@@ -50,6 +50,32 @@ function resolveOpencodeBin(configured) {
   }
   return configured || "opencode";
 }
+function psSingleQuoted(value) {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+function openOpencodeCli(bin, cwd) {
+  if (process.platform === "win32") {
+    const command2 = `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const launcher2 = (0, import_child_process.spawn)(
+      "cmd.exe",
+      ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
+      { detached: true, stdio: "ignore", windowsHide: false }
+    );
+    launcher2.unref();
+    return;
+  }
+  if (process.platform === "darwin") {
+    const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
+    const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${escapedBin}"`;
+    const launcher2 = (0, import_child_process.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
+    launcher2.unref();
+    return;
+  }
+  const command = `cd ${JSON.stringify(cwd)} && ${JSON.stringify(bin)}`;
+  const launcher = (0, import_child_process.spawn)("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
+  launcher.unref();
+}
 function launchHiddenPS(psScriptFile) {
   const fs2 = require("fs");
   const path2 = require("path");
@@ -81,8 +107,6 @@ function fetchModelsSync(opencodePath) {
 }
 var DEFAULT_SETTINGS = {
   tasks: [],
-  chatHistory: [],
-  chatModel: "",
   opencodePath: "opencode",
   defaultModel: "",
   workingDirectory: "",
@@ -258,6 +282,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   async loadSettings() {
     var _a, _b;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    delete this.settings.chatHistory;
+    delete this.settings.chatModel;
     if (!this.settings.defaultModel) {
       this.settings.defaultModel = (_b = (_a = this.availableModels[0]) == null ? void 0 : _a.value) != null ? _b : "";
     }
@@ -455,7 +481,6 @@ DONE:$code")`
 var AutoOCView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
-    this.currentTab = "tasks";
     this.plugin = plugin;
   }
   getViewType() {
@@ -475,6 +500,16 @@ var AutoOCView = class extends import_obsidian.ItemView {
   refresh() {
     this.render();
   }
+  openCli() {
+    try {
+      const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
+      const cwd = this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
+      openOpencodeCli(bin, cwd);
+      new import_obsidian.Notice(`AutoOC: opened OpenCode CLI in ${cwd}`);
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not open OpenCode CLI: ${String(e)}`);
+    }
+  }
   render() {
     const { containerEl } = this;
     containerEl.empty();
@@ -482,25 +517,15 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const tabBar = containerEl.createDiv("auto-oc-tab-bar");
     const btnTasks = tabBar.createEl("button", {
       text: "\u{1F4CB} Tasks",
-      cls: `auto-oc-tab-btn ${this.currentTab === "tasks" ? "active" : ""}`
+      cls: "auto-oc-tab-btn active"
     });
-    btnTasks.onclick = () => {
-      this.currentTab = "tasks";
-      this.render();
-    };
-    const btnChat = tabBar.createEl("button", {
-      text: "\u{1F4AC} Chat",
-      cls: `auto-oc-tab-btn ${this.currentTab === "chat" ? "active" : ""}`
+    btnTasks.onclick = () => this.render();
+    const btnCli = tabBar.createEl("button", {
+      text: "OpenCode CLI",
+      cls: "auto-oc-tab-btn"
     });
-    btnChat.onclick = () => {
-      this.currentTab = "chat";
-      this.render();
-    };
-    if (this.currentTab === "tasks") {
-      this.renderTasks(containerEl);
-    } else {
-      this.renderChat(containerEl);
-    }
+    btnCli.onclick = () => this.openCli();
+    this.renderTasks(containerEl);
   }
   renderTasks(containerEl) {
     const header = containerEl.createDiv("auto-oc-header");
@@ -540,249 +565,6 @@ var AutoOCView = class extends import_obsidian.ItemView {
     for (const task of [...tasks].reverse()) {
       this.renderTaskCard(list, task);
     }
-  }
-  renderChat(containerEl) {
-    const chatLayout = containerEl.createDiv("auto-oc-chat-layout");
-    chatLayout.style.height = "100%";
-    const header = chatLayout.createDiv("auto-oc-header");
-    header.createEl("h4", { text: "\u{1F4AC} Chat with Models" });
-    const modelRow = chatLayout.createDiv("auto-oc-chat-model-row");
-    modelRow.createEl("label", { text: "Model:" });
-    const selectModel = modelRow.createEl("select", { cls: "auto-oc-chat-model-select" });
-    selectModel.innerHTML = "";
-    this.plugin.availableModels.forEach((m) => {
-      const opt = selectModel.createEl("option", { text: m.label });
-      opt.value = m.value;
-    });
-    const currentModel = this.plugin.settings.chatModel || this.plugin.getEffectiveDefaultModel();
-    if (currentModel) selectModel.value = currentModel;
-    selectModel.onchange = async () => {
-      this.plugin.settings.chatModel = selectModel.value;
-      await this.plugin.saveSettings();
-    };
-    chatLayout.createEl("p", {
-      text: `Conversation is saved. Locked model: ${selectModel.value || "(none)"}`,
-      cls: "setting-item-description"
-    });
-    const messagesDiv = chatLayout.createDiv("auto-oc-chat-messages");
-    const sanitizeForContext = (text) => {
-      return text.replace(/\n?\[stderr\][\s\S]*$/i, "").replace(/^>\s*build\s.*$/gim, "").trim();
-    };
-    const renderMessages = () => {
-      messagesDiv.empty();
-      this.plugin.settings.chatHistory.forEach((msg) => {
-        const msgEl = messagesDiv.createDiv(`auto-oc-chat-message auto-oc-chat-${msg.role}`);
-        msgEl.createEl("div", { text: msg.role === "user" ? "You:" : "Assistant:", cls: "auto-oc-chat-role" });
-        const visibleContent = msg.role === "assistant" ? sanitizeForContext(msg.content) || msg.content || "(no response)" : msg.content;
-        msgEl.createEl("div", { text: visibleContent, cls: "auto-oc-chat-content" });
-      });
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    };
-    renderMessages();
-    const footer = chatLayout.createDiv("auto-oc-chat-footer");
-    const inputDiv = footer.createDiv("auto-oc-chat-input-area");
-    const inputField = inputDiv.createEl("textarea", { cls: "auto-oc-chat-input" });
-    inputField.placeholder = "Type your prompt here... (Enter to send, Shift+Enter for newline)";
-    inputField.disabled = false;
-    inputField.readOnly = false;
-    const actionsCol = inputDiv.createDiv("auto-oc-chat-actions-col");
-    const btnSend = actionsCol.createEl("button", {
-      text: "\u25B6 Send",
-      cls: "auto-oc-btn-primary"
-    });
-    const btnClear = actionsCol.createEl("button", {
-      text: "\u{1F5D1} Clear History",
-      cls: "auto-oc-btn-secondary"
-    });
-    const buildChatPrompt = (history, userPrompt) => {
-      const compact = (s) => s.replace(/\s+/g, " ").trim();
-      const userOnly = history.filter((m) => m.role === "user").slice(-4).map((m) => compact(m.content)).filter(Boolean);
-      if (userOnly.length === 0) return userPrompt;
-      const clippedUserHistory = userOnly.join(" | ").slice(-900);
-      const compactPrompt = compact(userPrompt);
-      return [
-        "Use this short user context if relevant:",
-        clippedUserHistory,
-        "Current user message:",
-        compactPrompt
-      ].join("\n\n");
-    };
-    const runPrompt = async () => {
-      var _a;
-      const prompt = inputField.value.trim();
-      if (!prompt) return;
-      const model = selectModel.value;
-      if (!model) {
-        new import_obsidian.Notice("Please select a model first.");
-        return;
-      }
-      const historyBefore = [...this.plugin.settings.chatHistory];
-      const contextualPrompt = buildChatPrompt(historyBefore, prompt);
-      this.plugin.settings.chatModel = model;
-      this.plugin.settings.chatHistory.push({
-        role: "user",
-        content: prompt,
-        timestamp: (/* @__PURE__ */ new Date()).toISOString()
-      });
-      await this.plugin.saveSettings();
-      inputField.value = "";
-      renderMessages();
-      btnSend.disabled = true;
-      btnSend.textContent = "\u23F3 Waiting...";
-      try {
-        const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-        const cwd = this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-        const timeoutMs = ((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : 1800) * 1e3;
-        const chatTimeoutMs = Math.min(timeoutMs, 12e4);
-        const finishChatRequest = () => {
-          btnSend.disabled = false;
-          btnSend.textContent = "\u25B6 Send";
-          inputField.focus();
-          renderMessages();
-        };
-        const onResult = async (error, stdout, stderr) => {
-          const cleanStdout = normalizeCommandOutput(stdout || "");
-          const cleanStderr = normalizeCommandOutput(stderr || "");
-          let output = cleanStdout;
-          if (!output && cleanStderr) output = `Error: ${cleanStderr}`;
-          if (!output && error) output = `Error: ${String(error)}`;
-          this.plugin.settings.chatHistory.push({
-            role: "assistant",
-            content: output.trim() || "(no response)",
-            timestamp: (/* @__PURE__ */ new Date()).toISOString()
-          });
-          try {
-            await this.plugin.saveSettings();
-          } catch (e) {
-          }
-          finishChatRequest();
-        };
-        if (process.platform === "win32" && /\.(cmd|bat)$/i.test(bin)) {
-          const promptB64 = Buffer.from(contextualPrompt, "utf8").toString("base64");
-          const tmpDir = require("os").tmpdir();
-          const outFile = require("path").join(tmpDir, `autooc-chat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
-          const psScriptFile = require("path").join(tmpDir, `autooc-chat-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
-          const psScript = [
-            `$env:USERPROFILE = '${(process.env.USERPROFILE || "").replace(/'/g, "''")}'`,
-            `$env:APPDATA     = '${(process.env.APPDATA || "").replace(/'/g, "''")}'`,
-            `$env:LOCALAPPDATA= '${(process.env.LOCALAPPDATA || "").replace(/'/g, "''")}'`,
-            `$env:PATH        = '${(process.env.PATH || "").replace(/'/g, "''")}'`,
-            `$env:HOME        = '${(process.env.USERPROFILE || "").replace(/'/g, "''")}'`,
-            `$env:OPENCODE_MODEL = '${model.replace(/'/g, "''")}'`,
-            `Set-Location '${cwd.replace(/'/g, "''")}'`,
-            `$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${promptB64}'))`,
-            `$outTmp = [System.IO.Path]::GetTempFileName()`,
-            `$errTmp = [System.IO.Path]::GetTempFileName()`,
-            `$proc = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run',$p,'-m','${model.replace(/'/g, "''")}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
-            `$stdout = (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue)`,
-            `$stderr = (Get-Content $errTmp -Raw -ErrorAction SilentlyContinue)`,
-            `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-            `$combined = ($stdout + $(if($stderr){"
-[stderr]
-" + $stderr}else{""})).Trim()`,
-            `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "
-DONE:" + $proc.ExitCode)`
-          ].join("\n");
-          fs.writeFileSync(psScriptFile, psScript, "utf8");
-          launchHiddenPS(psScriptFile);
-          const startedAt = Date.now();
-          const outFileDeadlineMs = 15e3;
-          const pollHandle = setInterval(async () => {
-            if (Date.now() - startedAt > chatTimeoutMs) {
-              clearInterval(pollHandle);
-              try {
-                fs.unlinkSync(psScriptFile);
-              } catch (e) {
-              }
-              await onResult(new Error(`Chat timeout after ${Math.floor(chatTimeoutMs / 1e3)}s`), "", "");
-              return;
-            }
-            if (!fs.existsSync(outFile)) {
-              if (Date.now() - startedAt > outFileDeadlineMs) {
-                clearInterval(pollHandle);
-                try {
-                  fs.unlinkSync(psScriptFile);
-                } catch (e) {
-                }
-                await onResult(new Error("Chat process did not start correctly (no output file created)."), "", "");
-              }
-              return;
-            }
-            clearInterval(pollHandle);
-            const raw = fs.readFileSync(outFile, "utf8");
-            try {
-              fs.unlinkSync(outFile);
-            } catch (e) {
-            }
-            try {
-              fs.unlinkSync(psScriptFile);
-            } catch (e) {
-            }
-            const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
-            const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
-            const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
-            const stderrFromOutput = output.includes("[stderr]") ? output : "";
-            await onResult(exitCode === 0 ? null : new Error(`Exit code ${exitCode}`), output, stderrFromOutput);
-          }, 1200);
-        } else {
-          (0, import_child_process.execFile)(
-            bin,
-            ["run", contextualPrompt, "-m", model, "--dangerously-skip-permissions"],
-            {
-              cwd,
-              timeout: chatTimeoutMs,
-              windowsHide: true,
-              env: { ...process.env, OPENCODE_MODEL: model }
-            },
-            onResult
-          );
-        }
-      } catch (e) {
-        const errMsg = String(e);
-        this.plugin.settings.chatHistory.push({
-          role: "assistant",
-          content: `Error: ${errMsg}`,
-          timestamp: (/* @__PURE__ */ new Date()).toISOString()
-        });
-        await this.plugin.saveSettings();
-        btnSend.disabled = false;
-        btnSend.textContent = "\u25B6 Send";
-        renderMessages();
-      }
-    };
-    btnSend.onclick = runPrompt;
-    inputField.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        if (btnSend.disabled) return;
-        runPrompt();
-      }
-    });
-    btnClear.onclick = async () => {
-      if (confirm("Clear chat history?")) {
-        this.plugin.settings.chatHistory = [];
-        try {
-          await this.plugin.saveSettings();
-        } catch (e) {
-        }
-        btnSend.disabled = false;
-        btnSend.textContent = "\u25B6 Send";
-        inputField.removeAttribute("disabled");
-        inputField.readOnly = false;
-        inputField.value = "";
-        inputField.focus();
-        window.setTimeout(() => inputField.focus(), 0);
-        this.render();
-        window.setTimeout(() => {
-          const ta = this.containerEl.querySelector(".auto-oc-chat-input");
-          if (ta) {
-            ta.disabled = false;
-            ta.readOnly = false;
-            ta.focus();
-          }
-        }, 0);
-      }
-    };
   }
   renderTaskCard(parent, task) {
     var _a, _b;

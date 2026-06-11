@@ -1,6 +1,6 @@
 # AutoOC for Obsidian
 
-Obsidian plugin to schedule and run OpenCode CLI tasks with model selection, manual execution, logging, diagnostics, and task stopping. **Now with integrated chat!**
+Obsidian plugin to schedule and run OpenCode CLI tasks with model selection, manual execution, logging, diagnostics, task stopping, and a direct OpenCode CLI launcher.
 
 ## Features
 
@@ -18,7 +18,7 @@ Obsidian plugin to schedule and run OpenCode CLI tasks with model selection, man
 - Configurable timeout per task
 - Dynamic model loading via `opencode models`
 - Assistant to install/activate Ralph Loop in `~/.config/opencode/opencode.json`
-- **💬 Chat with AI models directly** — interactive chat interface for real-time prompting without task scheduling
+- Direct `OpenCode CLI` launcher from the AutoOC panel
 
 ## Requirements
 
@@ -70,14 +70,10 @@ node deploy.mjs "C:/path/to/your/vault"
 5. Execute with `Run` or wait for schedule.
 6. View log with `Log` or `Live Log`.
 
-### Chat Tab
-1. Switch to the **Chat** tab in AutoOC panel.
-2. Select a model from the dropdown.
-3. Type your prompt in the text area.
-4. Press `▶ Send` or `Ctrl+Enter` to send.
-5. View the model's response in the chat history.
-6. Continue chatting — all messages are saved automatically.
-7. Use `🗑 Clear History` to start fresh.
+### OpenCode CLI
+1. Open the AutoOC panel.
+2. Press `OpenCode CLI`.
+3. Work in the terminal session opened in the vault/project directory.
 
 ## Ralph Loop from Extension
 
@@ -96,32 +92,6 @@ Notes:
 
 - This configures Ralph Loop plugin for OpenCode (not the full oh-my-opencode suite).
 - Loop state file is managed in `.opencode/ralph-loop.local.md` within the project.
-
-## Chat Feature
-
-The **Chat** tab allows you to interact with OpenCode models in real-time without creating scheduled tasks.
-
-### How It Works
-
-1. Switch to the **Chat** tab in the AutoOC sidebar.
-2. Select a model from the dropdown (same models available for tasks).
-3. Type your prompt in the input field.
-4. Press `▶ Send` or use `Ctrl+Enter` to execute.
-5. Wait for the model's response to appear.
-6. Continue the conversation naturally.
-
-### Chat History
-
-- All messages are automatically saved to plugin settings.
-- Chat history persists when you close Obsidian.
-- Use `🗑 Clear History` button to delete all messages and start fresh.
-
-### Features
-
-- **Real-time execution**: Prompts run immediately with no task scheduling.
-- **Model selection**: Change models on the fly.
-- **Timeout**: Uses the same task timeout from Settings (configurable).
-- **Error handling**: Network or execution errors appear in chat.
 
 ## Configuration
 
