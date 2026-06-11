@@ -1,0 +1,22 @@
+{
+  "name": "auto-oc",
+  "version": "1.0.0",
+  "description": "Schedule and run OpenCode CLI tasks from Obsidian",
+  "main": "main.js",
+  "scripts": {
+    "dev": "node esbuild.config.mjs",
+    "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+    "deploy": "node esbuild.config.mjs production && node deploy.mjs",
+    "pack:release": "powershell -ExecutionPolicy Bypass -File .\\package-release.ps1 -Version %npm_package_version%"
+  },
+  "keywords": [],
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^18.0.0",
+    "builtin-modules": "^3.3.0",
+    "esbuild": "0.21.5",
+    "obsidian": "latest",
+    "tslib": "2.6.0",
+    "typescript": "^5.0.0"
+  }
+}

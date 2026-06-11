@@ -1,0 +1,10 @@
+{
+  "id": "auto-oc",
+  "name": "AutoOC — OpenCode Task Scheduler",
+  "version": "1.0.0",
+  "minAppVersion": "1.0.0",
+  "description": "Schedule and run OpenCode CLI tasks at specific times, with model selection and output capture.",
+  "author": "JuanPe",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

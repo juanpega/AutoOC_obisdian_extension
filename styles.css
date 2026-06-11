@@ -1,0 +1,292 @@
+/* ── AutoOC Obsidian Plugin Styles ─────────────────────────────────────────── */
+
+.auto-oc-view {
+  padding: 12px;
+  overflow-y: auto;
+}
+
+/* Header */
+.auto-oc-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.auto-oc-header h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.auto-oc-btn-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-oc-btn-primary {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.auto-oc-btn-primary:hover {
+  filter: brightness(1.1);
+}
+
+.auto-oc-btn-secondary {
+  background: transparent;
+  color: var(--text-normal);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 0.82rem;
+}
+
+.auto-oc-btn-secondary:hover {
+  background: var(--background-modifier-hover);
+}
+
+/* Stats bar */
+.auto-oc-stats {
+  display: flex;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.auto-oc-stat-running { color: #f59e0b; }
+.auto-oc-stat-failed  { color: #ef4444; }
+
+/* Empty state */
+.auto-oc-empty {
+  color: var(--text-muted);
+  text-align: center;
+  margin-top: 40px;
+  font-size: 0.85rem;
+}
+
+/* Task list */
+.auto-oc-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* Task card */
+.auto-oc-card {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 10px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-left: 3px solid var(--interactive-accent);
+}
+
+.auto-oc-status-running   { border-left-color: #f59e0b; }
+.auto-oc-status-completed { border-left-color: #10b981; }
+.auto-oc-status-failed    { border-left-color: #ef4444; }
+.auto-oc-status-pending   { border-left-color: #6366f1; }
+
+/* Card top row */
+.auto-oc-card-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.auto-oc-task-name {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+
+/* Status badge */
+.auto-oc-badge {
+  font-size: 0.68rem;
+  padding: 2px 7px;
+  border-radius: 20px;
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+
+.auto-oc-badge-pending   { background: #6366f120; color: #6366f1; }
+.auto-oc-badge-running   { background: #f59e0b20; color: #f59e0b; }
+.auto-oc-badge-completed { background: #10b98120; color: #10b981; }
+.auto-oc-badge-failed    { background: #ef444420; color: #ef4444; }
+
+/* Meta rows */
+.auto-oc-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.77rem;
+  color: var(--text-muted);
+}
+
+/* Ralph badge */
+.auto-oc-ralph-badge {
+  color: #a855f7;
+}
+
+/* Prompt preview */
+.auto-oc-prompt-preview {
+  font-size: 0.79rem;
+  color: var(--text-faint);
+  font-style: italic;
+  border-left: 2px solid var(--background-modifier-border);
+  padding-left: 7px;
+  line-height: 1.4;
+}
+
+/* Action buttons strip */
+.auto-oc-card-actions {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.auto-oc-card-actions button {
+  font-size: 0.76rem;
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+  transition: background 0.15s;
+}
+
+.auto-oc-card-actions button:hover {
+  background: var(--background-modifier-hover);
+}
+
+.auto-oc-btn-run    { border-color: #6366f140 !important; color: #6366f1 !important; }
+.auto-oc-btn-run:disabled { opacity: 0.5; cursor: default; }
+.auto-oc-btn-delete { color: #ef4444 !important; border-color: #ef444430 !important; }
+.auto-oc-btn-output { color: var(--text-muted) !important; }
+.auto-oc-btn-cmd    { color: var(--text-muted) !important; }
+
+/* Output modal */
+.auto-oc-output-modal pre.auto-oc-output-pre,
+.auto-oc-output-pre {
+  background: var(--background-secondary);
+  padding: 12px;
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8rem;
+  max-height: 420px;
+  overflow-y: auto;
+  font-family: var(--font-monospace);
+  border: 1px solid var(--background-modifier-border);
+}
+
+/* Day labels in weekly schedule */
+.auto-oc-day-label {
+  font-size: 0.75rem;
+  margin: 0 10px 0 3px;
+  color: var(--text-muted);
+  vertical-align: middle;
+}
+
+/* Modal textarea */
+.auto-oc-modal .setting-item-control textarea {
+  font-size: 0.85rem;
+  min-width: 280px;
+}
+
+.auto-oc-btn-stop {
+  color: #ef4444 !important;
+  border-color: #ef444440 !important;
+  font-weight: 600;
+}
+
+.auto-oc-btn-stop:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.auto-oc-btn-log-live {
+  color: #f59e0b !important;
+  border-color: #f59e0b40 !important;
+  animation: auto-oc-pulse 1.5s infinite;
+}
+
+@keyframes auto-oc-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.55; }
+}
+
+.auto-oc-log-elapsed {
+  font-size: 0.76rem;
+  color: #f59e0b;
+  margin: 0;
+}
+
+/* Live Log Modal */
+.auto-oc-log-header {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.auto-oc-log-header h3 {
+  margin: 0;
+}
+
+.auto-oc-log-status {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.auto-oc-log-toolbar {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.auto-oc-log-pre {
+  max-height: 520px;
+  min-height: 180px;
+  font-size: 0.75rem;
+}
+
+/* Settings models table */
+.auto-oc-models-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin-top: 8px;
+}
+
+.auto-oc-models-table th,
+.auto-oc-models-table td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 5px 10px;
+  text-align: left;
+}
+
+.auto-oc-models-table th {
+  background: var(--background-secondary);
+  font-weight: 600;
+}
+
+.auto-oc-model-value {
+  font-family: var(--font-monospace);
+  color: var(--text-accent);
+}
