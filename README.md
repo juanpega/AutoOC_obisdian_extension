@@ -1,94 +1,156 @@
 # AutoOC for Obsidian
 
-Plugin de Obsidian para programar y ejecutar tareas de OpenCode CLI con seleccion de modelo, ejecucion manual, log, diagnostico y parada de tareas.
+Obsidian plugin to schedule and run OpenCode CLI tasks with model selection, manual execution, logging, diagnostics, and task stopping. **Now with integrated chat!**
 
 ## Features
 
-- Crear tareas con:
-  - nombre
+- Create tasks with:
+  - name
   - prompt/goal
-  - modelo OpenCode
-  - schedule: una vez, diario o semanal
-  - opcion Ralph Loop
-- Ejecucion manual de una tarea
-- Comprobacion automatica de tareas pendientes
-- Log de salida por tarea
-- Diagnostico integrado para validar OpenCode desde Obsidian
-- Boton para parar tareas en ejecucion
-- Timeout configurable por tarea
-- Carga dinamica de modelos via `opencode models`
+  - OpenCode model
+  - schedule: once, daily, or weekly
+  - Ralph Loop option
+- Manual task execution
+- Automatic checking of due tasks
+- Output logging per task
+- Built-in diagnostic to validate OpenCode from Obsidian
+- Button to stop running tasks
+- Configurable timeout per task
+- Dynamic model loading via `opencode models`
+- Assistant to install/activate Ralph Loop in `~/.config/opencode/opencode.json`
+- **💬 Chat with AI models directly** — interactive chat interface for real-time prompting without task scheduling
 
-## Requisitos
+## Requirements
 
-- Obsidian Desktop (Community plugins habilitados)
-- OpenCode instalado en local
-- Windows (el flujo actual usa PowerShell/VBScript para ejecucion silenciosa)
+- Obsidian Desktop (Community plugins enabled)
+- OpenCode installed locally
+- Windows (current flow uses PowerShell/VBScript for silent execution)
 
-## Estructura del proyecto
+## Project Structure
 
-- `main.ts`: codigo fuente del plugin
-- `styles.css`: estilos
-- `manifest.json`: metadata del plugin
-- `main.js`: build final consumido por Obsidian
+- `main.ts`: plugin source code
+- `styles.css`: styles
+- `manifest.json`: plugin metadata
+- `main.js`: final build consumed by Obsidian
 - `esbuild.config.mjs`: build/bundle
-- `deploy.mjs`: copia archivos a `.obsidian/plugins/auto-oc`
+- `deploy.mjs`: copies files to `.obsidian/plugins/auto-oc`
 
-## Instalacion para uso local (sin publicar)
+## Local Installation (without publishing)
 
-1. Clona o copia esta carpeta en tu maquina.
-2. Instala dependencias:
+1. Clone or copy this folder to your machine.
+2. Install dependencies:
 
 ```powershell
 npm install
 ```
 
-3. Build + deploy al vault actual:
+3. Build + deploy to current vault:
 
 ```powershell
 npm run build
-node deploy.mjs
+node deploy.mjs "C:/path/to/your/vault"
+```
+
+4. In Obsidian:
+- `Ctrl+Shift+P` -> `Reload app without saving`
+- Settings -> Community plugins -> Enable `AutoOC`
 ```
 
 4. En Obsidian:
 - `Ctrl+Shift+P` -> `Reload app without saving`
 - Settings -> Community plugins -> activar `AutoOC`
 
-## Uso rapido
+## Quick Usage
 
-1. Abre el panel AutoOC (icono de reloj o comando de paleta).
-2. Crea una tarea con `+ Nueva tarea`.
-3. Elige modelo (lista dinamica desde OpenCode).
-4. Guarda la tarea.
-5. Ejecuta con `Ejecutar` o espera al schedule.
-6. Mira el log con `Log` o `Log en vivo`.
+### Tasks Tab
+1. Open the AutoOC panel (clock icon or palette command).
+2. Create a task with `+ New Task`.
+3. Choose model (dynamic list from OpenCode).
+4. Save the task.
+5. Execute with `Run` or wait for schedule.
+6. View log with `Log` or `Live Log`.
 
-## Configuracion
+### Chat Tab
+1. Switch to the **Chat** tab in AutoOC panel.
+2. Select a model from the dropdown.
+3. Type your prompt in the text area.
+4. Press `▶ Send` or `Ctrl+Enter` to send.
+5. View the model's response in the chat history.
+6. Continue chatting — all messages are saved automatically.
+7. Use `🗑 Clear History` to start fresh.
 
-En Settings del plugin:
+## Ralph Loop from Extension
 
-- Ruta de OpenCode CLI
-- Directorio de trabajo
-- Modelo por defecto
-- Timeout por tarea (segundos)
-- Recarga de lista de modelos
+If you want to use Ralph Loop auto-continuation without leaving Obsidian:
 
-## Diagnostico
+1. Go to AutoOC plugin Settings.
+2. In the **Ralph Loop** section, press `Install / Activate`.
+3. AutoOC will add `opencode-ralph-loop` to `~/.config/opencode/opencode.json`.
+4. Restart OpenCode.
 
-Comando de paleta:
+You can also use the palette command:
 
-- `AutoOC: Diagnostico - probar comando opencode`
+- `AutoOC: Ralph Loop Assistant (install/activate)`
 
-Que valida:
+Notes:
 
-- ruta detectada de OpenCode
-- modelo por defecto
-- ejecucion real y salida
+- This configures Ralph Loop plugin for OpenCode (not the full oh-my-opencode suite).
+- Loop state file is managed in `.opencode/ralph-loop.local.md` within the project.
 
-## Publicar en tu propio repositorio
+## Chat Feature
 
-### 1) Subir codigo fuente
+The **Chat** tab allows you to interact with OpenCode models in real-time without creating scheduled tasks.
 
-Sube esta carpeta como repo (o subcarpeta de un repo) con:
+### How It Works
+
+1. Switch to the **Chat** tab in the AutoOC sidebar.
+2. Select a model from the dropdown (same models available for tasks).
+3. Type your prompt in the input field.
+4. Press `▶ Send` or use `Ctrl+Enter` to execute.
+5. Wait for the model's response to appear.
+6. Continue the conversation naturally.
+
+### Chat History
+
+- All messages are automatically saved to plugin settings.
+- Chat history persists when you close Obsidian.
+- Use `🗑 Clear History` button to delete all messages and start fresh.
+
+### Features
+
+- **Real-time execution**: Prompts run immediately with no task scheduling.
+- **Model selection**: Change models on the fly.
+- **Timeout**: Uses the same task timeout from Settings (configurable).
+- **Error handling**: Network or execution errors appear in chat.
+
+## Configuration
+
+In plugin Settings:
+
+- OpenCode CLI path
+- Working directory
+- Default model
+- Task timeout (seconds)
+- Model list reload
+- Ralph Loop Assistant
+
+## Diagnostics
+
+Palette command:
+
+- `AutoOC: Diagnostic — test opencode command`
+
+It validates:
+
+- detected OpenCode path
+- default model
+- real execution and output
+
+## Publishing to Your Own Repository
+
+### 1) Upload Source Code
+
+Push this folder as a repo (or repo subfolder) with:
 
 - `main.ts`
 - `styles.css`
@@ -101,57 +163,143 @@ Sube esta carpeta como repo (o subcarpeta de un repo) con:
 - `README.md`
 - `.gitignore`
 
-### 2) Crear release para distribuir
+### 2) Create Release for Distribution
 
-Para entregar plugin compilado a usuarios:
+To deliver compiled plugin to users:
 
-1. Ejecuta build:
+1. Run build:
 
 ```powershell
 npm run build
 ```
 
-2. Adjunta en release estos archivos:
+2. Attach in release:
 
 - `manifest.json`
 - `main.js`
 - `styles.css`
 
-3. El usuario final debe copiar esos archivos en:
+3. End user copies those files to:
 
 - `.obsidian/plugins/auto-oc/`
 
-## Instalacion del plugin desde release (usuario final)
+## Installing Plugin from Release (End User)
 
-1. Crear carpeta:
+1. Create folder:
 
 - `.obsidian/plugins/auto-oc`
 
-2. Copiar dentro:
+2. Copy inside:
 
 - `manifest.json`
 - `main.js`
 - `styles.css`
 
-3. Recargar Obsidian y activar plugin.
+3. Reload Obsidian and enable plugin.
 
 ## Troubleshooting
 
-### No aparece el plugin
+### Plugin Does Not Appear
 
-- Verifica que Community plugins no este en Restricted Mode.
-- Verifica ruta y archivos en `.obsidian/plugins/auto-oc`.
-- Recarga Obsidian.
+- Verify Community plugins not in Restricted Mode.
+- Verify path and files in `.obsidian/plugins/auto-oc`.
+- Reload Obsidian.
 
-### Los modelos se ven pero la tarea no corre
+### Models Show But Task Does Not Run
 
-- Ejecuta el comando de Diagnostico.
-- Verifica `Ruta de OpenCode CLI`.
-- Prueba en terminal:
+- Run the Diagnostic command.
+- Verify `OpenCode CLI Path`.
+- Try in terminal:
 
 ```powershell
-opencode run "di hola" -m "rndia/qwen3.6:35b" --dangerously-skip-permissions
+opencode run "di hola" -m "opencode/deepseek-v4-flash-free" --dangerously-skip-permissions
 ```
+
+If you see `Unexpected server error` or `[code 1]` in Diagnostic:
+
+1. Upgrade OpenCode:
+
+```powershell
+opencode upgrade
+```
+
+2. Check version and minimal test:
+
+```powershell
+opencode -v
+opencode run "di hola" -m "opencode/deepseek-v4-flash-free" --dangerously-skip-permissions
+```
+
+3. If you use agents in `.opencode/agents/*.agent.md`, review their frontmatter:
+- Avoid a `tools: [...]` field with format not supported by your version.
+- Invalid frontmatter in any agent can break global executions, even if you don't invoke that agent explicitly.
+
+### Task Takes a Long Time
+
+- Check timeout per task.
+- Check server/model provider status.
+- Use `Stop` to cancel and retry.
+
+## Useful Scripts
+
+```powershell
+npm install
+npm run build
+node deploy.mjs "C:/path/to/your/vault"
+npm run pack:release
+```
+
+## Files to Publish to Your Repo
+
+- `package-release.ps1`: creates release zip with `manifest.json`, `main.js`, `styles.css`
+- `RELEASE_NOTES_TEMPLATE.md`: template for release text
+- `PUBLISH_CHECKLIST.md`: end-to-end publication checklist
+
+## Recommended Release Flow
+
+1. Build plugin:
+
+```powershell
+npm run build
+```
+
+2. Create release zip:
+
+```powershell
+npm run pack:release
+```
+
+3. Zip ends up in `release/auto-oc-<version>.zip` with SHA256 hash in console.
+4. Publish that zip in your GitHub Release.
+
+## Current Status
+
+- Diagnostic working
+- Task execution using silent launcher on Windows
+- Logs available from UI
+
+---
+
+If you want to extend the plugin for Mac/Linux, adapt the background process launcher (currently optimized for Windows).
+
+Si ves `Unexpected server error` o `[código 1]` en Diagnóstico:
+
+1. Actualiza OpenCode:
+
+```powershell
+opencode upgrade
+```
+
+2. Verifica versión y prueba mínima:
+
+```powershell
+opencode -v
+opencode run "di hola" -m "opencode/deepseek-v4-flash-free" --dangerously-skip-permissions
+```
+
+3. Si usas agentes en `.opencode/agents/*.agent.md`, revisa su frontmatter:
+- Evita un campo `tools: [...]` con formato no soportado por tu versión.
+- Un frontmatter inválido en cualquier agente puede romper ejecuciones globales, aunque no invoques ese agente explícitamente.
 
 ### La tarea tarda mucho
 

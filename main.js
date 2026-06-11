@@ -34,42 +34,41 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
+var import_child_process = require("child_process");
 var os = __toESM(require("os"));
+var fs = __toESM(require("fs"));
+var path = __toESM(require("path"));
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
   if (os.platform() === "win32") {
     const candidate = `${process.env.APPDATA}\\npm\\opencode.cmd`;
     try {
-      const { existsSync } = require("fs");
-      if (existsSync(candidate)) return candidate;
+      const { existsSync: existsSync2 } = require("fs");
+      if (existsSync2(candidate)) return candidate;
     } catch (e) {
     }
   }
   return configured || "opencode";
 }
 function launchHiddenPS(psScriptFile) {
-  const fs = require("fs");
-  const path = require("path");
+  const fs2 = require("fs");
+  const path2 = require("path");
   const vbsFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const vbs = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -WindowStyle Hidden -File """ & "${psScriptFile.replace(/"/g, '""')}" & """", 0, False\r
 `;
-  fs.writeFileSync(vbsFile, vbs, "utf8");
-  const { spawn } = require("child_process");
-  const ws = spawn("wscript.exe", [vbsFile], { detached: true, stdio: "ignore", windowsHide: true });
+  fs2.writeFileSync(vbsFile, vbs, "utf8");
+  const { spawn: spawn2 } = require("child_process");
+  const ws = spawn2("wscript.exe", [vbsFile], { detached: true, stdio: "ignore", windowsHide: true });
   ws.unref();
   setTimeout(() => {
     try {
-      fs.unlinkSync(vbsFile);
+      fs2.unlinkSync(vbsFile);
     } catch (e) {
     }
   }, 1e4);
 }
-var FALLBACK_MODELS = [
-  { value: "spark-reasoning/reasoning", label: "spark-reasoning/reasoning" },
-  { value: "spark-coder/coder", label: "spark-coder/coder" },
-  { value: "rndia/qwen3.6:35b", label: "rndia/qwen3.6:35b" }
-];
+var FALLBACK_MODELS = [];
 function fetchModelsSync(opencodePath) {
   const { execSync } = require("child_process");
   const bin = resolveOpencodeBin(opencodePath);
@@ -82,8 +81,10 @@ function fetchModelsSync(opencodePath) {
 }
 var DEFAULT_SETTINGS = {
   tasks: [],
+  chatHistory: [],
+  chatModel: "",
   opencodePath: "opencode",
-  defaultModel: "spark-reasoning/reasoning",
+  defaultModel: "",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
@@ -121,6 +122,12 @@ function normalizeCommandOutput(text) {
     }
   }
   return cleaned.trim();
+}
+function getOpencodeConfigPath() {
+  return path.join(os.homedir(), ".config", "opencode", "opencode.json");
+}
+function getRalphStateFilePath(vaultBasePath) {
+  return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
 }
 function isTaskDue(task) {
   if (task.status === "running") return false;
@@ -167,26 +174,36 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     });
     this.addCommand({
       id: "open-auto-oc",
-      name: "Abrir AutoOC Task Scheduler",
+      name: "Open AutoOC Task Scheduler",
       callback: () => this.activateView()
     });
     this.addCommand({
       id: "create-task",
-      name: "Crear nueva tarea OpenCode",
+      name: "Create new OpenCode task",
       callback: () => new CreateTaskModal(this.app, this).open()
     });
     this.addCommand({
       id: "check-tasks-now",
-      name: "Comprobar tareas pendientes ahora",
+      name: "Check due tasks now",
       callback: async () => {
         await this.runDueTasks();
-        new import_obsidian.Notice("AutoOC: comprobaci\xF3n completada.");
+        new import_obsidian.Notice("AutoOC: check completed.");
       }
     });
     this.addCommand({
       id: "diagnose",
-      name: "AutoOC: Diagn\xF3stico \u2014 probar comando opencode",
+      name: "AutoOC: Diagnostic \u2014 test opencode command",
       callback: () => new DiagnosticModal(this.app, this).open()
+    });
+    this.addCommand({
+      id: "install-ralph-loop",
+      name: "AutoOC: Ralph Loop Assistant (install/activate)",
+      callback: async () => {
+        const result = await this.ensureRalphLoopPluginEnabled();
+        new import_obsidian.Notice(
+          result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
+        );
+      }
     });
     this.addSettingTab(new AutoOCSettingTab(this.app, this));
     this.registerInterval(
@@ -206,8 +223,17 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const models = fetchModelsSync(this.settings.opencodePath || "opencode");
     if (models.length > 0) {
       this.availableModels = models;
+      if (!this.settings.defaultModel || !models.find((m) => m.value === this.settings.defaultModel)) {
+        this.settings.defaultModel = models[0].value;
+        void this.saveSettings();
+      }
       (_a = this.view) == null ? void 0 : _a.refresh();
     }
+  }
+  getEffectiveDefaultModel() {
+    var _a, _b;
+    if (this.settings.defaultModel) return this.settings.defaultModel;
+    return (_b = (_a = this.availableModels[0]) == null ? void 0 : _a.value) != null ? _b : "";
   }
   async activateView() {
     const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE);
@@ -230,7 +256,47 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.activateView();
   }
   async loadSettings() {
+    var _a, _b;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (!this.settings.defaultModel) {
+      this.settings.defaultModel = (_b = (_a = this.availableModels[0]) == null ? void 0 : _a.value) != null ? _b : "";
+    }
+  }
+  isRalphLoopEnabled() {
+    const configPath = getOpencodeConfigPath();
+    if (!fs.existsSync(configPath)) return false;
+    try {
+      const raw = fs.readFileSync(configPath, "utf8");
+      const data = JSON.parse(raw);
+      return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
+    } catch (e) {
+      return false;
+    }
+  }
+  async ensureRalphLoopPluginEnabled() {
+    const configPath = getOpencodeConfigPath();
+    const configDir = path.dirname(configPath);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    let data = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        const raw = fs.readFileSync(configPath, "utf8");
+        data = raw.trim() ? JSON.parse(raw) : {};
+      } catch (e) {
+        throw new Error(`Could not read valid JSON from ${configPath}`);
+      }
+    }
+    const plugins = Array.isArray(data.plugin) ? [...data.plugin] : [];
+    if (plugins.includes("opencode-ralph-loop")) {
+      return { changed: false, configPath };
+    }
+    plugins.push("opencode-ralph-loop");
+    data.plugin = plugins;
+    fs.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+`, "utf8");
+    return { changed: true, configPath };
   }
   async saveSettings() {
     var _a;
@@ -262,7 +328,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[iniciando proceso desacoplado\u2026]\n";
     await this.saveSettings();
-    new import_obsidian.Notice(`AutoOC: ejecutando "${task.name}"\u2026`);
+    new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(this.settings.tasks[idx]);
     const bin = args[0];
     const prompt = args[2];
@@ -271,13 +337,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
-    const fs = require("fs");
+    const fs2 = require("fs");
     try {
-      fs.unlinkSync(outFile);
+      fs2.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs.unlinkSync(pidFile);
+      fs2.unlinkSync(pidFile);
     } catch (e) {
     }
     const psScript = [
@@ -301,7 +367,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 DONE:$code")`
     ].join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
-    fs.writeFileSync(psScriptFile, psScript, "utf8");
+    fs2.writeFileSync(psScriptFile, psScript, "utf8");
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
@@ -324,7 +390,7 @@ DONE:$code")`
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" super\xF3 el timeout.`);
         return;
       }
-      if (!fs.existsSync(outFile)) {
+      if (!fs2.existsSync(outFile)) {
         t.output += ".";
         await this.saveSettings();
         return;
@@ -332,12 +398,12 @@ DONE:$code")`
       clearInterval(pollHandle);
       this.runningProcesses.delete(task.id);
       try {
-        fs.unlinkSync(psScriptFile);
+        fs2.unlinkSync(psScriptFile);
       } catch (e) {
       }
-      const raw = fs.readFileSync(outFile, "utf8");
+      const raw = fs2.readFileSync(outFile, "utf8");
       try {
-        fs.unlinkSync(outFile);
+        fs2.unlinkSync(outFile);
       } catch (e) {
       }
       const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
@@ -369,10 +435,10 @@ DONE:$code")`
     const t = this.settings.tasks.find((x) => x.id === id);
     if (t) {
       t.status = "failed";
-      t.output += "\n[tarea detenida manualmente]";
+      t.output += "\n[task stopped manually]";
       await this.saveSettings();
     }
-    new import_obsidian.Notice(`AutoOC: \u23F9 Tarea detenida.`);
+    new import_obsidian.Notice(`AutoOC: \u23F9 Task stopped.`);
   }
   async runDueTasks() {
     for (const task of this.settings.tasks) {
@@ -389,6 +455,7 @@ DONE:$code")`
 var AutoOCView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
+    this.currentTab = "tasks";
     this.plugin = plugin;
   }
   getViewType() {
@@ -412,21 +479,45 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
+    const tabBar = containerEl.createDiv("auto-oc-tab-bar");
+    const btnTasks = tabBar.createEl("button", {
+      text: "\u{1F4CB} Tasks",
+      cls: `auto-oc-tab-btn ${this.currentTab === "tasks" ? "active" : ""}`
+    });
+    btnTasks.onclick = () => {
+      this.currentTab = "tasks";
+      this.render();
+    };
+    const btnChat = tabBar.createEl("button", {
+      text: "\u{1F4AC} Chat",
+      cls: `auto-oc-tab-btn ${this.currentTab === "chat" ? "active" : ""}`
+    });
+    btnChat.onclick = () => {
+      this.currentTab = "chat";
+      this.render();
+    };
+    if (this.currentTab === "tasks") {
+      this.renderTasks(containerEl);
+    } else {
+      this.renderChat(containerEl);
+    }
+  }
+  renderTasks(containerEl) {
     const header = containerEl.createDiv("auto-oc-header");
     header.createEl("h4", { text: "\u23F0 AutoOC Scheduler" });
     const btnRow = header.createDiv("auto-oc-btn-row");
     const btnNew = btnRow.createEl("button", {
-      text: "+ Nueva tarea",
+      text: "+ New Task",
       cls: "auto-oc-btn-primary"
     });
     btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
     const btnCheck = btnRow.createEl("button", {
-      text: "\u25B6 Comprobar ahora",
+      text: "\u25B6 Check Now",
       cls: "auto-oc-btn-secondary"
     });
     btnCheck.onclick = async () => {
       await this.plugin.runDueTasks();
-      new import_obsidian.Notice("AutoOC: comprobaci\xF3n completada.");
+      new import_obsidian.Notice("AutoOC: check completed.");
     };
     const tasks = this.plugin.settings.tasks;
     const stats = containerEl.createDiv("auto-oc-stats");
@@ -434,13 +525,13 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const running = tasks.filter((t) => t.status === "running").length;
     const completed = tasks.filter((t) => t.status === "completed").length;
     const failed = tasks.filter((t) => t.status === "failed").length;
-    stats.createEl("span", { text: `${tasks.length} tareas` });
-    if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} ejecutando`, cls: "auto-oc-stat-running" });
-    if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} fallidas`, cls: "auto-oc-stat-failed" });
-    if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completadas` });
+    stats.createEl("span", { text: `${tasks.length} tasks` });
+    if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} running`, cls: "auto-oc-stat-running" });
+    if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} failed`, cls: "auto-oc-stat-failed" });
+    if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completed` });
     if (tasks.length === 0) {
       containerEl.createEl("p", {
-        text: 'No hay tareas programadas. Crea una con "+ Nueva tarea".',
+        text: 'No tasks scheduled. Create one with "+New Task".',
         cls: "auto-oc-empty"
       });
       return;
@@ -449,6 +540,249 @@ var AutoOCView = class extends import_obsidian.ItemView {
     for (const task of [...tasks].reverse()) {
       this.renderTaskCard(list, task);
     }
+  }
+  renderChat(containerEl) {
+    const chatLayout = containerEl.createDiv("auto-oc-chat-layout");
+    chatLayout.style.height = "100%";
+    const header = chatLayout.createDiv("auto-oc-header");
+    header.createEl("h4", { text: "\u{1F4AC} Chat with Models" });
+    const modelRow = chatLayout.createDiv("auto-oc-chat-model-row");
+    modelRow.createEl("label", { text: "Model:" });
+    const selectModel = modelRow.createEl("select", { cls: "auto-oc-chat-model-select" });
+    selectModel.innerHTML = "";
+    this.plugin.availableModels.forEach((m) => {
+      const opt = selectModel.createEl("option", { text: m.label });
+      opt.value = m.value;
+    });
+    const currentModel = this.plugin.settings.chatModel || this.plugin.getEffectiveDefaultModel();
+    if (currentModel) selectModel.value = currentModel;
+    selectModel.onchange = async () => {
+      this.plugin.settings.chatModel = selectModel.value;
+      await this.plugin.saveSettings();
+    };
+    chatLayout.createEl("p", {
+      text: `Conversation is saved. Locked model: ${selectModel.value || "(none)"}`,
+      cls: "setting-item-description"
+    });
+    const messagesDiv = chatLayout.createDiv("auto-oc-chat-messages");
+    const sanitizeForContext = (text) => {
+      return text.replace(/\n?\[stderr\][\s\S]*$/i, "").replace(/^>\s*build\s.*$/gim, "").trim();
+    };
+    const renderMessages = () => {
+      messagesDiv.empty();
+      this.plugin.settings.chatHistory.forEach((msg) => {
+        const msgEl = messagesDiv.createDiv(`auto-oc-chat-message auto-oc-chat-${msg.role}`);
+        msgEl.createEl("div", { text: msg.role === "user" ? "You:" : "Assistant:", cls: "auto-oc-chat-role" });
+        const visibleContent = msg.role === "assistant" ? sanitizeForContext(msg.content) || msg.content || "(no response)" : msg.content;
+        msgEl.createEl("div", { text: visibleContent, cls: "auto-oc-chat-content" });
+      });
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    };
+    renderMessages();
+    const footer = chatLayout.createDiv("auto-oc-chat-footer");
+    const inputDiv = footer.createDiv("auto-oc-chat-input-area");
+    const inputField = inputDiv.createEl("textarea", { cls: "auto-oc-chat-input" });
+    inputField.placeholder = "Type your prompt here... (Enter to send, Shift+Enter for newline)";
+    inputField.disabled = false;
+    inputField.readOnly = false;
+    const actionsCol = inputDiv.createDiv("auto-oc-chat-actions-col");
+    const btnSend = actionsCol.createEl("button", {
+      text: "\u25B6 Send",
+      cls: "auto-oc-btn-primary"
+    });
+    const btnClear = actionsCol.createEl("button", {
+      text: "\u{1F5D1} Clear History",
+      cls: "auto-oc-btn-secondary"
+    });
+    const buildChatPrompt = (history, userPrompt) => {
+      const compact = (s) => s.replace(/\s+/g, " ").trim();
+      const userOnly = history.filter((m) => m.role === "user").slice(-4).map((m) => compact(m.content)).filter(Boolean);
+      if (userOnly.length === 0) return userPrompt;
+      const clippedUserHistory = userOnly.join(" | ").slice(-900);
+      const compactPrompt = compact(userPrompt);
+      return [
+        "Use this short user context if relevant:",
+        clippedUserHistory,
+        "Current user message:",
+        compactPrompt
+      ].join("\n\n");
+    };
+    const runPrompt = async () => {
+      var _a;
+      const prompt = inputField.value.trim();
+      if (!prompt) return;
+      const model = selectModel.value;
+      if (!model) {
+        new import_obsidian.Notice("Please select a model first.");
+        return;
+      }
+      const historyBefore = [...this.plugin.settings.chatHistory];
+      const contextualPrompt = buildChatPrompt(historyBefore, prompt);
+      this.plugin.settings.chatModel = model;
+      this.plugin.settings.chatHistory.push({
+        role: "user",
+        content: prompt,
+        timestamp: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      await this.plugin.saveSettings();
+      inputField.value = "";
+      renderMessages();
+      btnSend.disabled = true;
+      btnSend.textContent = "\u23F3 Waiting...";
+      try {
+        const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
+        const cwd = this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
+        const timeoutMs = ((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : 1800) * 1e3;
+        const chatTimeoutMs = Math.min(timeoutMs, 12e4);
+        const finishChatRequest = () => {
+          btnSend.disabled = false;
+          btnSend.textContent = "\u25B6 Send";
+          inputField.focus();
+          renderMessages();
+        };
+        const onResult = async (error, stdout, stderr) => {
+          const cleanStdout = normalizeCommandOutput(stdout || "");
+          const cleanStderr = normalizeCommandOutput(stderr || "");
+          let output = cleanStdout;
+          if (!output && cleanStderr) output = `Error: ${cleanStderr}`;
+          if (!output && error) output = `Error: ${String(error)}`;
+          this.plugin.settings.chatHistory.push({
+            role: "assistant",
+            content: output.trim() || "(no response)",
+            timestamp: (/* @__PURE__ */ new Date()).toISOString()
+          });
+          try {
+            await this.plugin.saveSettings();
+          } catch (e) {
+          }
+          finishChatRequest();
+        };
+        if (process.platform === "win32" && /\.(cmd|bat)$/i.test(bin)) {
+          const promptB64 = Buffer.from(contextualPrompt, "utf8").toString("base64");
+          const tmpDir = require("os").tmpdir();
+          const outFile = require("path").join(tmpDir, `autooc-chat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+          const psScriptFile = require("path").join(tmpDir, `autooc-chat-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
+          const psScript = [
+            `$env:USERPROFILE = '${(process.env.USERPROFILE || "").replace(/'/g, "''")}'`,
+            `$env:APPDATA     = '${(process.env.APPDATA || "").replace(/'/g, "''")}'`,
+            `$env:LOCALAPPDATA= '${(process.env.LOCALAPPDATA || "").replace(/'/g, "''")}'`,
+            `$env:PATH        = '${(process.env.PATH || "").replace(/'/g, "''")}'`,
+            `$env:HOME        = '${(process.env.USERPROFILE || "").replace(/'/g, "''")}'`,
+            `$env:OPENCODE_MODEL = '${model.replace(/'/g, "''")}'`,
+            `Set-Location '${cwd.replace(/'/g, "''")}'`,
+            `$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${promptB64}'))`,
+            `$outTmp = [System.IO.Path]::GetTempFileName()`,
+            `$errTmp = [System.IO.Path]::GetTempFileName()`,
+            `$proc = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run',$p,'-m','${model.replace(/'/g, "''")}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+            `$stdout = (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue)`,
+            `$stderr = (Get-Content $errTmp -Raw -ErrorAction SilentlyContinue)`,
+            `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
+            `$combined = ($stdout + $(if($stderr){"
+[stderr]
+" + $stderr}else{""})).Trim()`,
+            `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "
+DONE:" + $proc.ExitCode)`
+          ].join("\n");
+          fs.writeFileSync(psScriptFile, psScript, "utf8");
+          launchHiddenPS(psScriptFile);
+          const startedAt = Date.now();
+          const outFileDeadlineMs = 15e3;
+          const pollHandle = setInterval(async () => {
+            if (Date.now() - startedAt > chatTimeoutMs) {
+              clearInterval(pollHandle);
+              try {
+                fs.unlinkSync(psScriptFile);
+              } catch (e) {
+              }
+              await onResult(new Error(`Chat timeout after ${Math.floor(chatTimeoutMs / 1e3)}s`), "", "");
+              return;
+            }
+            if (!fs.existsSync(outFile)) {
+              if (Date.now() - startedAt > outFileDeadlineMs) {
+                clearInterval(pollHandle);
+                try {
+                  fs.unlinkSync(psScriptFile);
+                } catch (e) {
+                }
+                await onResult(new Error("Chat process did not start correctly (no output file created)."), "", "");
+              }
+              return;
+            }
+            clearInterval(pollHandle);
+            const raw = fs.readFileSync(outFile, "utf8");
+            try {
+              fs.unlinkSync(outFile);
+            } catch (e) {
+            }
+            try {
+              fs.unlinkSync(psScriptFile);
+            } catch (e) {
+            }
+            const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
+            const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
+            const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
+            const stderrFromOutput = output.includes("[stderr]") ? output : "";
+            await onResult(exitCode === 0 ? null : new Error(`Exit code ${exitCode}`), output, stderrFromOutput);
+          }, 1200);
+        } else {
+          (0, import_child_process.execFile)(
+            bin,
+            ["run", contextualPrompt, "-m", model, "--dangerously-skip-permissions"],
+            {
+              cwd,
+              timeout: chatTimeoutMs,
+              windowsHide: true,
+              env: { ...process.env, OPENCODE_MODEL: model }
+            },
+            onResult
+          );
+        }
+      } catch (e) {
+        const errMsg = String(e);
+        this.plugin.settings.chatHistory.push({
+          role: "assistant",
+          content: `Error: ${errMsg}`,
+          timestamp: (/* @__PURE__ */ new Date()).toISOString()
+        });
+        await this.plugin.saveSettings();
+        btnSend.disabled = false;
+        btnSend.textContent = "\u25B6 Send";
+        renderMessages();
+      }
+    };
+    btnSend.onclick = runPrompt;
+    inputField.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (btnSend.disabled) return;
+        runPrompt();
+      }
+    });
+    btnClear.onclick = async () => {
+      if (confirm("Clear chat history?")) {
+        this.plugin.settings.chatHistory = [];
+        try {
+          await this.plugin.saveSettings();
+        } catch (e) {
+        }
+        btnSend.disabled = false;
+        btnSend.textContent = "\u25B6 Send";
+        inputField.removeAttribute("disabled");
+        inputField.readOnly = false;
+        inputField.value = "";
+        inputField.focus();
+        window.setTimeout(() => inputField.focus(), 0);
+        this.render();
+        window.setTimeout(() => {
+          const ta = this.containerEl.querySelector(".auto-oc-chat-input");
+          if (ta) {
+            ta.disabled = false;
+            ta.readOnly = false;
+            ta.focus();
+          }
+        }, 0);
+      }
+    };
   }
   renderTaskCard(parent, task) {
     var _a, _b;
@@ -466,17 +800,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if (task.scheduleType === "once") {
       scheduleText = `\u{1F4C5} ${task.scheduleDate} ${task.scheduleTime}`;
     } else if (task.scheduleType === "daily") {
-      scheduleText = `\u{1F501} Cada d\xEDa a las ${task.scheduleTime}`;
+      scheduleText = `\u{1F501} Every day at ${task.scheduleTime}`;
     } else {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
-      scheduleText = `\u{1F501} ${days || "ning\xFAn d\xEDa"} a las ${task.scheduleTime}`;
+      scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     }
     meta.createEl("span", { text: scheduleText });
     if (task.lastRun) {
-      meta.createEl("span", { text: `\u23F1 \xDAltimo: ${formatDateTime(task.lastRun)}` });
+      meta.createEl("span", { text: `\u23F1 Last: ${formatDateTime(task.lastRun)}` });
     }
     if (task.useRalphLoop) {
-      meta.createEl("span", { text: "\u267B\uFE0F Ralph Loop activo", cls: "auto-oc-ralph-badge" });
+      meta.createEl("span", { text: "\u267B\uFE0F Ralph Loop active", cls: "auto-oc-ralph-badge" });
     }
     const preview = card.createDiv("auto-oc-prompt-preview");
     preview.createEl("span", {
@@ -484,32 +818,32 @@ var AutoOCView = class extends import_obsidian.ItemView {
     });
     const actions = card.createDiv("auto-oc-card-actions");
     const btnRun = actions.createEl("button", {
-      text: task.status === "running" ? "\u23F3 Ejecutando\u2026" : "\u25B6 Ejecutar",
+      text: task.status === "running" ? "\u23F3 Running\u2026" : "\u25B6 Run",
       cls: "auto-oc-btn-run"
     });
     btnRun.disabled = task.status === "running";
     btnRun.onclick = () => this.plugin.runTask(task);
     if (task.status === "running") {
       const btnStop = actions.createEl("button", {
-        text: "\u23F9 Parar",
+        text: "\u23F9 Stop",
         cls: "auto-oc-btn-stop"
       });
-      btnStop.title = "Terminar el proceso ahora";
+      btnStop.title = "Terminate process now";
       btnStop.onclick = async () => {
         btnStop.disabled = true;
-        btnStop.textContent = "Parando\u2026";
+        btnStop.textContent = "Stopping\u2026";
         await this.plugin.killTask(task.id);
       };
     }
     const btnLog = actions.createEl("button", {
-      text: task.status === "running" ? "\u{1F4E1} Log en vivo" : "\u{1F4C4} Log",
+      text: task.status === "running" ? "\u{1F4E1} Live Log" : "\u{1F4C4} Log",
       cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output"
     });
     btnLog.disabled = !task.output && task.status !== "running";
     btnLog.title = task.output ? "" : "A\xFAn no hay output";
     btnLog.onclick = () => new LiveLogModal(this.app, task, this.plugin).open();
     const btnCmd = actions.createEl("button", {
-      text: "\u{1F50D} Comando",
+      text: "\u{1F50D} Command",
       cls: "auto-oc-btn-cmd"
     });
     btnCmd.onclick = () => {
@@ -517,7 +851,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       new CommandPreviewModal(this.app, task.name, cmd).open();
     };
     const btnEdit = actions.createEl("button", {
-      text: "\u270F\uFE0F Editar",
+      text: "\u270F\uFE0F Edit",
       cls: "auto-oc-btn-edit"
     });
     btnEdit.onclick = () => new CreateTaskModal(this.app, this.plugin, task).open();
@@ -525,9 +859,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: "\u{1F5D1}",
       cls: "auto-oc-btn-delete"
     });
-    btnDelete.title = "Eliminar tarea";
+    btnDelete.title = "Delete task";
     btnDelete.onclick = async () => {
-      if (confirm(`\xBFEliminar tarea "${task.name}"?`)) {
+      if (confirm(`Delete task "${task.name}"?`)) {
         await this.plugin.deleteTask(task.id);
       }
     };
@@ -541,7 +875,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     this.draft = editTask ? { ...editTask } : {
       name: "",
       prompt: "",
-      model: plugin.settings.defaultModel,
+      model: plugin.getEffectiveDefaultModel(),
       useRalphLoop: false,
       scheduleType: "once",
       scheduleTime: nowTimeString(),
@@ -554,47 +888,60 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     contentEl.empty();
     contentEl.addClass("auto-oc-modal");
     contentEl.createEl("h3", {
-      text: this.editTask ? "Editar tarea" : "Nueva tarea OpenCode"
+      text: this.editTask ? "Edit Task" : "New OpenCode Task"
     });
-    new import_obsidian.Setting(contentEl).setName("Nombre").setDesc("Identificador corto de la tarea").addText(
+    new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText(
       (text) => {
         var _a;
         return text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
       }
     );
-    new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Texto que se enviar\xE1 a OpenCode").addTextArea((ta) => {
+    new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Text to send to OpenCode").addTextArea((ta) => {
       var _a;
       ta.setValue((_a = this.draft.prompt) != null ? _a : "").onChange((v) => this.draft.prompt = v);
       ta.inputEl.rows = 5;
       ta.inputEl.style.width = "100%";
     });
-    new import_obsidian.Setting(contentEl).setName("Modelo").setDesc("Modelo de IA a usar").addDropdown((dd) => {
+    new import_obsidian.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
       var _a;
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
-      const current = (_a = this.draft.model) != null ? _a : this.plugin.settings.defaultModel;
-      if (!models.find((m) => m.value === current)) {
+      const current = (_a = this.draft.model) != null ? _a : this.plugin.getEffectiveDefaultModel();
+      if (!current && models.length === 0) {
+        dd.addOption("", "(no models; tap refresh)");
+      } else if (current && !models.find((m) => m.value === current)) {
         dd.addOption(current, current);
       }
-      dd.setValue(current);
+      dd.setValue(current || "");
       dd.onChange((v) => this.draft.model = v);
     });
     new import_obsidian.Setting(contentEl).addButton(
-      (btn) => btn.setButtonText("\u{1F504} Refrescar modelos").onClick(() => {
+      (btn) => btn.setButtonText("\u{1F504} Refresh Models").onClick(() => {
         this.plugin.refreshModels();
-        new import_obsidian.Notice("AutoOC: modelos actualizados. Vuelve a abrir el di\xE1logo.");
+        new import_obsidian.Notice("AutoOC: models updated. Reopen dialog.");
       })
     );
-    new import_obsidian.Setting(contentEl).setName("Ralph Loop").setDesc("Envuelve el prompt con /ralph-loop para continuar autom\xE1ticamente hasta DONE").addToggle((tog) => {
+    new import_obsidian.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.useRalphLoop) != null ? _a : false);
       tog.onChange((v) => this.draft.useRalphLoop = v);
-    });
-    new import_obsidian.Setting(contentEl).setName("Tipo de schedule").addDropdown((dd) => {
+    }).addButton(
+      (btn) => btn.setButtonText("Installation Assistant").onClick(async () => {
+        try {
+          const result = await this.plugin.ensureRalphLoopPluginEnabled();
+          new import_obsidian.Notice(
+            result.changed ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `Ralph Loop was already active at ${result.configPath}.`
+          );
+        } catch (e) {
+          new import_obsidian.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+        }
+      })
+    );
+    new import_obsidian.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a;
-      dd.addOption("once", "Una vez (fecha y hora concretas)");
-      dd.addOption("daily", "Cada d\xEDa (hora fija)");
-      dd.addOption("weekly", "D\xEDas de la semana");
+      dd.addOption("once", "Once (specific date and time)");
+      dd.addOption("daily", "Daily (fixed time)");
+      dd.addOption("weekly", "Weekdays");
       dd.setValue((_a = this.draft.scheduleType) != null ? _a : "once");
       dd.onChange((v) => {
         this.draft.scheduleType = v;
@@ -602,7 +949,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian.Setting(contentEl).setName("Fecha").setDesc("Formato YYYY-MM-DD").addText(
+      new import_obsidian.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText(
         (text) => {
           var _a;
           return text.setPlaceholder(todayString()).setValue((_a = this.draft.scheduleDate) != null ? _a : "").onChange((v) => this.draft.scheduleDate = v);
@@ -610,7 +957,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       );
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian.Setting(contentEl).setName("D\xEDas de la semana");
+      const daySetting = new import_obsidian.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -634,29 +981,33 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         });
       });
     }
-    new import_obsidian.Setting(contentEl).setName("Hora").setDesc("Formato HH:MM (24 h)").addText(
+    new import_obsidian.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText(
       (text) => {
         var _a;
         return text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
       }
     );
     new import_obsidian.Setting(contentEl).addButton(
-      (btn) => btn.setButtonText(this.editTask ? "Guardar cambios" : "Crear tarea").setCta().onClick(async () => {
+      (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
         var _a, _b, _c, _d, _e, _f, _g, _h, _i;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
-          new import_obsidian.Notice("El nombre es obligatorio.");
+          new import_obsidian.Notice("Name is required.");
           return;
         }
         if (!((_b = this.draft.prompt) == null ? void 0 : _b.trim())) {
-          new import_obsidian.Notice("El prompt es obligatorio.");
+          new import_obsidian.Notice("Prompt is required.");
           return;
         }
-        if (!/^\d{2}:\d{2}$/.test((_c = this.draft.scheduleTime) != null ? _c : "")) {
-          new import_obsidian.Notice("Hora inv\xE1lida. Usa formato HH:MM.");
+        if (!((_c = this.draft.model) != null ? _c : "").trim()) {
+          new import_obsidian.Notice("You must select a model.");
           return;
         }
-        if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_d = this.draft.scheduleDate) != null ? _d : "")) {
-          new import_obsidian.Notice("Fecha inv\xE1lida. Usa formato YYYY-MM-DD.");
+        if (!/^\d{2}:\d{2}$/.test((_d = this.draft.scheduleTime) != null ? _d : "")) {
+          new import_obsidian.Notice("Invalid time. Use HH:MM format.");
+          return;
+        }
+        if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_e = this.draft.scheduleDate) != null ? _e : "")) {
+          new import_obsidian.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.editTask) {
@@ -674,7 +1025,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             id: generateId(),
             name: this.draft.name,
             prompt: this.draft.prompt,
-            model: (_e = this.draft.model) != null ? _e : this.plugin.settings.defaultModel,
+            model: this.draft.model,
             useRalphLoop: (_f = this.draft.useRalphLoop) != null ? _f : false,
             scheduleType: (_g = this.draft.scheduleType) != null ? _g : "once",
             scheduleTime: this.draft.scheduleTime,
@@ -688,7 +1039,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           this.plugin.settings.tasks.push(task);
         }
         await this.plugin.saveSettings();
-        new import_obsidian.Notice(`Tarea "${this.draft.name}" guardada.`);
+        new import_obsidian.Notice(`Task "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -723,7 +1074,7 @@ var LiveLogModal = class extends import_obsidian.Modal {
       const secs = Math.floor((Date.now() - new Date(this.task.lastRun).getTime()) / 1e3);
       const min = Math.floor(secs / 60);
       const sec = secs % 60;
-      elapsedEl.textContent = `\u23F1 Tiempo transcurrido: ${min}m ${sec}s`;
+      elapsedEl.textContent = `\u23F1 Elapsed time: ${min}m ${sec}s`;
     };
     updateElapsed();
     this.elapsedIntervalId = window.setInterval(updateElapsed, 1e3);
@@ -737,16 +1088,16 @@ var LiveLogModal = class extends import_obsidian.Modal {
       btnScroll.textContent = `\u2193 Auto-scroll: ${this.autoScroll ? "ON" : "OFF"}`;
     };
     const btnCopy = toolbar.createEl("button", {
-      text: "\u{1F4CB} Copiar",
+      text: "\u{1F4CB} Copy",
       cls: "auto-oc-btn-secondary"
     });
     btnCopy.onclick = () => {
       var _a, _b;
       navigator.clipboard.writeText((_b = (_a = this.pre) == null ? void 0 : _a.textContent) != null ? _b : "");
-      new import_obsidian.Notice("Log copiado.");
+      new import_obsidian.Notice("Log copied.");
     };
     const btnClear = toolbar.createEl("button", {
-      text: "\u{1F5D1} Limpiar vista",
+      text: "\u{1F5D1} Clear View",
       cls: "auto-oc-btn-secondary"
     });
     btnClear.onclick = () => {
@@ -799,17 +1150,17 @@ var CommandPreviewModal = class extends import_obsidian.Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: `Comando: ${this.taskName}` });
+    contentEl.createEl("h3", { text: `Command: ${this.taskName}` });
     contentEl.createEl("p", {
-      text: "Este es el comando CLI que se ejecutar\xE1:",
+      text: "This is the CLI command that will be executed:",
       cls: "setting-item-description"
     });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.cmd;
     new import_obsidian.Setting(contentEl).addButton(
-      (btn) => btn.setButtonText("Copiar").onClick(() => {
+      (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.cmd);
-        new import_obsidian.Notice("Comando copiado.");
+        new import_obsidian.Notice("Command copied.");
       })
     );
   }
@@ -825,25 +1176,29 @@ var DiagnosticModal = class extends import_obsidian.Modal {
   }
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "\u{1F527} Diagn\xF3stico AutoOC" });
+    contentEl.createEl("h3", { text: "\u{1F527} AutoOC Diagnostic" });
     contentEl.createEl("p", {
-      text: "Prueba el comando opencode directamente desde Obsidian.",
+      text: "Test the opencode command directly from Obsidian.",
       cls: "setting-item-description"
     });
     const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-    contentEl.createEl("p", { text: `Binario detectado: ${bin}`, cls: "setting-item-description" });
-    contentEl.createEl("p", { text: `Modelo por defecto: ${this.plugin.settings.defaultModel}`, cls: "setting-item-description" });
+    contentEl.createEl("p", { text: `Detected binary: ${bin}`, cls: "setting-item-description" });
+    contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
     new import_obsidian.Setting(contentEl).addButton(
-      (btn) => btn.setButtonText("\u25B6 Lanzar prueba: 'di hola'").setCta().onClick(() => {
-        if (this.logEl) this.logEl.textContent = "[lanzando proceso PowerShell desacoplado\u2026]\n";
+      (btn) => btn.setButtonText("\u25B6 Launch test: 'di hola'").setCta().onClick(() => {
+        if (this.logEl) this.logEl.textContent = "[launching detached PowerShell process\u2026]\n";
         const bin2 = resolveOpencodeBin(this.plugin.settings.opencodePath);
-        const model = this.plugin.settings.defaultModel;
-        const fs = require("fs");
-        const path = require("path");
+        const model = this.plugin.getEffectiveDefaultModel();
+        if (!model) {
+          new import_obsidian.Notice("AutoOC: no model selected. Reload models in Settings.");
+          return;
+        }
+        const fs2 = require("fs");
+        const path2 = require("path");
         const osTmp = require("os").tmpdir();
-        const outFile = path.join(osTmp, "autooc-diag.txt");
+        const outFile = path2.join(osTmp, "autooc-diag.txt");
         try {
-          fs.unlinkSync(outFile);
+          fs2.unlinkSync(outFile);
         } catch (e) {
         }
         const psScript = [
@@ -860,22 +1215,22 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "
 DONE:" + $p.ExitCode)`
         ].join("\n");
-        const psFile = path.join(osTmp, "autooc-diag.ps1");
-        fs.writeFileSync(psFile, psScript, "utf8");
+        const psFile = path2.join(osTmp, "autooc-diag.ps1");
+        fs2.writeFileSync(psFile, psScript, "utf8");
         if (this.logEl) this.logEl.textContent += `Script: ${psFile}
 
 `;
         launchHiddenPS(psFile);
         const poll = setInterval(() => {
-          if (!fs.existsSync(outFile)) {
+          if (!fs2.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           clearInterval(poll);
-          const raw = fs.readFileSync(outFile, "utf8");
+          const raw = fs2.readFileSync(outFile, "utf8");
           try {
-            fs.unlinkSync(outFile);
-            fs.unlinkSync(psFile);
+            fs2.unlinkSync(outFile);
+            fs2.unlinkSync(psFile);
           } catch (e) {
           }
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
@@ -906,45 +1261,45 @@ var AutoOCSettingTab = class extends import_obsidian.PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "AutoOC \u2014 Configuraci\xF3n" });
-    new import_obsidian.Setting(containerEl).setName("Ruta de OpenCode CLI").setDesc(
-      `Ruta absoluta al ejecutable. Vac\xEDo = auto-detectar.
-Detectado ahora: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
+    containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
+    new import_obsidian.Setting(containerEl).setName("OpenCode CLI Path").setDesc(
+      `Absolute path to executable. Empty = auto-detect.
+Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
     ).addText((text) => {
-      text.setPlaceholder("auto-detectar").setValue(this.plugin.settings.opencodePath).onChange(async (v) => {
+      text.setPlaceholder("auto-detect").setValue(this.plugin.settings.opencodePath).onChange(async (v) => {
         this.plugin.settings.opencodePath = v.trim();
         await this.plugin.saveSettings();
       });
       return text;
     }).addButton(
-      (btn) => btn.setButtonText("\u{1F50D} Auto-detectar").onClick(async () => {
-        const { existsSync } = require("fs");
+      (btn) => btn.setButtonText("\u{1F50D} Auto-detect").onClick(async () => {
+        const { existsSync: existsSync2 } = require("fs");
         const candidates = [
           `${process.env.APPDATA}\\npm\\opencode.cmd`,
           `${process.env.APPDATA}\\npm\\opencode`,
           `${process.env.LOCALAPPDATA}\\npm\\opencode.cmd`,
           `${process.env.ProgramFiles}\\nodejs\\opencode.cmd`
         ].filter(Boolean);
-        const found = candidates.find((c) => existsSync(c));
+        const found = candidates.find((c) => existsSync2(c));
         if (found) {
           this.plugin.settings.opencodePath = found;
           await this.plugin.saveSettings();
-          new import_obsidian.Notice(`AutoOC: ruta configurada \u2192 ${found}`);
+          new import_obsidian.Notice(`AutoOC: path configured \u2192 ${found}`);
           this.display();
         } else {
-          new import_obsidian.Notice("AutoOC: no se encontr\xF3 opencode autom\xE1ticamente. Introduce la ruta manualmente.");
+          new import_obsidian.Notice("AutoOC: opencode not found automatically. Enter the path manually.");
         }
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Directorio de trabajo").setDesc(
-      "Directorio desde el que se lanza OpenCode (vac\xEDo = directorio actual del vault)"
+    new import_obsidian.Setting(containerEl).setName("Working Directory").setDesc(
+      "Directory from which to launch OpenCode (empty = vault's current directory)"
     ).addText(
       (text) => text.setPlaceholder("C:\\Users\\GiJu236\\projects\\mi-proyecto").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
         this.plugin.settings.workingDirectory = v;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Timeout por tarea (segundos)").setDesc("Si el proceso no termina en este tiempo, se mata autom\xE1ticamente. Por defecto 1800 s (30 min). Usa 0 para desactivar timeout.").addText(
+    new import_obsidian.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("If process doesn't finish in this time, it's automatically killed. Default 1800 s (30 min). Use 0 to disable timeout.").addText(
       (text) => {
         var _a;
         return text.setPlaceholder("1800").setValue(String((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : 1800)).onChange(async (v) => {
@@ -956,32 +1311,62 @@ Detectado ahora: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
         });
       }
     );
-    new import_obsidian.Setting(containerEl).setName("Modelo por defecto").addDropdown((dd) => {
+    containerEl.createEl("h3", { text: "Ralph Loop" });
+    containerEl.createEl("p", {
+      text: "Enable opencode-ralph-loop in ~/.config/opencode/opencode.json to use auto-continuation with /ralph-loop.",
+      cls: "setting-item-description"
+    });
+    containerEl.createEl("p", {
+      text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
+      (btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
+        try {
+          const result = await this.plugin.ensureRalphLoopPluginEnabled();
+          new import_obsidian.Notice(
+            result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
+          );
+          this.display();
+        } catch (e) {
+          new import_obsidian.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+        }
+      })
+    ).addButton(
+      (btn) => btn.setButtonText("Show status path").onClick(() => {
+        const basePath = this.app.vault.adapter.basePath || ".";
+        const statePath = getRalphStateFilePath(basePath);
+        new import_obsidian.Notice(`Ralph state file: ${statePath}`);
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default Model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
-      const current = this.plugin.settings.defaultModel;
-      if (!models.find((m) => m.value === current)) {
+      const current = this.plugin.getEffectiveDefaultModel();
+      if (!current && models.length === 0) {
+        dd.addOption("", "(no models; press reload)");
+      } else if (current && !models.find((m) => m.value === current)) {
         dd.addOption(current, current);
       }
-      dd.setValue(current);
+      dd.setValue(current || "");
       dd.onChange(async (v) => {
         this.plugin.settings.defaultModel = v;
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: "Modelos disponibles" });
+    containerEl.createEl("h3", { text: "Available Models" });
     const refreshBtn = containerEl.createEl("button", {
-      text: "\u{1F504} Recargar lista de modelos",
+      text: "\u{1F504} Reload Model List",
       cls: "auto-oc-btn-secondary"
     });
     refreshBtn.style.marginBottom = "8px";
     refreshBtn.onclick = () => {
       this.plugin.refreshModels();
-      new import_obsidian.Notice("AutoOC: modelos recargados. Recarga este panel.");
+      new import_obsidian.Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
     containerEl.createEl("p", {
-      text: `${this.plugin.availableModels.length} modelos cargados desde \`opencode models\``,
+      text: `${this.plugin.availableModels.length} models loaded from \`opencode models\``,
       cls: "setting-item-description"
     });
     const table = containerEl.createEl("table", { cls: "auto-oc-models-table" });

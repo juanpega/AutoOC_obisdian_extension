@@ -10,6 +10,8 @@ import {
 } from "obsidian";
 import { spawn, exec, execFile } from "child_process";
 import * as os from "os";
+import * as fs from "fs";
+import * as path from "path";
 
 // Resolve the opencode binary: on Windows prefer .cmd so Electron finds it without PATH
 function resolveOpencodeBin(configured: string): string {
@@ -47,6 +49,12 @@ function launchHiddenPS(psScriptFile: string): void {
 type ScheduleType = "once" | "daily" | "weekly";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 
+interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: string;  // ISO string
+}
+
 interface ScheduledTask {
   id: string;
   name: string;
@@ -65,6 +73,8 @@ interface ScheduledTask {
 
 interface AutoOCSettings {
   tasks: ScheduledTask[];
+  chatHistory: ChatMessage[];
+  chatModel: string;
   opencodePath: string;
   defaultModel: string;
   workingDirectory: string;
@@ -74,12 +84,8 @@ interface AutoOCSettings {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Fallback si opencode no responde aún
-const FALLBACK_MODELS = [
-  { value: "spark-reasoning/reasoning", label: "spark-reasoning/reasoning" },
-  { value: "spark-coder/coder",         label: "spark-coder/coder" },
-  { value: "rndia/qwen3.6:35b",         label: "rndia/qwen3.6:35b" },
-];
+// No hardcoded models: load dynamically with `opencode models`.
+const FALLBACK_MODELS: { value: string; label: string }[] = [];
 
 function fetchModelsSync(opencodePath: string): { value: string; label: string }[] {
   const { execSync } = require("child_process");
@@ -98,8 +104,10 @@ function fetchModelsSync(opencodePath: string): { value: string; label: string }
 
 const DEFAULT_SETTINGS: AutoOCSettings = {
   tasks: [],
+  chatHistory: [],
+  chatModel: "",
   opencodePath: "opencode",
-  defaultModel: "spark-reasoning/reasoning",
+  defaultModel: "",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
@@ -158,6 +166,14 @@ function normalizeCommandOutput(text: string): string {
   return cleaned.trim();
 }
 
+function getOpencodeConfigPath(): string {
+  return path.join(os.homedir(), ".config", "opencode", "opencode.json");
+}
+
+function getRalphStateFilePath(vaultBasePath: string): string {
+  return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
+}
+
 function isTaskDue(task: ScheduledTask): boolean {
   if (task.status === "running") return false;
 
@@ -201,7 +217,7 @@ export default class AutoOCPlugin extends Plugin {
 
   async onload() {
     await this.loadSettings();
-    // Carga modelos de forma asíncrona para no bloquear el arranque
+    // Load models asynchronously to avoid blocking startup
     setTimeout(() => this.refreshModels(), 2000);
 
     this.registerView(VIEW_TYPE, (leaf) => {
@@ -215,29 +231,42 @@ export default class AutoOCPlugin extends Plugin {
 
     this.addCommand({
       id: "open-auto-oc",
-      name: "Abrir AutoOC Task Scheduler",
+      name: "Open AutoOC Task Scheduler",
       callback: () => this.activateView(),
     });
 
     this.addCommand({
       id: "create-task",
-      name: "Crear nueva tarea OpenCode",
+      name: "Create new OpenCode task",
       callback: () => new CreateTaskModal(this.app, this).open(),
     });
 
     this.addCommand({
       id: "check-tasks-now",
-      name: "Comprobar tareas pendientes ahora",
+      name: "Check due tasks now",
       callback: async () => {
         await this.runDueTasks();
-        new Notice("AutoOC: comprobación completada.");
+        new Notice("AutoOC: check completed.");
       },
     });
 
     this.addCommand({
       id: "diagnose",
-      name: "AutoOC: Diagnóstico — probar comando opencode",
+      name: "AutoOC: Diagnostic — test opencode command",
       callback: () => new DiagnosticModal(this.app, this).open(),
+    });
+
+    this.addCommand({
+      id: "install-ralph-loop",
+      name: "AutoOC: Ralph Loop Assistant (install/activate)",
+      callback: async () => {
+        const result = await this.ensureRalphLoopPluginEnabled();
+        new Notice(
+          result.changed
+            ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
+            : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
+        );
+      },
     });
 
     this.addSettingTab(new AutoOCSettingTab(this.app, this));
@@ -247,7 +276,7 @@ export default class AutoOCPlugin extends Plugin {
       window.setInterval(() => this.runDueTasks(), 60_000)
     );
 
-    // Comprobación inicial tras arrancar (5 s de margen para que cargue Obsidian)
+    // Initial check after startup (5 s margin for Obsidian to load)
     setTimeout(() => this.runDueTasks(), 5_000);
   }
 
@@ -264,8 +293,17 @@ export default class AutoOCPlugin extends Plugin {
     const models = fetchModelsSync(this.settings.opencodePath || "opencode");
     if (models.length > 0) {
       this.availableModels = models;
+      if (!this.settings.defaultModel || !models.find((m) => m.value === this.settings.defaultModel)) {
+        this.settings.defaultModel = models[0].value;
+        void this.saveSettings();
+      }
       this.view?.refresh();
     }
+  }
+
+  getEffectiveDefaultModel(): string {
+    if (this.settings.defaultModel) return this.settings.defaultModel;
+    return this.availableModels[0]?.value ?? "";
   }
 
   async activateView() {
@@ -292,6 +330,49 @@ export default class AutoOCPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (!this.settings.defaultModel) {
+      this.settings.defaultModel = this.availableModels[0]?.value ?? "";
+    }
+  }
+
+  isRalphLoopEnabled(): boolean {
+    const configPath = getOpencodeConfigPath();
+    if (!fs.existsSync(configPath)) return false;
+    try {
+      const raw = fs.readFileSync(configPath, "utf8");
+      const data = JSON.parse(raw);
+      return Array.isArray(data?.plugin) && data.plugin.includes("opencode-ralph-loop");
+    } catch {
+      return false;
+    }
+  }
+
+  async ensureRalphLoopPluginEnabled(): Promise<{ changed: boolean; configPath: string }> {
+    const configPath = getOpencodeConfigPath();
+    const configDir = path.dirname(configPath);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    let data: Record<string, any> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        const raw = fs.readFileSync(configPath, "utf8");
+        data = raw.trim() ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error(`Could not read valid JSON from ${configPath}`);
+      }
+    }
+
+    const plugins = Array.isArray(data.plugin) ? [...data.plugin] : [];
+    if (plugins.includes("opencode-ralph-loop")) {
+      return { changed: false, configPath };
+    }
+
+    plugins.push("opencode-ralph-loop");
+    data.plugin = plugins;
+    fs.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    return { changed: true, configPath };
   }
 
   async saveSettings() {
@@ -328,7 +409,7 @@ export default class AutoOCPlugin extends Plugin {
     this.settings.tasks[idx].output = "[iniciando proceso desacoplado…]\n";
     await this.saveSettings();
 
-    new Notice(`AutoOC: ejecutando "${task.name}"…`);
+    new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(this.settings.tasks[idx]);
     const bin   = args[0]; // opencode.cmd full path
@@ -433,10 +514,10 @@ export default class AutoOCPlugin extends Plugin {
     const t = this.settings.tasks.find((x) => x.id === id);
     if (t) {
       t.status = "failed";
-      t.output += "\n[tarea detenida manualmente]";
+      t.output += "\n[task stopped manually]";
       await this.saveSettings();
     }
-    new Notice(`AutoOC: ⏹ Tarea detenida.`);
+    new Notice(`AutoOC: ⏹ Task stopped.`);
   }
 
   async runDueTasks() {
@@ -457,6 +538,7 @@ export default class AutoOCPlugin extends Plugin {
 
 class AutoOCView extends ItemView {
   private plugin: AutoOCPlugin;
+  private currentTab: "tasks" | "chat" = "tasks";
 
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
@@ -476,6 +558,35 @@ class AutoOCView extends ItemView {
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
 
+    // ── Tab buttons ──
+    const tabBar = containerEl.createDiv("auto-oc-tab-bar");
+    const btnTasks = tabBar.createEl("button", {
+      text: "📋 Tasks",
+      cls: `auto-oc-tab-btn ${this.currentTab === "tasks" ? "active" : ""}`,
+    });
+    btnTasks.onclick = () => {
+      this.currentTab = "tasks";
+      this.render();
+    };
+
+    const btnChat = tabBar.createEl("button", {
+      text: "💬 Chat",
+      cls: `auto-oc-tab-btn ${this.currentTab === "chat" ? "active" : ""}`,
+    });
+    btnChat.onclick = () => {
+      this.currentTab = "chat";
+      this.render();
+    };
+
+    // ── Content ──
+    if (this.currentTab === "tasks") {
+      this.renderTasks(containerEl);
+    } else {
+      this.renderChat(containerEl);
+    }
+  }
+
+  private renderTasks(containerEl: HTMLElement) {
     // ── Header ──
     const header = containerEl.createDiv("auto-oc-header");
     header.createEl("h4", { text: "⏰ AutoOC Scheduler" });
@@ -483,18 +594,18 @@ class AutoOCView extends ItemView {
     const btnRow = header.createDiv("auto-oc-btn-row");
 
     const btnNew = btnRow.createEl("button", {
-      text: "+ Nueva tarea",
+      text: "+ New Task",
       cls: "auto-oc-btn-primary",
     });
     btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
 
     const btnCheck = btnRow.createEl("button", {
-      text: "▶ Comprobar ahora",
+      text: "▶ Check Now",
       cls: "auto-oc-btn-secondary",
     });
     btnCheck.onclick = async () => {
       await this.plugin.runDueTasks();
-      new Notice("AutoOC: comprobación completada.");
+      new Notice("AutoOC: check completed.");
     };
 
     // ── Stats bar ──
@@ -504,25 +615,312 @@ class AutoOCView extends ItemView {
     const running = tasks.filter((t) => t.status === "running").length;
     const completed = tasks.filter((t) => t.status === "completed").length;
     const failed = tasks.filter((t) => t.status === "failed").length;
-    stats.createEl("span", { text: `${tasks.length} tareas` });
-    if (running > 0) stats.createEl("span", { text: `🟡 ${running} ejecutando`, cls: "auto-oc-stat-running" });
-    if (failed > 0) stats.createEl("span", { text: `🔴 ${failed} fallidas`, cls: "auto-oc-stat-failed" });
-    if (completed > 0) stats.createEl("span", { text: `🟢 ${completed} completadas` });
+    stats.createEl("span", { text: `${tasks.length} tasks` });
+    if (running > 0) stats.createEl("span", { text: `🟡 ${running} running`, cls: "auto-oc-stat-running" });
+    if (failed > 0) stats.createEl("span", { text: `🔴 ${failed} failed`, cls: "auto-oc-stat-failed" });
+    if (completed > 0) stats.createEl("span", { text: `🟢 ${completed} completed` });
 
     // ── Task list ──
     if (tasks.length === 0) {
       containerEl.createEl("p", {
-        text: 'No hay tareas programadas. Crea una con "+ Nueva tarea".',
+        text: 'No tasks scheduled. Create one with "+New Task".',
         cls: "auto-oc-empty",
       });
       return;
     }
 
     const list = containerEl.createDiv("auto-oc-list");
-    // Mostrar más recientes primero
+    // Show most recent first
     for (const task of [...tasks].reverse()) {
       this.renderTaskCard(list, task);
     }
+  }
+
+  private renderChat(containerEl: HTMLElement) {
+    const chatLayout = containerEl.createDiv("auto-oc-chat-layout");
+    chatLayout.style.height = "100%";
+
+    // ── Header ──
+    const header = chatLayout.createDiv("auto-oc-header");
+    header.createEl("h4", { text: "💬 Chat with Models" });
+
+    // ── Model selector ──
+    const modelRow = chatLayout.createDiv("auto-oc-chat-model-row");
+    modelRow.createEl("label", { text: "Model:" });
+    const selectModel = modelRow.createEl("select", { cls: "auto-oc-chat-model-select" });
+    selectModel.innerHTML = "";
+    this.plugin.availableModels.forEach((m) => {
+      const opt = selectModel.createEl("option", { text: m.label });
+      opt.value = m.value;
+    });
+    const currentModel = this.plugin.settings.chatModel || this.plugin.getEffectiveDefaultModel();
+    if (currentModel) selectModel.value = currentModel;
+    selectModel.onchange = async () => {
+      this.plugin.settings.chatModel = selectModel.value;
+      await this.plugin.saveSettings();
+    };
+
+    chatLayout.createEl("p", {
+      text: `Conversation is saved. Locked model: ${selectModel.value || "(none)"}`,
+      cls: "setting-item-description",
+    });
+
+    // ── Messages area ──
+    const messagesDiv = chatLayout.createDiv("auto-oc-chat-messages");
+    const sanitizeForContext = (text: string): string => {
+      return text
+        .replace(/\n?\[stderr\][\s\S]*$/i, "")
+        .replace(/^>\s*build\s.*$/gim, "")
+        .trim();
+    };
+
+    const renderMessages = () => {
+      messagesDiv.empty();
+      this.plugin.settings.chatHistory.forEach((msg) => {
+        const msgEl = messagesDiv.createDiv(`auto-oc-chat-message auto-oc-chat-${msg.role}`);
+        msgEl.createEl("div", { text: msg.role === "user" ? "You:" : "Assistant:", cls: "auto-oc-chat-role" });
+        const visibleContent = msg.role === "assistant"
+          ? (sanitizeForContext(msg.content) || msg.content || "(no response)")
+          : msg.content;
+        msgEl.createEl("div", { text: visibleContent, cls: "auto-oc-chat-content" });
+      });
+      // Auto-scroll to bottom
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    };
+
+    renderMessages();
+
+    // ── Input footer ──
+    const footer = chatLayout.createDiv("auto-oc-chat-footer");
+    const inputDiv = footer.createDiv("auto-oc-chat-input-area");
+    const inputField = inputDiv.createEl("textarea", { cls: "auto-oc-chat-input" });
+    inputField.placeholder = "Type your prompt here... (Enter to send, Shift+Enter for newline)";
+    inputField.disabled = false;
+    inputField.readOnly = false;
+
+    const actionsCol = inputDiv.createDiv("auto-oc-chat-actions-col");
+
+    const btnSend = actionsCol.createEl("button", {
+      text: "▶ Send",
+      cls: "auto-oc-btn-primary",
+    });
+
+    // Clear history button (below Send)
+    const btnClear = actionsCol.createEl("button", {
+      text: "🗑 Clear History",
+      cls: "auto-oc-btn-secondary",
+    });
+
+    const buildChatPrompt = (history: ChatMessage[], userPrompt: string): string => {
+      const compact = (s: string) => s.replace(/\s+/g, " ").trim();
+      const userOnly = history
+        .filter((m) => m.role === "user")
+        .slice(-4)
+        .map((m) => compact(m.content))
+        .filter(Boolean);
+
+      if (userOnly.length === 0) return userPrompt;
+
+      const clippedUserHistory = userOnly.join(" | ").slice(-900);
+      const compactPrompt = compact(userPrompt);
+
+      return [
+        "Use this short user context if relevant:",
+        clippedUserHistory,
+        "Current user message:",
+        compactPrompt,
+      ].join("\n\n");
+    };
+
+    const runPrompt = async () => {
+      const prompt = inputField.value.trim();
+      if (!prompt) return;
+
+      const model = selectModel.value;
+      if (!model) {
+        new Notice("Please select a model first.");
+        return;
+      }
+
+      const historyBefore = [...this.plugin.settings.chatHistory];
+      const contextualPrompt = buildChatPrompt(historyBefore, prompt);
+      this.plugin.settings.chatModel = model;
+
+      // Add user message to history
+      this.plugin.settings.chatHistory.push({
+        role: "user",
+        content: prompt,
+        timestamp: new Date().toISOString(),
+      });
+      await this.plugin.saveSettings();
+
+      inputField.value = "";
+      renderMessages();
+
+      // Run opencode command
+      btnSend.disabled = true;
+      btnSend.textContent = "⏳ Waiting...";
+
+      try {
+        const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
+        const cwd = this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+        const timeoutMs = (this.plugin.settings.taskTimeoutSeconds ?? 1800) * 1000;
+        const chatTimeoutMs = Math.min(timeoutMs, 120000); // keep chat responsive even if task timeout is large
+
+        const finishChatRequest = () => {
+          btnSend.disabled = false;
+          btnSend.textContent = "▶ Send";
+          inputField.focus();
+          renderMessages();
+        };
+
+        const onResult = async (error: any, stdout: string, stderr: string) => {
+          const cleanStdout = normalizeCommandOutput(stdout || "");
+          const cleanStderr = normalizeCommandOutput(stderr || "");
+          let output = cleanStdout;
+          if (!output && cleanStderr) output = `Error: ${cleanStderr}`;
+          if (!output && error) output = `Error: ${String(error)}`;
+
+          // Add assistant message
+          this.plugin.settings.chatHistory.push({
+            role: "assistant",
+            content: output.trim() || "(no response)",
+            timestamp: new Date().toISOString(),
+          });
+          try {
+            await this.plugin.saveSettings();
+          } catch {
+            // Keep chat responsive even if saving fails intermittently.
+          }
+          finishChatRequest();
+        };
+
+        // On Windows, use the same detached PS + file-polling approach as scheduled tasks.
+        if (process.platform === "win32" && /\.(cmd|bat)$/i.test(bin)) {
+          const promptB64 = Buffer.from(contextualPrompt, "utf8").toString("base64");
+          const tmpDir = require("os").tmpdir();
+          const outFile = require("path").join(tmpDir, `autooc-chat-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+          const psScriptFile = require("path").join(tmpDir, `autooc-chat-${Date.now()}-${Math.random().toString(36).slice(2)}.ps1`);
+          const psScript = [
+            `$env:USERPROFILE = '${(process.env.USERPROFILE || "").replace(/'/g, "''")}'`,
+            `$env:APPDATA     = '${(process.env.APPDATA || "").replace(/'/g, "''")}'`,
+            `$env:LOCALAPPDATA= '${(process.env.LOCALAPPDATA || "").replace(/'/g, "''")}'`,
+            `$env:PATH        = '${(process.env.PATH || "").replace(/'/g, "''")}'`,
+            `$env:HOME        = '${(process.env.USERPROFILE || "").replace(/'/g, "''")}'`,
+            `$env:OPENCODE_MODEL = '${model.replace(/'/g, "''")}'`,
+            `Set-Location '${cwd.replace(/'/g, "''")}'`,
+            `$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${promptB64}'))`,
+            `$outTmp = [System.IO.Path]::GetTempFileName()`,
+            `$errTmp = [System.IO.Path]::GetTempFileName()`,
+            `$proc = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run',$p,'-m','${model.replace(/'/g, "''")}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+            `$stdout = (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue)`,
+            `$stderr = (Get-Content $errTmp -Raw -ErrorAction SilentlyContinue)`,
+            `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
+            `$combined = ($stdout + $(if($stderr){"\n[stderr]\n" + $stderr}else{""})).Trim()`,
+            `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:" + $proc.ExitCode)`,
+          ].join("\n");
+
+          fs.writeFileSync(psScriptFile, psScript, "utf8");
+          launchHiddenPS(psScriptFile);
+
+          const startedAt = Date.now();
+          const outFileDeadlineMs = 15000; // if file never appears, command likely failed to launch
+          const pollHandle = setInterval(async () => {
+            if (Date.now() - startedAt > chatTimeoutMs) {
+              clearInterval(pollHandle);
+              try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
+              await onResult(new Error(`Chat timeout after ${Math.floor(chatTimeoutMs / 1000)}s`), "", "");
+              return;
+            }
+
+            if (!fs.existsSync(outFile)) {
+              if (Date.now() - startedAt > outFileDeadlineMs) {
+                clearInterval(pollHandle);
+                try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
+                await onResult(new Error("Chat process did not start correctly (no output file created)."), "", "");
+              }
+              return;
+            }
+
+            clearInterval(pollHandle);
+            const raw = fs.readFileSync(outFile, "utf8");
+            try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+            try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
+
+            const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
+            const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
+            const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
+            const stderrFromOutput = output.includes("[stderr]") ? output : "";
+            await onResult(exitCode === 0 ? null : new Error(`Exit code ${exitCode}`), output, stderrFromOutput);
+          }, 1200);
+        } else {
+          execFile(
+            bin,
+            ["run", contextualPrompt, "-m", model, "--dangerously-skip-permissions"],
+            {
+              cwd,
+              timeout: chatTimeoutMs,
+              windowsHide: true,
+              env: { ...process.env, OPENCODE_MODEL: model },
+            },
+            onResult,
+          );
+        }
+      } catch (e) {
+        const errMsg = String(e);
+        this.plugin.settings.chatHistory.push({
+          role: "assistant",
+          content: `Error: ${errMsg}`,
+          timestamp: new Date().toISOString(),
+        });
+        await this.plugin.saveSettings();
+
+        btnSend.disabled = false;
+        btnSend.textContent = "▶ Send";
+
+        renderMessages();
+      }
+    };
+
+    btnSend.onclick = runPrompt;
+
+    // Enter sends, Shift+Enter inserts newline (common chat UX)
+    inputField.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        if (btnSend.disabled) return;
+        runPrompt();
+      }
+    });
+
+    btnClear.onclick = async () => {
+      if (confirm("Clear chat history?")) {
+        this.plugin.settings.chatHistory = [];
+        try {
+          await this.plugin.saveSettings();
+        } catch {
+          // Keep UI usable even if persistence fails.
+        }
+        // Safety reset: if a previous request got stuck, unlock chat controls immediately.
+        btnSend.disabled = false;
+        btnSend.textContent = "▶ Send";
+        inputField.removeAttribute("disabled");
+        inputField.readOnly = false;
+        inputField.value = "";
+        inputField.focus();
+        window.setTimeout(() => inputField.focus(), 0);
+        // Full rerender avoids any stale closure/state after clear.
+        this.render();
+        window.setTimeout(() => {
+          const ta = this.containerEl.querySelector(".auto-oc-chat-input") as HTMLTextAreaElement | null;
+          if (ta) {
+            ta.disabled = false;
+            ta.readOnly = false;
+            ta.focus();
+          }
+        }, 0);
+      }
+    };
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
@@ -545,19 +943,19 @@ class AutoOCView extends ItemView {
     if (task.scheduleType === "once") {
       scheduleText = `📅 ${task.scheduleDate} ${task.scheduleTime}`;
     } else if (task.scheduleType === "daily") {
-      scheduleText = `🔁 Cada día a las ${task.scheduleTime}`;
+      scheduleText = `🔁 Every day at ${task.scheduleTime}`;
     } else {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
-      scheduleText = `🔁 ${days || "ningún día"} a las ${task.scheduleTime}`;
+      scheduleText = `🔁 ${days || "no days"} at ${task.scheduleTime}`;
     }
     meta.createEl("span", { text: scheduleText });
 
     if (task.lastRun) {
-      meta.createEl("span", { text: `⏱ Último: ${formatDateTime(task.lastRun)}` });
+      meta.createEl("span", { text: `⏱ Last: ${formatDateTime(task.lastRun)}` });
     }
 
     if (task.useRalphLoop) {
-      meta.createEl("span", { text: "♻️ Ralph Loop activo", cls: "auto-oc-ralph-badge" });
+      meta.createEl("span", { text: "♻️ Ralph Loop active", cls: "auto-oc-ralph-badge" });
     }
 
     // Prompt preview
@@ -570,7 +968,7 @@ class AutoOCView extends ItemView {
     const actions = card.createDiv("auto-oc-card-actions");
 
     const btnRun = actions.createEl("button", {
-      text: task.status === "running" ? "⏳ Ejecutando…" : "▶ Ejecutar",
+      text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
     btnRun.disabled = task.status === "running";
@@ -579,20 +977,20 @@ class AutoOCView extends ItemView {
     // Stop button — only when running
     if (task.status === "running") {
       const btnStop = actions.createEl("button", {
-        text: "⏹ Parar",
+        text: "⏹ Stop",
         cls: "auto-oc-btn-stop",
       });
-      btnStop.title = "Terminar el proceso ahora";
+      btnStop.title = "Terminate process now";
       btnStop.onclick = async () => {
         btnStop.disabled = true;
-        btnStop.textContent = "Parando…";
+        btnStop.textContent = "Stopping…";
         await this.plugin.killTask(task.id);
       };
     }
 
     // Log button — always visible; live-refresh when running
     const btnLog = actions.createEl("button", {
-      text: task.status === "running" ? "📡 Log en vivo" : "📄 Log",
+      text: task.status === "running" ? "📡 Live Log" : "📄 Log",
       cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output",
     });
     btnLog.disabled = !task.output && task.status !== "running";
@@ -600,7 +998,7 @@ class AutoOCView extends ItemView {
     btnLog.onclick = () => new LiveLogModal(this.app, task, this.plugin).open();
 
     const btnCmd = actions.createEl("button", {
-      text: "🔍 Comando",
+      text: "🔍 Command",
       cls: "auto-oc-btn-cmd",
     });
     btnCmd.onclick = () => {
@@ -609,7 +1007,7 @@ class AutoOCView extends ItemView {
     };
 
     const btnEdit = actions.createEl("button", {
-      text: "✏️ Editar",
+      text: "✏️ Edit",
       cls: "auto-oc-btn-edit",
     });
     btnEdit.onclick = () =>
@@ -619,9 +1017,9 @@ class AutoOCView extends ItemView {
       text: "🗑",
       cls: "auto-oc-btn-delete",
     });
-    btnDelete.title = "Eliminar tarea";
+    btnDelete.title = "Delete task";
     btnDelete.onclick = async () => {
-      if (confirm(`¿Eliminar tarea "${task.name}"?`)) {
+      if (confirm(`Delete task "${task.name}"?`)) {
         await this.plugin.deleteTask(task.id);
       }
     };
@@ -644,7 +1042,7 @@ class CreateTaskModal extends Modal {
       : {
           name: "",
           prompt: "",
-          model: plugin.settings.defaultModel,
+          model: plugin.getEffectiveDefaultModel(),
           useRalphLoop: false,
           scheduleType: "once",
           scheduleTime: nowTimeString(),
@@ -658,19 +1056,19 @@ class CreateTaskModal extends Modal {
     contentEl.empty();
     contentEl.addClass("auto-oc-modal");
     contentEl.createEl("h3", {
-      text: this.editTask ? "Editar tarea" : "Nueva tarea OpenCode",
+      text: this.editTask ? "Edit Task" : "New OpenCode Task",
     });
 
     new Setting(contentEl)
-      .setName("Nombre")
-      .setDesc("Identificador corto de la tarea")
+      .setName("Name")
+      .setDesc("Short task identifier")
       .addText((text) =>
         text.setValue(this.draft.name ?? "").onChange((v) => (this.draft.name = v))
       );
 
     new Setting(contentEl)
       .setName("Prompt / Goal")
-      .setDesc("Texto que se enviará a OpenCode")
+      .setDesc("Text to send to OpenCode")
       .addTextArea((ta) => {
         ta.setValue(this.draft.prompt ?? "").onChange((v) => (this.draft.prompt = v));
         ta.inputEl.rows = 5;
@@ -678,54 +1076,69 @@ class CreateTaskModal extends Modal {
       });
 
     new Setting(contentEl)
-      .setName("Modelo")
-      .setDesc("Modelo de IA a usar")
+      .setName("Model")
+      .setDesc("AI model to use")
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
-        const current = this.draft.model ?? this.plugin.settings.defaultModel;
-        // Asegúrate de que el valor guardado esté en la lista
-        if (!models.find((m) => m.value === current)) {
+        const current = this.draft.model ?? this.plugin.getEffectiveDefaultModel();
+        if (!current && models.length === 0) {
+          dd.addOption("", "(no models; tap refresh)");
+        } else if (current && !models.find((m) => m.value === current)) {
           dd.addOption(current, current);
         }
-        dd.setValue(current);
+        dd.setValue(current || "");
         dd.onChange((v) => (this.draft.model = v));
       });
 
     new Setting(contentEl)
       .addButton((btn) =>
-        btn.setButtonText("🔄 Refrescar modelos").onClick(() => {
+        btn.setButtonText("🔄 Refresh Models").onClick(() => {
           this.plugin.refreshModels();
-          new Notice("AutoOC: modelos actualizados. Vuelve a abrir el diálogo.");
+          new Notice("AutoOC: models updated. Reopen dialog.");
         })
       );
 
     new Setting(contentEl)
       .setName("Ralph Loop")
-      .setDesc("Envuelve el prompt con /ralph-loop para continuar automáticamente hasta DONE")
+      .setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE")
       .addToggle((tog) => {
         tog.setValue(this.draft.useRalphLoop ?? false);
         tog.onChange((v) => (this.draft.useRalphLoop = v));
-      });
+      })
+      .addButton((btn) =>
+        btn.setButtonText("Installation Assistant").onClick(async () => {
+          try {
+            const result = await this.plugin.ensureRalphLoopPluginEnabled();
+            new Notice(
+              result.changed
+                ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
+                : `Ralph Loop was already active at ${result.configPath}.`
+            );
+          } catch (e) {
+            new Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+          }
+        })
+      );
 
     new Setting(contentEl)
-      .setName("Tipo de schedule")
+      .setName("Schedule Type")
       .addDropdown((dd) => {
-        dd.addOption("once", "Una vez (fecha y hora concretas)");
-        dd.addOption("daily", "Cada día (hora fija)");
-        dd.addOption("weekly", "Días de la semana");
+        dd.addOption("once", "Once (specific date and time)");
+        dd.addOption("daily", "Daily (fixed time)");
+        dd.addOption("weekly", "Weekdays");
         dd.setValue(this.draft.scheduleType ?? "once");
         dd.onChange((v) => {
           this.draft.scheduleType = v as ScheduleType;
-          this.onOpen(); // re-render para mostrar campos relevantes
+          this.onOpen(); // re-render to show relevant fields
         });
       });
 
-    // Fecha — solo para 'once'
+    // Date — only for 'once'
     if (this.draft.scheduleType === "once") {
       new Setting(contentEl)
-        .setName("Fecha")
-        .setDesc("Formato YYYY-MM-DD")
+        .setName("Date")
+        .setDesc("Format YYYY-MM-DD")
         .addText((text) =>
           text
             .setPlaceholder(todayString())
@@ -734,9 +1147,9 @@ class CreateTaskModal extends Modal {
         );
     }
 
-    // Días — solo para 'weekly'
+    // Days — only for 'weekly'
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new Setting(contentEl).setName("Días de la semana");
+      const daySetting = new Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -751,7 +1164,7 @@ class CreateTaskModal extends Modal {
             }
             this.draft.scheduleDays = days;
           });
-          // Etiqueta junto al toggle
+          // Label next to toggle
           tog.toggleEl.insertAdjacentHTML(
             "afterend",
             `<span class="auto-oc-day-label">${name}</span>`
@@ -761,8 +1174,8 @@ class CreateTaskModal extends Modal {
     }
 
     new Setting(contentEl)
-      .setName("Hora")
-      .setDesc("Formato HH:MM (24 h)")
+      .setName("Time")
+      .setDesc("Format HH:MM (24h)")
       .addText((text) =>
         text
           .setPlaceholder("09:00")
@@ -772,26 +1185,30 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl).addButton((btn) =>
       btn
-        .setButtonText(this.editTask ? "Guardar cambios" : "Crear tarea")
+        .setButtonText(this.editTask ? "Save Changes" : "Create Task")
         .setCta()
         .onClick(async () => {
           if (!this.draft.name?.trim()) {
-            new Notice("El nombre es obligatorio.");
+            new Notice("Name is required.");
             return;
           }
           if (!this.draft.prompt?.trim()) {
-            new Notice("El prompt es obligatorio.");
+            new Notice("Prompt is required.");
+            return;
+          }
+          if (!(this.draft.model ?? "").trim()) {
+            new Notice("You must select a model.");
             return;
           }
           if (!/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")) {
-            new Notice("Hora inválida. Usa formato HH:MM.");
+            new Notice("Invalid time. Use HH:MM format.");
             return;
           }
           if (
             this.draft.scheduleType === "once" &&
             !/^\d{4}-\d{2}-\d{2}$/.test(this.draft.scheduleDate ?? "")
           ) {
-            new Notice("Fecha inválida. Usa formato YYYY-MM-DD.");
+            new Notice("Invalid date. Use YYYY-MM-DD format.");
             return;
           }
 
@@ -810,7 +1227,7 @@ class CreateTaskModal extends Modal {
               id: generateId(),
               name: this.draft.name!,
               prompt: this.draft.prompt!,
-              model: this.draft.model ?? this.plugin.settings.defaultModel,
+              model: this.draft.model!,
               useRalphLoop: this.draft.useRalphLoop ?? false,
               scheduleType: this.draft.scheduleType ?? "once",
               scheduleTime: this.draft.scheduleTime!,
@@ -825,7 +1242,7 @@ class CreateTaskModal extends Modal {
           }
 
           await this.plugin.saveSettings();
-          new Notice(`Tarea "${this.draft.name}" guardada.`);
+          new Notice(`Task "${this.draft.name}" saved.`);
           this.close();
         })
     );
@@ -869,7 +1286,7 @@ class LiveLogModal extends Modal {
       const secs = Math.floor((Date.now() - new Date(this.task.lastRun).getTime()) / 1000);
       const min = Math.floor(secs / 60);
       const sec = secs % 60;
-      elapsedEl.textContent = `⏱ Tiempo transcurrido: ${min}m ${sec}s`;
+      elapsedEl.textContent = `⏱ Elapsed time: ${min}m ${sec}s`;
     };
     updateElapsed();
     this.elapsedIntervalId = window.setInterval(updateElapsed, 1000);
@@ -886,16 +1303,16 @@ class LiveLogModal extends Modal {
     };
 
     const btnCopy = toolbar.createEl("button", {
-      text: "📋 Copiar",
+      text: "📋 Copy",
       cls: "auto-oc-btn-secondary",
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.pre?.textContent ?? "");
-      new Notice("Log copiado.");
+      new Notice("Log copied.");
     };
 
     const btnClear = toolbar.createEl("button", {
-      text: "🗑 Limpiar vista",
+      text: "🗑 Clear View",
       cls: "auto-oc-btn-secondary",
     });
     btnClear.onclick = () => {
@@ -965,18 +1382,18 @@ class CommandPreviewModal extends Modal {
 
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: `Comando: ${this.taskName}` });
+    contentEl.createEl("h3", { text: `Command: ${this.taskName}` });
     contentEl.createEl("p", {
-      text: "Este es el comando CLI que se ejecutará:",
+      text: "This is the CLI command that will be executed:",
       cls: "setting-item-description",
     });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.cmd;
 
     new Setting(contentEl).addButton((btn) =>
-      btn.setButtonText("Copiar").onClick(() => {
+      btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.cmd);
-        new Notice("Comando copiado.");
+        new Notice("Command copied.");
       })
     );
   }
@@ -999,21 +1416,25 @@ class DiagnosticModal extends Modal {
 
   onOpen() {
     const { contentEl } = this;
-    contentEl.createEl("h3", { text: "🔧 Diagnóstico AutoOC" });
+    contentEl.createEl("h3", { text: "🔧 AutoOC Diagnostic" });
     contentEl.createEl("p", {
-      text: "Prueba el comando opencode directamente desde Obsidian.",
+      text: "Test the opencode command directly from Obsidian.",
       cls: "setting-item-description",
     });
 
     const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-    contentEl.createEl("p", { text: `Binario detectado: ${bin}`, cls: "setting-item-description" });
-    contentEl.createEl("p", { text: `Modelo por defecto: ${this.plugin.settings.defaultModel}`, cls: "setting-item-description" });
+    contentEl.createEl("p", { text: `Detected binary: ${bin}`, cls: "setting-item-description" });
+    contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
 
     new Setting(contentEl).addButton((btn) =>
-      btn.setButtonText("▶ Lanzar prueba: 'di hola'").setCta().onClick(() => {
-        if (this.logEl) this.logEl.textContent = "[lanzando proceso PowerShell desacoplado…]\n";
+      btn.setButtonText("▶ Launch test: 'di hola'").setCta().onClick(() => {
+        if (this.logEl) this.logEl.textContent = "[launching detached PowerShell process…]\n";
         const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-        const model = this.plugin.settings.defaultModel;
+        const model = this.plugin.getEffectiveDefaultModel();
+        if (!model) {
+          new Notice("AutoOC: no model selected. Reload models in Settings.");
+          return;
+        }
         const fs   = require("fs");
         const path = require("path");
         const osTmp = require("os").tmpdir();
@@ -1082,16 +1503,16 @@ class AutoOCSettingTab extends PluginSettingTab {
   display() {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "AutoOC — Configuración" });
+    containerEl.createEl("h2", { text: "AutoOC — Settings" });
 
     new Setting(containerEl)
-      .setName("Ruta de OpenCode CLI")
+      .setName("OpenCode CLI Path")
       .setDesc(
-        `Ruta absoluta al ejecutable. Vacío = auto-detectar.\nDetectado ahora: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
+        `Absolute path to executable. Empty = auto-detect.\nDetected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
       )
       .addText((text) => {
         text
-          .setPlaceholder("auto-detectar")
+          .setPlaceholder("auto-detect")
           .setValue(this.plugin.settings.opencodePath)
           .onChange(async (v) => {
             this.plugin.settings.opencodePath = v.trim();
@@ -1100,8 +1521,8 @@ class AutoOCSettingTab extends PluginSettingTab {
         return text;
       })
       .addButton((btn) =>
-        btn.setButtonText("🔍 Auto-detectar").onClick(async () => {
-          // Busca opencode.cmd / opencode.exe en las rutas npm habituales
+        btn.setButtonText("🔍 Auto-detect").onClick(async () => {
+          // Search for opencode.cmd / opencode.exe in typical npm paths
           const { existsSync } = require("fs");
           const candidates = [
             `${process.env.APPDATA}\\npm\\opencode.cmd`,
@@ -1113,18 +1534,18 @@ class AutoOCSettingTab extends PluginSettingTab {
           if (found) {
             this.plugin.settings.opencodePath = found;
             await this.plugin.saveSettings();
-            new Notice(`AutoOC: ruta configurada → ${found}`);
-            this.display(); // re-render para mostrar nuevo valor
+            new Notice(`AutoOC: path configured → ${found}`);
+            this.display(); // re-render to show new value
           } else {
-            new Notice("AutoOC: no se encontró opencode automáticamente. Introduce la ruta manualmente.");
+            new Notice("AutoOC: opencode not found automatically. Enter the path manually.");
           }
         })
       );
 
     new Setting(containerEl)
-      .setName("Directorio de trabajo")
+      .setName("Working Directory")
       .setDesc(
-        "Directorio desde el que se lanza OpenCode (vacío = directorio actual del vault)"
+        "Directory from which to launch OpenCode (empty = vault's current directory)"
       )
       .addText((text) =>
         text
@@ -1137,8 +1558,8 @@ class AutoOCSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Timeout por tarea (segundos)")
-      .setDesc("Si el proceso no termina en este tiempo, se mata automáticamente. Por defecto 1800 s (30 min). Usa 0 para desactivar timeout.")
+      .setName("Task Timeout (seconds)")
+      .setDesc("If process doesn't finish in this time, it's automatically killed. Default 1800 s (30 min). Use 0 to disable timeout.")
       .addText((text) =>
         text
           .setPlaceholder("1800")
@@ -1152,35 +1573,73 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
+    containerEl.createEl("h3", { text: "Ralph Loop" });
+    containerEl.createEl("p", {
+      text: "Enable opencode-ralph-loop in ~/.config/opencode/opencode.json to use auto-continuation with /ralph-loop.",
+      cls: "setting-item-description",
+    });
+    containerEl.createEl("p", {
+      text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
+      cls: "setting-item-description",
+    });
+
     new Setting(containerEl)
-      .setName("Modelo por defecto")
+      .setName("Ralph Loop Assistant")
+      .setDesc("Add opencode-ralph-loop to OpenCode configuration file")
+      .addButton((btn) =>
+        btn.setButtonText("Install / Activate").setCta().onClick(async () => {
+          try {
+            const result = await this.plugin.ensureRalphLoopPluginEnabled();
+            new Notice(
+              result.changed
+                ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
+                : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
+            );
+            this.display();
+          } catch (e) {
+            new Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+          }
+        })
+      )
+      .addButton((btn) =>
+        btn.setButtonText("Show status path").onClick(() => {
+          const basePath = (this.app.vault.adapter as any).basePath || ".";
+          const statePath = getRalphStateFilePath(basePath);
+          new Notice(`Ralph state file: ${statePath}`);
+        })
+      );
+
+    new Setting(containerEl)
+      .setName("Default Model")
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
-        const current = this.plugin.settings.defaultModel;
-        if (!models.find((m) => m.value === current)) {
+        const current = this.plugin.getEffectiveDefaultModel();
+        if (!current && models.length === 0) {
+          dd.addOption("", "(no models; press reload)");
+        } else if (current && !models.find((m) => m.value === current)) {
           dd.addOption(current, current);
         }
-        dd.setValue(current);
+        dd.setValue(current || "");
         dd.onChange(async (v) => {
           this.plugin.settings.defaultModel = v;
           await this.plugin.saveSettings();
         });
       });
 
-    containerEl.createEl("h3", { text: "Modelos disponibles" });
+    containerEl.createEl("h3", { text: "Available Models" });
     const refreshBtn = containerEl.createEl("button", {
-      text: "🔄 Recargar lista de modelos",
+      text: "🔄 Reload Model List",
       cls: "auto-oc-btn-secondary",
     });
     refreshBtn.style.marginBottom = "8px";
     refreshBtn.onclick = () => {
       this.plugin.refreshModels();
-      new Notice("AutoOC: modelos recargados. Recarga este panel.");
+      new Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
     containerEl.createEl("p", {
-      text: `${this.plugin.availableModels.length} modelos cargados desde \`opencode models\``,
+      text: `${this.plugin.availableModels.length} models loaded from \`opencode models\``,
       cls: "setting-item-description",
     });
     const table = containerEl.createEl("table", { cls: "auto-oc-models-table" });
