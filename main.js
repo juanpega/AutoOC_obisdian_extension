@@ -359,7 +359,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const bin = args[0];
     const prompt = args[2];
     const model = args[4];
-    const safePrompt = prompt.replace(/'/g, "''");
+    const cwd = this.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
+    const promptB64 = Buffer.from(prompt, "utf8").toString("base64");
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
@@ -378,14 +379,16 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
-      `Set-Location '${(this.app.vault.adapter.basePath || ".").replace(/'/g, "''")}'`,
+      `Set-Location -LiteralPath ${psSingleQuoted(cwd)}`,
+      `$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${promptB64}'))`,
+      `$argList = @('run', $p, '-m', ${psSingleQuoted(model)}, '--dangerously-skip-permissions', '--dir', ${psSingleQuoted(cwd)})`,
       `$outTmp = [System.IO.Path]::GetTempFileName()`,
       `$errTmp = [System.IO.Path]::GetTempFileName()`,
-      `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+      `$proc = Start-Process -FilePath ${psSingleQuoted(bin)} -ArgumentList $argList -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
       `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
       `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
       `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-      `$code = $p.ExitCode`,
+      `$code = $proc.ExitCode`,
       `$combined = ($stdout + $(if($stderr){"
 [stderr]
 " + $stderr}else{""})).Trim()`,
@@ -672,17 +675,19 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     contentEl.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New OpenCode Task"
     });
-    new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText(
-      (text) => {
-        var _a;
-        return text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
-      }
-    );
+    new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
+      var _a;
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
+      window.setTimeout(() => text.inputEl.focus(), 50);
+    });
     new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Text to send to OpenCode").addTextArea((ta) => {
       var _a;
       ta.setValue((_a = this.draft.prompt) != null ? _a : "").onChange((v) => this.draft.prompt = v);
+      ta.inputEl.addClass("auto-oc-modal-textarea");
       ta.inputEl.rows = 5;
       ta.inputEl.style.width = "100%";
+      ta.inputEl.spellcheck = false;
     });
     new import_obsidian.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
       var _a;
@@ -731,12 +736,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText(
-        (text) => {
-          var _a;
-          return text.setPlaceholder(todayString()).setValue((_a = this.draft.scheduleDate) != null ? _a : "").onChange((v) => this.draft.scheduleDate = v);
-        }
-      );
+      new import_obsidian.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+        var _a;
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setPlaceholder(todayString()).setValue((_a = this.draft.scheduleDate) != null ? _a : "").onChange((v) => this.draft.scheduleDate = v);
+      });
     }
     if (this.draft.scheduleType === "weekly") {
       const daySetting = new import_obsidian.Setting(contentEl).setName("Weekdays");
@@ -763,12 +767,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         });
       });
     }
-    new import_obsidian.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText(
-      (text) => {
-        var _a;
-        return text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
-      }
-    );
+    new import_obsidian.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      var _a;
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
+    });
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
         var _a, _b, _c, _d, _e, _f, _g, _h, _i;
@@ -797,9 +800,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             (t) => t.id === this.editTask.id
           );
           if (idx !== -1) {
+            const wasRunning = this.editTask.status === "running";
             this.plugin.settings.tasks[idx] = {
               ...this.editTask,
-              ...this.draft
+              ...this.draft,
+              status: wasRunning ? "running" : "pending"
             };
           }
         } else {

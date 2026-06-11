@@ -437,7 +437,8 @@ export default class AutoOCPlugin extends Plugin {
     const bin   = args[0]; // opencode.cmd full path
     const prompt = args[2];
     const model  = args[4];
-    const safePrompt = prompt.replace(/'/g, "''"); // escape for PS single-quoted string
+    const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+    const promptB64 = Buffer.from(prompt, "utf8").toString("base64");
 
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
@@ -455,14 +456,16 @@ export default class AutoOCPlugin extends Plugin {
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
-      `Set-Location '${((this.app.vault.adapter as any).basePath || ".").replace(/'/g, "''")}'`,
+      `Set-Location -LiteralPath ${psSingleQuoted(cwd)}`,
+      `$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${promptB64}'))`,
+      `$argList = @('run', $p, '-m', ${psSingleQuoted(model)}, '--dangerously-skip-permissions', '--dir', ${psSingleQuoted(cwd)})`,
       `$outTmp = [System.IO.Path]::GetTempFileName()`,
       `$errTmp = [System.IO.Path]::GetTempFileName()`,
-      `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+      `$proc = Start-Process -FilePath ${psSingleQuoted(bin)} -ArgumentList $argList -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
       `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
       `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
       `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-      `$code = $p.ExitCode`,
+      `$code = $proc.ExitCode`,
       `$combined = ($stdout + $(if($stderr){"\n[stderr]\n" + $stderr}else{""})).Trim()`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:$code")`,
     ].join("\n");
@@ -797,17 +800,23 @@ class CreateTaskModal extends Modal {
     new Setting(contentEl)
       .setName("Name")
       .setDesc("Short task identifier")
-      .addText((text) =>
-        text.setValue(this.draft.name ?? "").onChange((v) => (this.draft.name = v))
-      );
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setValue(this.draft.name ?? "")
+          .onChange((v) => (this.draft.name = v));
+        window.setTimeout(() => text.inputEl.focus(), 50);
+      });
 
     new Setting(contentEl)
       .setName("Prompt / Goal")
       .setDesc("Text to send to OpenCode")
       .addTextArea((ta) => {
         ta.setValue(this.draft.prompt ?? "").onChange((v) => (this.draft.prompt = v));
+        ta.inputEl.addClass("auto-oc-modal-textarea");
         ta.inputEl.rows = 5;
         ta.inputEl.style.width = "100%";
+        ta.inputEl.spellcheck = false;
       });
 
     new Setting(contentEl)
@@ -874,12 +883,13 @@ class CreateTaskModal extends Modal {
       new Setting(contentEl)
         .setName("Date")
         .setDesc("Format YYYY-MM-DD")
-        .addText((text) =>
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
           text
             .setPlaceholder(todayString())
             .setValue(this.draft.scheduleDate ?? "")
-            .onChange((v) => (this.draft.scheduleDate = v))
-        );
+            .onChange((v) => (this.draft.scheduleDate = v));
+        });
     }
 
     // Days — only for 'weekly'
@@ -911,12 +921,13 @@ class CreateTaskModal extends Modal {
     new Setting(contentEl)
       .setName("Time")
       .setDesc("Format HH:MM (24h)")
-      .addText((text) =>
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
         text
           .setPlaceholder("09:00")
           .setValue(this.draft.scheduleTime ?? "")
-          .onChange((v) => (this.draft.scheduleTime = v))
-      );
+          .onChange((v) => (this.draft.scheduleTime = v));
+      });
 
     new Setting(contentEl).addButton((btn) =>
       btn
@@ -952,9 +963,11 @@ class CreateTaskModal extends Modal {
               (t) => t.id === this.editTask!.id
             );
             if (idx !== -1) {
+              const wasRunning = this.editTask.status === "running";
               this.plugin.settings.tasks[idx] = {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
+                status: wasRunning ? "running" : "pending",
               };
             }
           } else {

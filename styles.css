@@ -202,9 +202,40 @@
 }
 
 /* Modal textarea */
-.auto-oc-modal .setting-item-control textarea {
+.auto-oc-modal .setting-item {
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.auto-oc-modal .setting-item-control {
+  flex: 1 1 360px;
+  min-width: 260px;
+}
+
+.auto-oc-modal .setting-item-control input,
+.auto-oc-modal .setting-item-control textarea,
+.auto-oc-modal-input,
+.auto-oc-modal-textarea {
+  background: var(--background-primary) !important;
+  color: var(--text-normal) !important;
+  caret-color: var(--text-normal) !important;
+}
+
+.auto-oc-modal .setting-item-control input:focus,
+.auto-oc-modal .setting-item-control textarea:focus,
+.auto-oc-modal-input:focus,
+.auto-oc-modal-textarea:focus {
+  border-color: var(--interactive-accent) !important;
+  box-shadow: 0 0 0 2px var(--interactive-accent)20;
+  outline: none;
+}
+
+.auto-oc-modal .setting-item-control textarea,
+.auto-oc-modal-textarea {
   font-size: 0.85rem;
   min-width: 280px;
+  min-height: 120px;
+  resize: vertical;
 }
 
 .auto-oc-btn-stop {
@@ -291,7 +322,7 @@
   color: var(--text-accent);
 }
 
-/* ── Chat Tab Styles ────────────────────────────────────────────────────────── */
+/* ── Panel Navigation ───────────────────────────────────────────────────────── */
 
 .auto-oc-tab-bar {
   display: flex;
