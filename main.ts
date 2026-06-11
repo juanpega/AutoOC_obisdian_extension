@@ -352,8 +352,20 @@ export default class AutoOCPlugin extends Plugin {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     delete (this.settings as any).chatHistory;
     delete (this.settings as any).chatModel;
+    let changed = false;
+    for (const task of this.settings.tasks) {
+      if (task.status === "running") {
+        task.status = "failed";
+        task.output = `${task.output || ""}\n[stale running state cleared on plugin load]`;
+        changed = true;
+      }
+    }
     if (!this.settings.defaultModel) {
       this.settings.defaultModel = this.availableModels[0]?.value ?? "";
+      changed = true;
+    }
+    if (changed) {
+      await this.saveData(this.settings);
     }
   }
 
@@ -437,8 +449,12 @@ export default class AutoOCPlugin extends Plugin {
     const bin   = args[0]; // opencode.cmd full path
     const prompt = args[2];
     const model  = args[4];
-    const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-    const promptB64 = Buffer.from(prompt, "utf8").toString("base64");
+    const safePrompt = prompt
+      .replace(/\r?\n\s*[-*]\s+/g, "; ")
+      .replace(/\r?\n+/g, "; ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .replace(/'/g, "''"); // escape for PS single-quoted string
 
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
@@ -449,43 +465,21 @@ export default class AutoOCPlugin extends Plugin {
     try { fs.unlinkSync(outFile); } catch { /* ignore */ }
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
 
-    // Use ProcessStartInfo.ArgumentList to preserve prompts with newlines, bullets, and many URLs.
+    // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
     const psScript = [
       `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
       `$env:APPDATA     = '${process.env.APPDATA}'`,
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
-      `Set-Location -LiteralPath ${psSingleQuoted(cwd)}`,
-      `$p = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('${promptB64}'))`,
+      `Set-Location '${((this.app.vault.adapter as any).basePath || ".").replace(/'/g, "''")}'`,
       `$outTmp = [System.IO.Path]::GetTempFileName()`,
       `$errTmp = [System.IO.Path]::GetTempFileName()`,
-      `$psi = [System.Diagnostics.ProcessStartInfo]::new()`,
-      `$psi.FileName = ${psSingleQuoted(bin)}`,
-      `$psi.WorkingDirectory = ${psSingleQuoted(cwd)}`,
-      `$psi.UseShellExecute = $false`,
-      `$psi.CreateNoWindow = $true`,
-      `$psi.RedirectStandardOutput = $true`,
-      `$psi.RedirectStandardError = $true`,
-      `[void]$psi.ArgumentList.Add('run')`,
-      `[void]$psi.ArgumentList.Add($p)`,
-      `[void]$psi.ArgumentList.Add('-m')`,
-      `[void]$psi.ArgumentList.Add(${psSingleQuoted(model)})`,
-      `[void]$psi.ArgumentList.Add('--dangerously-skip-permissions')`,
-      `[void]$psi.ArgumentList.Add('--dir')`,
-      `[void]$psi.ArgumentList.Add(${psSingleQuoted(cwd)})`,
-      `$proc = [System.Diagnostics.Process]::new()`,
-      `$proc.StartInfo = $psi`,
-      `[void]$proc.Start()`,
-      `$stdoutTask = $proc.StandardOutput.ReadToEndAsync()`,
-      `$stderrTask = $proc.StandardError.ReadToEndAsync()`,
-      `$proc.WaitForExit()`,
-      `$stdout = $stdoutTask.Result`,
-      `$stderr = $stderrTask.Result`,
-      `[System.IO.File]::WriteAllText($outTmp, $stdout)`,
-      `[System.IO.File]::WriteAllText($errTmp, $stderr)`,
+      `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+      `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
+      `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
       `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-      `$code = $proc.ExitCode`,
+      `$code = $p.ExitCode`,
       `$combined = ($stdout + $(if($stderr){"\n[stderr]\n" + $stderr}else{""})).Trim()`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:$code")`,
     ].join("\n");
