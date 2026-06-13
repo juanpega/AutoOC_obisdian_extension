@@ -697,15 +697,6 @@ class AutoOCView extends ItemView {
     });
     btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
 
-    const btnCheck = btnRow.createEl("button", {
-      text: "▶ Check Now",
-      cls: "auto-oc-btn-secondary",
-    });
-    btnCheck.onclick = async () => {
-      await this.plugin.runDueTasks();
-      new Notice("AutoOC: check completed.");
-    };
-
     // ── Filters Bar ──
     const filterBar = containerEl.createDiv("auto-oc-filter-bar");
     

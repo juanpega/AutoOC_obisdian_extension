@@ -594,14 +594,6 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: "auto-oc-btn-primary"
     });
     btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
-    const btnCheck = btnRow.createEl("button", {
-      text: "\u25B6 Check Now",
-      cls: "auto-oc-btn-secondary"
-    });
-    btnCheck.onclick = async () => {
-      await this.plugin.runDueTasks();
-      new import_obsidian.Notice("AutoOC: check completed.");
-    };
     const filterBar = containerEl.createDiv("auto-oc-filter-bar");
     const searchInput = filterBar.createEl("input", {
       type: "text",
