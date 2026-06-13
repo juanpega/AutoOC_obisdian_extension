@@ -634,6 +634,8 @@ export default class AutoOCPlugin extends Plugin {
 
 class AutoOCView extends ItemView {
   private plugin: AutoOCPlugin;
+  private filterText: string = "";
+  private filterStatus: string = "all";
 
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
@@ -704,6 +706,35 @@ class AutoOCView extends ItemView {
       new Notice("AutoOC: check completed.");
     };
 
+    // ── Filters Bar ──
+    const filterBar = containerEl.createDiv("auto-oc-filter-bar");
+    
+    const searchInput = filterBar.createEl("input", {
+      type: "text",
+      placeholder: "🔍 Search name or prompt...",
+      cls: "auto-oc-search-input",
+    });
+    searchInput.value = this.filterText;
+    searchInput.oninput = () => {
+      this.filterText = searchInput.value.toLowerCase();
+      this.render();
+    };
+
+    const statusSelect = filterBar.createEl("select", {
+      cls: "auto-oc-status-select",
+    });
+    const statuses = ["all", "pending", "running", "completed", "failed"];
+    statuses.forEach(s => {
+      const opt = statusSelect.createEl("option");
+      opt.value = s;
+      opt.text = s.charAt(0).toUpperCase() + s.slice(1);
+    });
+    statusSelect.value = this.filterStatus;
+    statusSelect.onchange = () => {
+      this.filterStatus = statusSelect.value;
+      this.render();
+    };
+
     // ── Stats bar ──
     const tasks = this.plugin.settings.tasks;
     const stats = containerEl.createDiv("auto-oc-stats");
@@ -717,36 +748,49 @@ class AutoOCView extends ItemView {
     if (completed > 0) stats.createEl("span", { text: `🟢 ${completed} completed` });
 
     // ── Task list ──
-    if (tasks.length === 0) {
+    const filteredTasks = tasks.filter(t => {
+      const matchesText = t.name.toLowerCase().includes(this.filterText) || 
+                          t.prompt.toLowerCase().includes(this.filterText);
+      const matchesStatus = this.filterStatus === "all" || t.status === this.filterStatus;
+      return matchesText && matchesStatus;
+    });
+
+    if (filteredTasks.length === 0) {
       containerEl.createEl("p", {
-        text: 'No tasks scheduled. Create one with "+New Task".',
+        text: this.filterText || this.filterStatus !== "all" 
+              ? "No tasks match your filters." 
+              : "No tasks scheduled. Create one with \"+New Task\".",
         cls: "auto-oc-empty",
       });
       return;
     }
 
     const list = containerEl.createDiv("auto-oc-list");
-    // Show most recent first
-    for (const task of [...tasks].reverse()) {
+    for (const task of [...filteredTasks].reverse()) {
       this.renderTaskCard(list, task);
     }
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
-
-    // Top row: name + badge
-    const top = card.createDiv("auto-oc-card-top");
-    top.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
-    top.createEl("span", {
+    
+    // Summary Bar (Always Visible)
+    const summary = card.createDiv("auto-oc-card-summary");
+    const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
+    
+    const badge = summary.createEl("span", {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
 
-    // Meta: model, schedule, last run
-    const meta = card.createDiv("auto-oc-card-meta");
+    // Details Section (Collapsible)
+    const details = card.createDiv("auto-oc-card-details");
+    details.style.display = "none";
+
+    const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🤖 ${modelLabel}` });
+    meta.createEl("span", { text: `⚙️ ${task.agent || 'general'}` });
 
     let scheduleText = "";
     if (task.scheduleType === "once") {
@@ -767,50 +811,54 @@ class AutoOCView extends ItemView {
       meta.createEl("span", { text: "♻️ Ralph Loop active", cls: "auto-oc-ralph-badge" });
     }
 
-    // Prompt preview
-    const preview = card.createDiv("auto-oc-prompt-preview");
+    const preview = details.createDiv("auto-oc-prompt-preview");
     preview.createEl("span", {
       text: task.prompt.slice(0, 140) + (task.prompt.length > 140 ? "…" : ""),
     });
 
-    // Action buttons
-    const actions = card.createDiv("auto-oc-card-actions");
+    const actions = details.createDiv("auto-oc-card-actions");
 
     const btnRun = actions.createEl("button", {
       text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
     btnRun.disabled = task.status === "running";
-    btnRun.onclick = () => this.plugin.runTask(task);
+    btnRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runTask(task);
+    };
 
-    // Stop button — only when running
     if (task.status === "running") {
       const btnStop = actions.createEl("button", {
         text: "⏹ Stop",
         cls: "auto-oc-btn-stop",
       });
       btnStop.title = "Terminate process now";
-      btnStop.onclick = async () => {
+      btnStop.onclick = async (e) => {
+        e.stopPropagation();
         btnStop.disabled = true;
         btnStop.textContent = "Stopping…";
         await this.plugin.killTask(task.id);
       };
     }
 
-    // Log button — always visible; live-refresh when running
     const btnLog = actions.createEl("button", {
       text: task.status === "running" ? "📡 Live Log" : "📄 Log",
       cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output",
     });
     btnLog.disabled = !task.output && task.status !== "running";
     btnLog.title = task.output ? "" : "Aún no hay output";
-    btnLog.onclick = () => new LiveLogModal(this.app, task, this.plugin).open();
+    btnLog.onclick = (e) => {
+      e.stopPropagation();
+      new LiveLogModal(this.app, task, this.plugin).open();
+    };
 
     const btnCmd = actions.createEl("button", {
       text: "🔍 Command",
       cls: "auto-oc-btn-cmd",
     });
-    btnCmd.onclick = () => {
+    btnCmd.onclick = (e) => {
+      e.stopPropagation();
       const cmd = this.plugin.buildCommand(task);
       new CommandPreviewModal(this.app, task.name, cmd).open();
     };
@@ -819,18 +867,28 @@ class AutoOCView extends ItemView {
       text: "✏️ Edit",
       cls: "auto-oc-btn-edit",
     });
-    btnEdit.onclick = () =>
+    btnEdit.onclick = (e) => {
+      e.stopPropagation();
       new CreateTaskModal(this.app, this.plugin, task).open();
+    };
 
     const btnDelete = actions.createEl("button", {
       text: "🗑",
       cls: "auto-oc-btn-delete",
     });
     btnDelete.title = "Delete task";
-    btnDelete.onclick = async () => {
+    btnDelete.onclick = async (e) => {
+      e.stopPropagation();
       if (confirm(`Delete task "${task.name}"?`)) {
         await this.plugin.deleteTask(task.id);
       }
+    };
+
+    // Toggle interaction
+    summary.onclick = () => {
+      const isHidden = details.style.display === "none";
+      details.style.display = isHidden ? "block" : "none";
+      card.classList.toggle("expanded", isHidden);
     };
   }
 }
@@ -931,9 +989,6 @@ class CreateTaskModal extends Modal {
               const selected = await new BranchSelectorModal(this.app, branches).open();
               if (selected) {
                 this.draft.branch = selected;
-                // Update the text field in the modal
-                const branchSetting = contentEl.querySelectorAll(".setting-item").value[2] as HTMLElement; // This is a bit fragile
-                // Instead of searching DOM, let's just notify the user to update or use a simpler way
                 new Notice(`AutoOC: Selected branch ${selected}`);
               }
             } else {
@@ -959,7 +1014,7 @@ class CreateTaskModal extends Modal {
       .addDropdown((dd) => {
         const agents = this.plugin.availableAgents;
         agents.forEach((a) => dd.addOption(a.value, a.label));
-        const current = this.draft.agent ?? this.plugin.settings.defaultAgent || "general";
+        const current = this.draft.agent ?? (this.plugin.settings.defaultAgent || "general");
         if (!current && agents.length === 0) {
           dd.addOption("", "(no agents; tap refresh)");
         } else if (current && !agents.find((a) => a.value === current)) {
