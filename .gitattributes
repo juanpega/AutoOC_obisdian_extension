@@ -1,2 +1,11 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Keep source and plugin files consistent across Windows/macOS/Linux.
+*.ts text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+.gitattributes text eol=lf
