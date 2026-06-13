@@ -95,6 +95,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -WindowStyle Hidden -File """ & "
   }, 1e4);
 }
 var FALLBACK_MODELS = [];
+var FALLBACK_AGENTS = [
+  { value: "general", label: "general" },
+  { value: "build", label: "build" },
+  { value: "plan", label: "plan" },
+  { value: "explore", label: "explore" }
+];
+function stripAnsi(text) {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+function isValidAgentName(name) {
+  return /^[A-Za-z0-9_-]+$/.test(name);
+}
 function fetchModelsSync(opencodePath) {
   const { execSync } = require("child_process");
   const bin = resolveOpencodeBin(opencodePath);
@@ -110,12 +122,14 @@ function fetchAgentsSync(opencodePath) {
   const bin = resolveOpencodeBin(opencodePath);
   try {
     const out = execSync(`"${bin}" agent list`, { timeout: 8e3, encoding: "utf8" });
-    return out.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("[") && !l.startsWith("  {")).map((l) => {
-      const name = l.split(" ")[0];
+    const agents = stripAnsi(out).split("\n").map((l) => l.trim()).filter((l) => /^\S+\s+\(/.test(l)).map((l) => {
+      var _a, _b;
+      const name = (_b = (_a = l.match(/^(\S+)\s+\(/)) == null ? void 0 : _a[1]) != null ? _b : l.split(" ")[0];
       return { value: name, label: name };
-    });
+    }).filter((a) => isValidAgentName(a.value));
+    return agents.length > 0 ? agents : FALLBACK_AGENTS;
   } catch (e) {
-    return [{ value: "general", label: "general" }, { value: "build", label: "build" }, { value: "plan", label: "plan" }];
+    return FALLBACK_AGENTS;
   }
 }
 var DEFAULT_SETTINGS = {
@@ -197,7 +211,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.availableModels = FALLBACK_MODELS;
-    this.availableAgents = [];
+    this.availableAgents = FALLBACK_AGENTS;
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
   }
@@ -827,9 +841,9 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       tog.setValue((_a = this.draft.createBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.createBranch = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Agent").setDesc("AI agent personality to use").addDropdown((dd) => {
+    new import_obsidian.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       var _a;
-      const agents = this.plugin.availableAgents;
+      const agents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
       agents.forEach((a) => dd.addOption(a.value, a.label));
       const current = (_a = this.draft.agent) != null ? _a : this.plugin.settings.defaultAgent || "general";
       if (!current && agents.length === 0) {
@@ -840,10 +854,16 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       dd.setValue(current || "");
       dd.onChange((v) => this.draft.agent = v);
     });
+    contentEl.createEl("p", {
+      text: `Detected agents: ${this.plugin.availableAgents.map((a) => a.label).join(", ") || "none"}`,
+      cls: "setting-item-description auto-oc-agent-list"
+    });
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u{1F504} Refresh Agents").onClick(() => {
         this.plugin.refreshAgents();
-        new import_obsidian.Notice("AutoOC: agents updated. Reopen dialog.");
+        new import_obsidian.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+        this.contentEl.empty();
+        this.onOpen();
       })
     );
     new import_obsidian.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
@@ -1321,6 +1341,43 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
         new import_obsidian.Notice(`Ralph state file: ${statePath}`);
       })
     );
+    new import_obsidian.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+      const agents = this.plugin.availableAgents;
+      agents.forEach((a) => dd.addOption(a.value, a.label));
+      const current = this.plugin.settings.defaultAgent || "general";
+      if (current && !agents.find((a) => a.value === current)) {
+        dd.addOption(current, current);
+      }
+      dd.setValue(current);
+      dd.onChange(async (v) => {
+        this.plugin.settings.defaultAgent = v;
+        await this.plugin.saveSettings();
+      });
+    });
+    containerEl.createEl("h3", { text: "Available Agents" });
+    const refreshAgentsBtn = containerEl.createEl("button", {
+      text: "\u{1F504} Reload Agent List",
+      cls: "auto-oc-btn-secondary"
+    });
+    refreshAgentsBtn.style.marginBottom = "8px";
+    refreshAgentsBtn.onclick = () => {
+      this.plugin.refreshAgents();
+      new import_obsidian.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+      this.display();
+    };
+    containerEl.createEl("p", {
+      text: `${this.plugin.availableAgents.length} agents loaded from \`opencode agent list\``,
+      cls: "setting-item-description"
+    });
+    const agentsTable = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const agentsHead = agentsTable.createEl("thead");
+    const agentsHeader = agentsHead.createEl("tr");
+    agentsHeader.createEl("th", { text: "agent" });
+    const agentsBody = agentsTable.createEl("tbody");
+    this.plugin.availableAgents.forEach((a) => {
+      const tr = agentsBody.createEl("tr");
+      tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
+    });
     new import_obsidian.Setting(containerEl).setName("Default Model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));

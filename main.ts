@@ -113,6 +113,20 @@ interface AutoOCSettings {
 
 // No hardcoded models: load dynamically with `opencode models`.
 const FALLBACK_MODELS: { value: string; label: string }[] = [];
+const FALLBACK_AGENTS: { value: string; label: string }[] = [
+  { value: "general", label: "general" },
+  { value: "build", label: "build" },
+  { value: "plan", label: "plan" },
+  { value: "explore", label: "explore" },
+];
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function isValidAgentName(name: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(name);
+}
 
 function fetchModelsSync(opencodePath: string): { value: string; label: string }[] {
   const { execSync } = require("child_process");
@@ -134,16 +148,18 @@ function fetchAgentsSync(opencodePath: string): { value: string; label: string }
   const bin = resolveOpencodeBin(opencodePath);
   try {
     const out = execSync(`"${bin}" agent list`, { timeout: 8000, encoding: "utf8" });
-    return out
+    const agents = stripAnsi(out)
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => l.length > 0 && !l.startsWith("[") && !l.startsWith("  {"))
+      .filter((l) => /^\S+\s+\(/.test(l))
       .map((l) => {
-        const name = l.split(" ")[0];
+        const name = l.match(/^(\S+)\s+\(/)?.[1] ?? l.split(" ")[0];
         return { value: name, label: name };
-      });
+      })
+      .filter((a) => isValidAgentName(a.value));
+    return agents.length > 0 ? agents : FALLBACK_AGENTS;
   } catch {
-    return [{ value: "general", label: "general" }, { value: "build", label: "build" }, { value: "plan", label: "plan" }];
+    return FALLBACK_AGENTS;
   }
 }
 
@@ -256,7 +272,7 @@ export default class AutoOCPlugin extends Plugin {
   settings!: AutoOCSettings;
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
-  availableAgents: { value: string; label: string }[] = [];
+  availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
 
@@ -1001,9 +1017,9 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl)
       .setName("Agent")
-      .setDesc("AI agent personality to use")
+      .setDesc(`AI agent personality to use (${this.plugin.availableAgents.length} loaded)`)
       .addDropdown((dd) => {
-        const agents = this.plugin.availableAgents;
+        const agents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
         agents.forEach((a) => dd.addOption(a.value, a.label));
         const current = this.draft.agent ?? (this.plugin.settings.defaultAgent || "general");
         if (!current && agents.length === 0) {
@@ -1015,11 +1031,18 @@ class CreateTaskModal extends Modal {
         dd.onChange((v) => (this.draft.agent = v));
       });
 
+    contentEl.createEl("p", {
+      text: `Detected agents: ${this.plugin.availableAgents.map((a) => a.label).join(", ") || "none"}`,
+      cls: "setting-item-description auto-oc-agent-list",
+    });
+
     new Setting(contentEl)
       .addButton((btn) =>
         btn.setButtonText("🔄 Refresh Agents").onClick(() => {
           this.plugin.refreshAgents();
-          new Notice("AutoOC: agents updated. Reopen dialog.");
+          new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+          this.contentEl.empty();
+          this.onOpen();
         })
       );
 
@@ -1605,6 +1628,48 @@ class AutoOCSettingTab extends PluginSettingTab {
           new Notice(`Ralph state file: ${statePath}`);
         })
       );
+
+    new Setting(containerEl)
+      .setName("Default Agent")
+      .setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`)
+      .addDropdown((dd) => {
+        const agents = this.plugin.availableAgents;
+        agents.forEach((a) => dd.addOption(a.value, a.label));
+        const current = this.plugin.settings.defaultAgent || "general";
+        if (current && !agents.find((a) => a.value === current)) {
+          dd.addOption(current, current);
+        }
+        dd.setValue(current);
+        dd.onChange(async (v) => {
+          this.plugin.settings.defaultAgent = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    containerEl.createEl("h3", { text: "Available Agents" });
+    const refreshAgentsBtn = containerEl.createEl("button", {
+      text: "🔄 Reload Agent List",
+      cls: "auto-oc-btn-secondary",
+    });
+    refreshAgentsBtn.style.marginBottom = "8px";
+    refreshAgentsBtn.onclick = () => {
+      this.plugin.refreshAgents();
+      new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+      this.display();
+    };
+    containerEl.createEl("p", {
+      text: `${this.plugin.availableAgents.length} agents loaded from \`opencode agent list\``,
+      cls: "setting-item-description",
+    });
+    const agentsTable = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const agentsHead = agentsTable.createEl("thead");
+    const agentsHeader = agentsHead.createEl("tr");
+    agentsHeader.createEl("th", { text: "agent" });
+    const agentsBody = agentsTable.createEl("tbody");
+    this.plugin.availableAgents.forEach((a) => {
+      const tr = agentsBody.createEl("tr");
+      tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
+    });
 
     new Setting(containerEl)
       .setName("Default Model")
