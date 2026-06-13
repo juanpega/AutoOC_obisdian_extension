@@ -107,6 +107,9 @@ interface AutoOCSettings {
   workingDirectory: string;
   cmdTemplate: string;
   taskTimeoutSeconds: number;
+  logsEnabled: boolean;
+  maxLogsPerTask: number;
+  logRetentionDays: number;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -186,6 +189,9 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
   taskTimeoutSeconds: 1800,  // 30 min por defecto
+  logsEnabled: true,
+  maxLogsPerTask: 50,
+  logRetentionDays: 30,
 };
 
 export const VIEW_TYPE = "auto-oc-view";
@@ -246,6 +252,135 @@ function getOpencodeConfigPath(): string {
 
 function getRalphStateFilePath(vaultBasePath: string): string {
   return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
+}
+
+// ─── Log File Helpers ────────────────────────────────────────────────────────
+
+function getTaskLogDir(vaultBasePath: string, taskId: string): string {
+  return path.join(vaultBasePath, ".opencode", "logs", taskId);
+}
+
+function formatTimestampForLog(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+
+function saveLogToFile(vaultBasePath: string, taskId: string, output: string): string | null {
+  if (!output || !output.trim()) return null;
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+  } catch { /* ignore */ }
+  const timestamp = formatTimestampForLog();
+  const logFile = path.join(logDir, `${timestamp}.log`);
+  try {
+    fs.writeFileSync(logFile, output, "utf8");
+    // Update latest.log
+    const latestFile = path.join(logDir, "latest.log");
+    fs.writeFileSync(latestFile, output, "utf8");
+    return logFile;
+  } catch {
+    return null;
+  }
+}
+
+function getLogHistory(vaultBasePath: string, taskId: string): { file: string; timestamp: string }[] {
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return [];
+    const files = fs.readdirSync(logDir)
+      .filter((f: string) => f.endsWith(".log") && f !== "latest.log")
+      .sort()
+      .reverse();
+    return files.map((f: string) => ({
+      file: path.join(logDir, f),
+      timestamp: f.replace(".log", "").replace("_", " ").replace(/-/g, (m, i) => {
+        // Restore date/time format: 2026-06-13_14-30-00 -> 2026-06-13 14:30:00
+        if (i < 10) return m.replace(/-/g, "/"); // Date part: replace - with /
+        return m; // Time part: keep as-is but replace - with :
+      }).replace(/(\d{4}\/\d{2}\/\d{2}) (\d{2})-(\d{2})-(\d{2})/, "$1 $2:$3:$4"),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function readLogFile(filePath: string): string {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch {
+    return "(error reading log file)";
+  }
+}
+
+function cleanupOldLogs(vaultBasePath: string, taskId: string, maxLogs: number): void {
+  if (maxLogs <= 0) return;
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const files = fs.readdirSync(logDir)
+      .filter((f: string) => f.endsWith(".log") && f !== "latest.log")
+      .sort();
+    while (files.length > maxLogs) {
+      const oldFile = files.shift();
+      if (oldFile) {
+        try { fs.unlinkSync(path.join(logDir, oldFile)); } catch { /* ignore */ }
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+function cleanupLogsByAge(vaultBasePath: string, taskId: string, retentionDays: number): void {
+  if (retentionDays <= 0) return;
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const files = fs.readdirSync(logDir)
+      .filter((f: string) => f.endsWith(".log") && f !== "latest.log");
+    for (const f of files) {
+      // Parse timestamp from filename: 2026-06-13_14-30-00.log
+      const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
+      if (match) {
+        const [, y, m, d, h, min, s] = match;
+        const fileDate = new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
+        if (fileDate.getTime() < cutoff) {
+          try { fs.unlinkSync(path.join(logDir, f)); } catch { /* ignore */ }
+        }
+      }
+    }
+  } catch { /* ignore */ }
+}
+
+function clearTaskLogs(vaultBasePath: string, taskId: string): void {
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const files = fs.readdirSync(logDir);
+    for (const f of files) {
+      try { fs.unlinkSync(path.join(logDir, f)); } catch { /* ignore */ }
+    }
+    try { fs.rmdirSync(logDir); } catch { /* ignore */ }
+  } catch { /* ignore */ }
+}
+
+function clearAllLogs(vaultBasePath: string): void {
+  const logsDir = path.join(vaultBasePath, ".opencode", "logs");
+  try {
+    if (!fs.existsSync(logsDir)) return;
+    const dirs = fs.readdirSync(logsDir, { withFileTypes: true })
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name);
+    for (const dir of dirs) {
+      clearTaskLogs(vaultBasePath, dir);
+    }
+    try { fs.rmdirSync(logsDir); } catch { /* ignore */ }
+  } catch { /* ignore */ }
+}
+
+function deleteSingleLogFile(filePath: string): void {
+  try { fs.unlinkSync(filePath); } catch { /* ignore */ }
 }
 
 function isTaskDue(task: ScheduledTask): boolean {
@@ -509,6 +644,15 @@ export default class AutoOCPlugin extends Plugin {
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
 
+    // Save previous log to file before starting new execution
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const previousOutput = this.settings.tasks[idx].output;
+    if (this.settings.logsEnabled && previousOutput && previousOutput.trim() && previousOutput !== "[iniciando proceso desacoplado…]\n") {
+      saveLogToFile(vaultBasePath, task.id, previousOutput);
+      cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+      cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+    }
+
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = new Date().toISOString();
     this.settings.tasks[idx].output = "[iniciando proceso desacoplado…]\n";
@@ -593,6 +737,11 @@ export default class AutoOCPlugin extends Plugin {
         clearInterval(pollHandle);
         t.output += `\n[⏱ timeout: ${timeoutSeconds}s superados]`;
         t.status = "failed";
+        if (this.settings.logsEnabled) {
+          saveLogToFile(vaultBasePath, task.id, t.output);
+          cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+          cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+        }
         await this.saveSettings();
         new Notice(`AutoOC: ⏱ "${task.name}" superó el timeout.`);
         return;
@@ -627,6 +776,11 @@ export default class AutoOCPlugin extends Plugin {
         t.status = t.scheduleType === "once" ? "completed" : "pending";
         new Notice(`AutoOC: ✅ "${task.name}" completada.`);
       }
+      if (this.settings.logsEnabled) {
+        saveLogToFile(vaultBasePath, task.id, t.output);
+        cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+        cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+      }
       await this.saveSettings();
     }, 3000);
   }
@@ -641,6 +795,12 @@ export default class AutoOCPlugin extends Plugin {
     if (t) {
       t.status = "failed";
       t.output += "\n[task stopped manually]";
+      if (this.settings.logsEnabled) {
+        const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+        saveLogToFile(vaultBasePath, id, t.output);
+        cleanupOldLogs(vaultBasePath, id, this.settings.maxLogsPerTask);
+        cleanupLogsByAge(vaultBasePath, id, this.settings.logRetentionDays);
+      }
       await this.saveSettings();
     }
     new Notice(`AutoOC: ⏹ Task stopped.`);
@@ -657,6 +817,18 @@ export default class AutoOCPlugin extends Plugin {
   async deleteTask(id: string) {
     this.settings.tasks = this.settings.tasks.filter((t) => t.id !== id);
     await this.saveSettings();
+  }
+
+  async clearTaskLogs(id: string) {
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    clearTaskLogs(vaultBasePath, id);
+    new Notice("Logs cleared for this task.");
+  }
+
+  async clearAllLogs() {
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    clearAllLogs(vaultBasePath);
+    new Notice("All logs cleared.");
   }
 }
 
@@ -872,6 +1044,15 @@ class AutoOCView extends ItemView {
     btnLog.onclick = (e) => {
       e.stopPropagation();
       new LiveLogModal(this.app, task, this.plugin).open();
+    };
+
+    const btnHistory = actions.createEl("button", {
+      text: "📜 History",
+      cls: "auto-oc-btn-history",
+    });
+    btnHistory.onclick = (e) => {
+      e.stopPropagation();
+      new LogHistoryModal(this.app, task, this.plugin).open();
     };
 
     const btnCmd = actions.createEl("button", {
@@ -1368,6 +1549,149 @@ class LiveLogModal extends Modal {
   }
 }
 
+// ─── Log History Modal ───────────────────────────────────────────────────────
+
+class LogHistoryModal extends Modal {
+  private task: ScheduledTask;
+  private plugin: AutoOCPlugin;
+
+  constructor(app: App, task: ScheduledTask, plugin: AutoOCPlugin) {
+    super(app);
+    this.task = task;
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-output-modal");
+
+    const header = contentEl.createDiv("auto-oc-log-header");
+    header.createEl("h3", { text: `📜 Log History: ${this.task.name}` });
+
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const history = getLogHistory(vaultBasePath, this.task.id);
+
+    if (history.length === 0) {
+      contentEl.createEl("p", {
+        text: "No historical logs found for this task.",
+        cls: "auto-oc-empty",
+      });
+      return;
+    }
+
+    const toolbar = header.createDiv("auto-oc-log-toolbar");
+    toolbar.createEl("span", {
+      text: `${history.length} execution(s)`,
+      cls: "setting-item-description",
+    });
+
+    const btnClearAll = toolbar.createEl("button", {
+      text: "🧹 Clear All",
+      cls: "auto-oc-btn-secondary",
+    });
+    btnClearAll.onclick = async () => {
+      if (confirm(`Delete ALL ${history.length} logs for "${this.task.name}"?`)) {
+        clearTaskLogs(vaultBasePath, this.task.id);
+        this.close();
+        new Notice("All logs cleared.");
+      }
+    };
+
+    const list = contentEl.createDiv("auto-oc-log-history-list");
+    list.style.maxHeight = "60vh";
+    list.style.overflowY = "auto";
+
+    for (const entry of history) {
+      const item = list.createDiv("auto-oc-log-history-item");
+      item.style.display = "flex";
+      item.style.alignItems = "center";
+      item.style.justifyContent = "space-between";
+      item.style.padding = "8px 12px";
+      item.style.marginBottom = "4px";
+      item.style.borderRadius = "4px";
+      item.style.backgroundColor = "var(--background-secondary)";
+
+      const label = item.createSpan({ text: `🕐 ${entry.timestamp}`, cls: "auto-oc-log-history-timestamp" });
+      label.style.cursor = "pointer";
+      label.style.flex = "1";
+      label.onclick = () => {
+        const content = readLogFile(entry.file);
+        const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content);
+        previewModal.open();
+      };
+
+      const btnDelete = item.createEl("button", {
+        text: "🗑",
+        cls: "auto-oc-btn-delete-small",
+      });
+      btnDelete.title = "Delete this log";
+      btnDelete.style.marginLeft = "8px";
+      btnDelete.onclick = async (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete log from ${entry.timestamp}?`)) {
+          deleteSingleLogFile(entry.file);
+          this.close();
+          this.open();
+        }
+      };
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+// ─── Log Preview Modal ───────────────────────────────────────────────────────
+
+class LogPreviewModal extends Modal {
+  private taskName: string;
+  private timestamp: string;
+  private content: string;
+  private pre: HTMLPreElement | null = null;
+
+  constructor(app: App, taskName: string, timestamp: string, content: string) {
+    super(app);
+    this.taskName = taskName;
+    this.timestamp = timestamp;
+    this.content = content;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-output-modal");
+
+    const header = contentEl.createDiv("auto-oc-log-header");
+    header.createEl("h3", { text: `📄 Log: ${this.taskName}` });
+    header.createEl("p", { text: `Execution: ${this.timestamp}`, cls: "auto-oc-log-status" });
+
+    const toolbar = contentEl.createDiv("auto-oc-log-toolbar");
+
+    const btnCopy = toolbar.createEl("button", {
+      text: "📋 Copy",
+      cls: "auto-oc-btn-secondary",
+    });
+    btnCopy.onclick = () => {
+      navigator.clipboard.writeText(this.content);
+      new Notice("Log copied.");
+    };
+
+    const btnClose = toolbar.createEl("button", {
+      text: "✖ Close",
+      cls: "auto-oc-btn-secondary",
+    });
+    btnClose.onclick = () => this.close();
+
+    this.pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
+    this.pre.textContent = this.content;
+    this.pre.scrollTop = this.pre.scrollHeight;
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 class BranchSelectorModal extends Modal {
   private branches: string[];
   private selectedBranch: string | null = null;
@@ -1606,6 +1930,70 @@ class AutoOCSettingTab extends PluginSettingTab {
             if (!isNaN(n) && n >= 0) {
               this.plugin.settings.taskTimeoutSeconds = n;
               await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    containerEl.createEl("h3", { text: "Logging" });
+    containerEl.createEl("p", {
+      text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
+      cls: "setting-item-description",
+    });
+
+    new Setting(containerEl)
+      .setName("Enable Log Persistence")
+      .setDesc("Save task logs to files when execution completes")
+      .addToggle((tog) =>
+        tog
+          .setValue(this.plugin.settings.logsEnabled)
+          .onChange(async (v) => {
+            this.plugin.settings.logsEnabled = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Max Logs Per Task")
+      .setDesc("Maximum number of log files to keep per task (0 = unlimited)")
+      .addText((text) =>
+        text
+          .setPlaceholder("50")
+          .setValue(String(this.plugin.settings.maxLogsPerTask ?? 50))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n >= 0) {
+              this.plugin.settings.maxLogsPerTask = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Log Retention (days)")
+      .setDesc("Delete logs older than this many days (0 = no age limit)")
+      .addText((text) =>
+        text
+          .setPlaceholder("30")
+          .setValue(String(this.plugin.settings.logRetentionDays ?? 30))
+          .onChange(async (v) => {
+            const n = parseInt(v, 10);
+            if (!isNaN(n) && n >= 0) {
+              this.plugin.settings.logRetentionDays = n;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Clear All Logs")
+      .setDesc("Delete all log files for every task")
+      .addButton((btn) =>
+        btn
+          .setButtonText("🧹 Clear All Logs")
+          .setWarning()
+          .onClick(async () => {
+            if (confirm("Delete ALL log files for ALL tasks? This cannot be undone.")) {
+              await this.plugin.clearAllLogs();
             }
           })
       );
