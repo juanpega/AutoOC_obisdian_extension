@@ -84,6 +84,7 @@ interface ScheduledTask {
   name: string;
   prompt: string;
   model: string;
+  agent: string;
   useRalphLoop: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;    // "HH:MM"
@@ -92,13 +93,17 @@ interface ScheduledTask {
   status: TaskStatus;
   lastRun: string;         // ISO string
   output: string;
-  createdAt: string;       // ISO string
+  createdAt: string;       // ISO string;
+  workingDirectory?: string; // Optional path override
+  branch?: string;           // Git branch name
+  createBranch?: boolean;    // Create branch if it doesn't exist
 }
 
 interface AutoOCSettings {
   tasks: ScheduledTask[];
   opencodePath: string;
   defaultModel: string;
+  defaultAgent: string;
   workingDirectory: string;
   cmdTemplate: string;
   taskTimeoutSeconds: number;
@@ -108,6 +113,34 @@ interface AutoOCSettings {
 
 // No hardcoded models: load dynamically with `opencode models`.
 const FALLBACK_MODELS: { value: string; label: string }[] = [];
+const FALLBACK_AGENTS: { value: string; label: string }[] = [
+  { value: "general", label: "general" },
+  { value: "build", label: "build" },
+  { value: "plan", label: "plan" },
+  { value: "explore", label: "explore" },
+];
+
+function stripAnsi(text: string): string {
+  return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function isValidAgentName(name: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(name);
+}
+
+function listGitBranches(cwd: string): string[] {
+  const { execFileSync } = require("child_process");
+  const out = execFileSync("git", ["branch", "--format=%(refname:short)"], {
+    cwd,
+    timeout: 8000,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return out
+    .split("\n")
+    .map((b: string) => b.trim())
+    .filter(Boolean);
+}
 
 function fetchModelsSync(opencodePath: string): { value: string; label: string }[] {
   const { execSync } = require("child_process");
@@ -124,10 +157,31 @@ function fetchModelsSync(opencodePath: string): { value: string; label: string }
   }
 }
 
+function fetchAgentsSync(opencodePath: string): { value: string; label: string }[] {
+  const { execSync } = require("child_process");
+  const bin = resolveOpencodeBin(opencodePath);
+  try {
+    const out = execSync(`"${bin}" agent list`, { timeout: 8000, encoding: "utf8" });
+    const agents = stripAnsi(out)
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => /^\S+\s+\(/.test(l))
+      .map((l) => {
+        const name = l.match(/^(\S+)\s+\(/)?.[1] ?? l.split(" ")[0];
+        return { value: name, label: name };
+      })
+      .filter((a) => isValidAgentName(a.value));
+    return agents.length > 0 ? agents : FALLBACK_AGENTS;
+  } catch {
+    return FALLBACK_AGENTS;
+  }
+}
+
 const DEFAULT_SETTINGS: AutoOCSettings = {
   tasks: [],
   opencodePath: "opencode",
   defaultModel: "",
+  defaultAgent: "general",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
@@ -232,13 +286,17 @@ export default class AutoOCPlugin extends Plugin {
   settings!: AutoOCSettings;
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
+  availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
 
   async onload() {
     await this.loadSettings();
     // Load models asynchronously to avoid blocking startup
-    setTimeout(() => this.refreshModels(), 2000);
+    setTimeout(() => {
+      this.refreshModels();
+      this.refreshAgents();
+    }, 2000);
 
     this.registerView(VIEW_TYPE, (leaf) => {
       this.view = new AutoOCView(leaf, this);
@@ -315,6 +373,18 @@ export default class AutoOCPlugin extends Plugin {
       this.availableModels = models;
       if (!this.settings.defaultModel || !models.find((m) => m.value === this.settings.defaultModel)) {
         this.settings.defaultModel = models[0].value;
+        void this.saveSettings();
+      }
+      this.view?.refresh();
+    }
+  }
+
+  refreshAgents(): void {
+    const agents = fetchAgentsSync(this.settings.opencodePath || "opencode");
+    if (agents.length > 0) {
+      this.availableAgents = agents;
+      if (!this.settings.defaultAgent) {
+        this.settings.defaultAgent = "general";
         void this.saveSettings();
       }
       this.view?.refresh();
@@ -421,14 +491,15 @@ export default class AutoOCPlugin extends Plugin {
       prompt = `/ralph-loop ${prompt}`;
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
+    const agent = task.agent || this.settings.defaultAgent || "general";
     // --dangerously-skip-permissions prevents opencode from blocking on tool-approval prompts
-    return [bin, "run", prompt, "-m", task.model, "--dangerously-skip-permissions"];
+    return [bin, "run", prompt, "-m", task.model, "--agent", agent, "--dangerously-skip-permissions"];
   }
 
   // Human-readable command string for the preview modal
   buildCommand(task: ScheduledTask): string {
     const args = this.buildArgs(task);
-    return `${args[0]} ${args[1]} "${args[2]}" ${args[3]} ${args[4]} ${args[5]}`;
+    return args.join(" ");
   }
 
   // Runs opencode via a fully-detached PowerShell process to avoid Electron's
@@ -466,13 +537,29 @@ export default class AutoOCPlugin extends Plugin {
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
 
     // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
+    // Resolve working directory: Task override -> Global Setting -> Vault Path
+    const taskCwd = task.workingDirectory || this.settings.workingDirectory || ((this.app.vault.adapter as any).basePath || ".");
+    const safeCwd = taskCwd.replace(/'/g, "''");
+
+    // Git branch logic
+    let gitCmds = "";
+    if (task.branch) {
+      const safeBranch = task.branch.replace(/'/g, "''");
+      if (task.createBranch) {
+        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
+      } else {
+        gitCmds = `git checkout ${safeBranch}`;
+      }
+    }
+
     const psScript = [
       `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
       `$env:APPDATA     = '${process.env.APPDATA}'`,
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
-      `Set-Location '${((this.app.vault.adapter as any).basePath || ".").replace(/'/g, "''")}'`,
+      `Set-Location -LiteralPath '${safeCwd}'`,
+      gitCmds ? gitCmds : "",
       `$outTmp = [System.IO.Path]::GetTempFileName()`,
       `$errTmp = [System.IO.Path]::GetTempFileName()`,
       `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
@@ -482,7 +569,7 @@ export default class AutoOCPlugin extends Plugin {
       `$code = $p.ExitCode`,
       `$combined = ($stdout + $(if($stderr){"\n[stderr]\n" + $stderr}else{""})).Trim()`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:$code")`,
-    ].join("\n");
+    ].filter(line => line !== "").join("\n");
 
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     fs.writeFileSync(psScriptFile, psScript, "utf8");
@@ -577,6 +664,8 @@ export default class AutoOCPlugin extends Plugin {
 
 class AutoOCView extends ItemView {
   private plugin: AutoOCPlugin;
+  private filterText: string = "";
+  private filterStatus: string = "all";
 
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
@@ -638,13 +727,33 @@ class AutoOCView extends ItemView {
     });
     btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
 
-    const btnCheck = btnRow.createEl("button", {
-      text: "▶ Check Now",
-      cls: "auto-oc-btn-secondary",
+    // ── Filters Bar ──
+    const filterBar = containerEl.createDiv("auto-oc-filter-bar");
+    
+    const searchInput = filterBar.createEl("input", {
+      type: "text",
+      placeholder: "🔍 Search name or prompt...",
+      cls: "auto-oc-search-input",
     });
-    btnCheck.onclick = async () => {
-      await this.plugin.runDueTasks();
-      new Notice("AutoOC: check completed.");
+    searchInput.value = this.filterText;
+    searchInput.oninput = () => {
+      this.filterText = searchInput.value.toLowerCase();
+      this.render();
+    };
+
+    const statusSelect = filterBar.createEl("select", {
+      cls: "auto-oc-status-select",
+    });
+    const statuses = ["all", "pending", "running", "completed", "failed"];
+    statuses.forEach(s => {
+      const opt = statusSelect.createEl("option");
+      opt.value = s;
+      opt.text = s.charAt(0).toUpperCase() + s.slice(1);
+    });
+    statusSelect.value = this.filterStatus;
+    statusSelect.onchange = () => {
+      this.filterStatus = statusSelect.value;
+      this.render();
     };
 
     // ── Stats bar ──
@@ -660,36 +769,49 @@ class AutoOCView extends ItemView {
     if (completed > 0) stats.createEl("span", { text: `🟢 ${completed} completed` });
 
     // ── Task list ──
-    if (tasks.length === 0) {
+    const filteredTasks = tasks.filter(t => {
+      const matchesText = t.name.toLowerCase().includes(this.filterText) || 
+                          t.prompt.toLowerCase().includes(this.filterText);
+      const matchesStatus = this.filterStatus === "all" || t.status === this.filterStatus;
+      return matchesText && matchesStatus;
+    });
+
+    if (filteredTasks.length === 0) {
       containerEl.createEl("p", {
-        text: 'No tasks scheduled. Create one with "+New Task".',
+        text: this.filterText || this.filterStatus !== "all" 
+              ? "No tasks match your filters." 
+              : "No tasks scheduled. Create one with \"+New Task\".",
         cls: "auto-oc-empty",
       });
       return;
     }
 
     const list = containerEl.createDiv("auto-oc-list");
-    // Show most recent first
-    for (const task of [...tasks].reverse()) {
+    for (const task of [...filteredTasks].reverse()) {
       this.renderTaskCard(list, task);
     }
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
-
-    // Top row: name + badge
-    const top = card.createDiv("auto-oc-card-top");
-    top.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
-    top.createEl("span", {
+    
+    // Summary Bar (Always Visible)
+    const summary = card.createDiv("auto-oc-card-summary");
+    const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
+    
+    const badge = summary.createEl("span", {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
 
-    // Meta: model, schedule, last run
-    const meta = card.createDiv("auto-oc-card-meta");
+    // Details Section (Collapsible)
+    const details = card.createDiv("auto-oc-card-details");
+    details.style.display = "none";
+
+    const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🤖 ${modelLabel}` });
+    meta.createEl("span", { text: `⚙️ ${task.agent || 'general'}` });
 
     let scheduleText = "";
     if (task.scheduleType === "once") {
@@ -710,50 +832,54 @@ class AutoOCView extends ItemView {
       meta.createEl("span", { text: "♻️ Ralph Loop active", cls: "auto-oc-ralph-badge" });
     }
 
-    // Prompt preview
-    const preview = card.createDiv("auto-oc-prompt-preview");
+    const preview = details.createDiv("auto-oc-prompt-preview");
     preview.createEl("span", {
       text: task.prompt.slice(0, 140) + (task.prompt.length > 140 ? "…" : ""),
     });
 
-    // Action buttons
-    const actions = card.createDiv("auto-oc-card-actions");
+    const actions = details.createDiv("auto-oc-card-actions");
 
     const btnRun = actions.createEl("button", {
       text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
     btnRun.disabled = task.status === "running";
-    btnRun.onclick = () => this.plugin.runTask(task);
+    btnRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runTask(task);
+    };
 
-    // Stop button — only when running
     if (task.status === "running") {
       const btnStop = actions.createEl("button", {
         text: "⏹ Stop",
         cls: "auto-oc-btn-stop",
       });
       btnStop.title = "Terminate process now";
-      btnStop.onclick = async () => {
+      btnStop.onclick = async (e) => {
+        e.stopPropagation();
         btnStop.disabled = true;
         btnStop.textContent = "Stopping…";
         await this.plugin.killTask(task.id);
       };
     }
 
-    // Log button — always visible; live-refresh when running
     const btnLog = actions.createEl("button", {
       text: task.status === "running" ? "📡 Live Log" : "📄 Log",
       cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output",
     });
     btnLog.disabled = !task.output && task.status !== "running";
     btnLog.title = task.output ? "" : "Aún no hay output";
-    btnLog.onclick = () => new LiveLogModal(this.app, task, this.plugin).open();
+    btnLog.onclick = (e) => {
+      e.stopPropagation();
+      new LiveLogModal(this.app, task, this.plugin).open();
+    };
 
     const btnCmd = actions.createEl("button", {
       text: "🔍 Command",
       cls: "auto-oc-btn-cmd",
     });
-    btnCmd.onclick = () => {
+    btnCmd.onclick = (e) => {
+      e.stopPropagation();
       const cmd = this.plugin.buildCommand(task);
       new CommandPreviewModal(this.app, task.name, cmd).open();
     };
@@ -762,18 +888,28 @@ class AutoOCView extends ItemView {
       text: "✏️ Edit",
       cls: "auto-oc-btn-edit",
     });
-    btnEdit.onclick = () =>
+    btnEdit.onclick = (e) => {
+      e.stopPropagation();
       new CreateTaskModal(this.app, this.plugin, task).open();
+    };
 
     const btnDelete = actions.createEl("button", {
       text: "🗑",
       cls: "auto-oc-btn-delete",
     });
     btnDelete.title = "Delete task";
-    btnDelete.onclick = async () => {
+    btnDelete.onclick = async (e) => {
+      e.stopPropagation();
       if (confirm(`Delete task "${task.name}"?`)) {
         await this.plugin.deleteTask(task.id);
       }
+    };
+
+    // Toggle interaction
+    summary.onclick = () => {
+      const isHidden = details.style.display === "none";
+      details.style.display = isHidden ? "block" : "none";
+      card.classList.toggle("expanded", isHidden);
     };
   }
 }
@@ -792,24 +928,29 @@ class CreateTaskModal extends Modal {
     this.draft = editTask
       ? { ...editTask }
       : {
-          name: "",
-          prompt: "",
-          model: plugin.getEffectiveDefaultModel(),
-          useRalphLoop: false,
-          scheduleType: "once",
-          scheduleTime: nowTimeString(),
-          scheduleDate: todayString(),
-          scheduleDays: [],
-        };
+            name: "",
+            prompt: "",
+            model: plugin.getEffectiveDefaultModel(),
+            agent: plugin.settings.defaultAgent || "general",
+            useRalphLoop: false,
+            scheduleType: "once",
+            scheduleTime: nowTimeString(),
+            scheduleDate: todayString(),
+            scheduleDays: [],
+          };
   }
 
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("auto-oc-modal");
+    contentEl.style.maxWidth = "800px";
+    contentEl.style.width = "90%";
+
     contentEl.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New OpenCode Task",
     });
+
 
     new Setting(contentEl)
       .setName("Name")
@@ -833,9 +974,96 @@ class CreateTaskModal extends Modal {
         ta.inputEl.spellcheck = false;
       });
 
+    contentEl.createDiv("auto-oc-modal-section-title").setText("📂 Workspace & Git");
+
+    new Setting(contentEl)
+      .setName("Project Path")
+      .setDesc("Absolute path to the project (empty = vault root)")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder((this.app.vault.adapter as any).basePath || "C:\\path\\to\\project")
+          .setValue(this.draft.workingDirectory ?? "")
+          .onChange((v) => (this.draft.workingDirectory = v));
+      });
+
+    let branchInput: HTMLInputElement | null = null;
+    new Setting(contentEl)
+      .setName("Git Branch")
+      .setDesc("Branch to work on")
+      .addText((text) => {
+        branchInput = text.inputEl;
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder("main")
+          .setValue(this.draft.branch ?? "")
+          .onChange((v) => (this.draft.branch = v));
+      })
+      .addButton((btn) => 
+        btn.setButtonText("🔍 Discover").onClick(async () => {
+          const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+          new Notice("AutoOC: Fetching branches...");
+          try {
+            const branches = listGitBranches(taskCwd);
+            if (branches.length > 0) {
+              const selected = await new BranchSelectorModal(this.app, branches).open();
+              if (selected) {
+                this.draft.branch = selected;
+                if (branchInput) branchInput.value = selected;
+                new Notice(`AutoOC: Selected branch ${selected}`);
+              }
+            } else {
+              new Notice("AutoOC: No branches found.");
+            }
+          } catch (e) {
+            new Notice(`AutoOC: Could not list branches: ${String(e)}`);
+          }
+        })
+      );
+
+    new Setting(contentEl)
+      .setName("Create Branch")
+      .setDesc("Automatically create the branch if it doesn't exist")
+      .addToggle((tog) => {
+        tog.setValue(this.draft.createBranch ?? false);
+        tog.onChange((v) => (this.draft.createBranch = v));
+      });
+
+    new Setting(contentEl)
+      .setName("Agent")
+      .setDesc(`AI agent personality to use (${this.plugin.availableAgents.length} loaded)`)
+      .addDropdown((dd) => {
+        const agents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
+        agents.forEach((a) => dd.addOption(a.value, a.label));
+        const current = this.draft.agent ?? (this.plugin.settings.defaultAgent || "general");
+        if (!current && agents.length === 0) {
+          dd.addOption("", "(no agents; tap refresh)");
+        } else if (current && !agents.find((a) => a.value === current)) {
+          dd.addOption(current, current);
+        }
+        dd.setValue(current || "");
+        dd.onChange((v) => (this.draft.agent = v));
+      });
+
+    contentEl.createEl("p", {
+      text: `Detected agents: ${this.plugin.availableAgents.map((a) => a.label).join(", ") || "none"}`,
+      cls: "setting-item-description auto-oc-agent-list",
+    });
+
+    new Setting(contentEl)
+      .addButton((btn) =>
+        btn.setButtonText("🔄 Refresh Agents").onClick(() => {
+          this.plugin.refreshAgents();
+          new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+          this.contentEl.empty();
+          this.onOpen();
+        })
+      );
+
     new Setting(contentEl)
       .setName("Model")
       .setDesc("AI model to use")
+
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
@@ -990,6 +1218,7 @@ class CreateTaskModal extends Modal {
               name: this.draft.name!,
               prompt: this.draft.prompt!,
               model: this.draft.model!,
+              agent: this.draft.agent || "general",
               useRalphLoop: this.draft.useRalphLoop ?? false,
               scheduleType: this.draft.scheduleType ?? "once",
               scheduleTime: this.draft.scheduleTime!,
@@ -999,8 +1228,12 @@ class CreateTaskModal extends Modal {
               lastRun: "",
               output: "",
               createdAt: new Date().toISOString(),
+              workingDirectory: this.draft.workingDirectory,
+              branch: this.draft.branch,
+              createBranch: this.draft.createBranch,
             };
             this.plugin.settings.tasks.push(task);
+
           }
 
           await this.plugin.saveSettings();
@@ -1132,6 +1365,48 @@ class LiveLogModal extends Modal {
       this.elapsedIntervalId = null;
     }
     this.contentEl.empty();
+  }
+}
+
+class BranchSelectorModal extends Modal {
+  private branches: string[];
+  private selectedBranch: string | null = null;
+  private resolveSelection: ((branch: string | null) => void) | null = null;
+
+  constructor(app: App, branches: string[]) {
+    super(app);
+    this.branches = branches;
+  }
+
+  async open(): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.resolveSelection = resolve;
+      super.open();
+    });
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Select Git Branch" });
+    const list = contentEl.createDiv("branch-selector-list");
+    list.style.maxHeight = "400px";
+    list.style.overflowY = "auto";
+    this.branches.forEach((branch) => {
+      const item = list.createEl("div", { text: branch, cls: "branch-selector-item" });
+      item.style.cursor = "pointer";
+      item.style.padding = "4px 8px";
+      item.onclick = () => {
+        this.selectedBranch = branch;
+        this.close();
+      };
+    });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    this.resolveSelection?.(this.selectedBranch);
+    this.resolveSelection = null;
   }
 }
 
@@ -1370,6 +1645,48 @@ class AutoOCSettingTab extends PluginSettingTab {
           new Notice(`Ralph state file: ${statePath}`);
         })
       );
+
+    new Setting(containerEl)
+      .setName("Default Agent")
+      .setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`)
+      .addDropdown((dd) => {
+        const agents = this.plugin.availableAgents;
+        agents.forEach((a) => dd.addOption(a.value, a.label));
+        const current = this.plugin.settings.defaultAgent || "general";
+        if (current && !agents.find((a) => a.value === current)) {
+          dd.addOption(current, current);
+        }
+        dd.setValue(current);
+        dd.onChange(async (v) => {
+          this.plugin.settings.defaultAgent = v;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    containerEl.createEl("h3", { text: "Available Agents" });
+    const refreshAgentsBtn = containerEl.createEl("button", {
+      text: "🔄 Reload Agent List",
+      cls: "auto-oc-btn-secondary",
+    });
+    refreshAgentsBtn.style.marginBottom = "8px";
+    refreshAgentsBtn.onclick = () => {
+      this.plugin.refreshAgents();
+      new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+      this.display();
+    };
+    containerEl.createEl("p", {
+      text: `${this.plugin.availableAgents.length} agents loaded from \`opencode agent list\``,
+      cls: "setting-item-description",
+    });
+    const agentsTable = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const agentsHead = agentsTable.createEl("thead");
+    const agentsHeader = agentsHead.createEl("tr");
+    agentsHeader.createEl("th", { text: "agent" });
+    const agentsBody = agentsTable.createEl("tbody");
+    this.plugin.availableAgents.forEach((a) => {
+      const tr = agentsBody.createEl("tr");
+      tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
+    });
 
     new Setting(containerEl)
       .setName("Default Model")
