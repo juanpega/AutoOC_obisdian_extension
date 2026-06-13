@@ -150,8 +150,11 @@ var DEFAULT_SETTINGS = {
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
-  taskTimeoutSeconds: 1800
+  taskTimeoutSeconds: 1800,
   // 30 min por defecto
+  logsEnabled: true,
+  maxLogsPerTask: 50,
+  logRetentionDays: 30
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
@@ -190,6 +193,135 @@ function getOpencodeConfigPath() {
 }
 function getRalphStateFilePath(vaultBasePath) {
   return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
+}
+function getTaskLogDir(vaultBasePath, taskId) {
+  return path.join(vaultBasePath, ".opencode", "logs", taskId);
+}
+function formatTimestampForLog() {
+  const now = /* @__PURE__ */ new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+function saveLogToFile(vaultBasePath, taskId, output) {
+  if (!output || !output.trim()) return null;
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    fs.mkdirSync(logDir, { recursive: true });
+  } catch (e) {
+  }
+  const timestamp = formatTimestampForLog();
+  const logFile = path.join(logDir, `${timestamp}.log`);
+  try {
+    fs.writeFileSync(logFile, output, "utf8");
+    const latestFile = path.join(logDir, "latest.log");
+    fs.writeFileSync(latestFile, output, "utf8");
+    return logFile;
+  } catch (e) {
+    return null;
+  }
+}
+function getLogHistory(vaultBasePath, taskId) {
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return [];
+    const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    return files.map((f) => ({
+      file: path.join(logDir, f),
+      timestamp: f.replace(".log", "").replace("_", " ").replace(/-/g, (m, i) => {
+        if (i < 10) return m.replace(/-/g, "/");
+        return m;
+      }).replace(/(\d{4}\/\d{2}\/\d{2}) (\d{2})-(\d{2})-(\d{2})/, "$1 $2:$3:$4")
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+function readLogFile(filePath) {
+  try {
+    return fs.readFileSync(filePath, "utf8");
+  } catch (e) {
+    return "(error reading log file)";
+  }
+}
+function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
+  if (maxLogs <= 0) return;
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    while (files.length > maxLogs) {
+      const oldFile = files.shift();
+      if (oldFile) {
+        try {
+          fs.unlinkSync(path.join(logDir, oldFile));
+        } catch (e) {
+        }
+      }
+    }
+  } catch (e) {
+  }
+}
+function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
+  if (retentionDays <= 0) return;
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
+    const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    for (const f of files) {
+      const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
+      if (match) {
+        const [, y, m, d, h, min, s] = match;
+        const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
+        if (fileDate.getTime() < cutoff) {
+          try {
+            fs.unlinkSync(path.join(logDir, f));
+          } catch (e) {
+          }
+        }
+      }
+    }
+  } catch (e) {
+  }
+}
+function clearTaskLogs(vaultBasePath, taskId) {
+  const logDir = getTaskLogDir(vaultBasePath, taskId);
+  try {
+    if (!fs.existsSync(logDir)) return;
+    const files = fs.readdirSync(logDir);
+    for (const f of files) {
+      try {
+        fs.unlinkSync(path.join(logDir, f));
+      } catch (e) {
+      }
+    }
+    try {
+      fs.rmdirSync(logDir);
+    } catch (e) {
+    }
+  } catch (e) {
+  }
+}
+function clearAllLogs(vaultBasePath) {
+  const logsDir = path.join(vaultBasePath, ".opencode", "logs");
+  try {
+    if (!fs.existsSync(logsDir)) return;
+    const dirs = fs.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    for (const dir of dirs) {
+      clearTaskLogs(vaultBasePath, dir);
+    }
+    try {
+      fs.rmdirSync(logsDir);
+    } catch (e) {
+    }
+  } catch (e) {
+  }
+}
+function deleteSingleLogFile(filePath) {
+  try {
+    fs.unlinkSync(filePath);
+  } catch (e) {
+  }
 }
 function isTaskDue(task) {
   if (task.status === "running") return false;
@@ -418,6 +550,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     var _a;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    const previousOutput = this.settings.tasks[idx].output;
+    if (this.settings.logsEnabled && previousOutput && previousOutput.trim() && previousOutput !== "[iniciando proceso desacoplado\u2026]\n") {
+      saveLogToFile(vaultBasePath, task.id, previousOutput);
+      cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+      cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+    }
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[iniciando proceso desacoplado\u2026]\n";
@@ -492,6 +631,11 @@ DONE:$code")`
         t.output += `
 [\u23F1 timeout: ${timeoutSeconds}s superados]`;
         t.status = "failed";
+        if (this.settings.logsEnabled) {
+          saveLogToFile(vaultBasePath, task.id, t.output);
+          cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+          cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+        }
         await this.saveSettings();
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" super\xF3 el timeout.`);
         return;
@@ -526,6 +670,11 @@ DONE:$code")`
         t.status = t.scheduleType === "once" ? "completed" : "pending";
         new import_obsidian.Notice(`AutoOC: \u2705 "${task.name}" completada.`);
       }
+      if (this.settings.logsEnabled) {
+        saveLogToFile(vaultBasePath, task.id, t.output);
+        cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+        cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+      }
       await this.saveSettings();
     }, 3e3);
   }
@@ -542,6 +691,12 @@ DONE:$code")`
     if (t) {
       t.status = "failed";
       t.output += "\n[task stopped manually]";
+      if (this.settings.logsEnabled) {
+        const vaultBasePath = this.app.vault.adapter.basePath || ".";
+        saveLogToFile(vaultBasePath, id, t.output);
+        cleanupOldLogs(vaultBasePath, id, this.settings.maxLogsPerTask);
+        cleanupLogsByAge(vaultBasePath, id, this.settings.logRetentionDays);
+      }
       await this.saveSettings();
     }
     new import_obsidian.Notice(`AutoOC: \u23F9 Task stopped.`);
@@ -556,6 +711,16 @@ DONE:$code")`
   async deleteTask(id) {
     this.settings.tasks = this.settings.tasks.filter((t) => t.id !== id);
     await this.saveSettings();
+  }
+  async clearTaskLogs(id) {
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    clearTaskLogs(vaultBasePath, id);
+    new import_obsidian.Notice("Logs cleared for this task.");
+  }
+  async clearAllLogs() {
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    clearAllLogs(vaultBasePath);
+    new import_obsidian.Notice("All logs cleared.");
   }
 };
 var AutoOCView = class extends import_obsidian.ItemView {
@@ -737,6 +902,14 @@ var AutoOCView = class extends import_obsidian.ItemView {
     btnLog.onclick = (e) => {
       e.stopPropagation();
       new LiveLogModal(this.app, task, this.plugin).open();
+    };
+    const btnHistory = actions.createEl("button", {
+      text: "\u{1F4DC} History",
+      cls: "auto-oc-btn-history"
+    });
+    btnHistory.onclick = (e) => {
+      e.stopPropagation();
+      new LogHistoryModal(this.app, task, this.plugin).open();
     };
     const btnCmd = actions.createEl("button", {
       text: "\u{1F50D} Command",
@@ -1120,6 +1293,118 @@ var LiveLogModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
+var LogHistoryModal = class extends import_obsidian.Modal {
+  constructor(app, task, plugin) {
+    super(app);
+    this.task = task;
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-output-modal");
+    const header = contentEl.createDiv("auto-oc-log-header");
+    header.createEl("h3", { text: `\u{1F4DC} Log History: ${this.task.name}` });
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    const history = getLogHistory(vaultBasePath, this.task.id);
+    if (history.length === 0) {
+      contentEl.createEl("p", {
+        text: "No historical logs found for this task.",
+        cls: "auto-oc-empty"
+      });
+      return;
+    }
+    const toolbar = header.createDiv("auto-oc-log-toolbar");
+    toolbar.createEl("span", {
+      text: `${history.length} execution(s)`,
+      cls: "setting-item-description"
+    });
+    const btnClearAll = toolbar.createEl("button", {
+      text: "\u{1F9F9} Clear All",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnClearAll.onclick = async () => {
+      if (confirm(`Delete ALL ${history.length} logs for "${this.task.name}"?`)) {
+        clearTaskLogs(vaultBasePath, this.task.id);
+        this.close();
+        new import_obsidian.Notice("All logs cleared.");
+      }
+    };
+    const list = contentEl.createDiv("auto-oc-log-history-list");
+    list.style.maxHeight = "60vh";
+    list.style.overflowY = "auto";
+    for (const entry of history) {
+      const item = list.createDiv("auto-oc-log-history-item");
+      item.style.display = "flex";
+      item.style.alignItems = "center";
+      item.style.justifyContent = "space-between";
+      item.style.padding = "8px 12px";
+      item.style.marginBottom = "4px";
+      item.style.borderRadius = "4px";
+      item.style.backgroundColor = "var(--background-secondary)";
+      const label = item.createSpan({ text: `\u{1F550} ${entry.timestamp}`, cls: "auto-oc-log-history-timestamp" });
+      label.style.cursor = "pointer";
+      label.style.flex = "1";
+      label.onclick = () => {
+        const content = readLogFile(entry.file);
+        const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content);
+        previewModal.open();
+      };
+      const btnDelete = item.createEl("button", {
+        text: "\u{1F5D1}",
+        cls: "auto-oc-btn-delete-small"
+      });
+      btnDelete.title = "Delete this log";
+      btnDelete.style.marginLeft = "8px";
+      btnDelete.onclick = async (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete log from ${entry.timestamp}?`)) {
+          deleteSingleLogFile(entry.file);
+          this.close();
+          this.open();
+        }
+      };
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var LogPreviewModal = class extends import_obsidian.Modal {
+  constructor(app, taskName, timestamp, content) {
+    super(app);
+    this.pre = null;
+    this.taskName = taskName;
+    this.timestamp = timestamp;
+    this.content = content;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-output-modal");
+    const header = contentEl.createDiv("auto-oc-log-header");
+    header.createEl("h3", { text: `\u{1F4C4} Log: ${this.taskName}` });
+    header.createEl("p", { text: `Execution: ${this.timestamp}`, cls: "auto-oc-log-status" });
+    const toolbar = contentEl.createDiv("auto-oc-log-toolbar");
+    const btnCopy = toolbar.createEl("button", {
+      text: "\u{1F4CB} Copy",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnCopy.onclick = () => {
+      navigator.clipboard.writeText(this.content);
+      new import_obsidian.Notice("Log copied.");
+    };
+    const btnClose = toolbar.createEl("button", {
+      text: "\u2716 Close",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnClose.onclick = () => this.close();
+    this.pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
+    this.pre.textContent = this.content;
+    this.pre.scrollTop = this.pre.scrollHeight;
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var BranchSelectorModal = class extends import_obsidian.Modal {
   constructor(app, branches) {
     super(app);
@@ -1325,6 +1610,48 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
           }
         });
       }
+    );
+    containerEl.createEl("h3", { text: "Logging" });
+    containerEl.createEl("p", {
+      text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
+      (tog) => tog.setValue(this.plugin.settings.logsEnabled).onChange(async (v) => {
+        this.plugin.settings.logsEnabled = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
+      (text) => {
+        var _a;
+        return text.setPlaceholder("50").setValue(String((_a = this.plugin.settings.maxLogsPerTask) != null ? _a : 50)).onChange(async (v) => {
+          const n = parseInt(v, 10);
+          if (!isNaN(n) && n >= 0) {
+            this.plugin.settings.maxLogsPerTask = n;
+            await this.plugin.saveSettings();
+          }
+        });
+      }
+    );
+    new import_obsidian.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
+      (text) => {
+        var _a;
+        return text.setPlaceholder("30").setValue(String((_a = this.plugin.settings.logRetentionDays) != null ? _a : 30)).onChange(async (v) => {
+          const n = parseInt(v, 10);
+          if (!isNaN(n) && n >= 0) {
+            this.plugin.settings.logRetentionDays = n;
+            await this.plugin.saveSettings();
+          }
+        });
+      }
+    );
+    new import_obsidian.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
+      (btn) => btn.setButtonText("\u{1F9F9} Clear All Logs").setWarning().onClick(async () => {
+        if (confirm("Delete ALL log files for ALL tasks? This cannot be undone.")) {
+          await this.plugin.clearAllLogs();
+        }
+      })
     );
     containerEl.createEl("h3", { text: "Ralph Loop" });
     containerEl.createEl("p", {
