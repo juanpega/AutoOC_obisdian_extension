@@ -92,7 +92,10 @@ interface ScheduledTask {
   status: TaskStatus;
   lastRun: string;         // ISO string
   output: string;
-  createdAt: string;       // ISO string
+  createdAt: string;       // ISO string;
+  workingDirectory?: string; // Optional path override
+  branch?: string;           // Git branch name
+  createBranch?: boolean;    // Create branch if it doesn't exist
 }
 
 interface AutoOCSettings {
@@ -466,13 +469,29 @@ export default class AutoOCPlugin extends Plugin {
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
 
     // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
+    // Resolve working directory: Task override -> Global Setting -> Vault Path
+    const taskCwd = task.workingDirectory || this.settings.workingDirectory || ((this.app.vault.adapter as any).basePath || ".");
+    const safeCwd = taskCwd.replace(/'/g, "''");
+
+    // Git branch logic
+    let gitCmds = "";
+    if (task.branch) {
+      const safeBranch = task.branch.replace(/'/g, "''");
+      if (task.createBranch) {
+        gitCmds = `git checkout -b ${safeBranch} 2>$null; if ($?) { echo "Created branch ${safeBranch}" } else { git checkout ${safeBranch} }`;
+      } else {
+        gitCmds = `git checkout ${safeBranch}`;
+      }
+    }
+
     const psScript = [
       `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
       `$env:APPDATA     = '${process.env.APPDATA}'`,
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
-      `Set-Location '${((this.app.vault.adapter as any).basePath || ".").replace(/'/g, "''")}'`,
+      `Set-Location -LiteralPath '${safeCwd}'`,
+      gitCmds ? gitCmds : "",
       `$outTmp = [System.IO.Path]::GetTempFileName()`,
       `$errTmp = [System.IO.Path]::GetTempFileName()`,
       `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
@@ -482,7 +501,7 @@ export default class AutoOCPlugin extends Plugin {
       `$code = $p.ExitCode`,
       `$combined = ($stdout + $(if($stderr){"\n[stderr]\n" + $stderr}else{""})).Trim()`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:$code")`,
-    ].join("\n");
+    ].filter(line => line !== "").join("\n");
 
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     fs.writeFileSync(psScriptFile, psScript, "utf8");
@@ -807,9 +826,13 @@ class CreateTaskModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("auto-oc-modal");
+    contentEl.style.maxWidth = "800px";
+    contentEl.style.width = "90%";
+
     contentEl.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New OpenCode Task",
     });
+
 
     new Setting(contentEl)
       .setName("Name")
@@ -833,9 +856,42 @@ class CreateTaskModal extends Modal {
         ta.inputEl.spellcheck = false;
       });
 
+    contentEl.createDiv("auto-oc-modal-section-title").setText("📂 Workspace & Git");
+
+    new Setting(contentEl)
+      .setName("Project Path")
+      .setDesc("Absolute path to the project (empty = vault root)")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder((this.app.vault.adapter as any).basePath || "C:\\path\\to\\project")
+          .setValue(this.draft.workingDirectory ?? "")
+          .onChange((v) => (this.draft.workingDirectory = v));
+      });
+
+    new Setting(contentEl)
+      .setName("Git Branch")
+      .setDesc("Branch to work on")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder("main")
+          .setValue(this.draft.branch ?? "")
+          .onChange((v) => (this.draft.branch = v));
+      });
+
+    new Setting(contentEl)
+      .setName("Create Branch")
+      .setDesc("Automatically create the branch if it doesn't exist")
+      .addToggle((tog) => {
+        tog.setValue(this.draft.createBranch ?? false);
+        tog.onChange((v) => (this.draft.createBranch = v));
+      });
+
     new Setting(contentEl)
       .setName("Model")
       .setDesc("AI model to use")
+
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
@@ -999,8 +1055,12 @@ class CreateTaskModal extends Modal {
               lastRun: "",
               output: "",
               createdAt: new Date().toISOString(),
+              workingDirectory: this.draft.workingDirectory,
+              branch: this.draft.branch,
+              createBranch: this.draft.createBranch,
             };
             this.plugin.settings.tasks.push(task);
+
           }
 
           await this.plugin.saveSettings();
