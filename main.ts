@@ -84,6 +84,7 @@ interface ScheduledTask {
   name: string;
   prompt: string;
   model: string;
+  agent: string;
   useRalphLoop: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;    // "HH:MM"
@@ -102,6 +103,7 @@ interface AutoOCSettings {
   tasks: ScheduledTask[];
   opencodePath: string;
   defaultModel: string;
+  defaultAgent: string;
   workingDirectory: string;
   cmdTemplate: string;
   taskTimeoutSeconds: number;
@@ -127,10 +129,29 @@ function fetchModelsSync(opencodePath: string): { value: string; label: string }
   }
 }
 
+function fetchAgentsSync(opencodePath: string): { value: string; label: string }[] {
+  const { execSync } = require("child_process");
+  const bin = resolveOpencodeBin(opencodePath);
+  try {
+    const out = execSync(`"${bin}" agent list`, { timeout: 8000, encoding: "utf8" });
+    return out
+      .split("\n")
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0 && !l.startsWith("[") && !l.startsWith("  {"))
+      .map((l) => {
+        const name = l.split(" ")[0];
+        return { value: name, label: name };
+      });
+  } catch {
+    return [{ value: "general", label: "general" }, { value: "build", label: "build" }, { value: "plan", label: "plan" }];
+  }
+}
+
 const DEFAULT_SETTINGS: AutoOCSettings = {
   tasks: [],
   opencodePath: "opencode",
   defaultModel: "",
+  defaultAgent: "general",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
@@ -235,13 +256,17 @@ export default class AutoOCPlugin extends Plugin {
   settings!: AutoOCSettings;
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
+  availableAgents: { value: string; label: string }[] = [];
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
 
   async onload() {
     await this.loadSettings();
     // Load models asynchronously to avoid blocking startup
-    setTimeout(() => this.refreshModels(), 2000);
+    setTimeout(() => {
+      this.refreshModels();
+      this.refreshAgents();
+    }, 2000);
 
     this.registerView(VIEW_TYPE, (leaf) => {
       this.view = new AutoOCView(leaf, this);
@@ -318,6 +343,18 @@ export default class AutoOCPlugin extends Plugin {
       this.availableModels = models;
       if (!this.settings.defaultModel || !models.find((m) => m.value === this.settings.defaultModel)) {
         this.settings.defaultModel = models[0].value;
+        void this.saveSettings();
+      }
+      this.view?.refresh();
+    }
+  }
+
+  refreshAgents(): void {
+    const agents = fetchAgentsSync(this.settings.opencodePath || "opencode");
+    if (agents.length > 0) {
+      this.availableAgents = agents;
+      if (!this.settings.defaultAgent) {
+        this.settings.defaultAgent = "general";
         void this.saveSettings();
       }
       this.view?.refresh();
@@ -424,14 +461,15 @@ export default class AutoOCPlugin extends Plugin {
       prompt = `/ralph-loop ${prompt}`;
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
+    const agent = task.agent || this.settings.defaultAgent || "general";
     // --dangerously-skip-permissions prevents opencode from blocking on tool-approval prompts
-    return [bin, "run", prompt, "-m", task.model, "--dangerously-skip-permissions"];
+    return [bin, "run", prompt, "-m", task.model, "--agent", agent, "--dangerously-skip-permissions"];
   }
 
   // Human-readable command string for the preview modal
   buildCommand(task: ScheduledTask): string {
     const args = this.buildArgs(task);
-    return `${args[0]} ${args[1]} "${args[2]}" ${args[3]} ${args[4]} ${args[5]}`;
+    return args.join(" ");
   }
 
   // Runs opencode via a fully-detached PowerShell process to avoid Electron's
@@ -811,15 +849,16 @@ class CreateTaskModal extends Modal {
     this.draft = editTask
       ? { ...editTask }
       : {
-          name: "",
-          prompt: "",
-          model: plugin.getEffectiveDefaultModel(),
-          useRalphLoop: false,
-          scheduleType: "once",
-          scheduleTime: nowTimeString(),
-          scheduleDate: todayString(),
-          scheduleDays: [],
-        };
+            name: "",
+            prompt: "",
+            model: plugin.getEffectiveDefaultModel(),
+            agent: plugin.settings.defaultAgent || "general",
+            useRalphLoop: false,
+            scheduleType: "once",
+            scheduleTime: nowTimeString(),
+            scheduleDate: todayString(),
+            scheduleDays: [],
+          };
   }
 
   onOpen() {
@@ -913,6 +952,30 @@ class CreateTaskModal extends Modal {
         tog.setValue(this.draft.createBranch ?? false);
         tog.onChange((v) => (this.draft.createBranch = v));
       });
+
+    new Setting(contentEl)
+      .setName("Agent")
+      .setDesc("AI agent personality to use")
+      .addDropdown((dd) => {
+        const agents = this.plugin.availableAgents;
+        agents.forEach((a) => dd.addOption(a.value, a.label));
+        const current = this.draft.agent ?? this.plugin.settings.defaultAgent || "general";
+        if (!current && agents.length === 0) {
+          dd.addOption("", "(no agents; tap refresh)");
+        } else if (current && !agents.find((a) => a.value === current)) {
+          dd.addOption(current, current);
+        }
+        dd.setValue(current || "");
+        dd.onChange((v) => (this.draft.agent = v));
+      });
+
+    new Setting(contentEl)
+      .addButton((btn) =>
+        btn.setButtonText("🔄 Refresh Agents").onClick(() => {
+          this.plugin.refreshAgents();
+          new Notice("AutoOC: agents updated. Reopen dialog.");
+        })
+      );
 
     new Setting(contentEl)
       .setName("Model")
@@ -1072,6 +1135,7 @@ class CreateTaskModal extends Modal {
               name: this.draft.name!,
               prompt: this.draft.prompt!,
               model: this.draft.model!,
+              agent: this.draft.agent || "general",
               useRalphLoop: this.draft.useRalphLoop ?? false,
               scheduleType: this.draft.scheduleType ?? "once",
               scheduleTime: this.draft.scheduleTime!,

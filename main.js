@@ -385,13 +385,25 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       fs2.unlinkSync(pidFile);
     } catch (e) {
     }
+    const taskCwd = task.workingDirectory || this.settings.workingDirectory || (this.app.vault.adapter.basePath || ".");
+    const safeCwd = taskCwd.replace(/'/g, "''");
+    let gitCmds = "";
+    if (task.branch) {
+      const safeBranch = task.branch.replace(/'/g, "''");
+      if (task.createBranch) {
+        gitCmds = `git checkout -b ${safeBranch} 2>$null; if ($?) { echo "Created branch ${safeBranch}" } else { git checkout ${safeBranch} }`;
+      } else {
+        gitCmds = `git checkout ${safeBranch}`;
+      }
+    }
     const psScript = [
       `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
       `$env:APPDATA     = '${process.env.APPDATA}'`,
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
-      `Set-Location '${(this.app.vault.adapter.basePath || ".").replace(/'/g, "''")}'`,
+      `Set-Location -LiteralPath '${safeCwd}'`,
+      gitCmds ? gitCmds : "",
       `$outTmp = [System.IO.Path]::GetTempFileName()`,
       `$errTmp = [System.IO.Path]::GetTempFileName()`,
       `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
@@ -404,7 +416,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 " + $stderr}else{""})).Trim()`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "
 DONE:$code")`
-    ].join("\n");
+    ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     fs2.writeFileSync(psScriptFile, psScript, "utf8");
     launchHiddenPS(psScriptFile);
@@ -682,6 +694,8 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("auto-oc-modal");
+    contentEl.style.maxWidth = "800px";
+    contentEl.style.width = "90%";
     contentEl.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New OpenCode Task"
     });
@@ -698,6 +712,22 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       ta.inputEl.rows = 5;
       ta.inputEl.style.width = "100%";
       ta.inputEl.spellcheck = false;
+    });
+    contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4C2} Workspace & Git");
+    new import_obsidian.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
+      var _a;
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setPlaceholder(this.app.vault.adapter.basePath || "C:\\path\\to\\project").setValue((_a = this.draft.workingDirectory) != null ? _a : "").onChange((v) => this.draft.workingDirectory = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
+      var _a;
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setPlaceholder("main").setValue((_a = this.draft.branch) != null ? _a : "").onChange((v) => this.draft.branch = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
+      var _a;
+      tog.setValue((_a = this.draft.createBranch) != null ? _a : false);
+      tog.onChange((v) => this.draft.createBranch = v);
     });
     new import_obsidian.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
       var _a;
@@ -831,7 +861,10 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             status: "pending",
             lastRun: "",
             output: "",
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
+            createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+            workingDirectory: this.draft.workingDirectory,
+            branch: this.draft.branch,
+            createBranch: this.draft.createBranch
           };
           this.plugin.settings.tasks.push(task);
         }
