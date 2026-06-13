@@ -105,10 +105,24 @@ function fetchModelsSync(opencodePath) {
     return [];
   }
 }
+function fetchAgentsSync(opencodePath) {
+  const { execSync } = require("child_process");
+  const bin = resolveOpencodeBin(opencodePath);
+  try {
+    const out = execSync(`"${bin}" agent list`, { timeout: 8e3, encoding: "utf8" });
+    return out.split("\n").map((l) => l.trim()).filter((l) => l.length > 0 && !l.startsWith("[") && !l.startsWith("  {")).map((l) => {
+      const name = l.split(" ")[0];
+      return { value: name, label: name };
+    });
+  } catch (e) {
+    return [{ value: "general", label: "general" }, { value: "build", label: "build" }, { value: "plan", label: "plan" }];
+  }
+}
 var DEFAULT_SETTINGS = {
   tasks: [],
   opencodePath: "opencode",
   defaultModel: "",
+  defaultAgent: "general",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} "{prompt}"',
@@ -183,12 +197,16 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
     this.availableModels = FALLBACK_MODELS;
+    this.availableAgents = [];
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
   }
   async onload() {
     await this.loadSettings();
-    setTimeout(() => this.refreshModels(), 2e3);
+    setTimeout(() => {
+      this.refreshModels();
+      this.refreshAgents();
+    }, 2e3);
     this.registerView(VIEW_TYPE, (leaf) => {
       this.view = new AutoOCView(leaf, this);
       return this.view;
@@ -249,6 +267,18 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.availableModels = models;
       if (!this.settings.defaultModel || !models.find((m) => m.value === this.settings.defaultModel)) {
         this.settings.defaultModel = models[0].value;
+        void this.saveSettings();
+      }
+      (_a = this.view) == null ? void 0 : _a.refresh();
+    }
+  }
+  refreshAgents() {
+    var _a;
+    const agents = fetchAgentsSync(this.settings.opencodePath || "opencode");
+    if (agents.length > 0) {
+      this.availableAgents = agents;
+      if (!this.settings.defaultAgent) {
+        this.settings.defaultAgent = "general";
         void this.saveSettings();
       }
       (_a = this.view) == null ? void 0 : _a.refresh();
@@ -349,12 +379,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       prompt = `/ralph-loop ${prompt}`;
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
-    return [bin, "run", prompt, "-m", task.model, "--dangerously-skip-permissions"];
+    const agent = task.agent || this.settings.defaultAgent || "general";
+    return [bin, "run", prompt, "-m", task.model, "--agent", agent, "--dangerously-skip-permissions"];
   }
   // Human-readable command string for the preview modal
   buildCommand(task) {
     const args = this.buildArgs(task);
-    return `${args[0]} ${args[1]} "${args[2]}" ${args[3]} ${args[4]} ${args[5]}`;
+    return args.join(" ");
   }
   // Runs opencode via a fully-detached PowerShell process to avoid Electron's
   // restricted environment killing the child. Output is written to a temp file
@@ -391,7 +422,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     if (task.branch) {
       const safeBranch = task.branch.replace(/'/g, "''");
       if (task.createBranch) {
-        gitCmds = `git checkout -b ${safeBranch} 2>$null; if ($?) { echo "Created branch ${safeBranch}" } else { git checkout ${safeBranch} }`;
+        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
       } else {
         gitCmds = `git checkout ${safeBranch}`;
       }
@@ -506,6 +537,8 @@ DONE:$code")`
 var AutoOCView = class extends import_obsidian.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
+    this.filterText = "";
+    this.filterStatus = "all";
     this.plugin = plugin;
   }
   getViewType() {
@@ -569,6 +602,31 @@ var AutoOCView = class extends import_obsidian.ItemView {
       await this.plugin.runDueTasks();
       new import_obsidian.Notice("AutoOC: check completed.");
     };
+    const filterBar = containerEl.createDiv("auto-oc-filter-bar");
+    const searchInput = filterBar.createEl("input", {
+      type: "text",
+      placeholder: "\u{1F50D} Search name or prompt...",
+      cls: "auto-oc-search-input"
+    });
+    searchInput.value = this.filterText;
+    searchInput.oninput = () => {
+      this.filterText = searchInput.value.toLowerCase();
+      this.render();
+    };
+    const statusSelect = filterBar.createEl("select", {
+      cls: "auto-oc-status-select"
+    });
+    const statuses = ["all", "pending", "running", "completed", "failed"];
+    statuses.forEach((s) => {
+      const opt = statusSelect.createEl("option");
+      opt.value = s;
+      opt.text = s.charAt(0).toUpperCase() + s.slice(1);
+    });
+    statusSelect.value = this.filterStatus;
+    statusSelect.onchange = () => {
+      this.filterStatus = statusSelect.value;
+      this.render();
+    };
     const tasks = this.plugin.settings.tasks;
     const stats = containerEl.createDiv("auto-oc-stats");
     const pending = tasks.filter((t) => t.status === "pending").length;
@@ -579,30 +637,38 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} running`, cls: "auto-oc-stat-running" });
     if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} failed`, cls: "auto-oc-stat-failed" });
     if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completed` });
-    if (tasks.length === 0) {
+    const filteredTasks = tasks.filter((t) => {
+      const matchesText = t.name.toLowerCase().includes(this.filterText) || t.prompt.toLowerCase().includes(this.filterText);
+      const matchesStatus = this.filterStatus === "all" || t.status === this.filterStatus;
+      return matchesText && matchesStatus;
+    });
+    if (filteredTasks.length === 0) {
       containerEl.createEl("p", {
-        text: 'No tasks scheduled. Create one with "+New Task".',
+        text: this.filterText || this.filterStatus !== "all" ? "No tasks match your filters." : 'No tasks scheduled. Create one with "+New Task".',
         cls: "auto-oc-empty"
       });
       return;
     }
     const list = containerEl.createDiv("auto-oc-list");
-    for (const task of [...tasks].reverse()) {
+    for (const task of [...filteredTasks].reverse()) {
       this.renderTaskCard(list, task);
     }
   }
   renderTaskCard(parent, task) {
     var _a, _b;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
-    const top = card.createDiv("auto-oc-card-top");
-    top.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
-    top.createEl("span", {
+    const summary = card.createDiv("auto-oc-card-summary");
+    const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
+    const badge = summary.createEl("span", {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
-    const meta = card.createDiv("auto-oc-card-meta");
+    const details = card.createDiv("auto-oc-card-details");
+    details.style.display = "none";
+    const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = (_b = (_a = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model;
     meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
+    meta.createEl("span", { text: `\u2699\uFE0F ${task.agent || "general"}` });
     let scheduleText = "";
     if (task.scheduleType === "once") {
       scheduleText = `\u{1F4C5} ${task.scheduleDate} ${task.scheduleTime}`;
@@ -619,24 +685,28 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if (task.useRalphLoop) {
       meta.createEl("span", { text: "\u267B\uFE0F Ralph Loop active", cls: "auto-oc-ralph-badge" });
     }
-    const preview = card.createDiv("auto-oc-prompt-preview");
+    const preview = details.createDiv("auto-oc-prompt-preview");
     preview.createEl("span", {
       text: task.prompt.slice(0, 140) + (task.prompt.length > 140 ? "\u2026" : "")
     });
-    const actions = card.createDiv("auto-oc-card-actions");
+    const actions = details.createDiv("auto-oc-card-actions");
     const btnRun = actions.createEl("button", {
       text: task.status === "running" ? "\u23F3 Running\u2026" : "\u25B6 Run",
       cls: "auto-oc-btn-run"
     });
     btnRun.disabled = task.status === "running";
-    btnRun.onclick = () => this.plugin.runTask(task);
+    btnRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runTask(task);
+    };
     if (task.status === "running") {
       const btnStop = actions.createEl("button", {
         text: "\u23F9 Stop",
         cls: "auto-oc-btn-stop"
       });
       btnStop.title = "Terminate process now";
-      btnStop.onclick = async () => {
+      btnStop.onclick = async (e) => {
+        e.stopPropagation();
         btnStop.disabled = true;
         btnStop.textContent = "Stopping\u2026";
         await this.plugin.killTask(task.id);
@@ -648,12 +718,16 @@ var AutoOCView = class extends import_obsidian.ItemView {
     });
     btnLog.disabled = !task.output && task.status !== "running";
     btnLog.title = task.output ? "" : "A\xFAn no hay output";
-    btnLog.onclick = () => new LiveLogModal(this.app, task, this.plugin).open();
+    btnLog.onclick = (e) => {
+      e.stopPropagation();
+      new LiveLogModal(this.app, task, this.plugin).open();
+    };
     const btnCmd = actions.createEl("button", {
       text: "\u{1F50D} Command",
       cls: "auto-oc-btn-cmd"
     });
-    btnCmd.onclick = () => {
+    btnCmd.onclick = (e) => {
+      e.stopPropagation();
       const cmd = this.plugin.buildCommand(task);
       new CommandPreviewModal(this.app, task.name, cmd).open();
     };
@@ -661,16 +735,25 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: "\u270F\uFE0F Edit",
       cls: "auto-oc-btn-edit"
     });
-    btnEdit.onclick = () => new CreateTaskModal(this.app, this.plugin, task).open();
+    btnEdit.onclick = (e) => {
+      e.stopPropagation();
+      new CreateTaskModal(this.app, this.plugin, task).open();
+    };
     const btnDelete = actions.createEl("button", {
       text: "\u{1F5D1}",
       cls: "auto-oc-btn-delete"
     });
     btnDelete.title = "Delete task";
-    btnDelete.onclick = async () => {
+    btnDelete.onclick = async (e) => {
+      e.stopPropagation();
       if (confirm(`Delete task "${task.name}"?`)) {
         await this.plugin.deleteTask(task.id);
       }
+    };
+    summary.onclick = () => {
+      const isHidden = details.style.display === "none";
+      details.style.display = isHidden ? "block" : "none";
+      card.classList.toggle("expanded", isHidden);
     };
   }
 };
@@ -683,6 +766,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       name: "",
       prompt: "",
       model: plugin.getEffectiveDefaultModel(),
+      agent: plugin.settings.defaultAgent || "general",
       useRalphLoop: false,
       scheduleType: "once",
       scheduleTime: nowTimeString(),
@@ -723,12 +807,53 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("main").setValue((_a = this.draft.branch) != null ? _a : "").onChange((v) => this.draft.branch = v);
-    });
+    }).addButton(
+      (btn) => btn.setButtonText("\u{1F50D} Discover").onClick(async () => {
+        const taskCwd = this.draft.workingDirectory || this.app.vault.adapter.basePath || ".";
+        new import_obsidian.Notice("AutoOC: Fetching branches...");
+        try {
+          const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
+          const { execSync } = require("child_process");
+          const result = execSync(`powershell -NoProfile -Command "Set-Location -LiteralPath '${taskCwd.replace(/'/g, "''")}'; git branch --format='%(refname:short)'"`, { encoding: "utf8" });
+          const branches = result.split("\n").map((b) => b.trim()).filter((b) => b);
+          if (branches.length > 0) {
+            const selected = await new BranchSelectorModal(this.app, branches).open();
+            if (selected) {
+              this.draft.branch = selected;
+              new import_obsidian.Notice(`AutoOC: Selected branch ${selected}`);
+            }
+          } else {
+            new import_obsidian.Notice("AutoOC: No branches found.");
+          }
+        } catch (e) {
+          new import_obsidian.Notice(`AutoOC: Could not list branches: ${String(e)}`);
+        }
+      })
+    );
     new import_obsidian.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.createBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.createBranch = v);
     });
+    new import_obsidian.Setting(contentEl).setName("Agent").setDesc("AI agent personality to use").addDropdown((dd) => {
+      var _a;
+      const agents = this.plugin.availableAgents;
+      agents.forEach((a) => dd.addOption(a.value, a.label));
+      const current = (_a = this.draft.agent) != null ? _a : this.plugin.settings.defaultAgent || "general";
+      if (!current && agents.length === 0) {
+        dd.addOption("", "(no agents; tap refresh)");
+      } else if (current && !agents.find((a) => a.value === current)) {
+        dd.addOption(current, current);
+      }
+      dd.setValue(current || "");
+      dd.onChange((v) => this.draft.agent = v);
+    });
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("\u{1F504} Refresh Agents").onClick(() => {
+        this.plugin.refreshAgents();
+        new import_obsidian.Notice("AutoOC: agents updated. Reopen dialog.");
+      })
+    );
     new import_obsidian.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
       var _a;
       const models = this.plugin.availableModels;
@@ -853,6 +978,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             name: this.draft.name,
             prompt: this.draft.prompt,
             model: this.draft.model,
+            agent: this.draft.agent || "general",
             useRalphLoop: (_f = this.draft.useRalphLoop) != null ? _f : false,
             scheduleType: (_g = this.draft.scheduleType) != null ? _g : "once",
             scheduleTime: this.draft.scheduleTime,
@@ -970,6 +1096,40 @@ var LiveLogModal = class extends import_obsidian.Modal {
       this.elapsedIntervalId = null;
     }
     this.contentEl.empty();
+  }
+};
+var BranchSelectorModal = class extends import_obsidian.Modal {
+  constructor(app, branches) {
+    super(app);
+    this.selectedBranch = null;
+    this.branches = branches;
+  }
+  async open() {
+    return new Promise((resolve) => {
+      this.onOpen();
+      const originalClose = this.close.bind(this);
+      this.close = () => {
+        originalClose();
+        resolve(this.selectedBranch);
+      };
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Select Git Branch" });
+    const list = contentEl.createDiv("branch-selector-list");
+    list.style.maxHeight = "400px";
+    list.style.overflowY = "auto";
+    this.branches.forEach((branch) => {
+      const item = list.createEl("div", { text: branch, cls: "branch-selector-item" });
+      item.style.cursor = "pointer";
+      item.style.padding = "4px 8px";
+      item.onclick = () => {
+        this.selectedBranch = branch;
+        this.close();
+      };
+    });
   }
 };
 var CommandPreviewModal = class extends import_obsidian.Modal {
