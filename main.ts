@@ -128,6 +128,20 @@ function isValidAgentName(name: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(name);
 }
 
+function listGitBranches(cwd: string): string[] {
+  const { execFileSync } = require("child_process");
+  const out = execFileSync("git", ["branch", "--format=%(refname:short)"], {
+    cwd,
+    timeout: 8000,
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  return out
+    .split("\n")
+    .map((b: string) => b.trim())
+    .filter(Boolean);
+}
+
 function fetchModelsSync(opencodePath: string): { value: string; label: string }[] {
   const { execSync } = require("child_process");
   const bin = resolveOpencodeBin(opencodePath);
@@ -973,10 +987,12 @@ class CreateTaskModal extends Modal {
           .onChange((v) => (this.draft.workingDirectory = v));
       });
 
+    let branchInput: HTMLInputElement | null = null;
     new Setting(contentEl)
       .setName("Git Branch")
       .setDesc("Branch to work on")
       .addText((text) => {
+        branchInput = text.inputEl;
         text.inputEl.addClass("auto-oc-modal-input");
         text
           .setPlaceholder("main")
@@ -985,17 +1001,15 @@ class CreateTaskModal extends Modal {
       })
       .addButton((btn) => 
         btn.setButtonText("🔍 Discover").onClick(async () => {
-          const taskCwd = this.draft.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+          const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
           new Notice("AutoOC: Fetching branches...");
           try {
-            const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-            const { execSync } = require("child_process");
-            const result = execSync(`powershell -NoProfile -Command "Set-Location -LiteralPath '${taskCwd.replace(/'/g, "''")}'; git branch --format='%(refname:short)'"`, { encoding: "utf8" });
-            const branches = result.split("\n").map(b => b.trim()).filter(b => b);
+            const branches = listGitBranches(taskCwd);
             if (branches.length > 0) {
               const selected = await new BranchSelectorModal(this.app, branches).open();
               if (selected) {
                 this.draft.branch = selected;
+                if (branchInput) branchInput.value = selected;
                 new Notice(`AutoOC: Selected branch ${selected}`);
               }
             } else {
@@ -1357,6 +1371,7 @@ class LiveLogModal extends Modal {
 class BranchSelectorModal extends Modal {
   private branches: string[];
   private selectedBranch: string | null = null;
+  private resolveSelection: ((branch: string | null) => void) | null = null;
 
   constructor(app: App, branches: string[]) {
     super(app);
@@ -1365,12 +1380,8 @@ class BranchSelectorModal extends Modal {
 
   async open(): Promise<string | null> {
     return new Promise((resolve) => {
-      this.onOpen();
-      const originalClose = this.close.bind(this);
-      this.close = () => {
-        originalClose();
-        resolve(this.selectedBranch);
-      };
+      this.resolveSelection = resolve;
+      super.open();
     });
   }
 
@@ -1390,6 +1401,12 @@ class BranchSelectorModal extends Modal {
         this.close();
       };
     });
+  }
+
+  onClose() {
+    this.contentEl.empty();
+    this.resolveSelection?.(this.selectedBranch);
+    this.resolveSelection = null;
   }
 }
 

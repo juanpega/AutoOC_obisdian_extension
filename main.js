@@ -107,6 +107,16 @@ function stripAnsi(text) {
 function isValidAgentName(name) {
   return /^[A-Za-z0-9_-]+$/.test(name);
 }
+function listGitBranches(cwd) {
+  const { execFileSync } = require("child_process");
+  const out = execFileSync("git", ["branch", "--format=%(refname:short)"], {
+    cwd,
+    timeout: 8e3,
+    encoding: "utf8",
+    windowsHide: true
+  });
+  return out.split("\n").map((b) => b.trim()).filter(Boolean);
+}
 function fetchModelsSync(opencodePath) {
   const { execSync } = require("child_process");
   const bin = resolveOpencodeBin(opencodePath);
@@ -809,23 +819,23 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.app.vault.adapter.basePath || "C:\\path\\to\\project").setValue((_a = this.draft.workingDirectory) != null ? _a : "").onChange((v) => this.draft.workingDirectory = v);
     });
+    let branchInput = null;
     new import_obsidian.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
       var _a;
+      branchInput = text.inputEl;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("main").setValue((_a = this.draft.branch) != null ? _a : "").onChange((v) => this.draft.branch = v);
     }).addButton(
       (btn) => btn.setButtonText("\u{1F50D} Discover").onClick(async () => {
-        const taskCwd = this.draft.workingDirectory || this.app.vault.adapter.basePath || ".";
+        const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
         new import_obsidian.Notice("AutoOC: Fetching branches...");
         try {
-          const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-          const { execSync } = require("child_process");
-          const result = execSync(`powershell -NoProfile -Command "Set-Location -LiteralPath '${taskCwd.replace(/'/g, "''")}'; git branch --format='%(refname:short)'"`, { encoding: "utf8" });
-          const branches = result.split("\n").map((b) => b.trim()).filter((b) => b);
+          const branches = listGitBranches(taskCwd);
           if (branches.length > 0) {
             const selected = await new BranchSelectorModal(this.app, branches).open();
             if (selected) {
               this.draft.branch = selected;
+              if (branchInput) branchInput.value = selected;
               new import_obsidian.Notice(`AutoOC: Selected branch ${selected}`);
             }
           } else {
@@ -1114,16 +1124,13 @@ var BranchSelectorModal = class extends import_obsidian.Modal {
   constructor(app, branches) {
     super(app);
     this.selectedBranch = null;
+    this.resolveSelection = null;
     this.branches = branches;
   }
   async open() {
     return new Promise((resolve) => {
-      this.onOpen();
-      const originalClose = this.close.bind(this);
-      this.close = () => {
-        originalClose();
-        resolve(this.selectedBranch);
-      };
+      this.resolveSelection = resolve;
+      super.open();
     });
   }
   onOpen() {
@@ -1142,6 +1149,12 @@ var BranchSelectorModal = class extends import_obsidian.Modal {
         this.close();
       };
     });
+  }
+  onClose() {
+    var _a;
+    this.contentEl.empty();
+    (_a = this.resolveSelection) == null ? void 0 : _a.call(this, this.selectedBranch);
+    this.resolveSelection = null;
   }
 };
 var CommandPreviewModal = class extends import_obsidian.Modal {
