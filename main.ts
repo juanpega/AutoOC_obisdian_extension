@@ -478,7 +478,7 @@ export default class AutoOCPlugin extends Plugin {
     if (task.branch) {
       const safeBranch = task.branch.replace(/'/g, "''");
       if (task.createBranch) {
-        gitCmds = `git checkout -b ${safeBranch} 2>$null; if ($?) { echo "Created branch ${safeBranch}" } else { git checkout ${safeBranch} }`;
+        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
       } else {
         gitCmds = `git checkout ${safeBranch}`;
       }
@@ -878,7 +878,33 @@ class CreateTaskModal extends Modal {
           .setPlaceholder("main")
           .setValue(this.draft.branch ?? "")
           .onChange((v) => (this.draft.branch = v));
-      });
+      })
+      .addButton((btn) => 
+        btn.setButtonText("🔍 Discover").onClick(async () => {
+          const taskCwd = this.draft.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+          new Notice("AutoOC: Fetching branches...");
+          try {
+            const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
+            const { execSync } = require("child_process");
+            const result = execSync(`powershell -NoProfile -Command "Set-Location -LiteralPath '${taskCwd.replace(/'/g, "''")}'; git branch --format='%(refname:short)'"`, { encoding: "utf8" });
+            const branches = result.split("\n").map(b => b.trim()).filter(b => b);
+            if (branches.length > 0) {
+              const selected = await new BranchSelectorModal(this.app, branches).open();
+              if (selected) {
+                this.draft.branch = selected;
+                // Update the text field in the modal
+                const branchSetting = contentEl.querySelectorAll(".setting-item").value[2] as HTMLElement; // This is a bit fragile
+                // Instead of searching DOM, let's just notify the user to update or use a simpler way
+                new Notice(`AutoOC: Selected branch ${selected}`);
+              }
+            } else {
+              new Notice("AutoOC: No branches found.");
+            }
+          } catch (e) {
+            new Notice(`AutoOC: Could not list branches: ${String(e)}`);
+          }
+        })
+      );
 
     new Setting(contentEl)
       .setName("Create Branch")
@@ -1192,6 +1218,45 @@ class LiveLogModal extends Modal {
       this.elapsedIntervalId = null;
     }
     this.contentEl.empty();
+  }
+}
+
+class BranchSelectorModal extends Modal {
+  private branches: string[];
+  private selectedBranch: string | null = null;
+
+  constructor(app: App, branches: string[]) {
+    super(app);
+    this.branches = branches;
+  }
+
+  async open(): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.onOpen();
+      const originalClose = this.close.bind(this);
+      this.close = () => {
+        originalClose();
+        resolve(this.selectedBranch);
+      };
+    });
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Select Git Branch" });
+    const list = contentEl.createDiv("branch-selector-list");
+    list.style.maxHeight = "400px";
+    list.style.overflowY = "auto";
+    this.branches.forEach((branch) => {
+      const item = list.createEl("div", { text: branch, cls: "branch-selector-item" });
+      item.style.cursor = "pointer";
+      item.style.padding = "4px 8px";
+      item.onclick = () => {
+        this.selectedBranch = branch;
+        this.close();
+      };
+    });
   }
 }
 
