@@ -167,6 +167,15 @@
 .auto-oc-badge-completed { background: #10b98120; color: #10b981; }
 .auto-oc-badge-failed    { background: #ef444420; color: #ef4444; }
 
+.auto-oc-badge-clickable {
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.auto-oc-badge-clickable:hover {
+  filter: brightness(1.2);
+  transform: scale(1.05);
+}
+
 /* Card details section (collapsible) */
 .auto-oc-card-details {
   padding: 0 12px 10px 12px;
@@ -401,4 +410,67 @@
 .auto-oc-tab-btn.active {
   color: var(--interactive-accent);
   border-bottom-color: var(--interactive-accent);
+}
+
+/* ── Version / update indicator ─────────────────────────────────────────────── */
+
+.auto-oc-title-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.auto-oc-title-row h4 {
+  margin: 0;
+}
+
+.auto-oc-version-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.75rem;
+}
+
+.auto-oc-version {
+  color: var(--text-muted);
+  font-family: var(--font-monospace);
+}
+
+.auto-oc-update-badge {
+  background: #10b98125;
+  color: #10b981;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.auto-oc-update-status {
+  color: #f59e0b;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.auto-oc-update-error {
+  color: #ef4444;
+  cursor: help;
+  white-space: nowrap;
+}
+
+.auto-oc-btn-update {
+  background: var(--interactive-accent);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+  padding: 3px 10px;
+  cursor: pointer;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.auto-oc-btn-update:hover {
+  filter: brightness(1.1);
 }

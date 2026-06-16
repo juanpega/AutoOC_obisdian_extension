@@ -197,6 +197,29 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
 export const VIEW_TYPE = "auto-oc-view";
 const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 
+// ─── Update / Version Check ───────────────────────────────────────────────────
+
+const GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
+const GITHUB_BRANCH = "main";
+const REMOTE_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`;
+const REMOTE_FILE_URLS = {
+  mainJs: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/main.js`,
+  manifest: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`,
+  styles: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/styles.css`,
+};
+
+function compareVersions(a: string, b: string): number {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function generateId(): string {
@@ -425,6 +448,12 @@ export default class AutoOCPlugin extends Plugin {
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
 
+  // Update-check state
+  latestVersion: string | null = null;
+  updateAvailable = false;
+  updateCheckError: string | null = null;
+  updateInProgress = false;
+
   async onload() {
     await this.loadSettings();
     // Load models asynchronously to avoid blocking startup
@@ -438,7 +467,7 @@ export default class AutoOCPlugin extends Plugin {
       return this.view;
     });
 
-    this.addRibbonIcon("alarm-clock", "AutoOC — Task Scheduler", () => {
+    this.addRibbonIcon("workflow", "AutoOC — Task Scheduler", () => {
       this.toggleView();
     });
 
@@ -491,6 +520,9 @@ export default class AutoOCPlugin extends Plugin {
 
     // Initial check after startup (5 s margin for Obsidian to load)
     setTimeout(() => this.runDueTasks(), 5_000);
+
+    // Check for plugin updates in the background
+    setTimeout(() => this.checkForUpdates(), 3_000);
   }
 
   async onunload() {
@@ -617,6 +649,76 @@ export default class AutoOCPlugin extends Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
     this.view?.refresh();
+  }
+
+  // ── Version / update helpers ────────────────────────────────────────────────
+
+  async checkForUpdates(): Promise<void> {
+    try {
+      this.updateCheckError = null;
+      const res = await fetch(REMOTE_MANIFEST_URL, { cache: "no-cache" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const remoteVersion = data?.version;
+      if (!remoteVersion || typeof remoteVersion !== "string") {
+        throw new Error("Remote manifest has no version");
+      }
+      this.latestVersion = remoteVersion;
+      this.updateAvailable = compareVersions(remoteVersion, this.manifest.version) > 0;
+      this.view?.refresh();
+    } catch (e) {
+      this.updateCheckError = String(e);
+      this.view?.refresh();
+    }
+  }
+
+  async updatePlugin(): Promise<void> {
+    if (this.updateInProgress) return;
+    if (!this.latestVersion) return;
+
+    this.updateInProgress = true;
+    this.view?.refresh();
+    new Notice("AutoOC: downloading update…");
+
+    try {
+      const [mainJs, manifest, styles] = await Promise.all([
+        fetch(REMOTE_FILE_URLS.mainJs, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`main.js HTTP ${r.status}`);
+          return r.text();
+        }),
+        fetch(REMOTE_FILE_URLS.manifest, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`manifest.json HTTP ${r.status}`);
+          return r.text();
+        }),
+        fetch(REMOTE_FILE_URLS.styles, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`styles.css HTTP ${r.status}`);
+          return r.text();
+        }),
+      ]);
+
+      const pluginDir = `.obsidian/plugins/${this.manifest.id}`;
+      await this.app.vault.adapter.write(`${pluginDir}/main.js`, mainJs);
+      await this.app.vault.adapter.write(`${pluginDir}/manifest.json`, manifest);
+      await this.app.vault.adapter.write(`${pluginDir}/styles.css`, styles);
+
+      new Notice(`AutoOC: updated to v${this.latestVersion}. Reloading plugin…`);
+
+      // Try to reload without restarting Obsidian
+      try {
+        // @ts-ignore — internal Obsidian API
+        await this.app.plugins.disablePlugin(this.manifest.id);
+        // @ts-ignore — internal Obsidian API
+        await this.app.plugins.enablePlugin(this.manifest.id);
+        new Notice("AutoOC: plugin reloaded.");
+      } catch {
+        new Notice("AutoOC: update saved. Restart Obsidian to finish.");
+      }
+    } catch (e) {
+      new Notice(`AutoOC: update failed — ${String(e)}`);
+    } finally {
+      this.updateInProgress = false;
+      this.view?.refresh();
+    }
   }
 
   // Returns the args array exactly as tool.py does: ["opencode", "run", prompt, "-m", model]
@@ -846,7 +948,7 @@ class AutoOCView extends ItemView {
 
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC Scheduler"; }
-  getIcon() { return "alarm-clock"; }
+  getIcon() { return "workflow"; }
 
   async onOpen() { this.render(); }
   async onClose() {}
@@ -889,7 +991,38 @@ class AutoOCView extends ItemView {
   private renderTasks(containerEl: HTMLElement) {
     // ── Header ──
     const header = containerEl.createDiv("auto-oc-header");
-    header.createEl("h4", { text: "⏰ AutoOC Scheduler" });
+
+    const titleRow = header.createDiv("auto-oc-title-row");
+    titleRow.createEl("h4", { text: "⏰ AutoOC Scheduler" });
+
+    const versionWrap = titleRow.createDiv("auto-oc-version-wrap");
+    versionWrap.createEl("span", {
+      text: `v${this.plugin.manifest.version}`,
+      cls: "auto-oc-version",
+    });
+
+    if (this.plugin.updateInProgress) {
+      versionWrap.createEl("span", {
+        text: "⏳ Updating…",
+        cls: "auto-oc-update-status",
+      });
+    } else if (this.plugin.updateAvailable && this.plugin.latestVersion) {
+      versionWrap.createEl("span", {
+        text: `🚀 v${this.plugin.latestVersion} available`,
+        cls: "auto-oc-update-badge",
+      });
+      const btnUpdate = versionWrap.createEl("button", {
+        text: "Update now",
+        cls: "auto-oc-btn-update",
+      });
+      btnUpdate.onclick = () => this.plugin.updatePlugin();
+    } else if (this.plugin.updateCheckError) {
+      versionWrap.createEl("span", {
+        text: "⚠️ update check failed",
+        cls: "auto-oc-update-error",
+        title: this.plugin.updateCheckError,
+      });
+    }
 
     const btnRow = header.createDiv("auto-oc-btn-row");
 
@@ -975,6 +1108,17 @@ class AutoOCView extends ItemView {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
+    if (task.status === "failed") {
+      badge.addClass("auto-oc-badge-clickable");
+      badge.title = "Click to reset to pending (will run on next schedule, or hit ▶ Run now)";
+      badge.onclick = async (e) => {
+        e.stopPropagation();
+        task.status = "pending";
+        await this.plugin.saveSettings();
+        this.render();
+        new Notice(`AutoOC: "${task.name}" reset to pending.`);
+      };
+    }
 
     // Details Section (Collapsible)
     const details = card.createDiv("auto-oc-card-details");
