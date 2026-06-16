@@ -367,7 +367,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.view = new AutoOCView(leaf, this);
       return this.view;
     });
-    this.addRibbonIcon("alarm-clock", "AutoOC \u2014 Task Scheduler", () => {
+    this.addRibbonIcon("workflow", "AutoOC \u2014 Task Scheduler", () => {
       this.toggleView();
     });
     this.addCommand({
@@ -737,7 +737,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     return "AutoOC Scheduler";
   }
   getIcon() {
-    return "alarm-clock";
+    return "workflow";
   }
   async onOpen() {
     this.render();
@@ -844,6 +844,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
+    if (task.status === "failed") {
+      badge.addClass("auto-oc-badge-clickable");
+      badge.title = "Click to reset to pending (will run on next schedule, or hit \u25B6 Run now)";
+      badge.onclick = async (e) => {
+        e.stopPropagation();
+        task.status = "pending";
+        await this.plugin.saveSettings();
+        this.render();
+        new import_obsidian.Notice(`AutoOC: "${task.name}" reset to pending.`);
+      };
+    }
     const details = card.createDiv("auto-oc-card-details");
     details.style.display = "none";
     const meta = details.createDiv("auto-oc-card-meta");

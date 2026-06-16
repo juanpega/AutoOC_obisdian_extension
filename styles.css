@@ -167,6 +167,15 @@
 .auto-oc-badge-completed { background: #10b98120; color: #10b981; }
 .auto-oc-badge-failed    { background: #ef444420; color: #ef4444; }
 
+.auto-oc-badge-clickable {
+  cursor: pointer;
+  transition: filter 0.15s ease, transform 0.1s ease;
+}
+.auto-oc-badge-clickable:hover {
+  filter: brightness(1.2);
+  transform: scale(1.05);
+}
+
 /* Card details section (collapsible) */
 .auto-oc-card-details {
   padding: 0 12px 10px 12px;

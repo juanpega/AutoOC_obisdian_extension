@@ -438,7 +438,7 @@ export default class AutoOCPlugin extends Plugin {
       return this.view;
     });
 
-    this.addRibbonIcon("alarm-clock", "AutoOC — Task Scheduler", () => {
+    this.addRibbonIcon("workflow", "AutoOC — Task Scheduler", () => {
       this.toggleView();
     });
 
@@ -846,7 +846,7 @@ class AutoOCView extends ItemView {
 
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC Scheduler"; }
-  getIcon() { return "alarm-clock"; }
+  getIcon() { return "workflow"; }
 
   async onOpen() { this.render(); }
   async onClose() {}
@@ -975,6 +975,17 @@ class AutoOCView extends ItemView {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
+    if (task.status === "failed") {
+      badge.addClass("auto-oc-badge-clickable");
+      badge.title = "Click to reset to pending (will run on next schedule, or hit ▶ Run now)";
+      badge.onclick = async (e) => {
+        e.stopPropagation();
+        task.status = "pending";
+        await this.plugin.saveSettings();
+        this.render();
+        new Notice(`AutoOC: "${task.name}" reset to pending.`);
+      };
+    }
 
     // Details Section (Collapsible)
     const details = card.createDiv("auto-oc-card-details");
