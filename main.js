@@ -158,6 +158,25 @@ var DEFAULT_SETTINGS = {
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
+var GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
+var GITHUB_BRANCH = "main";
+var REMOTE_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`;
+var REMOTE_FILE_URLS = {
+  mainJs: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/main.js`,
+  manifest: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`,
+  styles: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/styles.css`
+};
+function compareVersions(a, b) {
+  const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
+  const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na > nb) return 1;
+    if (na < nb) return -1;
+  }
+  return 0;
+}
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
@@ -356,6 +375,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.availableAgents = FALLBACK_AGENTS;
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
+    // Update-check state
+    this.latestVersion = null;
+    this.updateAvailable = false;
+    this.updateCheckError = null;
+    this.updateInProgress = false;
   }
   async onload() {
     await this.loadSettings();
@@ -408,6 +432,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       window.setInterval(() => this.runDueTasks(), 6e4)
     );
     setTimeout(() => this.runDueTasks(), 5e3);
+    setTimeout(() => this.checkForUpdates(), 3e3);
   }
   async onunload() {
     for (const [, proc] of this.runningProcesses) {
@@ -527,6 +552,67 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     var _a;
     await this.saveData(this.settings);
     (_a = this.view) == null ? void 0 : _a.refresh();
+  }
+  // ── Version / update helpers ────────────────────────────────────────────────
+  async checkForUpdates() {
+    var _a, _b;
+    try {
+      this.updateCheckError = null;
+      const res = await fetch(REMOTE_MANIFEST_URL, { cache: "no-cache" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const remoteVersion = data == null ? void 0 : data.version;
+      if (!remoteVersion || typeof remoteVersion !== "string") {
+        throw new Error("Remote manifest has no version");
+      }
+      this.latestVersion = remoteVersion;
+      this.updateAvailable = compareVersions(remoteVersion, this.manifest.version) > 0;
+      (_a = this.view) == null ? void 0 : _a.refresh();
+    } catch (e) {
+      this.updateCheckError = String(e);
+      (_b = this.view) == null ? void 0 : _b.refresh();
+    }
+  }
+  async updatePlugin() {
+    var _a, _b;
+    if (this.updateInProgress) return;
+    if (!this.latestVersion) return;
+    this.updateInProgress = true;
+    (_a = this.view) == null ? void 0 : _a.refresh();
+    new import_obsidian.Notice("AutoOC: downloading update\u2026");
+    try {
+      const [mainJs, manifest, styles] = await Promise.all([
+        fetch(REMOTE_FILE_URLS.mainJs, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`main.js HTTP ${r.status}`);
+          return r.text();
+        }),
+        fetch(REMOTE_FILE_URLS.manifest, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`manifest.json HTTP ${r.status}`);
+          return r.text();
+        }),
+        fetch(REMOTE_FILE_URLS.styles, { cache: "no-cache" }).then((r) => {
+          if (!r.ok) throw new Error(`styles.css HTTP ${r.status}`);
+          return r.text();
+        })
+      ]);
+      const pluginDir = `.obsidian/plugins/${this.manifest.id}`;
+      await this.app.vault.adapter.write(`${pluginDir}/main.js`, mainJs);
+      await this.app.vault.adapter.write(`${pluginDir}/manifest.json`, manifest);
+      await this.app.vault.adapter.write(`${pluginDir}/styles.css`, styles);
+      new import_obsidian.Notice(`AutoOC: updated to v${this.latestVersion}. Reloading plugin\u2026`);
+      try {
+        await this.app.plugins.disablePlugin(this.manifest.id);
+        await this.app.plugins.enablePlugin(this.manifest.id);
+        new import_obsidian.Notice("AutoOC: plugin reloaded.");
+      } catch (e) {
+        new import_obsidian.Notice("AutoOC: update saved. Restart Obsidian to finish.");
+      }
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: update failed \u2014 ${String(e)}`);
+    } finally {
+      this.updateInProgress = false;
+      (_b = this.view) == null ? void 0 : _b.refresh();
+    }
   }
   // Returns the args array exactly as tool.py does: ["opencode", "run", prompt, "-m", model]
   buildArgs(task) {
@@ -776,7 +862,35 @@ var AutoOCView = class extends import_obsidian.ItemView {
   }
   renderTasks(containerEl) {
     const header = containerEl.createDiv("auto-oc-header");
-    header.createEl("h4", { text: "\u23F0 AutoOC Scheduler" });
+    const titleRow = header.createDiv("auto-oc-title-row");
+    titleRow.createEl("h4", { text: "\u23F0 AutoOC Scheduler" });
+    const versionWrap = titleRow.createDiv("auto-oc-version-wrap");
+    versionWrap.createEl("span", {
+      text: `v${this.plugin.manifest.version}`,
+      cls: "auto-oc-version"
+    });
+    if (this.plugin.updateInProgress) {
+      versionWrap.createEl("span", {
+        text: "\u23F3 Updating\u2026",
+        cls: "auto-oc-update-status"
+      });
+    } else if (this.plugin.updateAvailable && this.plugin.latestVersion) {
+      versionWrap.createEl("span", {
+        text: `\u{1F680} v${this.plugin.latestVersion} available`,
+        cls: "auto-oc-update-badge"
+      });
+      const btnUpdate = versionWrap.createEl("button", {
+        text: "Update now",
+        cls: "auto-oc-btn-update"
+      });
+      btnUpdate.onclick = () => this.plugin.updatePlugin();
+    } else if (this.plugin.updateCheckError) {
+      versionWrap.createEl("span", {
+        text: "\u26A0\uFE0F update check failed",
+        cls: "auto-oc-update-error",
+        title: this.plugin.updateCheckError
+      });
+    }
     const btnRow = header.createDiv("auto-oc-btn-row");
     const btnNew = btnRow.createEl("button", {
       text: "+ New Task",
