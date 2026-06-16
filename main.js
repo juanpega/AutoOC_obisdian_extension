@@ -834,14 +834,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.render();
   }
   openCli() {
-    try {
-      const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      const cwd = this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-      openOpencodeCli(bin, cwd);
-      new import_obsidian.Notice(`AutoOC: opened OpenCode CLI in ${cwd}`);
-    } catch (e) {
-      new import_obsidian.Notice(`AutoOC: could not open OpenCode CLI: ${String(e)}`);
-    }
+    new OpenCodeCliModal(this.app, this.plugin).open();
   }
   render() {
     const { containerEl } = this;
@@ -1588,6 +1581,74 @@ var CommandPreviewModal = class extends import_obsidian.Modal {
         new import_obsidian.Notice("Command copied.");
       })
     );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var OpenCodeCliModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-cli-modal");
+    contentEl.createEl("h3", { text: "OpenCode CLI Launcher" });
+    contentEl.createEl("p", {
+      text: "Choose where to open the OpenCode terminal.",
+      cls: "setting-item-description"
+    });
+    const vaultCwd = this.app.vault.adapter.basePath || ".";
+    const defaultCwd = this.plugin.settings.workingDirectory || vaultCwd;
+    const buttons = contentEl.createDiv("auto-oc-cli-modal-buttons");
+    const btnDefault = buttons.createEl("button", {
+      text: "\u{1F4C2} Open in project / vault",
+      cls: "auto-oc-btn-primary"
+    });
+    btnDefault.onclick = () => this.launch(defaultCwd);
+    contentEl.createEl("p", {
+      text: defaultCwd,
+      cls: "setting-item-description auto-oc-cli-path"
+    });
+    const btnChoose = buttons.createEl("button", {
+      text: "\u{1F5C0} Choose folder\u2026",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnChoose.onclick = async () => {
+      const chosen = await this.chooseFolder();
+      if (chosen) this.launch(chosen);
+    };
+    const btnCancel = buttons.createEl("button", {
+      text: "Cancel",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnCancel.onclick = () => this.close();
+  }
+  launch(cwd) {
+    try {
+      const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
+      openOpencodeCli(bin, cwd);
+      new import_obsidian.Notice(`AutoCO: opened OpenCode CLI in ${cwd}`);
+      this.close();
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not open OpenCode CLI: ${String(e)}`);
+    }
+  }
+  async chooseFolder() {
+    try {
+      const electron = window.require("electron");
+      const result = await electron.remote.dialog.showOpenDialog({
+        properties: ["openDirectory"],
+        title: "Select folder for OpenCode CLI"
+      });
+      if (!result.canceled && result.filePaths.length > 0) {
+        return result.filePaths[0];
+      }
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: folder picker failed \u2014 ${String(e)}`);
+    }
+    return null;
   }
   onClose() {
     this.contentEl.empty();
