@@ -159,7 +159,7 @@ var DEFAULT_SETTINGS = {
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
 var GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
-var GITHUB_BRANCH = "dev";
+var GITHUB_BRANCH = "main";
 var REMOTE_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`;
 var REMOTE_FILE_URLS = {
   mainJs: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/main.js`,

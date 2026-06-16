@@ -200,7 +200,7 @@ const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 // ─── Update / Version Check ───────────────────────────────────────────────────
 
 const GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
-const GITHUB_BRANCH = "dev";
+const GITHUB_BRANCH = "main";
 const REMOTE_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`;
 const REMOTE_FILE_URLS = {
   mainJs: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/main.js`,
