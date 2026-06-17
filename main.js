@@ -179,17 +179,6 @@ function preventBackdropClose(modal) {
 }
 function setupModalX(modal) {
   preventBackdropClose(modal);
-  const contentEl = modal.contentEl;
-  const xBtn = contentEl.createEl("button", {
-    text: "\u2715",
-    cls: "auto-oc-modal-x"
-  });
-  xBtn.style.position = "absolute";
-  xBtn.style.top = "8px";
-  xBtn.style.right = "8px";
-  xBtn.style.zIndex = "10";
-  xBtn.onclick = () => modal.close();
-  return xBtn;
 }
 function setAutoOCModalSize(modal, widthPx) {
   const modalEl = modal.modalEl;
@@ -319,9 +308,50 @@ function decodeCp850(bytes) {
   }
   return out;
 }
+function decodeWindows1252(bytes) {
+  var _a;
+  const map = {
+    128: "\u20AC",
+    130: "\u201A",
+    131: "\u0192",
+    132: "\u201E",
+    133: "\u2026",
+    134: "\u2020",
+    135: "\u2021",
+    136: "\u02C6",
+    137: "\u2030",
+    138: "\u0160",
+    139: "\u2039",
+    140: "\u0152",
+    142: "\u017D",
+    145: "\u2018",
+    146: "\u2019",
+    147: "\u201C",
+    148: "\u201D",
+    149: "\u2022",
+    150: "\u2013",
+    151: "\u2014",
+    152: "\u02DC",
+    153: "\u2122",
+    154: "\u0161",
+    155: "\u203A",
+    156: "\u0153",
+    158: "\u017E",
+    159: "\u0178"
+  };
+  let out = "";
+  for (const byte of bytes) {
+    if (byte < 128 || byte >= 160) out += String.fromCharCode(byte);
+    else out += (_a = map[byte]) != null ? _a : "";
+  }
+  return out;
+}
 function decodeCommandBuffer(bytes) {
   const utf8 = bytes.toString("utf8");
-  return countReplacementChars(utf8) > 0 ? decodeCp850(bytes) : utf8;
+  if (countReplacementChars(utf8) === 0) return utf8;
+  const win1252 = decodeWindows1252(bytes);
+  const cp850 = decodeCp850(bytes);
+  return countReplacementChars(win1252) <= countReplacementChars(cp850) ? win1252 : cp850;
 }
 function getOpencodeConfigPath() {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
@@ -1530,7 +1560,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     });
     btnHistory.onclick = (e) => {
       e.stopPropagation();
-      new LogHistoryModal(this.app, task, this.plugin).open();
+      try {
+        new LogHistoryModal(this.app, task, this.plugin).open();
+      } catch (err) {
+        new import_obsidian.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+      }
     };
     const btnCmd = actions.createEl("button", {
       text: "\u{1F50D} Command",
@@ -1547,7 +1581,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     });
     btnEdit.onclick = (e) => {
       e.stopPropagation();
-      new CreateTaskModal(this.app, this.plugin, task).open();
+      try {
+        new CreateTaskModal(this.app, this.plugin, task).open();
+      } catch (err) {
+        new import_obsidian.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+      }
     };
     const btnDuplicate = actions.createEl("button", {
       text: "\u29C9 Duplicate",
@@ -1694,7 +1732,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
       btnHistory.onclick = (e) => {
         e.stopPropagation();
-        new LogHistoryModal(this.app, task, this.plugin).open();
+        try {
+          new LogHistoryModal(this.app, task, this.plugin).open();
+        } catch (err) {
+          new import_obsidian.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        }
       };
       const btnCmd = taskActions.createEl("button", {
         text: "\u{1F50D} Command",
@@ -1710,7 +1752,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
       btnEditTask.onclick = (e) => {
         e.stopPropagation();
-        new CreateTaskModal(this.app, this.plugin, task).open();
+        try {
+          new CreateTaskModal(this.app, this.plugin, task).open();
+        } catch (err) {
+          new import_obsidian.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+        }
       };
     }
     if (workflow.handoffBranch || workflow.handoffOutput) {
@@ -1815,11 +1861,6 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New OpenCode Task"
     });
-    const btnX = headerBar.createEl("button", {
-      text: "\u2715",
-      cls: "auto-oc-modal-x"
-    });
-    btnX.onclick = () => this.close();
     new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
@@ -1873,8 +1914,8 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       tog.onChange((v) => this.draft.createBranch = v);
     });
     const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-    const projectAgents = this.plugin.getAgentsForDirectory(agentCwd).filter((a) => isValidAgentName(a.value));
-    new import_obsidian.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded from project/global config)`).addDropdown((dd) => {
+    const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
+    new import_obsidian.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
       var _a;
       projectAgents.forEach((a) => dd.addOption(a.value, a.label));
       const current = (_a = this.draft.agent) != null ? _a : this.plugin.settings.defaultAgent || "general";
@@ -2076,11 +2117,6 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     headerBar.createEl("h3", {
       text: this.editWorkflow ? "Edit Workflow" : "New Workflow"
     });
-    const btnX = headerBar.createEl("button", {
-      text: "\u2715",
-      cls: "auto-oc-modal-x"
-    });
-    btnX.onclick = () => this.close();
     const guide = contentEl.createDiv("auto-oc-workflow-guide");
     guide.createEl("h4", { text: "How workflows work" });
     const guideList = guide.createEl("ol");
@@ -2511,11 +2547,12 @@ Reply ONLY with YES or NO.`;
 var LiveLogModal = class extends import_obsidian.Modal {
   constructor(app, task, plugin) {
     super(app);
-    this.pre = null;
+    this.renderEl = null;
     this.statusEl = null;
     this.intervalId = null;
     this.elapsedIntervalId = null;
     this.autoScroll = true;
+    this.lastRenderedContent = "";
     this.task = task;
     this.plugin = plugin;
   }
@@ -2553,8 +2590,7 @@ var LiveLogModal = class extends import_obsidian.Modal {
       cls: "auto-oc-btn-secondary"
     });
     btnCopy.onclick = () => {
-      var _a, _b;
-      navigator.clipboard.writeText((_b = (_a = this.pre) == null ? void 0 : _a.textContent) != null ? _b : "");
+      navigator.clipboard.writeText(this.lastRenderedContent);
       new import_obsidian.Notice("Log copied.");
     };
     const btnClear = toolbar.createEl("button", {
@@ -2562,9 +2598,10 @@ var LiveLogModal = class extends import_obsidian.Modal {
       cls: "auto-oc-btn-secondary"
     });
     btnClear.onclick = () => {
-      if (this.pre) this.pre.textContent = "";
+      if (this.renderEl) this.renderEl.empty();
+      this.lastRenderedContent = "";
     };
-    this.pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
+    this.renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
     this.refresh();
     this.intervalId = window.setInterval(() => this.refresh(), 1e3);
   }
@@ -2577,12 +2614,14 @@ var LiveLogModal = class extends import_obsidian.Modal {
       this.statusEl.textContent = `Estado: ${latest.status}` + (latest.lastRun ? `  |  Inicio: ${formatDateTime(latest.lastRun)}` : "") + (isRunning ? "  \u23F3" : "");
       this.statusEl.className = "auto-oc-log-status auto-oc-badge-" + latest.status;
     }
-    if (this.pre) {
+    if (this.renderEl) {
       const newContent = latest.output || "(sin output a\xFAn\u2026)";
-      if (this.pre.textContent !== newContent) {
-        this.pre.textContent = newContent;
+      if (this.lastRenderedContent !== newContent) {
+        this.lastRenderedContent = newContent;
+        this.renderEl.empty();
+        void import_obsidian.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
         if (this.autoScroll) {
-          this.pre.scrollTop = this.pre.scrollHeight;
+          this.renderEl.scrollTop = this.renderEl.scrollHeight;
         }
       }
     }
@@ -2646,7 +2685,7 @@ var LogHistoryModal = class extends import_obsidian.Modal {
       const label = item.createSpan({ text: `\u{1F550} ${entry.timestamp}`, cls: "auto-oc-log-history-timestamp" });
       label.onclick = () => {
         const content = readLogFile(entry.file);
-        const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content);
+        const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content, this.plugin);
         previewModal.open();
       };
       const btnDelete = item.createEl("button", {
@@ -2669,12 +2708,12 @@ var LogHistoryModal = class extends import_obsidian.Modal {
   }
 };
 var LogPreviewModal = class extends import_obsidian.Modal {
-  constructor(app, taskName, timestamp, content) {
+  constructor(app, taskName, timestamp, content, plugin) {
     super(app);
-    this.pre = null;
     this.taskName = taskName;
     this.timestamp = timestamp;
     this.content = content;
+    this.plugin = plugin;
   }
   onOpen() {
     const { contentEl } = this;
@@ -2697,9 +2736,9 @@ var LogPreviewModal = class extends import_obsidian.Modal {
       cls: "auto-oc-btn-secondary"
     });
     btnClose.onclick = () => this.close();
-    this.pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
-    this.pre.textContent = this.content;
-    this.pre.scrollTop = this.pre.scrollHeight;
+    const renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
+    void import_obsidian.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
+    renderEl.scrollTop = renderEl.scrollHeight;
   }
   onClose() {
     this.contentEl.empty();

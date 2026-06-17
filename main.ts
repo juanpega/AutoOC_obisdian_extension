@@ -1,6 +1,7 @@
 import {
   App,
   ItemView,
+  MarkdownRenderer,
   Modal,
   Notice,
   Plugin,
@@ -244,19 +245,8 @@ function preventBackdropClose(modal: Modal): void {
   }
 }
 
-function setupModalX(modal: Modal): HTMLButtonElement {
+function setupModalX(modal: Modal): void {
   preventBackdropClose(modal);
-  const contentEl = modal.contentEl;
-  const xBtn = contentEl.createEl("button", {
-    text: "✕",
-    cls: "auto-oc-modal-x",
-  });
-  xBtn.style.position = "absolute";
-  xBtn.style.top = "8px";
-  xBtn.style.right = "8px";
-  xBtn.style.zIndex = "10";
-  xBtn.onclick = () => modal.close();
-  return xBtn;
 }
 
 function setAutoOCModalSize(modal: Modal, widthPx: number): void {
@@ -372,9 +362,27 @@ function decodeCp850(bytes: Buffer): string {
   return out;
 }
 
+function decodeWindows1252(bytes: Buffer): string {
+  const map: Record<number, string> = {
+    0x80: "€", 0x82: "‚", 0x83: "ƒ", 0x84: "„", 0x85: "…", 0x86: "†", 0x87: "‡",
+    0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹", 0x8c: "Œ", 0x8e: "Ž",
+    0x91: "‘", 0x92: "’", 0x93: "“", 0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—",
+    0x98: "˜", 0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž", 0x9f: "Ÿ",
+  };
+  let out = "";
+  for (const byte of bytes) {
+    if (byte < 0x80 || byte >= 0xa0) out += String.fromCharCode(byte);
+    else out += map[byte] ?? "";
+  }
+  return out;
+}
+
 function decodeCommandBuffer(bytes: Buffer): string {
   const utf8 = bytes.toString("utf8");
-  return countReplacementChars(utf8) > 0 ? decodeCp850(bytes) : utf8;
+  if (countReplacementChars(utf8) === 0) return utf8;
+  const win1252 = decodeWindows1252(bytes);
+  const cp850 = decodeCp850(bytes);
+  return countReplacementChars(win1252) <= countReplacementChars(cp850) ? win1252 : cp850;
 }
 
 function getOpencodeConfigPath(): string {
@@ -1681,7 +1689,11 @@ class AutoOCView extends ItemView {
     });
     btnHistory.onclick = (e) => {
       e.stopPropagation();
-      new LogHistoryModal(this.app, task, this.plugin).open();
+      try {
+        new LogHistoryModal(this.app, task, this.plugin).open();
+      } catch (err) {
+        new Notice(`AutoOC: could not open history — ${String(err)}`);
+      }
     };
 
     const btnCmd = actions.createEl("button", {
@@ -1700,7 +1712,11 @@ class AutoOCView extends ItemView {
     });
     btnEdit.onclick = (e) => {
       e.stopPropagation();
-      new CreateTaskModal(this.app, this.plugin, task).open();
+      try {
+        new CreateTaskModal(this.app, this.plugin, task).open();
+      } catch (err) {
+        new Notice(`AutoOC: could not open task editor — ${String(err)}`);
+      }
     };
 
     const btnDuplicate = actions.createEl("button", {
@@ -1877,7 +1893,11 @@ class AutoOCView extends ItemView {
       });
       btnHistory.onclick = (e) => {
         e.stopPropagation();
-        new LogHistoryModal(this.app, task, this.plugin).open();
+        try {
+          new LogHistoryModal(this.app, task, this.plugin).open();
+        } catch (err) {
+          new Notice(`AutoOC: could not open history — ${String(err)}`);
+        }
       };
 
       const btnCmd = taskActions.createEl("button", {
@@ -1895,7 +1915,11 @@ class AutoOCView extends ItemView {
       });
       btnEditTask.onclick = (e) => {
         e.stopPropagation();
-        new CreateTaskModal(this.app, this.plugin, task).open();
+        try {
+          new CreateTaskModal(this.app, this.plugin, task).open();
+        } catch (err) {
+          new Notice(`AutoOC: could not open task editor — ${String(err)}`);
+        }
       };
     }
 
@@ -2023,11 +2047,6 @@ class CreateTaskModal extends Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New OpenCode Task",
     });
-    const btnX = headerBar.createEl("button", {
-      text: "✕",
-      cls: "auto-oc-modal-x",
-    });
-    btnX.onclick = () => this.close();
 
     new Setting(contentEl)
       .setName("Name")
@@ -2107,11 +2126,11 @@ class CreateTaskModal extends Modal {
       });
 
     const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-    const projectAgents = this.plugin.getAgentsForDirectory(agentCwd).filter((a) => isValidAgentName(a.value));
+    const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
 
     new Setting(contentEl)
       .setName("Agent")
-      .setDesc(`AI agent personality to use (${projectAgents.length} loaded from project/global config)`)
+      .setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`)
       .addDropdown((dd) => {
         projectAgents.forEach((a) => dd.addOption(a.value, a.label));
         const current = this.draft.agent ?? (this.plugin.settings.defaultAgent || "general");
@@ -2371,11 +2390,6 @@ class CreateWorkflowModal extends Modal {
     headerBar.createEl("h3", {
       text: this.editWorkflow ? "Edit Workflow" : "New Workflow",
     });
-    const btnX = headerBar.createEl("button", {
-      text: "✕",
-      cls: "auto-oc-modal-x",
-    });
-    btnX.onclick = () => this.close();
 
     const guide = contentEl.createDiv("auto-oc-workflow-guide");
     guide.createEl("h4", { text: "How workflows work" });
@@ -2871,11 +2885,12 @@ class CreateWorkflowModal extends Modal {
 class LiveLogModal extends Modal {
   private task: ScheduledTask;
   private plugin: AutoOCPlugin;
-  private pre: HTMLPreElement | null = null;
+  private renderEl: HTMLElement | null = null;
   private statusEl: HTMLElement | null = null;
   private intervalId: number | null = null;
   private elapsedIntervalId: number | null = null;
   private autoScroll = true;
+  private lastRenderedContent = "";
 
   constructor(app: App, task: ScheduledTask, plugin: AutoOCPlugin) {
     super(app);
@@ -2921,7 +2936,7 @@ class LiveLogModal extends Modal {
       cls: "auto-oc-btn-secondary",
     });
     btnCopy.onclick = () => {
-      navigator.clipboard.writeText(this.pre?.textContent ?? "");
+      navigator.clipboard.writeText(this.lastRenderedContent);
       new Notice("Log copied.");
     };
 
@@ -2930,10 +2945,11 @@ class LiveLogModal extends Modal {
       cls: "auto-oc-btn-secondary",
     });
     btnClear.onclick = () => {
-      if (this.pre) this.pre.textContent = "";
+      if (this.renderEl) this.renderEl.empty();
+      this.lastRenderedContent = "";
     };
 
-    this.pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
+    this.renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
 
     this.refresh();
 
@@ -2957,12 +2973,14 @@ class LiveLogModal extends Modal {
         "auto-oc-log-status auto-oc-badge-" + latest.status;
     }
 
-    if (this.pre) {
+    if (this.renderEl) {
       const newContent = latest.output || "(sin output aún…)";
-      if (this.pre.textContent !== newContent) {
-        this.pre.textContent = newContent;
+      if (this.lastRenderedContent !== newContent) {
+        this.lastRenderedContent = newContent;
+        this.renderEl.empty();
+        void MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
         if (this.autoScroll) {
-          this.pre.scrollTop = this.pre.scrollHeight;
+          this.renderEl.scrollTop = this.renderEl.scrollHeight;
         }
       }
     }
@@ -3044,7 +3062,7 @@ class LogHistoryModal extends Modal {
       const label = item.createSpan({ text: `🕐 ${entry.timestamp}`, cls: "auto-oc-log-history-timestamp" });
       label.onclick = () => {
         const content = readLogFile(entry.file);
-        const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content);
+        const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content, this.plugin);
         previewModal.open();
       };
 
@@ -3075,13 +3093,14 @@ class LogPreviewModal extends Modal {
   private taskName: string;
   private timestamp: string;
   private content: string;
-  private pre: HTMLPreElement | null = null;
+  private plugin: AutoOCPlugin;
 
-  constructor(app: App, taskName: string, timestamp: string, content: string) {
+  constructor(app: App, taskName: string, timestamp: string, content: string, plugin: AutoOCPlugin) {
     super(app);
     this.taskName = taskName;
     this.timestamp = timestamp;
     this.content = content;
+    this.plugin = plugin;
   }
 
   onOpen() {
@@ -3110,9 +3129,9 @@ class LogPreviewModal extends Modal {
     });
     btnClose.onclick = () => this.close();
 
-    this.pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
-    this.pre.textContent = this.content;
-    this.pre.scrollTop = this.pre.scrollHeight;
+    const renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
+    void MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
+    renderEl.scrollTop = renderEl.scrollHeight;
   }
 
   onClose() {

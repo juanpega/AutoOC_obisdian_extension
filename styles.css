@@ -421,6 +421,37 @@
   margin: 0;
 }
 
+.auto-oc-log-rendered {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  max-height: min(58vh, 620px);
+  min-height: 180px;
+  overflow: auto;
+  padding: 12px 14px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.auto-oc-log-rendered table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 8px 0;
+}
+
+.auto-oc-log-rendered th,
+.auto-oc-log-rendered td {
+  border: 1px solid var(--background-modifier-border);
+  padding: 5px 8px;
+  vertical-align: top;
+}
+
+.auto-oc-log-rendered pre,
+.auto-oc-log-rendered code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .auto-oc-log-history-list {
   display: flex;
   flex-direction: column;
