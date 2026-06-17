@@ -127,11 +127,16 @@ function fetchModelsSync(opencodePath) {
     return [];
   }
 }
-function fetchAgentsSync(opencodePath) {
+function fetchAgentsSync(opencodePath, cwd) {
   const { execSync } = require("child_process");
   const bin = resolveOpencodeBin(opencodePath);
   try {
-    const out = execSync(`"${bin}" agent list`, { timeout: 8e3, encoding: "utf8" });
+    const out = execSync(`"${bin}" agent list`, {
+      timeout: 8e3,
+      encoding: "utf8",
+      cwd: cwd || void 0,
+      windowsHide: true
+    });
     const agents = stripAnsi(out).split("\n").map((l) => l.trim()).filter((l) => /^\S+\s+\(/.test(l)).map((l) => {
       var _a, _b;
       const name = (_b = (_a = l.match(/^(\S+)\s+\(/)) == null ? void 0 : _a[1]) != null ? _b : l.split(" ")[0];
@@ -251,6 +256,72 @@ function normalizeCommandOutput(text) {
 function formatLogContent(text) {
   if (!text) return "";
   return normalizeCommandOutput(text).replace(/\r\n/g, "\n");
+}
+function countReplacementChars(text) {
+  return (text.match(/�/g) || []).length;
+}
+function decodeCp850(bytes) {
+  var _a;
+  const map = {
+    128: "\xC7",
+    129: "\xFC",
+    130: "\xE9",
+    131: "\xE2",
+    132: "\xE4",
+    133: "\xE0",
+    134: "\xE5",
+    135: "\xE7",
+    136: "\xEA",
+    137: "\xEB",
+    138: "\xE8",
+    139: "\xEF",
+    140: "\xEE",
+    141: "\xEC",
+    142: "\xC4",
+    143: "\xC5",
+    144: "\xC9",
+    145: "\xE6",
+    146: "\xC6",
+    147: "\xF4",
+    148: "\xF6",
+    149: "\xF2",
+    150: "\xFB",
+    151: "\xF9",
+    152: "\xFF",
+    153: "\xD6",
+    154: "\xDC",
+    155: "\xF8",
+    156: "\xA3",
+    157: "\xD8",
+    158: "\xD7",
+    159: "\u0192",
+    160: "\xE1",
+    161: "\xED",
+    162: "\xF3",
+    163: "\xFA",
+    164: "\xF1",
+    165: "\xD1",
+    166: "\xAA",
+    167: "\xBA",
+    168: "\xBF",
+    169: "\xAE",
+    170: "\xAC",
+    171: "\xBD",
+    172: "\xBC",
+    173: "\xA1",
+    174: "\xAB",
+    175: "\xBB"
+  };
+  let out = "";
+  for (const byte of bytes) {
+    if (byte < 128) out += String.fromCharCode(byte);
+    else out += (_a = map[byte]) != null ? _a : String.fromCharCode(byte);
+  }
+  return out;
+}
+function decodeCommandBuffer(bytes) {
+  const utf8 = bytes.toString("utf8");
+  return countReplacementChars(utf8) > 0 ? decodeCp850(bytes) : utf8;
 }
 function getOpencodeConfigPath() {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
@@ -531,9 +602,12 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       (_a = this.view) == null ? void 0 : _a.refresh();
     }
   }
-  refreshAgents() {
+  getAgentsForDirectory(cwd) {
+    return fetchAgentsSync(this.settings.opencodePath || "opencode", cwd);
+  }
+  refreshAgents(cwd) {
     var _a;
-    const agents = fetchAgentsSync(this.settings.opencodePath || "opencode");
+    const agents = this.getAgentsForDirectory(cwd);
     if (agents.length > 0) {
       this.availableAgents = agents;
       if (!this.settings.defaultAgent) {
@@ -838,11 +912,21 @@ DONE:" + $p.ExitCode + "
     const preparedPrompt = prompt.replace(/\r?\n\s*[-*]\s+/g, "; ").replace(/\r?\n+/g, "; ").replace(/\s+/g, " ").trim();
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
+    const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
+    const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
     const fs2 = require("fs");
     try {
       fs2.unlinkSync(outFile);
+    } catch (e) {
+    }
+    try {
+      fs2.unlinkSync(errFile);
+    } catch (e) {
+    }
+    try {
+      fs2.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
@@ -874,20 +958,10 @@ DONE:" + $p.ExitCode + "
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
-      `$outTmp = [System.IO.Path]::GetTempFileName()`,
-      `$errTmp = [System.IO.Path]::GetTempFileName()`,
       `$bin = '${bin.replace(/'/g, "''")}'`,
       `$argList = @('run',$prompt,'-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions')`,
-      `& $bin @argList > $outTmp 2> $errTmp`,
-      `$code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-      `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
-      `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
-      `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-      `$combined = ($stdout + $(if($stderr){"
-[stderr]
-" + $stderr}else{""})).Trim()`,
-      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "
-DONE:$code")`
+      `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`
     ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     fs2.writeFileSync(psScriptFile, psScript, "utf8");
@@ -907,6 +981,18 @@ DONE:$code")`
       if (timeoutEnabled && Date.now() - startedAt > timeoutMs) {
         clearInterval(pollHandle);
         try {
+          fs2.unlinkSync(outFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(errFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(doneFile);
+        } catch (e) {
+        }
+        try {
           fs2.unlinkSync(promptFile);
         } catch (e) {
         }
@@ -925,7 +1011,7 @@ DONE:$code")`
         }
         return;
       }
-      if (!fs2.existsSync(outFile)) {
+      if (!fs2.existsSync(doneFile)) {
         t.output += ".";
         await this.saveSettings();
         return;
@@ -940,14 +1026,25 @@ DONE:$code")`
         fs2.unlinkSync(promptFile);
       } catch (e) {
       }
-      const raw = fs2.readFileSync(outFile, "utf8");
+      const stdout = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
+      const stderr = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs2.readFileSync(doneFile, "utf8").trim();
       try {
         fs2.unlinkSync(outFile);
       } catch (e) {
       }
-      const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
-      const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
-      const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
+      try {
+        fs2.unlinkSync(errFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(doneFile);
+      } catch (e) {
+      }
+      const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
+      const output = (stdout + (stderr.trim() ? `
+[stderr]
+${stderr}` : "")).trim();
       const normalized = normalizeCommandOutput(output);
       t.output = normalized || "(sin output)";
       if (exitCode !== 0) {
@@ -956,7 +1053,7 @@ DONE:$code")`
 [c\xF3digo de salida: ${exitCode}]`;
         new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" fall\xF3 (c\xF3digo ${exitCode}).`);
       } else {
-        t.status = t.scheduleType === "once" ? "completed" : "pending";
+        t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" ? "pending" : "completed";
         new import_obsidian.Notice(`AutoOC: \u2705 "${task.name}" completada.`);
       }
       if (this.settings.logsEnabled) {
@@ -1775,27 +1872,24 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       tog.setValue((_a = this.draft.createBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.createBranch = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+    const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
+    const projectAgents = this.plugin.getAgentsForDirectory(agentCwd).filter((a) => isValidAgentName(a.value));
+    new import_obsidian.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded from project/global config)`).addDropdown((dd) => {
       var _a;
-      const agents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
-      agents.forEach((a) => dd.addOption(a.value, a.label));
+      projectAgents.forEach((a) => dd.addOption(a.value, a.label));
       const current = (_a = this.draft.agent) != null ? _a : this.plugin.settings.defaultAgent || "general";
-      if (!current && agents.length === 0) {
+      if (!current && projectAgents.length === 0) {
         dd.addOption("", "(no agents; tap refresh)");
-      } else if (current && !agents.find((a) => a.value === current)) {
+      } else if (current && !projectAgents.find((a) => a.value === current)) {
         dd.addOption(current, current);
       }
       dd.setValue(current || "");
       dd.onChange((v) => this.draft.agent = v);
     });
-    contentEl.createEl("p", {
-      text: `Detected agents: ${this.plugin.availableAgents.map((a) => a.label).join(", ") || "none"}`,
-      cls: "setting-item-description auto-oc-agent-list"
-    });
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u{1F504} Refresh Agents").onClick(() => {
-        this.plugin.refreshAgents();
-        new import_obsidian.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+        this.plugin.refreshAgents(agentCwd);
+        new import_obsidian.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
         this.contentEl.empty();
         this.onOpen();
       })

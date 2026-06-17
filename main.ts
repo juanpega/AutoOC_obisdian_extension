@@ -187,11 +187,16 @@ function fetchModelsSync(opencodePath: string): { value: string; label: string }
   }
 }
 
-function fetchAgentsSync(opencodePath: string): { value: string; label: string }[] {
+function fetchAgentsSync(opencodePath: string, cwd?: string): { value: string; label: string }[] {
   const { execSync } = require("child_process");
   const bin = resolveOpencodeBin(opencodePath);
   try {
-    const out = execSync(`"${bin}" agent list`, { timeout: 8000, encoding: "utf8" });
+    const out = execSync(`"${bin}" agent list`, {
+      timeout: 8000,
+      encoding: "utf8",
+      cwd: cwd || undefined,
+      windowsHide: true,
+    });
     const agents = stripAnsi(out)
       .split("\n")
       .map((l) => l.trim())
@@ -344,6 +349,32 @@ function normalizeCommandOutput(text: string): string {
 function formatLogContent(text: string): string {
   if (!text) return "";
   return normalizeCommandOutput(text).replace(/\r\n/g, "\n");
+}
+
+function countReplacementChars(text: string): number {
+  return (text.match(/�/g) || []).length;
+}
+
+function decodeCp850(bytes: Buffer): string {
+  const map: Record<number, string> = {
+    0x80: "Ç", 0x81: "ü", 0x82: "é", 0x83: "â", 0x84: "ä", 0x85: "à", 0x86: "å", 0x87: "ç",
+    0x88: "ê", 0x89: "ë", 0x8a: "è", 0x8b: "ï", 0x8c: "î", 0x8d: "ì", 0x8e: "Ä", 0x8f: "Å",
+    0x90: "É", 0x91: "æ", 0x92: "Æ", 0x93: "ô", 0x94: "ö", 0x95: "ò", 0x96: "û", 0x97: "ù",
+    0x98: "ÿ", 0x99: "Ö", 0x9a: "Ü", 0x9b: "ø", 0x9c: "£", 0x9d: "Ø", 0x9e: "×", 0x9f: "ƒ",
+    0xa0: "á", 0xa1: "í", 0xa2: "ó", 0xa3: "ú", 0xa4: "ñ", 0xa5: "Ñ", 0xa6: "ª", 0xa7: "º",
+    0xa8: "¿", 0xa9: "®", 0xaa: "¬", 0xab: "½", 0xac: "¼", 0xad: "¡", 0xae: "«", 0xaf: "»",
+  };
+  let out = "";
+  for (const byte of bytes) {
+    if (byte < 0x80) out += String.fromCharCode(byte);
+    else out += map[byte] ?? String.fromCharCode(byte);
+  }
+  return out;
+}
+
+function decodeCommandBuffer(bytes: Buffer): string {
+  const utf8 = bytes.toString("utf8");
+  return countReplacementChars(utf8) > 0 ? decodeCp850(bytes) : utf8;
 }
 
 function getOpencodeConfigPath(): string {
@@ -662,8 +693,12 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
-  refreshAgents(): void {
-    const agents = fetchAgentsSync(this.settings.opencodePath || "opencode");
+  getAgentsForDirectory(cwd?: string): { value: string; label: string }[] {
+    return fetchAgentsSync(this.settings.opencodePath || "opencode", cwd);
+  }
+
+  refreshAgents(cwd?: string): void {
+    const agents = this.getAgentsForDirectory(cwd);
     if (agents.length > 0) {
       this.availableAgents = agents;
       if (!this.settings.defaultAgent) {
@@ -995,12 +1030,16 @@ export default class AutoOCPlugin extends Plugin {
 
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
+    const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
+    const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
     const fs = require("fs");
 
     // Clean up any previous temp files
     try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(errFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
     try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
     fs.writeFileSync(promptFile, preparedPrompt, "utf8");
@@ -1030,17 +1069,10 @@ export default class AutoOCPlugin extends Plugin {
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
-      `$outTmp = [System.IO.Path]::GetTempFileName()`,
-      `$errTmp = [System.IO.Path]::GetTempFileName()`,
       `$bin = '${bin.replace(/'/g, "''")}'`,
       `$argList = @('run',$prompt,'-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions')`,
-      `& $bin @argList > $outTmp 2> $errTmp`,
-      `$code = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-      `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
-      `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
-      `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-      `$combined = ($stdout + $(if($stderr){"\n[stderr]\n" + $stderr}else{""})).Trim()`,
-      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:$code")`,
+      `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`,
     ].filter(line => line !== "").join("\n");
 
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
@@ -1063,6 +1095,9 @@ export default class AutoOCPlugin extends Plugin {
       // Timeout guard
       if (timeoutEnabled && Date.now() - startedAt > timeoutMs) {
         clearInterval(pollHandle);
+        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(errFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
         try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
         t.output += `\n[⏱ timeout: ${timeoutSeconds}s superados]`;
         t.status = "failed";
@@ -1079,7 +1114,7 @@ export default class AutoOCPlugin extends Plugin {
         return;
       }
 
-      if (!fs.existsSync(outFile)) {
+      if (!fs.existsSync(doneFile)) {
         // Still running — heartbeat dot
         t.output += ".";
         await this.saveSettings();
@@ -1092,12 +1127,15 @@ export default class AutoOCPlugin extends Plugin {
       try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
       try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
 
-      const raw = fs.readFileSync(outFile, "utf8");
+      const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
+      const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs.readFileSync(doneFile, "utf8").trim();
       try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(errFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
 
-      const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
-      const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
-      const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
+      const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
+      const output = (stdout + (stderr.trim() ? `\n[stderr]\n${stderr}` : "")).trim();
       const normalized = normalizeCommandOutput(output);
 
       t.output = normalized || "(sin output)";
@@ -1106,7 +1144,7 @@ export default class AutoOCPlugin extends Plugin {
         t.output += `\n[código de salida: ${exitCode}]`;
         new Notice(`AutoOC: ❌ "${task.name}" falló (código ${exitCode}).`);
       } else {
-        t.status = t.scheduleType === "once" ? "completed" : "pending";
+        t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" ? "pending" : "completed";
         new Notice(`AutoOC: ✅ "${task.name}" completada.`);
       }
       if (this.settings.logsEnabled) {
@@ -2068,32 +2106,29 @@ class CreateTaskModal extends Modal {
         tog.onChange((v) => (this.draft.createBranch = v));
       });
 
+    const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+    const projectAgents = this.plugin.getAgentsForDirectory(agentCwd).filter((a) => isValidAgentName(a.value));
+
     new Setting(contentEl)
       .setName("Agent")
-      .setDesc(`AI agent personality to use (${this.plugin.availableAgents.length} loaded)`)
+      .setDesc(`AI agent personality to use (${projectAgents.length} loaded from project/global config)`)
       .addDropdown((dd) => {
-        const agents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
-        agents.forEach((a) => dd.addOption(a.value, a.label));
+        projectAgents.forEach((a) => dd.addOption(a.value, a.label));
         const current = this.draft.agent ?? (this.plugin.settings.defaultAgent || "general");
-        if (!current && agents.length === 0) {
+        if (!current && projectAgents.length === 0) {
           dd.addOption("", "(no agents; tap refresh)");
-        } else if (current && !agents.find((a) => a.value === current)) {
+        } else if (current && !projectAgents.find((a) => a.value === current)) {
           dd.addOption(current, current);
         }
         dd.setValue(current || "");
         dd.onChange((v) => (this.draft.agent = v));
       });
 
-    contentEl.createEl("p", {
-      text: `Detected agents: ${this.plugin.availableAgents.map((a) => a.label).join(", ") || "none"}`,
-      cls: "setting-item-description auto-oc-agent-list",
-    });
-
     new Setting(contentEl)
       .addButton((btn) =>
         btn.setButtonText("🔄 Refresh Agents").onClick(() => {
-          this.plugin.refreshAgents();
-          new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+          this.plugin.refreshAgents(agentCwd);
+          new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
           this.contentEl.empty();
           this.onOpen();
         })
