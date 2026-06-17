@@ -76,7 +76,7 @@ function launchHiddenPS(psScriptFile: string): void {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ScheduleType = "once" | "daily" | "weekly";
+type ScheduleType = "manual" | "once" | "daily" | "weekly";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 
 interface ScheduledTask {
@@ -341,6 +341,11 @@ function normalizeCommandOutput(text: string): string {
   return cleaned.trim();
 }
 
+function formatLogContent(text: string): string {
+  if (!text) return "";
+  return normalizeCommandOutput(text).replace(/\r\n/g, "\n");
+}
+
 function getOpencodeConfigPath(): string {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
 }
@@ -359,6 +364,13 @@ function formatTimestampForLog(): string {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}-${pad(now.getMinutes())}-${pad(now.getSeconds())}`;
+}
+
+function formatLogFilenameTimestamp(fileName: string): string {
+  const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
+  if (!match) return fileName.replace(/\.log$/, "");
+  const [, year, month, day, hour, minute, second] = match;
+  return `${day}/${month}/${year} ${hour}:${minute}:${second}`;
 }
 
 function saveLogToFile(vaultBasePath: string, taskId: string, output: string): string | null {
@@ -390,11 +402,7 @@ function getLogHistory(vaultBasePath: string, taskId: string): { file: string; t
       .reverse();
     return files.map((f: string) => ({
       file: path.join(logDir, f),
-      timestamp: f.replace(".log", "").replace("_", " ").replace(/-/g, (m, i) => {
-        // Restore date/time format: 2026-06-13_14-30-00 -> 2026-06-13 14:30:00
-        if (i < 10) return m.replace(/-/g, "/"); // Date part: replace - with /
-        return m; // Time part: keep as-is but replace - with :
-      }).replace(/(\d{4}\/\d{2}\/\d{2}) (\d{2})-(\d{2})-(\d{2})/, "$1 $2:$3:$4"),
+      timestamp: formatLogFilenameTimestamp(f),
     }));
   } catch {
     return [];
@@ -403,7 +411,7 @@ function getLogHistory(vaultBasePath: string, taskId: string): { file: string; t
 
 function readLogFile(filePath: string): string {
   try {
-    return fs.readFileSync(filePath, "utf8");
+    return formatLogContent(fs.readFileSync(filePath, "utf8"));
   } catch {
     return "(error reading log file)";
   }
@@ -480,6 +488,7 @@ function deleteSingleLogFile(filePath: string): void {
 
 function isTaskDue(task: ScheduledTask): boolean {
   if (task.status === "running") return false;
+  if (task.scheduleType === "manual") return false;
 
   const now = new Date();
   const [hh, mm] = task.scheduleTime.split(":").map(Number);
@@ -513,6 +522,7 @@ function isTaskDue(task: ScheduledTask): boolean {
 function isWorkflowDue(wf: Workflow): boolean {
   if (wf.status === "running") return false;
   if (wf.steps.length === 0) return false;
+  if (wf.scheduleType === "manual") return false;
 
   const now = new Date();
   const [hh, mm] = (wf.scheduleTime || "00:00").split(":").map(Number);
@@ -1159,6 +1169,21 @@ export default class AutoOCPlugin extends Plugin {
     await this.saveSettings();
   }
 
+  async duplicateTask(task: ScheduledTask) {
+    const copy: ScheduledTask = {
+      ...task,
+      id: generateId(),
+      name: `${task.name} (copy)`,
+      status: "pending",
+      lastRun: "",
+      output: "",
+      createdAt: new Date().toISOString(),
+    };
+    this.settings.tasks.push(copy);
+    await this.saveSettings();
+    new Notice(`Task "${copy.name}" duplicated.`);
+  }
+
   async clearTaskLogs(id: string) {
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
     clearTaskLogs(vaultBasePath, id);
@@ -1174,6 +1199,22 @@ export default class AutoOCPlugin extends Plugin {
   async deleteWorkflow(id: string) {
     this.settings.workflows = this.settings.workflows.filter((w) => w.id !== id);
     await this.saveSettings();
+  }
+
+  async duplicateWorkflow(workflow: Workflow) {
+    const copy: Workflow = {
+      ...workflow,
+      id: generateId(),
+      name: `${workflow.name} (copy)`,
+      steps: workflow.steps.map((step) => ({ ...step })),
+      status: "pending",
+      currentStep: -1,
+      createdAt: new Date().toISOString(),
+      lastRun: undefined,
+    };
+    this.settings.workflows.push(copy);
+    await this.saveSettings();
+    new Notice(`Workflow "${copy.name}" duplicated.`);
   }
 
   async runWorkflow(workflow: Workflow) {
@@ -1534,7 +1575,9 @@ class AutoOCView extends ItemView {
     meta.createEl("span", { text: `⚙️ ${task.agent || 'general'}` });
 
     let scheduleText = "";
-    if (task.scheduleType === "once") {
+    if (task.scheduleType === "manual") {
+      scheduleText = "▶ Manual only";
+    } else if (task.scheduleType === "once") {
       scheduleText = `📅 ${task.scheduleDate} ${task.scheduleTime}`;
     } else if (task.scheduleType === "daily") {
       scheduleText = `🔁 Every day at ${task.scheduleTime}`;
@@ -1620,6 +1663,16 @@ class AutoOCView extends ItemView {
     btnEdit.onclick = (e) => {
       e.stopPropagation();
       new CreateTaskModal(this.app, this.plugin, task).open();
+    };
+
+    const btnDuplicate = actions.createEl("button", {
+      text: "⧉ Duplicate",
+      cls: "auto-oc-btn-duplicate",
+    });
+    btnDuplicate.onclick = async (e) => {
+      e.stopPropagation();
+      await this.plugin.duplicateTask(task);
+      this.render();
     };
 
     const btnDelete = actions.createEl("button", {
@@ -1829,9 +1882,11 @@ class AutoOCView extends ItemView {
     const wfScheduleTime = workflow.scheduleTime || "00:00";
     const wfScheduleDate = workflow.scheduleDate || "";
     const wfScheduleDays = workflow.scheduleDays || [];
-    if (wfScheduleType !== "once" || wfScheduleTime !== "00:00") {
+    if (wfScheduleType === "manual" || wfScheduleType !== "once" || wfScheduleTime !== "00:00") {
       const schedMeta = details.createDiv("auto-oc-card-meta");
-      if (wfScheduleType === "once") {
+      if (wfScheduleType === "manual") {
+        schedMeta.createEl("span", { text: "▶ Manual only" });
+      } else if (wfScheduleType === "once") {
         schedMeta.createEl("span", { text: `📅 ${wfScheduleDate} ${wfScheduleTime}` });
       } else if (wfScheduleType === "daily") {
         schedMeta.createEl("span", { text: `🔁 Every day at ${wfScheduleTime}` });
@@ -1860,6 +1915,16 @@ class AutoOCView extends ItemView {
     btnEdit.onclick = (e) => {
       e.stopPropagation();
       new CreateWorkflowModal(this.app, this.plugin, workflow).open();
+    };
+
+    const btnDuplicate = actions.createEl("button", {
+      text: "⧉ Duplicate",
+      cls: "auto-oc-btn-duplicate",
+    });
+    btnDuplicate.onclick = async (e) => {
+      e.stopPropagation();
+      await this.plugin.duplicateWorkflow(workflow);
+      this.render();
     };
 
     const btnDelete = actions.createEl("button", {
@@ -1901,7 +1966,7 @@ class CreateTaskModal extends Modal {
             model: plugin.getEffectiveDefaultModel(),
             agent: plugin.settings.defaultAgent || "general",
             useRalphLoop: false,
-            scheduleType: "once",
+            scheduleType: "manual",
             scheduleTime: nowTimeString(),
             scheduleDate: todayString(),
             scheduleDays: [],
@@ -1925,19 +1990,6 @@ class CreateTaskModal extends Modal {
       cls: "auto-oc-modal-x",
     });
     btnX.onclick = () => this.close();
-
-    const guide = contentEl.createDiv("auto-oc-workflow-guide");
-    guide.createEl("h4", { text: "How workflows work" });
-    const guideList = guide.createEl("ol");
-    guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
-    guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is once, daily, weekly, completed, or pending." });
-    guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
-    guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
-    guide.createEl("p", {
-      text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 → Step 2 means Step 1 decides whether Step 2 starts.",
-      cls: "auto-oc-workflow-guide-tip",
-    });
-
 
     new Setting(contentEl)
       .setName("Name")
@@ -2097,10 +2149,11 @@ class CreateTaskModal extends Modal {
     new Setting(contentEl)
       .setName("Schedule Type")
       .addDropdown((dd) => {
+        dd.addOption("manual", "Manual (run only when I press play)");
         dd.addOption("once", "Once (specific date and time)");
         dd.addOption("daily", "Daily (fixed time)");
         dd.addOption("weekly", "Weekdays");
-        dd.setValue(this.draft.scheduleType ?? "once");
+        dd.setValue(this.draft.scheduleType ?? "manual");
         dd.onChange((v) => {
           this.draft.scheduleType = v as ScheduleType;
           this.onOpen(); // re-render to show relevant fields
@@ -2147,16 +2200,18 @@ class CreateTaskModal extends Modal {
       });
     }
 
-    new Setting(contentEl)
-      .setName("Time")
-      .setDesc("Format HH:MM (24h)")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text
-          .setPlaceholder("09:00")
-          .setValue(this.draft.scheduleTime ?? "")
-          .onChange((v) => (this.draft.scheduleTime = v));
-      });
+    if (this.draft.scheduleType !== "manual") {
+      new Setting(contentEl)
+        .setName("Time")
+        .setDesc("Format HH:MM (24h)")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text
+            .setPlaceholder("09:00")
+            .setValue(this.draft.scheduleTime ?? "")
+            .onChange((v) => (this.draft.scheduleTime = v));
+        });
+    }
 
     new Setting(contentEl).addButton((btn) =>
       btn
@@ -2175,7 +2230,10 @@ class CreateTaskModal extends Modal {
             new Notice("You must select a model.");
             return;
           }
-          if (!/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")) {
+          if (
+            this.draft.scheduleType !== "manual" &&
+            !/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")
+          ) {
             new Notice("Invalid time. Use HH:MM format.");
             return;
           }
@@ -2207,8 +2265,8 @@ class CreateTaskModal extends Modal {
               model: this.draft.model!,
               agent: this.draft.agent || "general",
               useRalphLoop: this.draft.useRalphLoop ?? false,
-              scheduleType: this.draft.scheduleType ?? "once",
-              scheduleTime: this.draft.scheduleTime!,
+              scheduleType: this.draft.scheduleType ?? "manual",
+              scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? "",
               scheduleDays: this.draft.scheduleDays ?? [],
               status: "pending",
@@ -2250,7 +2308,7 @@ class CreateWorkflowModal extends Modal {
     this.editWorkflow = editWorkflow;
     this.draft = editWorkflow
       ? { ...editWorkflow }
-      : { name: "", description: "", handoffBranch: false, handoffOutput: false, scheduleType: "once", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
+      : { name: "", description: "", handoffBranch: false, handoffOutput: false, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
     this.selectedTaskIds = editWorkflow
       ? editWorkflow.steps.map((s) => s.taskId)
       : [];
@@ -2283,6 +2341,18 @@ class CreateWorkflowModal extends Modal {
       cls: "auto-oc-modal-x",
     });
     btnX.onclick = () => this.close();
+
+    const guide = contentEl.createDiv("auto-oc-workflow-guide");
+    guide.createEl("h4", { text: "How workflows work" });
+    const guideList = guide.createEl("ol");
+    guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
+    guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is manual, once, daily, weekly, completed, or pending." });
+    guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
+    guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
+    guide.createEl("p", {
+      text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
+      cls: "auto-oc-workflow-guide-tip",
+    });
 
     new Setting(contentEl)
       .setName("Name")
@@ -2334,10 +2404,11 @@ class CreateWorkflowModal extends Modal {
     new Setting(contentEl)
       .setName("Schedule Type")
       .addDropdown((dd) => {
+        dd.addOption("manual", "Manual (run only when I press play)");
         dd.addOption("once", "Once (specific date and time)");
         dd.addOption("daily", "Daily (fixed time)");
         dd.addOption("weekly", "Weekdays");
-        dd.setValue(this.draft.scheduleType ?? "once");
+        dd.setValue(this.draft.scheduleType ?? "manual");
         dd.onChange((v) => {
           this.draft.scheduleType = v as ScheduleType;
           this.onOpen();
@@ -2381,16 +2452,18 @@ class CreateWorkflowModal extends Modal {
       });
     }
 
-    new Setting(contentEl)
-      .setName("Time")
-      .setDesc("Format HH:MM (24h)")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text
-          .setPlaceholder("09:00")
-          .setValue(this.draft.scheduleTime ?? "")
-          .onChange((v) => (this.draft.scheduleTime = v));
-      });
+    if (this.draft.scheduleType !== "manual") {
+      new Setting(contentEl)
+        .setName("Time")
+        .setDesc("Format HH:MM (24h)")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text
+            .setPlaceholder("09:00")
+            .setValue(this.draft.scheduleTime ?? "")
+            .onChange((v) => (this.draft.scheduleTime = v));
+        });
+    }
 
     // ── Steps section ──
     contentEl.createDiv("auto-oc-modal-section-title").setText("📋 Steps — Chain your tasks");
@@ -2416,7 +2489,10 @@ class CreateWorkflowModal extends Modal {
             new Notice("A workflow needs at least 2 tasks.");
             return;
           }
-          if (!/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")) {
+          if (
+            this.draft.scheduleType !== "manual" &&
+            !/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")
+          ) {
             new Notice("Invalid time. Use HH:MM format.");
             return;
           }
@@ -2449,8 +2525,8 @@ class CreateWorkflowModal extends Modal {
                 handoffBranch: this.draft.handoffBranch ?? false,
                 handoffOutput: this.draft.handoffOutput ?? false,
                 status: wasRunning ? "running" : "pending",
-                scheduleType: this.draft.scheduleType ?? "once",
-                scheduleTime: this.draft.scheduleTime!,
+                scheduleType: this.draft.scheduleType ?? "manual",
+                scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
                 scheduleDate: this.draft.scheduleDate ?? "",
                 scheduleDays: this.draft.scheduleDays ?? [],
               };
@@ -2466,7 +2542,7 @@ class CreateWorkflowModal extends Modal {
               createdAt: new Date().toISOString(),
               handoffBranch: this.draft.handoffBranch ?? false,
               handoffOutput: this.draft.handoffOutput ?? false,
-              scheduleType: this.draft.scheduleType ?? "once",
+              scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? todayString(),
               scheduleDays: this.draft.scheduleDays ?? [],
@@ -2926,22 +3002,11 @@ class LogHistoryModal extends Modal {
     };
 
     const list = contentEl.createDiv("auto-oc-log-history-list");
-    list.style.maxHeight = "60vh";
-    list.style.overflowY = "auto";
 
     for (const entry of history) {
       const item = list.createDiv("auto-oc-log-history-item");
-      item.style.display = "flex";
-      item.style.alignItems = "center";
-      item.style.justifyContent = "space-between";
-      item.style.padding = "8px 12px";
-      item.style.marginBottom = "4px";
-      item.style.borderRadius = "4px";
-      item.style.backgroundColor = "var(--background-secondary)";
 
       const label = item.createSpan({ text: `🕐 ${entry.timestamp}`, cls: "auto-oc-log-history-timestamp" });
-      label.style.cursor = "pointer";
-      label.style.flex = "1";
       label.onclick = () => {
         const content = readLogFile(entry.file);
         const previewModal = new LogPreviewModal(this.app, this.task.name, entry.timestamp, content);
@@ -2953,7 +3018,6 @@ class LogHistoryModal extends Modal {
         cls: "auto-oc-btn-delete-small",
       });
       btnDelete.title = "Delete this log";
-      btnDelete.style.marginLeft = "8px";
       btnDelete.onclick = async (e) => {
         e.stopPropagation();
         if (confirm(`Delete log from ${entry.timestamp}?`)) {
