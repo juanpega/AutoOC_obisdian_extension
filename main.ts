@@ -628,7 +628,7 @@ export default class AutoOCPlugin extends Plugin {
     setTimeout(() => this.runDueAll(), 5_000);
 
     // Check for plugin updates in the background
-    setTimeout(() => this.checkForUpdates(), 3_000);
+    setTimeout(() => this.checkForUpdates(true), 3_000);
   }
 
   async onunload() {
@@ -775,7 +775,7 @@ export default class AutoOCPlugin extends Plugin {
 
   // ── Version / update helpers ────────────────────────────────────────────────
 
-  async checkForUpdates(): Promise<void> {
+  async checkForUpdates(silent = false): Promise<void> {
     try {
       this.updateCheckError = null;
       const res = await fetch(REMOTE_MANIFEST_URL, { cache: "no-cache" });
@@ -788,15 +788,30 @@ export default class AutoOCPlugin extends Plugin {
       this.latestVersion = remoteVersion;
       this.updateAvailable = compareVersions(remoteVersion, this.manifest.version) > 0;
       this.view?.refresh();
+      if (!silent) {
+        new Notice(
+          this.updateAvailable
+            ? `AutoOC: update available v${remoteVersion}.`
+            : `AutoOC: already up to date (v${this.manifest.version}).`
+        );
+      }
     } catch (e) {
       this.updateCheckError = String(e);
       this.view?.refresh();
+      if (!silent) new Notice(`AutoOC: update check failed — ${String(e)}`);
     }
   }
 
   async updatePlugin(): Promise<void> {
     if (this.updateInProgress) return;
     if (!this.latestVersion) return;
+
+    const shouldUpdate = confirm(
+      `AutoOC will download v${this.latestVersion} and try to reload the plugin automatically.\n\n` +
+      `If Obsidian cannot reload it automatically, you will need to run: Ctrl+Shift+P → Reload app without saving.\n\n` +
+      `Continue?`
+    );
+    if (!shouldUpdate) return;
 
     this.updateInProgress = true;
     this.view?.refresh();
@@ -1376,6 +1391,19 @@ class AutoOCView extends ItemView {
       text: `v${this.plugin.manifest.version}`,
       cls: "auto-oc-version",
     });
+
+    const btnCheckUpdates = versionWrap.createEl("button", {
+      text: "Check updates",
+      cls: "auto-oc-btn-check-update",
+    });
+    btnCheckUpdates.disabled = this.plugin.updateInProgress;
+    btnCheckUpdates.title = "Check GitHub main/manifest.json for a newer AutoOC version";
+    btnCheckUpdates.onclick = async () => {
+      btnCheckUpdates.disabled = true;
+      btnCheckUpdates.textContent = "Checking…";
+      await this.plugin.checkForUpdates(false);
+      this.render();
+    };
 
     if (this.plugin.updateInProgress) {
       versionWrap.createEl("span", {
