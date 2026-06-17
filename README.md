@@ -1,6 +1,6 @@
 # AutoOC for Obsidian
 
-Obsidian plugin to schedule and run OpenCode CLI tasks with model selection, manual execution, logging, diagnostics, task stopping, and a direct OpenCode CLI launcher.
+Obsidian plugin to schedule and run OpenCode CLI tasks and workflows with model selection, manual execution, logging, diagnostics, task stopping, and a direct OpenCode CLI launcher.
 
 ## Features
 
@@ -19,6 +19,9 @@ Obsidian plugin to schedule and run OpenCode CLI tasks with model selection, man
 - Dynamic model loading via `opencode models`
 - Assistant to install/activate Ralph Loop in `~/.config/opencode/opencode.json`
 - Direct `OpenCode CLI` launcher from the AutoOC panel
+- Schedulable workflows that chain existing tasks in order
+- Workflow transitions: continue on success, force continue, or AI decides from previous output
+- Runtime handoff between workflow steps for branch and output context
 
 ## Requirements
 
