@@ -525,6 +525,26 @@
   filter: brightness(1.1);
 }
 
+.auto-oc-btn-check-update {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-size: 0.7rem;
+}
+
+.auto-oc-btn-check-update:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.auto-oc-btn-check-update:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 /* ── OpenCode CLI Launcher Modal ────────────────────────────────────────────── */
 
 .auto-oc-cli-modal .setting-item-description {

@@ -501,7 +501,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       window.setInterval(() => this.runDueAll(), 6e4)
     );
     setTimeout(() => this.runDueAll(), 5e3);
-    setTimeout(() => this.checkForUpdates(), 3e3);
+    setTimeout(() => this.checkForUpdates(true), 3e3);
   }
   async onunload() {
     for (const [, proc] of this.runningProcesses) {
@@ -637,7 +637,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     (_a = this.view) == null ? void 0 : _a.refresh();
   }
   // ── Version / update helpers ────────────────────────────────────────────────
-  async checkForUpdates() {
+  async checkForUpdates(silent = false) {
     var _a, _b;
     try {
       this.updateCheckError = null;
@@ -651,15 +651,29 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.latestVersion = remoteVersion;
       this.updateAvailable = compareVersions(remoteVersion, this.manifest.version) > 0;
       (_a = this.view) == null ? void 0 : _a.refresh();
+      if (!silent) {
+        new import_obsidian.Notice(
+          this.updateAvailable ? `AutoOC: update available v${remoteVersion}.` : `AutoOC: already up to date (v${this.manifest.version}).`
+        );
+      }
     } catch (e) {
       this.updateCheckError = String(e);
       (_b = this.view) == null ? void 0 : _b.refresh();
+      if (!silent) new import_obsidian.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
     }
   }
   async updatePlugin() {
     var _a, _b;
     if (this.updateInProgress) return;
     if (!this.latestVersion) return;
+    const shouldUpdate = confirm(
+      `AutoOC will download v${this.latestVersion} and try to reload the plugin automatically.
+
+If Obsidian cannot reload it automatically, you will need to run: Ctrl+Shift+P \u2192 Reload app without saving.
+
+Continue?`
+    );
+    if (!shouldUpdate) return;
     this.updateInProgress = true;
     (_a = this.view) == null ? void 0 : _a.refresh();
     new import_obsidian.Notice("AutoOC: downloading update\u2026");
@@ -1202,6 +1216,18 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: `v${this.plugin.manifest.version}`,
       cls: "auto-oc-version"
     });
+    const btnCheckUpdates = versionWrap.createEl("button", {
+      text: "Check updates",
+      cls: "auto-oc-btn-check-update"
+    });
+    btnCheckUpdates.disabled = this.plugin.updateInProgress;
+    btnCheckUpdates.title = "Check GitHub main/manifest.json for a newer AutoOC version";
+    btnCheckUpdates.onclick = async () => {
+      btnCheckUpdates.disabled = true;
+      btnCheckUpdates.textContent = "Checking\u2026";
+      await this.plugin.checkForUpdates(false);
+      this.render();
+    };
     if (this.plugin.updateInProgress) {
       versionWrap.createEl("span", {
         text: "\u23F3 Updating\u2026",
