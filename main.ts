@@ -1629,6 +1629,11 @@ class AutoOCView extends ItemView {
     });
     btnNew.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
 
+    const help = header.createDiv("auto-oc-workflow-panel-help");
+    help.createSpan({
+      text: "Workflows run tasks in order using their own schedule. Per-step transitions decide whether the next task starts: success, force, or AI decides.",
+    });
+
     const workflows = this.plugin.settings.workflows;
     const stats = containerEl.createDiv("auto-oc-stats");
     const completed = workflows.filter((w) => w.status === "completed").length;
@@ -1892,6 +1897,18 @@ class CreateTaskModal extends Modal {
       cls: "auto-oc-modal-x",
     });
     btnX.onclick = () => this.close();
+
+    const guide = contentEl.createDiv("auto-oc-workflow-guide");
+    guide.createEl("h4", { text: "How workflows work" });
+    const guideList = guide.createEl("ol");
+    guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
+    guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is once, daily, weekly, completed, or pending." });
+    guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
+    guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
+    guide.createEl("p", {
+      text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 → Step 2 means Step 1 decides whether Step 2 starts.",
+      cls: "auto-oc-workflow-guide-tip",
+    });
 
 
     new Setting(contentEl)
@@ -2258,10 +2275,14 @@ class CreateWorkflowModal extends Modal {
 
     // ── Handoff section ──
     contentEl.createDiv("auto-oc-modal-section-title").setText("🔄 Handoff between steps");
+    contentEl.createEl("p", {
+      text: "Handoff passes context from the task that just finished to the next task at runtime only. It does not edit the original task prompt.",
+      cls: "setting-item-description auto-oc-workflow-section-help",
+    });
 
     new Setting(contentEl)
       .setName("Pass Git Branch")
-      .setDesc("Pass the git branch from each task to the next")
+      .setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.")
       .addToggle((tog) => {
         tog.setValue(this.draft.handoffBranch ?? false);
         tog.onChange((v) => (this.draft.handoffBranch = v));
@@ -2269,7 +2290,7 @@ class CreateWorkflowModal extends Modal {
 
     new Setting(contentEl)
       .setName("Pass Output Context")
-      .setDesc("Append previous task's output as context for the next task")
+      .setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.")
       .addToggle((tog) => {
         tog.setValue(this.draft.handoffOutput ?? false);
         tog.onChange((v) => (this.draft.handoffOutput = v));
@@ -2277,6 +2298,10 @@ class CreateWorkflowModal extends Modal {
 
     // ── Schedule section ──
     contentEl.createDiv("auto-oc-modal-section-title").setText("⏰ Schedule");
+    contentEl.createEl("p", {
+      text: "This schedule belongs to the workflow itself. The individual task schedules are not used while the workflow is running.",
+      cls: "setting-item-description auto-oc-workflow-section-help",
+    });
 
     new Setting(contentEl)
       .setName("Schedule Type")
@@ -2341,6 +2366,10 @@ class CreateWorkflowModal extends Modal {
 
     // ── Steps section ──
     contentEl.createDiv("auto-oc-modal-section-title").setText("📋 Steps — Chain your tasks");
+    contentEl.createEl("p", {
+      text: "Add tasks in execution order. For every pair of steps, choose the transition rule that decides whether the next task starts.",
+      cls: "setting-item-description auto-oc-workflow-section-help",
+    });
 
     const stepsContainer = contentEl.createDiv("auto-oc-workflow-steps-container");
     this.renderStepsList(stepsContainer);
@@ -2482,20 +2511,31 @@ class CreateWorkflowModal extends Modal {
       // Transition config (only if not last)
       if (!isLast) {
         const transConfig = stepEl.createDiv("auto-oc-workflow-transition");
+        const nextTask = this.plugin.settings.tasks.find((t) => t.id === this.selectedTaskIds[i + 1]);
+
+        const transitionHeader = transConfig.createDiv("auto-oc-workflow-transition-header");
+        transitionHeader.createSpan({
+          text: `Transition: Step ${i + 1} → Step ${i + 2}`,
+          cls: "auto-oc-workflow-transition-title",
+        });
+        transitionHeader.createSpan({
+          text: `After «${task?.name ?? "current task"}» finishes, decide whether «${nextTask?.name ?? "next task"}» starts.`,
+          cls: "auto-oc-workflow-transition-help",
+        });
 
         // Mode selector: force, evaluate, or stop-on-fail (default)
         const modeDiv = transConfig.createDiv("auto-oc-workflow-mode");
         modeDiv.createSpan({
-          text: "Transition mode:",
+          text: "Decision mode:",
           cls: "auto-oc-workflow-label",
         });
 
         const modeSel = modeDiv.createEl("select", { cls: "auto-oc-status-select" });
         modeSel.style.marginLeft = "6px";
         const modes: { val: string; label: string; desc: string }[] = [
-          { val: "default", label: "Default — continue on success", desc: "Only proceeds if task completes without errors (exit code 0)." },
-          { val: "force",  label: "Force — always continue",     desc: "Always moves to the next step, even if the task fails." },
-          { val: "eval",   label: "Evaluate — AI decides",       desc: "Runs a prompt through OpenCode to decide YES or NO based on the output." },
+          { val: "default", label: "Default — continue only if this step succeeds", desc: "Starts the next task only when the current task exits successfully." },
+          { val: "force",  label: "Force — always start next step", desc: "Starts the next task even if the current task fails." },
+          { val: "eval",   label: "AI decides — evaluate output", desc: "Runs your transition prompt against this step output. YES starts the next task; NO stops the workflow." },
         ];
         const defaultEvalPrompt = "Did the previous task complete successfully? Check the output for errors, failures, or unfinished work. If it is safe to continue, reply YES. Otherwise reply NO.";
         const currentMode = config.transitionMode ?? ((config.forceContinue ?? false) ? "force" : (config.evaluatePrompt !== undefined ? "eval" : "default"));
@@ -2530,8 +2570,6 @@ class CreateWorkflowModal extends Modal {
         if (currentMode === "eval") {
           const evalDiv = transConfig.createDiv("auto-oc-workflow-eval");
 
-          const nextTask = this.plugin.settings.tasks.find((t) => t.id === this.selectedTaskIds[i + 1]);
-
           // The actual prompt textarea. Each AI-decided transition owns its own prompt.
           const promptBox = evalDiv.createDiv("auto-oc-workflow-ai-prompt-box");
           promptBox.createSpan({
@@ -2539,7 +2577,7 @@ class CreateWorkflowModal extends Modal {
             cls: "auto-oc-workflow-ai-prompt-title",
           });
           promptBox.createSpan({
-            text: `This prompt decides whether to continue from «${task?.name ?? "current task"}» to «${nextTask?.name ?? "next task"}».`,
+            text: `Write the condition here. OpenCode will receive this text plus the output of «${task?.name ?? "current task"}». It must answer YES to start «${nextTask?.name ?? "next task"}».`,
             cls: "auto-oc-workflow-ai-prompt-help",
           });
           const evalTextarea = promptBox.createEl("textarea", {
@@ -2552,7 +2590,7 @@ class CreateWorkflowModal extends Modal {
           // Info box: how it works
           const infoBox = evalDiv.createDiv("auto-oc-workflow-eval-info");
           infoBox.createSpan({
-            text: `How it works: OpenCode receives this prompt PLUS the full output of «${task?.name ?? "Step " + (i+1)}». It must reply YES or NO. If the answer is YES, the workflow continues to «${nextTask?.name ?? "step "+(i+2)}». Otherwise it stops.`,
+            text: `Evaluation contract: YES = continue to next step. NO or anything unclear = stop. The answer is saved in the previous task log as a workflow evaluation note.`,
           });
 
           // Presets

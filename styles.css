@@ -553,6 +553,53 @@
 
 /* ── Workflows ───────────────────────────────────────────────────────────────── */
 
+.auto-oc-workflow-guide {
+  background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 4px solid var(--interactive-accent);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 8px 0 14px 0;
+}
+
+.auto-oc-workflow-guide h4 {
+  margin: 0 0 6px 0;
+  font-size: 0.9rem;
+}
+
+.auto-oc-workflow-guide ol {
+  margin: 0 0 6px 18px;
+  padding: 0;
+}
+
+.auto-oc-workflow-guide li {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  margin-bottom: 3px;
+}
+
+.auto-oc-workflow-guide-tip,
+.auto-oc-workflow-section-help {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.auto-oc-workflow-guide-tip {
+  margin: 6px 0 0 0;
+  font-weight: 600;
+}
+
+.auto-oc-workflow-panel-help {
+  font-size: 0.76rem;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.35;
+}
+
 .auto-oc-workflow-steps-container {
   display: flex;
   flex-direction: column;
@@ -606,12 +653,33 @@
 
 .auto-oc-workflow-transition {
   margin: 6px 0 0 0;
-  padding: 6px 8px;
+  padding: 9px 10px;
   background: var(--background-secondary);
+  border: 1px solid var(--background-modifier-border);
+  border-left: 3px solid var(--interactive-accent);
   border-radius: 4px;
   font-size: 0.75rem;
   min-width: 0;
   max-width: 100%;
+}
+
+.auto-oc-workflow-transition-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+
+.auto-oc-workflow-transition-title {
+  color: var(--text-normal);
+  font-weight: 800;
+  font-size: 0.8rem;
+}
+
+.auto-oc-workflow-transition-help {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.35;
 }
 
 .auto-oc-workflow-inline {

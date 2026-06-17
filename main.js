@@ -1414,6 +1414,10 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: "auto-oc-btn-primary"
     });
     btnNew.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
+    const help = header.createDiv("auto-oc-workflow-panel-help");
+    help.createSpan({
+      text: "Workflows run tasks in order using their own schedule. Per-step transitions decide whether the next task starts: success, force, or AI decides."
+    });
     const workflows = this.plugin.settings.workflows;
     const stats = containerEl.createDiv("auto-oc-stats");
     const completed = workflows.filter((w) => w.status === "completed").length;
@@ -1633,6 +1637,17 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       cls: "auto-oc-modal-x"
     });
     btnX.onclick = () => this.close();
+    const guide = contentEl.createDiv("auto-oc-workflow-guide");
+    guide.createEl("h4", { text: "How workflows work" });
+    const guideList = guide.createEl("ol");
+    guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
+    guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is once, daily, weekly, completed, or pending." });
+    guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
+    guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
+    guide.createEl("p", {
+      text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 \u2192 Step 2 means Step 1 decides whether Step 2 starts.",
+      cls: "auto-oc-workflow-guide-tip"
+    });
     new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
@@ -1906,17 +1921,25 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       text.setValue((_a = this.draft.description) != null ? _a : "").onChange((v) => this.draft.description = v);
     });
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F504} Handoff between steps");
-    new import_obsidian.Setting(contentEl).setName("Pass Git Branch").setDesc("Pass the git branch from each task to the next").addToggle((tog) => {
+    contentEl.createEl("p", {
+      text: "Handoff passes context from the task that just finished to the next task at runtime only. It does not edit the original task prompt.",
+      cls: "setting-item-description auto-oc-workflow-section-help"
+    });
+    new import_obsidian.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffBranch = v);
     });
-    new import_obsidian.Setting(contentEl).setName("Pass Output Context").setDesc("Append previous task's output as context for the next task").addToggle((tog) => {
+    new import_obsidian.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffOutput) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffOutput = v);
     });
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u23F0 Schedule");
+    contentEl.createEl("p", {
+      text: "This schedule belongs to the workflow itself. The individual task schedules are not used while the workflow is running.",
+      cls: "setting-item-description auto-oc-workflow-section-help"
+    });
     new import_obsidian.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a;
       dd.addOption("once", "Once (specific date and time)");
@@ -1966,6 +1989,10 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
     });
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4CB} Steps \u2014 Chain your tasks");
+    contentEl.createEl("p", {
+      text: "Add tasks in execution order. For every pair of steps, choose the transition rule that decides whether the next task starts.",
+      cls: "setting-item-description auto-oc-workflow-section-help"
+    });
     const stepsContainer = contentEl.createDiv("auto-oc-workflow-steps-container");
     this.renderStepsList(stepsContainer);
     new import_obsidian.Setting(contentEl).addButton(
@@ -2089,26 +2116,36 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       };
       if (!isLast) {
         const transConfig = stepEl.createDiv("auto-oc-workflow-transition");
+        const nextTask = this.plugin.settings.tasks.find((t) => t.id === this.selectedTaskIds[i + 1]);
+        const transitionHeader = transConfig.createDiv("auto-oc-workflow-transition-header");
+        transitionHeader.createSpan({
+          text: `Transition: Step ${i + 1} \u2192 Step ${i + 2}`,
+          cls: "auto-oc-workflow-transition-title"
+        });
+        transitionHeader.createSpan({
+          text: `After \xAB${(_a = task == null ? void 0 : task.name) != null ? _a : "current task"}\xBB finishes, decide whether \xAB${(_b = nextTask == null ? void 0 : nextTask.name) != null ? _b : "next task"}\xBB starts.`,
+          cls: "auto-oc-workflow-transition-help"
+        });
         const modeDiv = transConfig.createDiv("auto-oc-workflow-mode");
         modeDiv.createSpan({
-          text: "Transition mode:",
+          text: "Decision mode:",
           cls: "auto-oc-workflow-label"
         });
         const modeSel = modeDiv.createEl("select", { cls: "auto-oc-status-select" });
         modeSel.style.marginLeft = "6px";
         const modes = [
-          { val: "default", label: "Default \u2014 continue on success", desc: "Only proceeds if task completes without errors (exit code 0)." },
-          { val: "force", label: "Force \u2014 always continue", desc: "Always moves to the next step, even if the task fails." },
-          { val: "eval", label: "Evaluate \u2014 AI decides", desc: "Runs a prompt through OpenCode to decide YES or NO based on the output." }
+          { val: "default", label: "Default \u2014 continue only if this step succeeds", desc: "Starts the next task only when the current task exits successfully." },
+          { val: "force", label: "Force \u2014 always start next step", desc: "Starts the next task even if the current task fails." },
+          { val: "eval", label: "AI decides \u2014 evaluate output", desc: "Runs your transition prompt against this step output. YES starts the next task; NO stops the workflow." }
         ];
         const defaultEvalPrompt = "Did the previous task complete successfully? Check the output for errors, failures, or unfinished work. If it is safe to continue, reply YES. Otherwise reply NO.";
-        const currentMode = (_b = config.transitionMode) != null ? _b : ((_a = config.forceContinue) != null ? _a : false) ? "force" : config.evaluatePrompt !== void 0 ? "eval" : "default";
+        const currentMode = (_d = config.transitionMode) != null ? _d : ((_c = config.forceContinue) != null ? _c : false) ? "force" : config.evaluatePrompt !== void 0 ? "eval" : "default";
         for (const m of modes) {
           modeSel.createEl("option", { text: m.label }).value = m.val;
         }
         modeSel.value = currentMode;
         const modeDesc = modeDiv.createSpan({
-          text: (_d = (_c = modes.find((m) => m.val === currentMode)) == null ? void 0 : _c.desc) != null ? _d : "",
+          text: (_f = (_e = modes.find((m) => m.val === currentMode)) == null ? void 0 : _e.desc) != null ? _f : "",
           cls: "auto-oc-workflow-mode-desc"
         });
         modeSel.onchange = () => {
@@ -2131,25 +2168,24 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
         };
         if (currentMode === "eval") {
           const evalDiv = transConfig.createDiv("auto-oc-workflow-eval");
-          const nextTask = this.plugin.settings.tasks.find((t) => t.id === this.selectedTaskIds[i + 1]);
           const promptBox = evalDiv.createDiv("auto-oc-workflow-ai-prompt-box");
           promptBox.createSpan({
             text: `AI decides prompt: Step ${i + 1} \u2192 Step ${i + 2}`,
             cls: "auto-oc-workflow-ai-prompt-title"
           });
           promptBox.createSpan({
-            text: `This prompt decides whether to continue from \xAB${(_e = task == null ? void 0 : task.name) != null ? _e : "current task"}\xBB to \xAB${(_f = nextTask == null ? void 0 : nextTask.name) != null ? _f : "next task"}\xBB.`,
+            text: `Write the condition here. OpenCode will receive this text plus the output of \xAB${(_g = task == null ? void 0 : task.name) != null ? _g : "current task"}\xBB. It must answer YES to start \xAB${(_h = nextTask == null ? void 0 : nextTask.name) != null ? _h : "next task"}\xBB.`,
             cls: "auto-oc-workflow-ai-prompt-help"
           });
           const evalTextarea = promptBox.createEl("textarea", {
             cls: "auto-oc-modal-textarea auto-oc-workflow-ai-textarea"
           });
           evalTextarea.rows = 4;
-          evalTextarea.value = (_g = config.evaluatePrompt) != null ? _g : defaultEvalPrompt;
+          evalTextarea.value = (_i = config.evaluatePrompt) != null ? _i : defaultEvalPrompt;
           evalTextarea.placeholder = "Example: Did the previous task complete successfully? Reply YES or NO.";
           const infoBox = evalDiv.createDiv("auto-oc-workflow-eval-info");
           infoBox.createSpan({
-            text: `How it works: OpenCode receives this prompt PLUS the full output of \xAB${(_h = task == null ? void 0 : task.name) != null ? _h : "Step " + (i + 1)}\xBB. It must reply YES or NO. If the answer is YES, the workflow continues to \xAB${(_i = nextTask == null ? void 0 : nextTask.name) != null ? _i : "step " + (i + 2)}\xBB. Otherwise it stops.`
+            text: `Evaluation contract: YES = continue to next step. NO or anything unclear = stop. The answer is saved in the previous task log as a workflow evaluation note.`
           });
           const presetsDiv = evalDiv.createDiv("auto-oc-workflow-presets");
           presetsDiv.createSpan({
