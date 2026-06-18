@@ -164,6 +164,11 @@ var DEFAULT_SETTINGS = {
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
+var INITIAL_DUE_CHECK_DELAY_MS = 3e4;
+var DUE_LAUNCH_GAP_MS = 1e4;
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 function preventBackdropClose(modal) {
   const contentEl = modal.contentEl;
   const modalContainer = contentEl.parentElement;
@@ -554,6 +559,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.availableAgents = FALLBACK_AGENTS;
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
+    this.dueCheckInProgress = false;
     // Update-check state
     this.latestVersion = null;
     this.updateAvailable = false;
@@ -610,7 +616,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.registerInterval(
       window.setInterval(() => this.runDueAll(), 6e4)
     );
-    setTimeout(() => this.runDueAll(), 5e3);
+    this.app.workspace.onLayoutReady(() => {
+      const startupTimer = window.setTimeout(() => this.runDueAll(), INITIAL_DUE_CHECK_DELAY_MS);
+      this.register(() => window.clearTimeout(startupTimer));
+    });
     setTimeout(() => this.checkForUpdates(true), 3e3);
   }
   async onunload() {
@@ -1121,21 +1130,27 @@ ${stderr}` : "")).trim();
     new import_obsidian.Notice(`AutoOC: \u23F9 Task stopped.`);
   }
   async runDueAll() {
-    await this.runDueTasks();
-    await this.runDueWorkflows();
+    if (this.dueCheckInProgress) return;
+    this.dueCheckInProgress = true;
+    try {
+      await this.runDueTasks();
+      await this.runDueWorkflows();
+    } finally {
+      this.dueCheckInProgress = false;
+    }
   }
   async runDueTasks() {
-    for (const task of this.settings.tasks) {
-      if (isTaskDue(task)) {
-        await this.runTask(task);
-      }
+    const dueTasks = this.settings.tasks.filter((task) => isTaskDue(task));
+    for (let i = 0; i < dueTasks.length; i++) {
+      await this.runTask(dueTasks[i]);
+      if (i < dueTasks.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
   }
   async runDueWorkflows() {
-    for (const wf of this.settings.workflows) {
-      if (isWorkflowDue(wf)) {
-        await this.runWorkflow(wf);
-      }
+    const dueWorkflows = this.settings.workflows.filter((wf) => isWorkflowDue(wf));
+    for (let i = 0; i < dueWorkflows.length; i++) {
+      await this.runWorkflow(dueWorkflows[i]);
+      if (i < dueWorkflows.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
   }
   async deleteTask(id) {
