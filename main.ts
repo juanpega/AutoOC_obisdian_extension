@@ -230,6 +230,12 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
 
 export const VIEW_TYPE = "auto-oc-view";
 const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const INITIAL_DUE_CHECK_DELAY_MS = 30_000;
+const DUE_LAUNCH_GAP_MS = 10_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 function preventBackdropClose(modal: Modal): void {
   const contentEl = modal.contentEl;
@@ -602,6 +608,7 @@ export default class AutoOCPlugin extends Plugin {
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
+  private dueCheckInProgress = false;
 
   // Update-check state
   latestVersion: string | null = null;
@@ -673,8 +680,12 @@ export default class AutoOCPlugin extends Plugin {
       window.setInterval(() => this.runDueAll(), 60_000)
     );
 
-    // Initial check after startup (5 s margin for Obsidian to load)
-    setTimeout(() => this.runDueAll(), 5_000);
+    // Initial check only after Obsidian has restored its layout, plus an extra
+    // margin so other plugins and the Electron environment settle before launch.
+    this.app.workspace.onLayoutReady(() => {
+      const startupTimer = window.setTimeout(() => this.runDueAll(), INITIAL_DUE_CHECK_DELAY_MS);
+      this.register(() => window.clearTimeout(startupTimer));
+    });
 
     // Check for plugin updates in the background
     setTimeout(() => this.checkForUpdates(true), 3_000);
@@ -1190,23 +1201,29 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDueAll() {
-    await this.runDueTasks();
-    await this.runDueWorkflows();
+    if (this.dueCheckInProgress) return;
+    this.dueCheckInProgress = true;
+    try {
+      await this.runDueTasks();
+      await this.runDueWorkflows();
+    } finally {
+      this.dueCheckInProgress = false;
+    }
   }
 
   async runDueTasks() {
-    for (const task of this.settings.tasks) {
-      if (isTaskDue(task)) {
-        await this.runTask(task);
-      }
+    const dueTasks = this.settings.tasks.filter((task) => isTaskDue(task));
+    for (let i = 0; i < dueTasks.length; i++) {
+      await this.runTask(dueTasks[i]);
+      if (i < dueTasks.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
   }
 
   async runDueWorkflows() {
-    for (const wf of this.settings.workflows) {
-      if (isWorkflowDue(wf)) {
-        await this.runWorkflow(wf);
-      }
+    const dueWorkflows = this.settings.workflows.filter((wf) => isWorkflowDue(wf));
+    for (let i = 0; i < dueWorkflows.length; i++) {
+      await this.runWorkflow(dueWorkflows[i]);
+      if (i < dueWorkflows.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
   }
 
