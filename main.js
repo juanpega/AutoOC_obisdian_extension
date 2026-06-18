@@ -155,7 +155,7 @@ var DEFAULT_SETTINGS = {
   defaultAgent: "general",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
-  cmdTemplate: '{opencode} run --model {model} "{prompt}"',
+  cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 1800,
   // 30 min por defecto
   logsEnabled: true,
@@ -206,6 +206,9 @@ var REMOTE_FILE_URLS = {
   manifest: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`,
   styles: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/styles.css`
 };
+function noCacheUrl(url) {
+  return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+}
 function compareVersions(a, b) {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
@@ -763,7 +766,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     var _a, _b;
     try {
       this.updateCheckError = null;
-      const res = await fetch(REMOTE_MANIFEST_URL, { cache: "no-cache" });
+      const res = await fetch(noCacheUrl(REMOTE_MANIFEST_URL), { cache: "reload" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const remoteVersion = data == null ? void 0 : data.version;
@@ -801,15 +804,15 @@ Continue?`
     new import_obsidian.Notice("AutoOC: downloading update\u2026");
     try {
       const [mainJs, manifest, styles] = await Promise.all([
-        fetch(REMOTE_FILE_URLS.mainJs, { cache: "no-cache" }).then((r) => {
+        fetch(noCacheUrl(REMOTE_FILE_URLS.mainJs), { cache: "reload" }).then((r) => {
           if (!r.ok) throw new Error(`main.js HTTP ${r.status}`);
           return r.text();
         }),
-        fetch(REMOTE_FILE_URLS.manifest, { cache: "no-cache" }).then((r) => {
+        fetch(noCacheUrl(REMOTE_FILE_URLS.manifest), { cache: "reload" }).then((r) => {
           if (!r.ok) throw new Error(`manifest.json HTTP ${r.status}`);
           return r.text();
         }),
-        fetch(REMOTE_FILE_URLS.styles, { cache: "no-cache" }).then((r) => {
+        fetch(noCacheUrl(REMOTE_FILE_URLS.styles), { cache: "reload" }).then((r) => {
           if (!r.ok) throw new Error(`styles.css HTTP ${r.status}`);
           return r.text();
         })
@@ -833,7 +836,7 @@ Continue?`
       (_b = this.view) == null ? void 0 : _b.refresh();
     }
   }
-  // Returns the args array exactly as tool.py does: ["opencode", "run", prompt, "-m", model]
+  // Keep CLI options before "--" so prompt text cannot be parsed as opencode flags.
   buildArgs(task) {
     let prompt = task.prompt;
     if (task.useRalphLoop) {
@@ -841,7 +844,7 @@ Continue?`
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
     const agent = task.agent || this.settings.defaultAgent || "general";
-    return [bin, "run", prompt, "-m", task.model, "--agent", agent, "--dangerously-skip-permissions"];
+    return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
   }
   // Human-readable command string for the preview modal
   buildCommand(task) {
@@ -870,7 +873,7 @@ Continue?`
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
-        `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--agent','${agent}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+        `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','-m','${model}','--agent','${agent}','--dangerously-skip-permissions','--','${safePrompt}' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
         `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
         `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
@@ -946,8 +949,11 @@ DONE:" + $p.ExitCode + "
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
     const bin = args[0];
-    const prompt = args[2];
-    const model = args[4];
+    let prompt = effectiveTask.prompt;
+    if (effectiveTask.useRalphLoop) {
+      prompt = `/ralph-loop ${prompt}`;
+    }
+    const model = effectiveTask.model;
     const preparedPrompt = prompt.replace(/\r?\n\s*[-*]\s+/g, "; ").replace(/\r?\n+/g, "; ").replace(/\s+/g, " ").trim();
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
@@ -998,7 +1004,7 @@ DONE:" + $p.ExitCode + "
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
       `$bin = '${bin.replace(/'/g, "''")}'`,
-      `$argList = @('run',$prompt,'-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions')`,
+      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
       `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`
     ].filter((line) => line !== "").join("\n");
@@ -2933,7 +2939,7 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           `$env:HOME        = '${process.env.USERPROFILE}'`,
           `$outTmp = [System.IO.Path]::GetTempFileName()`,
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
-          `$p = Start-Process -FilePath '${bin2.replace(/'/g, "''")}' -ArgumentList 'run','di hola','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+          `$p = Start-Process -FilePath '${bin2.replace(/'/g, "''")}' -ArgumentList 'run','-m','${model}','--dangerously-skip-permissions','--','di hola' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
           `$out = (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
           `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "
