@@ -716,6 +716,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         wf.scheduleDays = [];
         changed = true;
       }
+      if (wf.handoffOutput !== true) {
+        wf.handoffOutput = true;
+        changed = true;
+      }
     }
     if (!this.settings.defaultModel) {
       this.settings.defaultModel = (_b = (_a = this.availableModels[0]) == null ? void 0 : _a.value) != null ? _b : "";
@@ -959,7 +963,7 @@ DONE:" + $p.ExitCode + "
       prompt = `/ralph-loop ${prompt}`;
     }
     const model = effectiveTask.model;
-    const preparedPrompt = prompt.trim();
+    const preparedPrompt = prompt.replace(/\r?\n+/g, " ").replace(/\s+/g, " ").trim();
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
     const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
@@ -1256,16 +1260,17 @@ ${stderr}` : "")).trim();
           taskOverrides.branch = prevTask.branch;
           taskOverrides.createBranch = false;
         }
-        const handoffEnabled = wf.handoffOutput !== false;
+        const handoffEnabled = true;
         if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
           const cleanOutput = prevTask.output.replace(/\[código de salida:.*?\]/g, "").replace(/\[iniciando proceso desacoplado…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\n\[stderr\][\s\S]*?(?=\n\[|$)/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
-          const contextBlock = `
-
---- Context from previous task: "${prevTask.name}" ---
-${cleanOutput.slice(0, 2e3)}
---- End of context ---`;
-          taskOverrides.prompt = `${task.prompt}${contextBlock}`;
-          new import_obsidian.Notice(`AutoOC: \u21AA Passing context from "${prevTask.name}" to "${task.name}"`);
+          if (cleanOutput) {
+            const contextText = cleanOutput.slice(0, 2e3);
+            const contextBlock = ` Previous task output from "${prevTask.name}" to use as context: ${contextText} End of previous task output.`;
+            taskOverrides.prompt = `${task.prompt}${contextBlock}`;
+            new import_obsidian.Notice(`AutoOC: \u21AA Passing context from "${prevTask.name}" to "${task.name}" (${contextText.length} chars)`);
+          } else {
+            new import_obsidian.Notice(`AutoOC: handoff skipped \u2014 previous output was empty after filtering.`);
+          }
         }
       }
     }
