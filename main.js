@@ -96,10 +96,8 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -WindowStyle Hidden -File """ & "
 }
 var FALLBACK_MODELS = [];
 var FALLBACK_AGENTS = [
-  { value: "general", label: "general" },
   { value: "build", label: "build" },
-  { value: "plan", label: "plan" },
-  { value: "explore", label: "explore" }
+  { value: "plan", label: "plan" }
 ];
 function stripAnsi(text) {
   return text.replace(/\x1b\[[0-9;]*m/g, "");
@@ -137,7 +135,7 @@ function fetchAgentsSync(opencodePath, cwd) {
       cwd: cwd || void 0,
       windowsHide: true
     });
-    const agents = stripAnsi(out).split("\n").map((l) => l.trim()).filter((l) => /^\S+\s+\(/.test(l)).map((l) => {
+    const agents = stripAnsi(out).split("\n").map((l) => l.trim()).filter((l) => /^\S+\s+\(primary\)/.test(l)).map((l) => {
       var _a, _b;
       const name = (_b = (_a = l.match(/^(\S+)\s+\(/)) == null ? void 0 : _a[1]) != null ? _b : l.split(" ")[0];
       return { value: name, label: name };
@@ -152,7 +150,7 @@ var DEFAULT_SETTINGS = {
   workflows: [],
   opencodePath: "opencode",
   defaultModel: "",
-  defaultAgent: "general",
+  defaultAgent: "build",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
@@ -652,12 +650,19 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const agents = this.getAgentsForDirectory(cwd);
     if (agents.length > 0) {
       this.availableAgents = agents;
-      if (!this.settings.defaultAgent) {
-        this.settings.defaultAgent = "general";
+      if (!this.settings.defaultAgent || !agents.find((a) => a.value === this.settings.defaultAgent)) {
+        this.settings.defaultAgent = agents[0].value;
         void this.saveSettings();
       }
       (_a = this.view) == null ? void 0 : _a.refresh();
     }
+  }
+  getEffectiveAgent(agent) {
+    var _a;
+    const requested = agent || this.settings.defaultAgent;
+    if (requested && this.availableAgents.find((a) => a.value === requested)) return requested;
+    if (this.settings.defaultAgent && this.availableAgents.find((a) => a.value === this.settings.defaultAgent)) return this.settings.defaultAgent;
+    return ((_a = this.availableAgents[0]) == null ? void 0 : _a.value) || "build";
   }
   getEffectiveDefaultModel() {
     var _a, _b;
@@ -843,7 +848,7 @@ Continue?`
       prompt = `/ralph-loop ${prompt}`;
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
-    const agent = task.agent || this.settings.defaultAgent || "general";
+    const agent = this.getEffectiveAgent(task.agent);
     return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
   }
   // Human-readable command string for the preview modal
@@ -861,7 +866,7 @@ Continue?`
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const outFile = path2.join(tmpDir, `autooc-eval-${evalId}.txt`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
-      const agent = this.settings.defaultAgent || "general";
+      const agent = this.getEffectiveAgent();
       const safePrompt = prompt.replace(/"/g, '\\"').replace(/'/g, "''");
       const safeCwd = cwd.replace(/'/g, "''");
       const psScript = [
@@ -1004,7 +1009,7 @@ DONE:" + $p.ExitCode + "
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
       `$bin = '${bin.replace(/'/g, "''")}'`,
-      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
+      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${this.getEffectiveAgent(effectiveTask.agent).replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
       `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`
     ].filter((line) => line !== "").join("\n");
@@ -1519,7 +1524,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = (_b = (_a = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model;
     meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
-    meta.createEl("span", { text: `\u2699\uFE0F ${task.agent || "general"}` });
+    meta.createEl("span", { text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
     let scheduleText = "";
     if (task.scheduleType === "manual") {
       scheduleText = "\u25B6 Manual only";
@@ -1729,7 +1734,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
       const modelLabel = (_c = (_b = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _b.label) != null ? _c : task.model;
       taskMeta.createSpan({ text: `\u{1F916} ${modelLabel || "(no model)"}` });
-      taskMeta.createSpan({ text: `\u2699\uFE0F ${task.agent || "general"}` });
+      taskMeta.createSpan({ text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
       if (task.branch) taskMeta.createSpan({ text: `\u{1F33F} ${task.branch}${task.createBranch ? " (create)" : ""}` });
       if (task.workingDirectory) taskMeta.createSpan({ text: `\u{1F4C2} ${task.workingDirectory}` });
       if (task.lastRun) taskMeta.createSpan({ text: `\u23F1 ${formatDateTime(task.lastRun)}` });
@@ -1864,7 +1869,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       name: "",
       prompt: "",
       model: plugin.getEffectiveDefaultModel(),
-      agent: plugin.settings.defaultAgent || "general",
+      agent: plugin.getEffectiveAgent(),
       useRalphLoop: false,
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
@@ -1939,7 +1944,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     new import_obsidian.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
       var _a;
       projectAgents.forEach((a) => dd.addOption(a.value, a.label));
-      const current = (_a = this.draft.agent) != null ? _a : this.plugin.settings.defaultAgent || "general";
+      const current = (_a = this.draft.agent) != null ? _a : this.plugin.getEffectiveAgent();
       if (!current && projectAgents.length === 0) {
         dd.addOption("", "(no agents; tap refresh)");
       } else if (current && !projectAgents.find((a) => a.value === current)) {
@@ -2083,7 +2088,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             name: this.draft.name,
             prompt: this.draft.prompt,
             model: this.draft.model,
-            agent: this.draft.agent || "general",
+            agent: this.plugin.getEffectiveAgent(this.draft.agent),
             useRalphLoop: (_f = this.draft.useRalphLoop) != null ? _f : false,
             scheduleType: (_g = this.draft.scheduleType) != null ? _g : "manual",
             scheduleTime: (_h = this.draft.scheduleTime) != null ? _h : nowTimeString(),
@@ -3114,7 +3119,7 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
     new import_obsidian.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       const agents = this.plugin.availableAgents;
       agents.forEach((a) => dd.addOption(a.value, a.label));
-      const current = this.plugin.settings.defaultAgent || "general";
+      const current = this.plugin.getEffectiveAgent();
       if (current && !agents.find((a) => a.value === current)) {
         dd.addOption(current, current);
       }

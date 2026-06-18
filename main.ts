@@ -145,10 +145,8 @@ interface AutoOCSettings {
 // No hardcoded models: load dynamically with `opencode models`.
 const FALLBACK_MODELS: { value: string; label: string }[] = [];
 const FALLBACK_AGENTS: { value: string; label: string }[] = [
-  { value: "general", label: "general" },
   { value: "build", label: "build" },
   { value: "plan", label: "plan" },
-  { value: "explore", label: "explore" },
 ];
 
 function stripAnsi(text: string): string {
@@ -201,7 +199,7 @@ function fetchAgentsSync(opencodePath: string, cwd?: string): { value: string; l
     const agents = stripAnsi(out)
       .split("\n")
       .map((l) => l.trim())
-      .filter((l) => /^\S+\s+\(/.test(l))
+      .filter((l) => /^\S+\s+\(primary\)/.test(l))
       .map((l) => {
         const name = l.match(/^(\S+)\s+\(/)?.[1] ?? l.split(" ")[0];
         return { value: name, label: name };
@@ -218,7 +216,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   workflows: [],
   opencodePath: "opencode",
   defaultModel: "",
-  defaultAgent: "general",
+  defaultAgent: "build",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
@@ -724,12 +722,19 @@ export default class AutoOCPlugin extends Plugin {
     const agents = this.getAgentsForDirectory(cwd);
     if (agents.length > 0) {
       this.availableAgents = agents;
-      if (!this.settings.defaultAgent) {
-        this.settings.defaultAgent = "general";
+      if (!this.settings.defaultAgent || !agents.find((a) => a.value === this.settings.defaultAgent)) {
+        this.settings.defaultAgent = agents[0].value;
         void this.saveSettings();
       }
       this.view?.refresh();
     }
+  }
+
+  getEffectiveAgent(agent?: string): string {
+    const requested = agent || this.settings.defaultAgent;
+    if (requested && this.availableAgents.find((a) => a.value === requested)) return requested;
+    if (this.settings.defaultAgent && this.availableAgents.find((a) => a.value === this.settings.defaultAgent)) return this.settings.defaultAgent;
+    return this.availableAgents[0]?.value || "build";
   }
 
   getEffectiveDefaultModel(): string {
@@ -933,7 +938,7 @@ export default class AutoOCPlugin extends Plugin {
       prompt = `/ralph-loop ${prompt}`;
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
-    const agent = task.agent || this.settings.defaultAgent || "general";
+    const agent = this.getEffectiveAgent(task.agent);
     // --dangerously-skip-permissions prevents opencode from blocking on tool-approval prompts
     return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
   }
@@ -954,7 +959,7 @@ export default class AutoOCPlugin extends Plugin {
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const outFile = path.join(tmpDir, `autooc-eval-${evalId}.txt`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
-      const agent = this.settings.defaultAgent || "general";
+      const agent = this.getEffectiveAgent();
       const safePrompt = prompt.replace(/"/g, '\\"').replace(/'/g, "''");
       const safeCwd = cwd.replace(/'/g, "''");
 
@@ -1096,7 +1101,7 @@ export default class AutoOCPlugin extends Plugin {
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
       `$bin = '${bin.replace(/'/g, "''")}'`,
-      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
+      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${this.getEffectiveAgent(effectiveTask.agent).replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
       `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`,
     ].filter(line => line !== "").join("\n");
@@ -1642,7 +1647,7 @@ class AutoOCView extends ItemView {
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🤖 ${modelLabel}` });
-    meta.createEl("span", { text: `⚙️ ${task.agent || 'general'}` });
+    meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
 
     let scheduleText = "";
     if (task.scheduleType === "manual") {
@@ -1890,7 +1895,7 @@ class AutoOCView extends ItemView {
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
       const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
       taskMeta.createSpan({ text: `🤖 ${modelLabel || "(no model)"}` });
-      taskMeta.createSpan({ text: `⚙️ ${task.agent || "general"}` });
+      taskMeta.createSpan({ text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
       if (task.branch) taskMeta.createSpan({ text: `🌿 ${task.branch}${task.createBranch ? " (create)" : ""}` });
       if (task.workingDirectory) taskMeta.createSpan({ text: `📂 ${task.workingDirectory}` });
       if (task.lastRun) taskMeta.createSpan({ text: `⏱ ${formatDateTime(task.lastRun)}` });
@@ -2050,7 +2055,7 @@ class CreateTaskModal extends Modal {
             name: "",
             prompt: "",
             model: plugin.getEffectiveDefaultModel(),
-            agent: plugin.settings.defaultAgent || "general",
+            agent: plugin.getEffectiveAgent(),
             useRalphLoop: false,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
@@ -2157,7 +2162,7 @@ class CreateTaskModal extends Modal {
       .setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`)
       .addDropdown((dd) => {
         projectAgents.forEach((a) => dd.addOption(a.value, a.label));
-        const current = this.draft.agent ?? (this.plugin.settings.defaultAgent || "general");
+        const current = this.draft.agent ?? this.plugin.getEffectiveAgent();
         if (!current && projectAgents.length === 0) {
           dd.addOption("", "(no agents; tap refresh)");
         } else if (current && !projectAgents.find((a) => a.value === current)) {
@@ -2341,7 +2346,7 @@ class CreateTaskModal extends Modal {
               name: this.draft.name!,
               prompt: this.draft.prompt!,
               model: this.draft.model!,
-              agent: this.draft.agent || "general",
+              agent: this.plugin.getEffectiveAgent(this.draft.agent),
               useRalphLoop: this.draft.useRalphLoop ?? false,
               scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
@@ -3599,7 +3604,7 @@ class AutoOCSettingTab extends PluginSettingTab {
       .addDropdown((dd) => {
         const agents = this.plugin.availableAgents;
         agents.forEach((a) => dd.addOption(a.value, a.label));
-        const current = this.plugin.settings.defaultAgent || "general";
+        const current = this.plugin.getEffectiveAgent();
         if (current && !agents.find((a) => a.value === current)) {
           dd.addOption(current, current);
         }
