@@ -206,6 +206,9 @@ var REMOTE_FILE_URLS = {
   manifest: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`,
   styles: `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/styles.css`
 };
+function noCacheUrl(url) {
+  return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
+}
 function compareVersions(a, b) {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
@@ -763,7 +766,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     var _a, _b;
     try {
       this.updateCheckError = null;
-      const res = await fetch(REMOTE_MANIFEST_URL, { cache: "no-cache" });
+      const res = await fetch(noCacheUrl(REMOTE_MANIFEST_URL), { cache: "reload" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       const remoteVersion = data == null ? void 0 : data.version;
@@ -801,15 +804,15 @@ Continue?`
     new import_obsidian.Notice("AutoOC: downloading update\u2026");
     try {
       const [mainJs, manifest, styles] = await Promise.all([
-        fetch(REMOTE_FILE_URLS.mainJs, { cache: "no-cache" }).then((r) => {
+        fetch(noCacheUrl(REMOTE_FILE_URLS.mainJs), { cache: "reload" }).then((r) => {
           if (!r.ok) throw new Error(`main.js HTTP ${r.status}`);
           return r.text();
         }),
-        fetch(REMOTE_FILE_URLS.manifest, { cache: "no-cache" }).then((r) => {
+        fetch(noCacheUrl(REMOTE_FILE_URLS.manifest), { cache: "reload" }).then((r) => {
           if (!r.ok) throw new Error(`manifest.json HTTP ${r.status}`);
           return r.text();
         }),
-        fetch(REMOTE_FILE_URLS.styles, { cache: "no-cache" }).then((r) => {
+        fetch(noCacheUrl(REMOTE_FILE_URLS.styles), { cache: "reload" }).then((r) => {
           if (!r.ok) throw new Error(`styles.css HTTP ${r.status}`);
           return r.text();
         })
