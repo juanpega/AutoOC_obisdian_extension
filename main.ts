@@ -1345,7 +1345,9 @@ export default class AutoOCPlugin extends Plugin {
           taskOverrides.createBranch = false;
         }
 
-        if (wf.handoffOutput && prevTask.output && prevTask.output.trim()) {
+        // handoffOutput defaults to true for backwards compatibility (undefined = true)
+        const handoffEnabled = wf.handoffOutput !== false;
+        if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
           // Strip AutoOC markers and stderr noise so the AI only sees real output
           const cleanOutput = prevTask.output
             .replace(/\[código de salida:.*?\]/g, "")
@@ -1358,6 +1360,7 @@ export default class AutoOCPlugin extends Plugin {
             .trim();
           const contextBlock = `\n\n--- Context from previous task: "${prevTask.name}" ---\n${cleanOutput.slice(0, 2000)}\n--- End of context ---`;
           taskOverrides.prompt = `${task.prompt}${contextBlock}`;
+          new Notice(`AutoOC: ↪ Passing context from "${prevTask.name}" to "${task.name}"`);
         }
       }
     }
@@ -2397,7 +2400,7 @@ class CreateWorkflowModal extends Modal {
     this.editWorkflow = editWorkflow;
     this.draft = editWorkflow
       ? { ...editWorkflow }
-      : { name: "", description: "", handoffBranch: false, handoffOutput: false, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
+      : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
     this.selectedTaskIds = editWorkflow
       ? editWorkflow.steps.map((s) => s.taskId)
       : [];

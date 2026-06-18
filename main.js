@@ -1256,7 +1256,8 @@ ${stderr}` : "")).trim();
           taskOverrides.branch = prevTask.branch;
           taskOverrides.createBranch = false;
         }
-        if (wf.handoffOutput && prevTask.output && prevTask.output.trim()) {
+        const handoffEnabled = wf.handoffOutput !== false;
+        if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
           const cleanOutput = prevTask.output.replace(/\[código de salida:.*?\]/g, "").replace(/\[iniciando proceso desacoplado…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\n\[stderr\][\s\S]*?(?=\n\[|$)/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
           const contextBlock = `
 
@@ -1264,6 +1265,7 @@ ${stderr}` : "")).trim();
 ${cleanOutput.slice(0, 2e3)}
 --- End of context ---`;
           taskOverrides.prompt = `${task.prompt}${contextBlock}`;
+          new import_obsidian.Notice(`AutoOC: \u21AA Passing context from "${prevTask.name}" to "${task.name}"`);
         }
       }
     }
@@ -2120,7 +2122,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     super(app);
     this.plugin = plugin;
     this.editWorkflow = editWorkflow;
-    this.draft = editWorkflow ? { ...editWorkflow } : { name: "", description: "", handoffBranch: false, handoffOutput: false, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
+    this.draft = editWorkflow ? { ...editWorkflow } : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
     this.selectedTaskIds = editWorkflow ? editWorkflow.steps.map((s) => s.taskId) : [];
     this.stepConfigs = {};
     if (editWorkflow) {
