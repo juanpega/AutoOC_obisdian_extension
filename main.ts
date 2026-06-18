@@ -221,7 +221,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   defaultAgent: "general",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
-  cmdTemplate: '{opencode} run --model {model} "{prompt}"',
+  cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 1800,  // 30 min por defecto
   logsEnabled: true,
   maxLogsPerTask: 50,
@@ -926,7 +926,7 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
-  // Returns the args array exactly as tool.py does: ["opencode", "run", prompt, "-m", model]
+  // Keep CLI options before "--" so prompt text cannot be parsed as opencode flags.
   buildArgs(task: ScheduledTask): string[] {
     let prompt = task.prompt;
     if (task.useRalphLoop) {
@@ -935,7 +935,7 @@ export default class AutoOCPlugin extends Plugin {
     const bin = resolveOpencodeBin(this.settings.opencodePath);
     const agent = task.agent || this.settings.defaultAgent || "general";
     // --dangerously-skip-permissions prevents opencode from blocking on tool-approval prompts
-    return [bin, "run", prompt, "-m", task.model, "--agent", agent, "--dangerously-skip-permissions"];
+    return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
   }
 
   // Human-readable command string for the preview modal
@@ -967,7 +967,7 @@ export default class AutoOCPlugin extends Plugin {
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
-        `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','${safePrompt}','-m','${model}','--agent','${agent}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+        `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','-m','${model}','--agent','${agent}','--dangerously-skip-permissions','--','${safePrompt}' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
         `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
         `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
@@ -1042,9 +1042,12 @@ export default class AutoOCPlugin extends Plugin {
     new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(effectiveTask);
-    const bin   = args[0]; // opencode.cmd full path
-    const prompt = args[2];
-    const model  = args[4];
+    const bin = args[0]; // opencode.cmd full path
+    let prompt = effectiveTask.prompt;
+    if (effectiveTask.useRalphLoop) {
+      prompt = `/ralph-loop ${prompt}`;
+    }
+    const model = effectiveTask.model;
     const preparedPrompt = prompt
       .replace(/\r?\n\s*[-*]\s+/g, "; ")
       .replace(/\r?\n+/g, "; ")
@@ -1093,7 +1096,7 @@ export default class AutoOCPlugin extends Plugin {
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
       `$bin = '${bin.replace(/'/g, "''")}'`,
-      `$argList = @('run',$prompt,'-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions')`,
+      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${(effectiveTask.agent || this.settings.defaultAgent || "general").replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
       `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`,
     ].filter(line => line !== "").join("\n");
@@ -3366,7 +3369,7 @@ class DiagnosticModal extends Modal {
           `$env:HOME        = '${process.env.USERPROFILE}'`,
           `$outTmp = [System.IO.Path]::GetTempFileName()`,
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
-          `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','di hola','-m','${model}','--dangerously-skip-permissions' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
+          `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','-m','${model}','--dangerously-skip-permissions','--','di hola' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
           `$out = (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
           `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "\nDONE:" + $p.ExitCode)`,
