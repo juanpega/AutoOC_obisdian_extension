@@ -791,6 +791,10 @@ export default class AutoOCPlugin extends Plugin {
         wf.scheduleDays = [];
         changed = true;
       }
+      if (wf.handoffOutput !== true) {
+        wf.handoffOutput = true;
+        changed = true;
+      }
     }
     if (!this.settings.defaultModel) {
       this.settings.defaultModel = this.availableModels[0]?.value ?? "";
@@ -1053,7 +1057,10 @@ export default class AutoOCPlugin extends Plugin {
       prompt = `/ralph-loop ${prompt}`;
     }
     const model = effectiveTask.model;
-    const preparedPrompt = prompt.trim();
+    const preparedPrompt = prompt
+      .replace(/\r?\n+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
 
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
@@ -1345,8 +1352,8 @@ export default class AutoOCPlugin extends Plugin {
           taskOverrides.createBranch = false;
         }
 
-        // handoffOutput defaults to true for backwards compatibility (undefined = true)
-        const handoffEnabled = wf.handoffOutput !== false;
+        // Output handoff is enabled by default so workflow steps can build on each other.
+        const handoffEnabled = true;
         if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
           // Strip AutoOC markers and stderr noise so the AI only sees real output
           const cleanOutput = prevTask.output
@@ -1358,9 +1365,14 @@ export default class AutoOCPlugin extends Plugin {
             .replace(/\.{3,}/g, "")  // heartbeat dots
             .replace(/\n{3,}/g, "\n\n")
             .trim();
-          const contextBlock = `\n\n--- Context from previous task: "${prevTask.name}" ---\n${cleanOutput.slice(0, 2000)}\n--- End of context ---`;
-          taskOverrides.prompt = `${task.prompt}${contextBlock}`;
-          new Notice(`AutoOC: ↪ Passing context from "${prevTask.name}" to "${task.name}"`);
+          if (cleanOutput) {
+            const contextText = cleanOutput.slice(0, 2000);
+            const contextBlock = ` Previous task output from "${prevTask.name}" to use as context: ${contextText} End of previous task output.`;
+            taskOverrides.prompt = `${task.prompt}${contextBlock}`;
+            new Notice(`AutoOC: ↪ Passing context from "${prevTask.name}" to "${task.name}" (${contextText.length} chars)`);
+          } else {
+            new Notice(`AutoOC: handoff skipped — previous output was empty after filtering.`);
+          }
         }
       }
     }
