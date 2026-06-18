@@ -1053,11 +1053,7 @@ export default class AutoOCPlugin extends Plugin {
       prompt = `/ralph-loop ${prompt}`;
     }
     const model = effectiveTask.model;
-    const preparedPrompt = prompt
-      .replace(/\r?\n\s*[-*]\s+/g, "; ")
-      .replace(/\r?\n+/g, "; ")
-      .replace(/\s+/g, " ")
-      .trim();
+    const preparedPrompt = prompt.trim();
 
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
@@ -1350,7 +1346,17 @@ export default class AutoOCPlugin extends Plugin {
         }
 
         if (wf.handoffOutput && prevTask.output && prevTask.output.trim()) {
-          const contextBlock = `\n\n[Context from previous task "${prevTask.name}":\n${prevTask.output.slice(0, 2000)}\n---\n]`;
+          // Strip AutoOC markers and stderr noise so the AI only sees real output
+          const cleanOutput = prevTask.output
+            .replace(/\[código de salida:.*?\]/g, "")
+            .replace(/\[iniciando proceso desacoplado…\]/g, "")
+            .replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "")
+            .replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "")
+            .replace(/\n\[stderr\][\s\S]*?(?=\n\[|$)/g, "")
+            .replace(/\.{3,}/g, "")  // heartbeat dots
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+          const contextBlock = `\n\n--- Context from previous task: "${prevTask.name}" ---\n${cleanOutput.slice(0, 2000)}\n--- End of context ---`;
           taskOverrides.prompt = `${task.prompt}${contextBlock}`;
         }
       }
