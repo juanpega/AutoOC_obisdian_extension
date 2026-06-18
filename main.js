@@ -959,7 +959,7 @@ DONE:" + $p.ExitCode + "
       prompt = `/ralph-loop ${prompt}`;
     }
     const model = effectiveTask.model;
-    const preparedPrompt = prompt.replace(/\r?\n\s*[-*]\s+/g, "; ").replace(/\r?\n+/g, "; ").replace(/\s+/g, " ").trim();
+    const preparedPrompt = prompt.trim();
     const tmpDir = require("os").tmpdir();
     const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
     const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
@@ -1257,12 +1257,12 @@ ${stderr}` : "")).trim();
           taskOverrides.createBranch = false;
         }
         if (wf.handoffOutput && prevTask.output && prevTask.output.trim()) {
+          const cleanOutput = prevTask.output.replace(/\[código de salida:.*?\]/g, "").replace(/\[iniciando proceso desacoplado…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\n\[stderr\][\s\S]*?(?=\n\[|$)/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
           const contextBlock = `
 
-[Context from previous task "${prevTask.name}":
-${prevTask.output.slice(0, 2e3)}
----
-]`;
+--- Context from previous task: "${prevTask.name}" ---
+${cleanOutput.slice(0, 2e3)}
+--- End of context ---`;
           taskOverrides.prompt = `${task.prompt}${contextBlock}`;
         }
       }
