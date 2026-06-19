@@ -154,8 +154,8 @@ var DEFAULT_SETTINGS = {
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
-  taskTimeoutSeconds: 1800,
-  // 30 min por defecto
+  taskTimeoutSeconds: 7200,
+  // 2 h por defecto
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30
@@ -164,6 +164,7 @@ var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
 var INITIAL_DUE_CHECK_DELAY_MS = 3e4;
 var DUE_LAUNCH_GAP_MS = 1e4;
+var DEFAULT_TASK_TIMEOUT_SECONDS = 7200;
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -247,6 +248,58 @@ function normalizeCommandOutput(text) {
     }
   }
   return cleaned.trim();
+}
+function extractTouchedFiles(trace) {
+  const files = /* @__PURE__ */ new Set();
+  for (const line of trace.split(/\r?\n/)) {
+    const match = line.match(/^[←→]\s+(?:Edit|Write|Read)\s+(.+)$/) || line.match(/^Index:\s+(.+)$/);
+    if (match == null ? void 0 : match[1]) files.add(match[1].trim());
+  }
+  return [...files];
+}
+function formatTaskOutput(stdout, stderr) {
+  const cleanStdout = normalizeCommandOutput(stdout);
+  const cleanStderr = normalizeCommandOutput(stderr);
+  const parts = [];
+  if (cleanStdout) {
+    parts.push(`## Respuesta
+
+${cleanStdout}`);
+  }
+  const touchedFiles = extractTouchedFiles(cleanStderr);
+  if (touchedFiles.length > 0) {
+    parts.push(`## Archivos tocados
+
+${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
+  }
+  if (cleanStderr) {
+    parts.push(`## OpenCode trace
+
+\`\`\`text
+${cleanStderr}
+\`\`\``);
+  }
+  return parts.join("\n\n---\n\n").trim();
+}
+function extractSection(output, title) {
+  const match = output.match(new RegExp(`^## ${title}\\s*\\n\\s*([\\s\\S]*?)(?:\\n\\n---\\n\\n## |$)`, "m"));
+  return match ? match[1].trim() : "";
+}
+function cleanWorkflowContext(output) {
+  if (!output) return "";
+  return output.replace(/\[código de salida:.*?\]/g, "").replace(/\[iniciando proceso desacoplado…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
+}
+function extractContextForHandoff(output) {
+  const cleaned = cleanWorkflowContext(output);
+  if (!cleaned) return "";
+  const response = extractSection(cleaned, "Respuesta");
+  const touchedFiles = extractSection(cleaned, "Archivos tocados");
+  const trace = extractSection(cleaned, "OpenCode trace").replace(/^```text\s*/, "").replace(/```$/, "").trim();
+  const parts = [];
+  if (response) parts.push(`Response: ${response}`);
+  if (touchedFiles) parts.push(`Touched files: ${touchedFiles}`);
+  if (trace) parts.push(`OpenCode trace: ${trace}`);
+  return (parts.length > 0 ? parts.join("\n\n") : cleaned).slice(0, 6e3).trim();
 }
 function formatLogContent(text) {
   if (!text) return "";
@@ -725,6 +778,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.settings.defaultModel = (_b = (_a = this.availableModels[0]) == null ? void 0 : _a.value) != null ? _b : "";
       changed = true;
     }
+    if (this.settings.taskTimeoutSeconds === void 0 || this.settings.taskTimeoutSeconds > 0 && this.settings.taskTimeoutSeconds < 1800) {
+      this.settings.taskTimeoutSeconds = DEFAULT_TASK_TIMEOUT_SECONDS;
+      changed = true;
+    }
     if (changed) {
       await this.saveData(this.settings);
     }
@@ -1022,48 +1079,23 @@ DONE:" + $p.ExitCode + "
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
-    const timeoutSeconds = (_c = this.settings.taskTimeoutSeconds) != null ? _c : 1800;
+    const timeoutSeconds = (_c = this.settings.taskTimeoutSeconds) != null ? _c : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
+    let timeoutWarned = false;
     const pollHandle = setInterval(async () => {
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         clearInterval(pollHandle);
         return;
       }
-      if (timeoutEnabled && Date.now() - startedAt > timeoutMs) {
-        clearInterval(pollHandle);
-        try {
-          fs2.unlinkSync(outFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(errFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(doneFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(promptFile);
-        } catch (e) {
-        }
+      if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
+        timeoutWarned = true;
         t.output += `
-[\u23F1 timeout: ${timeoutSeconds}s superados]`;
-        t.status = "failed";
-        if (this.settings.logsEnabled) {
-          saveLogToFile(vaultBasePath, task.id, t.output);
-          cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
-          cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
-        }
+[\u23F1 timeout warning: ${timeoutSeconds}s superados; sigo esperando el resultado final]`;
         await this.saveSettings();
-        new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" super\xF3 el timeout.`);
-        if (onComplete) {
-          await onComplete(t, -1);
-        }
-        return;
+        new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" super\xF3 ${timeoutSeconds}s; sigo esperando.`);
       }
       if (!fs2.existsSync(doneFile)) {
         t.output += ".";
@@ -1096,10 +1128,7 @@ DONE:" + $p.ExitCode + "
       } catch (e) {
       }
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
-      const output = (stdout + (stderr.trim() ? `
-[stderr]
-${stderr}` : "")).trim();
-      const normalized = normalizeCommandOutput(output);
+      const normalized = formatTaskOutput(stdout, stderr);
       t.output = normalized || "(sin output)";
       if (exitCode !== 0) {
         t.status = "failed";
@@ -1262,9 +1291,9 @@ ${stderr}` : "")).trim();
         }
         const handoffEnabled = true;
         if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
-          const cleanOutput = prevTask.output.replace(/\[código de salida:.*?\]/g, "").replace(/\[iniciando proceso desacoplado…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\n\[stderr\][\s\S]*?(?=\n\[|$)/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
+          const cleanOutput = extractContextForHandoff(prevTask.output);
           if (cleanOutput) {
-            const contextText = cleanOutput.slice(0, 2e3);
+            const contextText = cleanOutput;
             const contextBlock = ` Previous task output from "${prevTask.name}" to use as context: ${contextText} End of previous task output.`;
             taskOverrides.prompt = `${task.prompt}${contextBlock}`;
             new import_obsidian.Notice(`AutoOC: \u21AA Passing context from "${prevTask.name}" to "${task.name}" (${contextText.length} chars)`);
@@ -3041,10 +3070,10 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("If process doesn't finish in this time, it's automatically killed. Default 1800 s (30 min). Use 0 to disable timeout.").addText(
+    new import_obsidian.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
       (text) => {
         var _a;
-        return text.setPlaceholder("1800").setValue(String((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : 1800)).onChange(async (v) => {
+        return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.taskTimeoutSeconds = n;

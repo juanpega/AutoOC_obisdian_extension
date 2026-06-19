@@ -220,7 +220,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
-  taskTimeoutSeconds: 1800,  // 30 min por defecto
+  taskTimeoutSeconds: 7200,  // 2 h por defecto
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
@@ -230,6 +230,7 @@ export const VIEW_TYPE = "auto-oc-view";
 const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
 const INITIAL_DUE_CHECK_DELAY_MS = 30_000;
 const DUE_LAUNCH_GAP_MS = 10_000;
+const DEFAULT_TASK_TIMEOUT_SECONDS = 7200;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
@@ -342,6 +343,69 @@ function normalizeCommandOutput(text: string): string {
   }
 
   return cleaned.trim();
+}
+
+function extractTouchedFiles(trace: string): string[] {
+  const files = new Set<string>();
+  for (const line of trace.split(/\r?\n/)) {
+    const match = line.match(/^[←→]\s+(?:Edit|Write|Read)\s+(.+)$/) || line.match(/^Index:\s+(.+)$/);
+    if (match?.[1]) files.add(match[1].trim());
+  }
+  return [...files];
+}
+
+function formatTaskOutput(stdout: string, stderr: string): string {
+  const cleanStdout = normalizeCommandOutput(stdout);
+  const cleanStderr = normalizeCommandOutput(stderr);
+  const parts: string[] = [];
+
+  if (cleanStdout) {
+    parts.push(`## Respuesta\n\n${cleanStdout}`);
+  }
+
+  const touchedFiles = extractTouchedFiles(cleanStderr);
+  if (touchedFiles.length > 0) {
+    parts.push(`## Archivos tocados\n\n${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
+  }
+
+  if (cleanStderr) {
+    parts.push(`## OpenCode trace\n\n\`\`\`text\n${cleanStderr}\n\`\`\``);
+  }
+
+  return parts.join("\n\n---\n\n").trim();
+}
+
+function extractSection(output: string, title: string): string {
+  const match = output.match(new RegExp(`^## ${title}\\s*\\n\\s*([\\s\\S]*?)(?:\\n\\n---\\n\\n## |$)`, "m"));
+  return match ? match[1].trim() : "";
+}
+
+function cleanWorkflowContext(output: string): string {
+  if (!output) return "";
+  return output
+    .replace(/\[código de salida:.*?\]/g, "")
+    .replace(/\[iniciando proceso desacoplado…\]/g, "")
+    .replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "")
+    .replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "")
+    .replace(/\.{3,}/g, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractContextForHandoff(output: string): string {
+  const cleaned = cleanWorkflowContext(output);
+  if (!cleaned) return "";
+
+  const response = extractSection(cleaned, "Respuesta");
+  const touchedFiles = extractSection(cleaned, "Archivos tocados");
+  const trace = extractSection(cleaned, "OpenCode trace").replace(/^```text\s*/, "").replace(/```$/, "").trim();
+  const parts: string[] = [];
+
+  if (response) parts.push(`Response: ${response}`);
+  if (touchedFiles) parts.push(`Touched files: ${touchedFiles}`);
+  if (trace) parts.push(`OpenCode trace: ${trace}`);
+
+  return (parts.length > 0 ? parts.join("\n\n") : cleaned).slice(0, 6000).trim();
 }
 
 function formatLogContent(text: string): string {
@@ -800,6 +864,10 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.defaultModel = this.availableModels[0]?.value ?? "";
       changed = true;
     }
+    if (this.settings.taskTimeoutSeconds === undefined || (this.settings.taskTimeoutSeconds > 0 && this.settings.taskTimeoutSeconds < 1800)) {
+      this.settings.taskTimeoutSeconds = DEFAULT_TASK_TIMEOUT_SECONDS;
+      changed = true;
+    }
     if (changed) {
       await this.saveData(this.settings);
     }
@@ -1116,36 +1184,23 @@ export default class AutoOCPlugin extends Plugin {
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => { /* best-effort */ } } as any);
 
-    const timeoutSeconds = this.settings.taskTimeoutSeconds ?? 1800;
+    const timeoutSeconds = this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1000;
     const startedAt = Date.now();
+    let timeoutWarned = false;
 
     // Poll the output file every 3 s
     const pollHandle = setInterval(async () => {
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) { clearInterval(pollHandle); return; }
 
-      // Timeout guard
-      if (timeoutEnabled && Date.now() - startedAt > timeoutMs) {
-        clearInterval(pollHandle);
-        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(errFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-        t.output += `\n[⏱ timeout: ${timeoutSeconds}s superados]`;
-        t.status = "failed";
-        if (this.settings.logsEnabled) {
-          saveLogToFile(vaultBasePath, task.id, t.output);
-          cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
-          cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
-        }
+      // Soft timeout: warn once, but keep polling because OpenCode may still finish successfully.
+      if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
+        timeoutWarned = true;
+        t.output += `\n[⏱ timeout warning: ${timeoutSeconds}s superados; sigo esperando el resultado final]`;
         await this.saveSettings();
-        new Notice(`AutoOC: ⏱ "${task.name}" superó el timeout.`);
-        if (onComplete) {
-          await onComplete(t, -1);
-        }
-        return;
+        new Notice(`AutoOC: ⏱ "${task.name}" superó ${timeoutSeconds}s; sigo esperando.`);
       }
 
       if (!fs.existsSync(doneFile)) {
@@ -1169,8 +1224,7 @@ export default class AutoOCPlugin extends Plugin {
       try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
 
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
-      const output = (stdout + (stderr.trim() ? `\n[stderr]\n${stderr}` : "")).trim();
-      const normalized = normalizeCommandOutput(output);
+      const normalized = formatTaskOutput(stdout, stderr);
 
       t.output = normalized || "(sin output)";
       if (exitCode !== 0) {
@@ -1355,18 +1409,9 @@ export default class AutoOCPlugin extends Plugin {
         // Output handoff is enabled by default so workflow steps can build on each other.
         const handoffEnabled = true;
         if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
-          // Strip AutoOC markers and stderr noise so the AI only sees real output
-          const cleanOutput = prevTask.output
-            .replace(/\[código de salida:.*?\]/g, "")
-            .replace(/\[iniciando proceso desacoplado…\]/g, "")
-            .replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "")
-            .replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "")
-            .replace(/\n\[stderr\][\s\S]*?(?=\n\[|$)/g, "")
-            .replace(/\.{3,}/g, "")  // heartbeat dots
-            .replace(/\n{3,}/g, "\n\n")
-            .trim();
+          const cleanOutput = extractContextForHandoff(prevTask.output);
           if (cleanOutput) {
-            const contextText = cleanOutput.slice(0, 2000);
+            const contextText = cleanOutput;
             const contextBlock = ` Previous task output from "${prevTask.name}" to use as context: ${contextText} End of previous task output.`;
             taskOverrides.prompt = `${task.prompt}${contextBlock}`;
             new Notice(`AutoOC: ↪ Passing context from "${prevTask.name}" to "${task.name}" (${contextText.length} chars)`);
@@ -3505,11 +3550,11 @@ class AutoOCSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName("Task Timeout (seconds)")
-      .setDesc("If process doesn't finish in this time, it's automatically killed. Default 1800 s (30 min). Use 0 to disable timeout.")
+      .setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.")
       .addText((text) =>
         text
-          .setPlaceholder("1800")
-          .setValue(String(this.plugin.settings.taskTimeoutSeconds ?? 1800))
+          .setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS))
+          .setValue(String(this.plugin.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS))
           .onChange(async (v) => {
             const n = parseInt(v, 10);
             if (!isNaN(n) && n >= 0) {
