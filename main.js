@@ -178,6 +178,22 @@ var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
 var INITIAL_DUE_CHECK_DELAY_MS = 3e4;
 var DUE_LAUNCH_GAP_MS = 1e4;
 var DEFAULT_TASK_TIMEOUT_SECONDS = 7200;
+function isDayScheduleDue(now, scheduleTime, lastRun) {
+  const [hh, mm] = scheduleTime.split(":").map(Number);
+  const todayTarget = new Date(now);
+  todayTarget.setHours(hh, mm, 0, 0);
+  if (now < todayTarget) return false;
+  if (!lastRun) return true;
+  return new Date(lastRun).toDateString() !== now.toDateString();
+}
+function parseMonthDays(input) {
+  const trimmed = input.trim();
+  if (!trimmed) return [];
+  const parts = trimmed.split(/[;,\s]+/).filter(Boolean);
+  const days = parts.map((part) => Number(part));
+  if (days.some((day) => !Number.isInteger(day) || day < 1 || day > 31)) return null;
+  return [...new Set(days)].sort((a, b) => a - b);
+}
 function delay(ms) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
@@ -584,26 +600,22 @@ function isTaskDue(task) {
   if (task.status === "running") return false;
   if (task.scheduleType === "manual") return false;
   const now = /* @__PURE__ */ new Date();
-  const [hh, mm] = task.scheduleTime.split(":").map(Number);
   if (task.scheduleType === "once") {
     if (task.status !== "pending") return false;
     const target = /* @__PURE__ */ new Date(`${task.scheduleDate}T${task.scheduleTime}:00`);
     return now >= target;
   }
   if (task.scheduleType === "daily") {
-    const todayTarget = /* @__PURE__ */ new Date();
-    todayTarget.setHours(hh, mm, 0, 0);
-    if (now < todayTarget) return false;
-    if (!task.lastRun) return true;
-    return new Date(task.lastRun).toDateString() !== now.toDateString();
+    return isDayScheduleDue(now, task.scheduleTime, task.lastRun);
   }
   if (task.scheduleType === "weekly") {
     if (!task.scheduleDays.includes(now.getDay())) return false;
-    const todayTarget = /* @__PURE__ */ new Date();
-    todayTarget.setHours(hh, mm, 0, 0);
-    if (now < todayTarget) return false;
-    if (!task.lastRun) return true;
-    return new Date(task.lastRun).toDateString() !== now.toDateString();
+    return isDayScheduleDue(now, task.scheduleTime, task.lastRun);
+  }
+  if (task.scheduleType === "monthly") {
+    const monthDays = task.scheduleMonthDays || [];
+    if (!monthDays.includes(now.getDate())) return false;
+    return isDayScheduleDue(now, task.scheduleTime, task.lastRun);
   }
   return false;
 }
@@ -612,27 +624,23 @@ function isWorkflowDue(wf) {
   if (wf.steps.length === 0) return false;
   if (wf.scheduleType === "manual") return false;
   const now = /* @__PURE__ */ new Date();
-  const [hh, mm] = (wf.scheduleTime || "00:00").split(":").map(Number);
   if (wf.scheduleType === "once") {
     if (wf.status !== "pending") return false;
     const target = /* @__PURE__ */ new Date(`${wf.scheduleDate || ""}T${wf.scheduleTime || "00:00"}:00`);
     return now >= target;
   }
   if (wf.scheduleType === "daily") {
-    const todayTarget = /* @__PURE__ */ new Date();
-    todayTarget.setHours(hh, mm, 0, 0);
-    if (now < todayTarget) return false;
-    if (!wf.lastRun) return true;
-    return new Date(wf.lastRun).toDateString() !== now.toDateString();
+    return isDayScheduleDue(now, wf.scheduleTime || "00:00", wf.lastRun);
   }
   if (wf.scheduleType === "weekly") {
     const days = wf.scheduleDays || [];
     if (!days.includes(now.getDay())) return false;
-    const todayTarget = /* @__PURE__ */ new Date();
-    todayTarget.setHours(hh, mm, 0, 0);
-    if (now < todayTarget) return false;
-    if (!wf.lastRun) return true;
-    return new Date(wf.lastRun).toDateString() !== now.toDateString();
+    return isDayScheduleDue(now, wf.scheduleTime || "00:00", wf.lastRun);
+  }
+  if (wf.scheduleType === "monthly") {
+    const monthDays = wf.scheduleMonthDays || [];
+    if (!monthDays.includes(now.getDate())) return false;
+    return isDayScheduleDue(now, wf.scheduleTime || "00:00", wf.lastRun);
   }
   return false;
 }
@@ -785,6 +793,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 [stale running state cleared on plugin load]`;
         changed = true;
       }
+      if (!Array.isArray(task.scheduleMonthDays)) {
+        task.scheduleMonthDays = [];
+        changed = true;
+      }
     }
     if (!this.settings.workflows) this.settings.workflows = [];
     for (const wf of this.settings.workflows) {
@@ -797,6 +809,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         wf.scheduleTime = "00:00";
         wf.scheduleDate = "";
         wf.scheduleDays = [];
+        wf.scheduleMonthDays = [];
+        changed = true;
+      }
+      if (!Array.isArray(wf.scheduleMonthDays)) {
+        wf.scheduleMonthDays = [];
         changed = true;
       }
       if (wf.handoffOutput !== true) {
@@ -1171,7 +1188,7 @@ DONE:" + $exitCode + "
 [c\xF3digo de salida: ${exitCode}]`;
         new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" fall\xF3 (c\xF3digo ${exitCode}).`);
       } else {
-        t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" ? "pending" : "completed";
+        t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" ? "pending" : "completed";
         new import_obsidian.Notice(`AutoOC: \u2705 "${task.name}" completada.`);
       }
       if (this.settings.logsEnabled) {
@@ -1603,9 +1620,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
       scheduleText = `\u{1F4C5} ${task.scheduleDate} ${task.scheduleTime}`;
     } else if (task.scheduleType === "daily") {
       scheduleText = `\u{1F501} Every day at ${task.scheduleTime}`;
-    } else {
+    } else if (task.scheduleType === "weekly") {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
+    } else {
+      const days = (task.scheduleMonthDays || []).join(", ");
+      scheduleText = `\u{1F501} Day ${days || "no days"} of each month at ${task.scheduleTime}`;
     }
     meta.createEl("span", { text: scheduleText });
     if (task.lastRun) {
@@ -1873,6 +1893,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const wfScheduleTime = workflow.scheduleTime || "00:00";
     const wfScheduleDate = workflow.scheduleDate || "";
     const wfScheduleDays = workflow.scheduleDays || [];
+    const wfScheduleMonthDays = workflow.scheduleMonthDays || [];
     if (wfScheduleType === "manual" || wfScheduleType !== "once" || wfScheduleTime !== "00:00") {
       const schedMeta = details.createDiv("auto-oc-card-meta");
       if (wfScheduleType === "manual") {
@@ -1884,6 +1905,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
       } else if (wfScheduleType === "weekly") {
         const days = wfScheduleDays.map((d) => DAY_NAMES[d]).join(", ");
         schedMeta.createEl("span", { text: `\u{1F501} ${days || "no days"} at ${wfScheduleTime}` });
+      } else if (wfScheduleType === "monthly") {
+        const days = wfScheduleMonthDays.join(", ");
+        schedMeta.createEl("span", { text: `\u{1F501} Day ${days || "no days"} of each month at ${wfScheduleTime}` });
       }
     }
     const actions = details.createDiv("auto-oc-card-actions");
@@ -1945,7 +1969,8 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
       scheduleDate: todayString(),
-      scheduleDays: []
+      scheduleDays: [],
+      scheduleMonthDays: []
     };
   }
   onOpen() {
@@ -2073,6 +2098,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       dd.addOption("once", "Once (specific date and time)");
       dd.addOption("daily", "Daily (fixed time)");
       dd.addOption("weekly", "Weekdays");
+      dd.addOption("monthly", "Monthly (days of month)");
       dd.setValue((_a = this.draft.scheduleType) != null ? _a : "manual");
       dd.onChange((v) => {
         this.draft.scheduleType = v;
@@ -2111,6 +2137,16 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         });
       });
     }
+    if (this.draft.scheduleType === "monthly") {
+      new import_obsidian.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+        var _a;
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setPlaceholder("1, 15, 31").setValue(((_a = this.draft.scheduleMonthDays) != null ? _a : []).join(", ")).onChange((v) => {
+          const parsed = parseMonthDays(v);
+          this.draft.scheduleMonthDays = parsed != null ? parsed : [];
+        });
+      });
+    }
     if (this.draft.scheduleType !== "manual") {
       new import_obsidian.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a;
@@ -2120,7 +2156,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     }
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -2139,6 +2175,10 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_e = this.draft.scheduleDate) != null ? _e : "")) {
           new import_obsidian.Notice("Invalid date. Use YYYY-MM-DD format.");
+          return;
+        }
+        if (this.draft.scheduleType === "monthly" && ((_f = this.draft.scheduleMonthDays) != null ? _f : []).length === 0) {
+          new import_obsidian.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         if (this.editTask) {
@@ -2160,11 +2200,12 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             prompt: this.draft.prompt,
             model: this.draft.model,
             agent: this.plugin.getEffectiveAgent(this.draft.agent),
-            useRalphLoop: (_f = this.draft.useRalphLoop) != null ? _f : false,
-            scheduleType: (_g = this.draft.scheduleType) != null ? _g : "manual",
-            scheduleTime: (_h = this.draft.scheduleTime) != null ? _h : nowTimeString(),
-            scheduleDate: (_i = this.draft.scheduleDate) != null ? _i : "",
-            scheduleDays: (_j = this.draft.scheduleDays) != null ? _j : [],
+            useRalphLoop: (_g = this.draft.useRalphLoop) != null ? _g : false,
+            scheduleType: (_h = this.draft.scheduleType) != null ? _h : "manual",
+            scheduleTime: (_i = this.draft.scheduleTime) != null ? _i : nowTimeString(),
+            scheduleDate: (_j = this.draft.scheduleDate) != null ? _j : "",
+            scheduleDays: (_k = this.draft.scheduleDays) != null ? _k : [],
+            scheduleMonthDays: (_l = this.draft.scheduleMonthDays) != null ? _l : [],
             status: "pending",
             lastRun: "",
             output: "",
@@ -2191,7 +2232,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     super(app);
     this.plugin = plugin;
     this.editWorkflow = editWorkflow;
-    this.draft = editWorkflow ? { ...editWorkflow } : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [] };
+    this.draft = editWorkflow ? { ...editWorkflow } : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [], scheduleMonthDays: [] };
     this.selectedTaskIds = editWorkflow ? editWorkflow.steps.map((s) => s.taskId) : [];
     this.stepConfigs = {};
     if (editWorkflow) {
@@ -2218,7 +2259,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     guide.createEl("h4", { text: "How workflows work" });
     const guideList = guide.createEl("ol");
     guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
-    guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is manual, once, daily, weekly, completed, or pending." });
+    guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is manual, once, daily, weekly, monthly, completed, or pending." });
     guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
     guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
     guide.createEl("p", {
@@ -2262,6 +2303,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       dd.addOption("once", "Once (specific date and time)");
       dd.addOption("daily", "Daily (fixed time)");
       dd.addOption("weekly", "Weekdays");
+      dd.addOption("monthly", "Monthly (days of month)");
       dd.setValue((_a = this.draft.scheduleType) != null ? _a : "manual");
       dd.onChange((v) => {
         this.draft.scheduleType = v;
@@ -2300,6 +2342,16 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
         });
       });
     }
+    if (this.draft.scheduleType === "monthly") {
+      new import_obsidian.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+        var _a;
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setPlaceholder("1, 15, 31").setValue(((_a = this.draft.scheduleMonthDays) != null ? _a : []).join(", ")).onChange((v) => {
+          const parsed = parseMonthDays(v);
+          this.draft.scheduleMonthDays = parsed != null ? parsed : [];
+        });
+      });
+    }
     if (this.draft.scheduleType !== "manual") {
       new import_obsidian.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a;
@@ -2316,7 +2368,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     this.renderStepsList(stepsContainer);
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -2331,6 +2383,10 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_c = this.draft.scheduleDate) != null ? _c : "")) {
           new import_obsidian.Notice("Invalid date. Use YYYY-MM-DD format.");
+          return;
+        }
+        if (this.draft.scheduleType === "monthly" && ((_d = this.draft.scheduleMonthDays) != null ? _d : []).length === 0) {
+          new import_obsidian.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         const steps = this.selectedTaskIds.map((tid) => {
@@ -2353,30 +2409,32 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
               name: this.draft.name,
               description: this.draft.description,
               steps,
-              handoffBranch: (_d = this.draft.handoffBranch) != null ? _d : false,
-              handoffOutput: (_e = this.draft.handoffOutput) != null ? _e : false,
+              handoffBranch: (_e = this.draft.handoffBranch) != null ? _e : false,
+              handoffOutput: (_f = this.draft.handoffOutput) != null ? _f : false,
               status: wasRunning ? "running" : "pending",
-              scheduleType: (_f = this.draft.scheduleType) != null ? _f : "manual",
-              scheduleTime: (_g = this.draft.scheduleTime) != null ? _g : nowTimeString(),
-              scheduleDate: (_h = this.draft.scheduleDate) != null ? _h : "",
-              scheduleDays: (_i = this.draft.scheduleDays) != null ? _i : []
+              scheduleType: (_g = this.draft.scheduleType) != null ? _g : "manual",
+              scheduleTime: (_h = this.draft.scheduleTime) != null ? _h : nowTimeString(),
+              scheduleDate: (_i = this.draft.scheduleDate) != null ? _i : "",
+              scheduleDays: (_j = this.draft.scheduleDays) != null ? _j : [],
+              scheduleMonthDays: (_k = this.draft.scheduleMonthDays) != null ? _k : []
             };
           }
         } else {
           const workflow = {
             id: generateId(),
             name: this.draft.name,
-            description: (_j = this.draft.description) != null ? _j : "",
+            description: (_l = this.draft.description) != null ? _l : "",
             steps,
             status: "pending",
             currentStep: -1,
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-            handoffBranch: (_k = this.draft.handoffBranch) != null ? _k : false,
-            handoffOutput: (_l = this.draft.handoffOutput) != null ? _l : false,
-            scheduleType: (_m = this.draft.scheduleType) != null ? _m : "manual",
-            scheduleTime: (_n = this.draft.scheduleTime) != null ? _n : nowTimeString(),
-            scheduleDate: (_o = this.draft.scheduleDate) != null ? _o : todayString(),
-            scheduleDays: (_p = this.draft.scheduleDays) != null ? _p : []
+            handoffBranch: (_m = this.draft.handoffBranch) != null ? _m : false,
+            handoffOutput: (_n = this.draft.handoffOutput) != null ? _n : false,
+            scheduleType: (_o = this.draft.scheduleType) != null ? _o : "manual",
+            scheduleTime: (_p = this.draft.scheduleTime) != null ? _p : nowTimeString(),
+            scheduleDate: (_q = this.draft.scheduleDate) != null ? _q : todayString(),
+            scheduleDays: (_r = this.draft.scheduleDays) != null ? _r : [],
+            scheduleMonthDays: (_s = this.draft.scheduleMonthDays) != null ? _s : []
           };
           this.plugin.settings.workflows.push(workflow);
         }
