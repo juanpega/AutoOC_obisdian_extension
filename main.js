@@ -53,6 +53,9 @@ function resolveOpencodeBin(configured) {
 function psSingleQuoted(value) {
   return `'${value.replace(/'/g, "''")}'`;
 }
+function commandPreviewArg(value) {
+  return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
+}
 function openOpencodeCli(bin, cwd) {
   if (process.platform === "win32") {
     const command2 = `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
@@ -93,6 +96,16 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -WindowStyle Hidden -File """ & "
     } catch (e) {
     }
   }, 1e4);
+}
+function writeUtf8BomFile(filePath, content) {
+  fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
+}
+function psUtf8Prelude() {
+  return [
+    `$utf8NoBom = New-Object System.Text.UTF8Encoding($false)`,
+    `[Console]::OutputEncoding = $utf8NoBom`,
+    `$OutputEncoding = $utf8NoBom`
+  ];
 }
 var FALLBACK_MODELS = [];
 var FALLBACK_AGENTS = [
@@ -406,6 +419,23 @@ function decodeWindows1252(bytes) {
   return out;
 }
 function decodeCommandBuffer(bytes) {
+  if (bytes.length >= 2) {
+    if (bytes[0] === 255 && bytes[1] === 254) return bytes.toString("utf16le");
+    if (bytes[0] === 254 && bytes[1] === 255) return Buffer.from(bytes).swap16().toString("utf16le");
+  }
+  if (bytes.length > 4) {
+    let oddNulls = 0;
+    let evenNulls = 0;
+    for (let i = 0; i < bytes.length; i++) {
+      if (bytes[i] === 0) {
+        if (i % 2 === 0) evenNulls++;
+        else oddNulls++;
+      }
+    }
+    const nullRatio = (oddNulls + evenNulls) / bytes.length;
+    if (nullRatio > 0.2 && oddNulls > evenNulls * 4) return bytes.toString("utf16le");
+    if (nullRatio > 0.2 && evenNulls > oddNulls * 4) return Buffer.from(bytes).swap16().toString("utf16le");
+  }
   const utf8 = bytes.toString("utf8");
   if (countReplacementChars(utf8) === 0) return utf8;
   const win1252 = decodeWindows1252(bytes);
@@ -915,7 +945,7 @@ Continue?`
   // Human-readable command string for the preview modal
   buildCommand(task) {
     const args = this.buildArgs(task);
-    return args.join(" ");
+    return args.map(commandPreviewArg).join(" ");
   }
   // Quick evaluation via same detached PS + polling mechanism. Used for workflow
   // transition validation prompts.
@@ -928,9 +958,9 @@ Continue?`
       const outFile = path2.join(tmpDir, `autooc-eval-${evalId}.txt`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
-      const safePrompt = prompt.replace(/"/g, '\\"').replace(/'/g, "''");
       const safeCwd = cwd.replace(/'/g, "''");
       const psScript = [
+        ...psUtf8Prelude(),
         `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
         `$env:APPDATA     = '${process.env.APPDATA}'`,
         `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
@@ -939,18 +969,21 @@ Continue?`
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
-        `$p = Start-Process -FilePath '${bin.replace(/'/g, "''")}' -ArgumentList 'run','-m','${model}','--agent','${agent}','--dangerously-skip-permissions','--','${safePrompt}' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
-        `$stdout = Get-Content $outTmp -Raw -ErrorAction SilentlyContinue`,
-        `$stderr = Get-Content $errTmp -Raw -ErrorAction SilentlyContinue`,
+        `$bin = ${psSingleQuoted(bin)}`,
+        `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
+        `& $bin @argList > $outTmp 2> $errTmp`,
+        `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+        `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
+        `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
         `$combined = ($stdout + $(if($stderr){"
 " + $stderr}else{""})).Trim()`,
         `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', "
-DONE:" + $p.ExitCode + "
+DONE:" + $exitCode + "
 " + $combined)`
       ].join("\n");
       const psFile = path2.join(tmpDir, `autooc-eval-${evalId}.ps1`);
-      fs2.writeFileSync(psFile, psScript, "utf8");
+      writeUtf8BomFile(psFile, psScript);
       launchHiddenPS(psFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -1061,6 +1094,7 @@ DONE:" + $p.ExitCode + "
       }
     }
     const psScript = [
+      ...psUtf8Prelude(),
       `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
       `$env:APPDATA     = '${process.env.APPDATA}'`,
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
@@ -1068,14 +1102,15 @@ DONE:" + $p.ExitCode + "
       `$env:HOME        = '${process.env.USERPROFILE}'`,
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
-      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw`,
-      `$bin = '${bin.replace(/'/g, "''")}'`,
-      `$argList = @('run','-m','${model.replace(/'/g, "''")}','--agent','${this.getEffectiveAgent(effectiveTask.agent).replace(/'/g, "''")}','--dangerously-skip-permissions','--',$prompt)`,
-      `$p = Start-Process -FilePath $bin -ArgumentList $argList -RedirectStandardOutput '${outFile.replace(/'/g, "''")}' -RedirectStandardError '${errFile.replace(/'/g, "''")}' -Wait -NoNewWindow -PassThru`,
-      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$p.ExitCode, [System.Text.Encoding]::UTF8)`
+      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
+      `$bin = ${psSingleQuoted(bin)}`,
+      `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))},'--dangerously-skip-permissions','--',$prompt)`,
+      `& $bin @argList > '${outFile.replace(/'/g, "''")}' 2> '${errFile.replace(/'/g, "''")}'`,
+      `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`
     ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
-    fs2.writeFileSync(psScriptFile, psScript, "utf8");
+    writeUtf8BomFile(psScriptFile, psScript);
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
@@ -2973,6 +3008,7 @@ var DiagnosticModal = class extends import_obsidian.Modal {
         } catch (e) {
         }
         const psScript = [
+          ...psUtf8Prelude(),
           `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
           `$env:APPDATA     = '${process.env.APPDATA}'`,
           `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
@@ -2980,14 +3016,17 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           `$env:HOME        = '${process.env.USERPROFILE}'`,
           `$outTmp = [System.IO.Path]::GetTempFileName()`,
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
-          `$p = Start-Process -FilePath '${bin2.replace(/'/g, "''")}' -ArgumentList 'run','-m','${model}','--dangerously-skip-permissions','--','di hola' -RedirectStandardOutput $outTmp -RedirectStandardError $errTmp -Wait -NoNewWindow -PassThru`,
-          `$out = (Get-Content $outTmp -Raw -ErrorAction SilentlyContinue).Trim()`,
+          `$bin = ${psSingleQuoted(bin2)}`,
+          `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
+          `& $bin @argList > $outTmp 2> $errTmp`,
+          `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+          `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
           `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "
-DONE:" + $p.ExitCode)`
+DONE:" + $exitCode)`
         ].join("\n");
         const psFile = path2.join(osTmp, "autooc-diag.ps1");
-        fs2.writeFileSync(psFile, psScript, "utf8");
+        writeUtf8BomFile(psFile, psScript);
         if (this.logEl) this.logEl.textContent += `Script: ${psFile}
 
 `;
