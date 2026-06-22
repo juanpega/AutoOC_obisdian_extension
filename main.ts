@@ -1569,6 +1569,8 @@ class AutoOCView extends ItemView {
   private filterText: string = "";
   private filterStatus: string = "all";
   private currentTab: string = "tasks";
+  private expandedTasks: Set<string> = new Set();
+  private expandedWorkflows: Set<string> = new Set();
 
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
@@ -1771,7 +1773,8 @@ class AutoOCView extends ItemView {
 
     // Details Section (Collapsible)
     const details = card.createDiv("auto-oc-card-details");
-    details.style.display = "none";
+    const isExpanded = this.expandedTasks.has(task.id);
+    details.style.display = isExpanded ? "block" : "none";
 
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
@@ -1907,6 +1910,11 @@ class AutoOCView extends ItemView {
       const isHidden = details.style.display === "none";
       details.style.display = isHidden ? "block" : "none";
       card.classList.toggle("expanded", isHidden);
+      if (isHidden) {
+        this.expandedTasks.add(task.id);
+      } else {
+        this.expandedTasks.delete(task.id);
+      }
     };
   }
 
@@ -1980,7 +1988,8 @@ class AutoOCView extends ItemView {
     }
 
     const details = card.createDiv("auto-oc-card-details");
-    details.style.display = "none";
+    const isExpandedWf = this.expandedWorkflows.has(workflow.id);
+    details.style.display = isExpandedWf ? "block" : "none";
 
     // Description
     if (workflow.description) {
@@ -2170,6 +2179,11 @@ class AutoOCView extends ItemView {
       const isHidden = details.style.display === "none";
       details.style.display = isHidden ? "block" : "none";
       card.classList.toggle("expanded", isHidden);
+      if (isHidden) {
+        this.expandedWorkflows.add(workflow.id);
+      } else {
+        this.expandedWorkflows.delete(workflow.id);
+      }
     };
   }
 }

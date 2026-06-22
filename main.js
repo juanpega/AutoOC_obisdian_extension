@@ -1430,6 +1430,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.filterText = "";
     this.filterStatus = "all";
     this.currentTab = "tasks";
+    this.expandedTasks = /* @__PURE__ */ new Set();
+    this.expandedWorkflows = /* @__PURE__ */ new Set();
     this.plugin = plugin;
   }
   getViewType() {
@@ -1608,7 +1610,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       };
     }
     const details = card.createDiv("auto-oc-card-details");
-    details.style.display = "none";
+    const isExpanded = this.expandedTasks.has(task.id);
+    details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = (_b = (_a = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model;
     meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
@@ -1728,6 +1731,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const isHidden = details.style.display === "none";
       details.style.display = isHidden ? "block" : "none";
       card.classList.toggle("expanded", isHidden);
+      if (isHidden) {
+        this.expandedTasks.add(task.id);
+      } else {
+        this.expandedTasks.delete(task.id);
+      }
     };
   }
   // ── Workflows rendering ──────────────────────────────────────────────────
@@ -1790,7 +1798,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       };
     }
     const details = card.createDiv("auto-oc-card-details");
-    details.style.display = "none";
+    const isExpandedWf = this.expandedWorkflows.has(workflow.id);
+    details.style.display = isExpandedWf ? "block" : "none";
     if (workflow.description) {
       const desc = details.createDiv("auto-oc-prompt-preview");
       desc.createEl("span", { text: workflow.description.slice(0, 200) });
@@ -1952,6 +1961,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const isHidden = details.style.display === "none";
       details.style.display = isHidden ? "block" : "none";
       card.classList.toggle("expanded", isHidden);
+      if (isHidden) {
+        this.expandedWorkflows.add(workflow.id);
+      } else {
+        this.expandedWorkflows.delete(workflow.id);
+      }
     };
   }
 };
