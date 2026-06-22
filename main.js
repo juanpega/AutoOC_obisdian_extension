@@ -171,7 +171,8 @@ var DEFAULT_SETTINGS = {
   // 2 h default
   logsEnabled: true,
   maxLogsPerTask: 50,
-  logRetentionDays: 30
+  logRetentionDays: 30,
+  libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library"
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -237,6 +238,24 @@ var REMOTE_FILE_URLS = {
 function noCacheUrl(url) {
   return `${url}${url.includes("?") ? "&" : "?"}t=${Date.now()}`;
 }
+function normalizeLibraryUrl(input) {
+  if (!input) return DEFAULT_SETTINGS.libraryUrl;
+  if (input.startsWith("https://raw.githubusercontent.com/")) return input;
+  const match = input.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/]+)(?:\/(?:tree|blob)\/([^/]+)(?:\/(.*))?)?\/?$/
+  );
+  if (match) {
+    const [, owner, repo, branch = "main", subPath = "library"] = match;
+    return `https://raw.githubusercontent.com/${owner}/${repo}/${branch}/${subPath}`;
+  }
+  return input;
+}
+function getLibraryIndexUrl(baseUrl) {
+  return `${normalizeLibraryUrl(baseUrl).replace(/\/$/, "")}/index.json`;
+}
+function getLibraryFileUrl(baseUrl, fileName) {
+  return `${normalizeLibraryUrl(baseUrl).replace(/\/$/, "")}/${fileName}`;
+}
 function compareVersions(a, b) {
   const pa = a.split(".").map((n) => parseInt(n, 10) || 0);
   const pb = b.split(".").map((n) => parseInt(n, 10) || 0);
@@ -250,6 +269,45 @@ function compareVersions(a, b) {
 }
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+function toExportTask(task, exportId) {
+  return {
+    exportId,
+    name: task.name,
+    prompt: task.prompt,
+    scheduleType: task.scheduleType,
+    scheduleTime: task.scheduleTime,
+    scheduleDate: task.scheduleDate,
+    scheduleDays: task.scheduleDays,
+    scheduleMonthDays: task.scheduleMonthDays || [],
+    useRalphLoop: task.useRalphLoop,
+    agent: task.agent,
+    branch: task.branch,
+    createBranch: task.createBranch
+  };
+}
+function toExportWorkflow(workflow, exportId, taskExportIdMap) {
+  return {
+    exportId,
+    name: workflow.name,
+    description: workflow.description,
+    scheduleType: workflow.scheduleType,
+    scheduleTime: workflow.scheduleTime,
+    scheduleDate: workflow.scheduleDate,
+    scheduleDays: workflow.scheduleDays,
+    scheduleMonthDays: workflow.scheduleMonthDays || [],
+    handoffBranch: workflow.handoffBranch,
+    handoffOutput: workflow.handoffOutput,
+    steps: workflow.steps.map((step) => {
+      var _a;
+      return {
+        taskExportId: (_a = taskExportIdMap.get(step.taskId)) != null ? _a : "",
+        transitionMode: step.transitionMode,
+        evaluatePrompt: step.evaluatePrompt,
+        forceContinue: step.forceContinue
+      };
+    })
+  };
 }
 function formatDateTime(iso) {
   if (!iso) return "\u2014";
@@ -829,6 +887,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.settings.taskTimeoutSeconds = DEFAULT_TASK_TIMEOUT_SECONDS;
       changed = true;
     }
+    if (!this.settings.libraryUrl) {
+      this.settings.libraryUrl = DEFAULT_SETTINGS.libraryUrl;
+      changed = true;
+    }
     if (changed) {
       await this.saveData(this.settings);
     }
@@ -1296,6 +1358,154 @@ DONE:" + $exitCode + "
     await this.saveSettings();
     new import_obsidian.Notice(`Workflow "${copy.name}" duplicated.`);
   }
+  ensureUniqueTaskName(name) {
+    const existing = new Set(this.settings.tasks.map((t) => t.name));
+    let candidate = name;
+    let i = 1;
+    while (existing.has(candidate)) {
+      candidate = `${name} (imported ${i})`;
+      i++;
+    }
+    return candidate;
+  }
+  ensureUniqueWorkflowName(name) {
+    const existing = new Set(this.settings.workflows.map((w) => w.name));
+    let candidate = name;
+    let i = 1;
+    while (existing.has(candidate)) {
+      candidate = `${name} (imported ${i})`;
+      i++;
+    }
+    return candidate;
+  }
+  async exportToFile(tasks, workflows, name, description) {
+    const taskExportIdMap = /* @__PURE__ */ new Map();
+    const exportTasks = tasks.map((t, i) => {
+      const exportId = `task-${i}`;
+      taskExportIdMap.set(t.id, exportId);
+      return toExportTask(t, exportId);
+    });
+    const exportWorkflows = workflows.map(
+      (w, i) => toExportWorkflow(w, `wf-${i}`, taskExportIdMap)
+    );
+    const data = {
+      autoOCExport: {
+        schemaVersion: "1.0",
+        exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        pluginVersion: this.manifest.version,
+        name,
+        description
+      },
+      tasks: exportTasks,
+      workflows: exportWorkflows
+    };
+    const json = JSON.stringify(data, null, 2);
+    try {
+      const electron = window.require("electron");
+      const result = await electron.remote.dialog.showSaveDialog({
+        defaultPath: `autooc-export-${(/* @__PURE__ */ new Date()).toISOString().slice(0, 10)}.json`,
+        filters: [{ name: "JSON files", extensions: ["json"] }],
+        title: "Export AutoOC tasks and workflows"
+      });
+      if (result.canceled || !result.filePath) return;
+      fs.writeFileSync(result.filePath, json, "utf8");
+      new import_obsidian.Notice(
+        `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
+      );
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
+    }
+  }
+  buildExportSelectionPayload(selectedTaskIds, selectedWorkflowIds) {
+    const tasks = this.settings.tasks.filter((t) => selectedTaskIds.has(t.id));
+    const workflows = this.settings.workflows.filter((w) => selectedWorkflowIds.has(w.id));
+    const referencedTaskIds = /* @__PURE__ */ new Set();
+    for (const wf of workflows) {
+      for (const step of wf.steps) {
+        referencedTaskIds.add(step.taskId);
+      }
+    }
+    const autoIncludedTasks = this.settings.tasks.filter(
+      (t) => referencedTaskIds.has(t.id) && !selectedTaskIds.has(t.id)
+    );
+    return {
+      tasks: [...tasks, ...autoIncludedTasks],
+      workflows,
+      referencedTaskIds
+    };
+  }
+  async importFromFile(filePath) {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const data = JSON.parse(raw);
+    return this.importFromData(data);
+  }
+  async importFromData(data) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+    if (!data.autoOCExport || data.autoOCExport.schemaVersion !== "1.0") {
+      throw new Error("Invalid AutoOC export file (missing or unsupported schema).");
+    }
+    const exportIdToTaskId = /* @__PURE__ */ new Map();
+    let tasksImported = 0;
+    for (const et of data.tasks || []) {
+      const task = {
+        id: generateId(),
+        name: this.ensureUniqueTaskName(et.name),
+        prompt: et.prompt,
+        model: this.getEffectiveDefaultModel(),
+        agent: this.getEffectiveAgent(et.agent),
+        useRalphLoop: (_a = et.useRalphLoop) != null ? _a : false,
+        scheduleType: (_b = et.scheduleType) != null ? _b : "manual",
+        scheduleTime: (_c = et.scheduleTime) != null ? _c : nowTimeString(),
+        scheduleDate: (_d = et.scheduleDate) != null ? _d : "",
+        scheduleDays: (_e = et.scheduleDays) != null ? _e : [],
+        scheduleMonthDays: (_f = et.scheduleMonthDays) != null ? _f : [],
+        status: "pending",
+        lastRun: "",
+        output: "",
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        branch: et.branch,
+        createBranch: et.createBranch
+      };
+      this.settings.tasks.push(task);
+      exportIdToTaskId.set(et.exportId, task.id);
+      tasksImported++;
+    }
+    let workflowsImported = 0;
+    for (const ew of data.workflows || []) {
+      const steps = [];
+      for (const s of ew.steps || []) {
+        const taskId = exportIdToTaskId.get(s.taskExportId);
+        if (!taskId) continue;
+        steps.push({
+          taskId,
+          transitionMode: s.transitionMode,
+          evaluatePrompt: s.evaluatePrompt,
+          forceContinue: s.forceContinue
+        });
+      }
+      if (steps.length < 2) continue;
+      const workflow = {
+        id: generateId(),
+        name: this.ensureUniqueWorkflowName(ew.name),
+        description: (_g = ew.description) != null ? _g : "",
+        steps,
+        status: "pending",
+        currentStep: -1,
+        createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        handoffBranch: (_h = ew.handoffBranch) != null ? _h : false,
+        handoffOutput: (_i = ew.handoffOutput) != null ? _i : true,
+        scheduleType: (_j = ew.scheduleType) != null ? _j : "manual",
+        scheduleTime: (_k = ew.scheduleTime) != null ? _k : nowTimeString(),
+        scheduleDate: (_l = ew.scheduleDate) != null ? _l : "",
+        scheduleDays: (_m = ew.scheduleDays) != null ? _m : [],
+        scheduleMonthDays: (_n = ew.scheduleMonthDays) != null ? _n : []
+      };
+      this.settings.workflows.push(workflow);
+      workflowsImported++;
+    }
+    await this.saveSettings();
+    return { tasksImported, workflowsImported };
+  }
   async runWorkflow(workflow) {
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
@@ -1480,6 +1690,20 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: "auto-oc-tab-btn"
     });
     btnCli.onclick = () => this.openCli();
+    const spacer = tabBar.createDiv("auto-oc-tab-spacer");
+    spacer.style.flex = "1";
+    const btnExport = tabBar.createEl("button", {
+      text: "\u{1F4E4} Export",
+      cls: "auto-oc-tab-btn"
+    });
+    btnExport.title = "Export tasks and workflows to JSON";
+    btnExport.onclick = () => new ExportModal(this.app, this.plugin).open();
+    const btnImport = tabBar.createEl("button", {
+      text: "\u{1F4E5} Import",
+      cls: "auto-oc-tab-btn"
+    });
+    btnImport.title = "Import tasks and workflows from JSON";
+    btnImport.onclick = () => new ImportModal(this.app, this.plugin).open();
     if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
     if (this.currentTab === "workflows") {
@@ -2713,6 +2937,444 @@ Reply ONLY with YES or NO.`;
     this.contentEl.empty();
   }
 };
+var ExportModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.selectedTaskIds = /* @__PURE__ */ new Set();
+    this.selectedWorkflowIds = /* @__PURE__ */ new Set();
+    this.name = "";
+    this.description = "";
+    this.plugin = plugin;
+    for (const t of plugin.settings.tasks) this.selectedTaskIds.add(t.id);
+    for (const w of plugin.settings.workflows) this.selectedWorkflowIds.add(w.id);
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setAutoOCModalSize(this, 720);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", { text: "\u{1F4E4} Export Tasks & Workflows" });
+    contentEl.createEl("p", {
+      text: "Select the items you want to share. Selected workflows automatically include their referenced tasks so the file remains importable on another machine.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(contentEl).setName("Export name (optional)").addText((text) => {
+      text.setPlaceholder("My tasks").onChange((v) => this.name = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Description (optional)").addText((text) => {
+      text.setPlaceholder("Shared AutoOC configuration").onChange((v) => this.description = v);
+    });
+    contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4CB} Tasks");
+    const taskActions = contentEl.createDiv("auto-oc-export-actions");
+    taskActions.style.display = "flex";
+    taskActions.style.gap = "8px";
+    taskActions.style.marginBottom = "8px";
+    const taskList = contentEl.createDiv("auto-oc-export-list");
+    const renderTaskList = () => {
+      taskList.empty();
+      if (this.plugin.settings.tasks.length === 0) {
+        taskList.createEl("p", { text: "No tasks available.", cls: "auto-oc-empty" });
+        return;
+      }
+      for (const task of this.plugin.settings.tasks) {
+        const row = taskList.createDiv("auto-oc-export-item");
+        const label = row.createEl("label", { cls: "auto-oc-export-label" });
+        const cb = label.createEl("input");
+        cb.type = "checkbox";
+        cb.checked = this.selectedTaskIds.has(task.id);
+        cb.onchange = () => {
+          if (cb.checked) this.selectedTaskIds.add(task.id);
+          else this.selectedTaskIds.delete(task.id);
+          updateSummary();
+        };
+        label.createSpan({ text: ` ${task.name}` });
+        label.title = task.prompt.slice(0, 120) + (task.prompt.length > 120 ? "\u2026" : "");
+      }
+    };
+    renderTaskList();
+    const addSelectBtn = (parent, text, all, isTask) => {
+      parent.createEl("button", {
+        text,
+        cls: "auto-oc-btn-secondary"
+      }).onclick = () => {
+        const source = isTask ? this.plugin.settings.tasks : this.plugin.settings.workflows;
+        for (const item of source) {
+          const set = isTask ? this.selectedTaskIds : this.selectedWorkflowIds;
+          if (all) set.add(item.id);
+          else set.delete(item.id);
+        }
+        if (isTask) renderTaskList();
+        else renderWorkflowList();
+        updateSummary();
+      };
+    };
+    addSelectBtn(taskActions, "Select all", true, true);
+    addSelectBtn(taskActions, "Deselect all", false, true);
+    contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F517} Workflows");
+    const wfActions = contentEl.createDiv("auto-oc-export-actions");
+    wfActions.style.display = "flex";
+    wfActions.style.gap = "8px";
+    wfActions.style.marginBottom = "8px";
+    const workflowList = contentEl.createDiv("auto-oc-export-list");
+    const renderWorkflowList = () => {
+      workflowList.empty();
+      if (this.plugin.settings.workflows.length === 0) {
+        workflowList.createEl("p", { text: "No workflows available.", cls: "auto-oc-empty" });
+        return;
+      }
+      for (const wf of this.plugin.settings.workflows) {
+        const row = workflowList.createDiv("auto-oc-export-item");
+        const label = row.createEl("label", { cls: "auto-oc-export-label" });
+        const cb = label.createEl("input");
+        cb.type = "checkbox";
+        cb.checked = this.selectedWorkflowIds.has(wf.id);
+        cb.onchange = () => {
+          if (cb.checked) this.selectedWorkflowIds.add(wf.id);
+          else this.selectedWorkflowIds.delete(wf.id);
+          updateSummary();
+        };
+        label.createSpan({ text: ` ${wf.name}` });
+        const stepNames = wf.steps.map((s) => {
+          var _a, _b;
+          return (_b = (_a = this.plugin.settings.tasks.find((t) => t.id === s.taskId)) == null ? void 0 : _a.name) != null ? _b : "?";
+        }).join(" \u2192 ");
+        label.title = wf.description ? `${wf.description}
+${stepNames}` : stepNames;
+      }
+    };
+    renderWorkflowList();
+    addSelectBtn(wfActions, "Select all", true, false);
+    addSelectBtn(wfActions, "Deselect all", false, false);
+    const summary = contentEl.createDiv("auto-oc-export-summary");
+    summary.style.marginTop = "16px";
+    summary.style.fontSize = "0.85rem";
+    summary.style.color = "var(--text-muted)";
+    const updateSummary = () => {
+      const payload = this.plugin.buildExportSelectionPayload(
+        this.selectedTaskIds,
+        this.selectedWorkflowIds
+      );
+      const explicitTasks = this.plugin.settings.tasks.filter(
+        (t) => this.selectedTaskIds.has(t.id)
+      ).length;
+      const autoTasks = payload.tasks.length - explicitTasks;
+      summary.textContent = `Will export ${explicitTasks} selected task(s)` + (autoTasks > 0 ? ` + ${autoTasks} task(s) required by workflows` : "") + ` and ${payload.workflows.length} selected workflow(s).`;
+    };
+    updateSummary();
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("Save JSON\u2026").setCta().onClick(async () => {
+        const payload = this.plugin.buildExportSelectionPayload(
+          this.selectedTaskIds,
+          this.selectedWorkflowIds
+        );
+        if (payload.tasks.length === 0 && payload.workflows.length === 0) {
+          new import_obsidian.Notice("AutoOC: nothing selected to export.");
+          return;
+        }
+        await this.plugin.exportToFile(
+          payload.tasks,
+          payload.workflows,
+          this.name,
+          this.description
+        );
+        this.close();
+      })
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var ImportModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.filePath = null;
+    this.previewData = null;
+    this.previewEl = null;
+    this.sourceMode = "file";
+    this.libraryEntries = [];
+    this.libraryError = null;
+    this.selectedLibraryFile = null;
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setAutoOCModalSize(this, 720);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", { text: "\u{1F4E5} Import Tasks & Workflows" });
+    contentEl.createEl("p", {
+      text: "Import from a local JSON file or browse the shared library configured in settings. Imported items use this system's default model and agent when the saved agent is unavailable. Duplicate names are renamed automatically.",
+      cls: "setting-item-description"
+    });
+    const tabBar = contentEl.createDiv("auto-oc-tab-bar");
+    const btnFile = tabBar.createEl("button", {
+      text: "\u{1F4C1} From file",
+      cls: "auto-oc-tab-btn"
+    });
+    const btnLibrary = tabBar.createEl("button", {
+      text: "\u{1F310} Browse library",
+      cls: "auto-oc-tab-btn"
+    });
+    const panel = contentEl.createDiv("auto-oc-import-panel");
+    const renderPanel = () => {
+      btnFile.toggleClass("active", this.sourceMode === "file");
+      btnLibrary.toggleClass("active", this.sourceMode === "library");
+      panel.empty();
+      if (this.sourceMode === "file") {
+        this.renderFilePanel(panel);
+      } else {
+        this.renderLibraryPanel(panel);
+      }
+    };
+    btnFile.onclick = () => {
+      this.sourceMode = "file";
+      renderPanel();
+    };
+    btnLibrary.onclick = () => {
+      this.sourceMode = "library";
+      renderPanel();
+    };
+    this.previewEl = contentEl.createDiv("auto-oc-import-preview");
+    this.previewEl.style.marginTop = "16px";
+    const btnRow = contentEl.createDiv("auto-oc-import-actions");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "8px";
+    btnRow.style.marginTop = "16px";
+    const btnImport = btnRow.createEl("button", {
+      text: "Import",
+      cls: "auto-oc-btn-primary"
+    });
+    btnImport.disabled = !this.previewData;
+    btnImport.onclick = async () => {
+      if (!this.previewData) return;
+      btnImport.disabled = true;
+      btnImport.textContent = "Importing\u2026";
+      try {
+        const result = await this.plugin.importFromData(this.previewData);
+        new import_obsidian.Notice(
+          `AutoOC: imported ${result.tasksImported} task(s) and ${result.workflowsImported} workflow(s).`
+        );
+        this.close();
+      } catch (e) {
+        new import_obsidian.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
+        btnImport.disabled = false;
+        btnImport.textContent = "Import";
+      }
+    };
+    const btnCancel = btnRow.createEl("button", {
+      text: "Cancel",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnCancel.onclick = () => this.close();
+    this._importBtn = btnImport;
+    renderPanel();
+    this.renderPreview();
+  }
+  renderFilePanel(panel) {
+    new import_obsidian.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
+      (btn) => btn.setButtonText("Choose file\u2026").onClick(async () => {
+        const chosen = await this.chooseFile();
+        if (chosen) {
+          this.filePath = chosen;
+          this.selectedLibraryFile = null;
+          await this.loadFilePreview();
+        }
+      })
+    ).addText((text) => {
+      var _a;
+      text.setDisabled(true);
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setValue((_a = this.filePath) != null ? _a : "");
+    });
+  }
+  renderLibraryPanel(panel) {
+    var _a;
+    const resolvedUrl = normalizeLibraryUrl(this.plugin.settings.libraryUrl);
+    panel.createEl("div", {
+      text: `Library source: ${resolvedUrl}`,
+      cls: "setting-item-description"
+    });
+    panel.createEl("div", {
+      text: "You can change this URL in AutoOC settings.",
+      cls: "setting-item-description"
+    });
+    const loadRow = panel.createDiv("auto-oc-import-library-load");
+    loadRow.style.display = "flex";
+    loadRow.style.gap = "8px";
+    loadRow.style.marginTop = "12px";
+    loadRow.style.marginBottom = "12px";
+    const btnLoad = loadRow.createEl("button", {
+      text: "\u{1F504} Load library",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnLoad.onclick = async () => {
+      btnLoad.disabled = true;
+      btnLoad.textContent = "Loading\u2026";
+      await this.loadLibraryIndex();
+      btnLoad.disabled = false;
+      btnLoad.textContent = "\u{1F504} Load library";
+      this.renderLibraryPanel(panel);
+    };
+    const listContainer = panel.createDiv("auto-oc-import-library-list");
+    if (this.libraryError) {
+      listContainer.createEl("p", {
+        text: `Could not load library: ${this.libraryError}`,
+        cls: "auto-oc-empty"
+      });
+      return;
+    }
+    if (this.libraryEntries.length === 0) {
+      listContainer.createEl("p", {
+        text: "No library entries loaded yet. Click Load library.",
+        cls: "auto-oc-empty"
+      });
+      return;
+    }
+    listContainer.createEl("p", {
+      text: `${this.libraryEntries.length} item(s) available:`,
+      cls: "setting-item-description"
+    });
+    for (const entry of this.libraryEntries) {
+      const row = listContainer.createDiv("auto-oc-import-library-item");
+      row.style.padding = "6px 0";
+      const isSelected = this.selectedLibraryFile === entry.file;
+      const btn = row.createEl("button", {
+        text: isSelected ? "\u2713 " + entry.name : entry.name,
+        cls: isSelected ? "auto-oc-btn-primary" : "auto-oc-btn-secondary"
+      });
+      btn.style.width = "100%";
+      btn.style.textAlign = "left";
+      btn.title = (_a = entry.description) != null ? _a : entry.file;
+      btn.onclick = async () => {
+        this.selectedLibraryFile = entry.file;
+        await this.loadLibraryFile(entry.file);
+        this.renderLibraryPanel(panel);
+      };
+      if (entry.description) {
+        row.createEl("div", {
+          text: entry.description,
+          cls: "setting-item-description"
+        });
+      }
+    }
+  }
+  async chooseFile() {
+    try {
+      const electron = window.require("electron");
+      const result = await electron.remote.dialog.showOpenDialog({
+        properties: ["openFile"],
+        filters: [{ name: "JSON files", extensions: ["json"] }],
+        title: "Import AutoOC tasks and workflows"
+      });
+      if (!result.canceled && result.filePaths.length > 0) {
+        return result.filePaths[0];
+      }
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
+    }
+    return null;
+  }
+  async loadFilePreview() {
+    var _a, _b, _c, _d;
+    if (!this.filePath) return;
+    try {
+      const raw = fs.readFileSync(this.filePath, "utf8");
+      const data = JSON.parse(raw);
+      this.validateExport(data);
+      this.previewData = data;
+      new import_obsidian.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s).`);
+    } catch (e) {
+      this.previewData = null;
+      new import_obsidian.Notice(`AutoOC: could not read file \u2014 ${String(e)}`);
+    }
+    this.renderPreview();
+    this.updateImportButton();
+  }
+  async loadLibraryIndex() {
+    this.libraryError = null;
+    this.libraryEntries = [];
+    try {
+      const url = noCacheUrl(getLibraryIndexUrl(this.plugin.settings.libraryUrl));
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.library || !Array.isArray(data.library)) {
+        throw new Error("Invalid library index.");
+      }
+      this.libraryEntries = data.library;
+    } catch (e) {
+      this.libraryError = String(e);
+      new import_obsidian.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
+    }
+  }
+  async loadLibraryFile(fileName) {
+    var _a, _b, _c, _d;
+    try {
+      const url = noCacheUrl(getLibraryFileUrl(this.plugin.settings.libraryUrl, fileName));
+      const res = await fetch(url, { cache: "no-store" });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      this.validateExport(data);
+      this.previewData = data;
+      new import_obsidian.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s).`);
+    } catch (e) {
+      this.previewData = null;
+      new import_obsidian.Notice(`AutoOC: could not load file \u2014 ${String(e)}`);
+    }
+    this.renderPreview();
+    this.updateImportButton();
+  }
+  validateExport(data) {
+    if (!data.autoOCExport || data.autoOCExport.schemaVersion !== "1.0") {
+      throw new Error("Invalid AutoOC export file (missing or unsupported schema).");
+    }
+  }
+  updateImportButton() {
+    const btnImport = this._importBtn;
+    if (btnImport) {
+      btnImport.disabled = !this.previewData;
+      btnImport.textContent = "Import";
+    }
+  }
+  renderPreview() {
+    var _a, _b, _c, _d;
+    if (!this.previewEl) return;
+    this.previewEl.empty();
+    if (!this.previewData) {
+      this.previewEl.createEl("p", {
+        text: "No valid export loaded yet.",
+        cls: "auto-oc-empty"
+      });
+      return;
+    }
+    const box = this.previewEl.createDiv("auto-oc-import-preview-box");
+    box.style.background = "var(--background-secondary)";
+    box.style.padding = "12px";
+    box.style.borderRadius = "6px";
+    const meta = this.previewData.autoOCExport;
+    if (meta.name) {
+      box.createEl("div", { text: `Name: ${meta.name}`, cls: "setting-item-description" });
+    }
+    if (meta.description) {
+      box.createEl("div", { text: meta.description, cls: "setting-item-description" });
+    }
+    box.createEl("div", {
+      text: `Exported: ${formatDateTime(meta.exportedAt)} \xB7 Schema: ${meta.schemaVersion}`,
+      cls: "setting-item-description"
+    });
+    const counts = box.createEl("ul", { cls: "auto-oc-import-counts" });
+    counts.style.marginTop = "8px";
+    counts.style.marginBottom = "0";
+    counts.createEl("li", { text: `${(_b = (_a = this.previewData.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s)` });
+    counts.createEl("li", { text: `${(_d = (_c = this.previewData.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s)` });
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var LiveLogModal = class extends import_obsidian.Modal {
   constructor(app, task, plugin) {
     super(app);
@@ -3179,6 +3841,16 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
       (text) => text.setPlaceholder("C:\\Users\\GiJu236\\projects\\mi-proyecto").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
         this.plugin.settings.workingDirectory = v;
         await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Shared Library URL").setDesc(
+      `GitHub repo or raw URL used by the Import \u2192 Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.
+Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
+    ).addText(
+      (text) => text.setPlaceholder(DEFAULT_SETTINGS.libraryUrl).setValue(this.plugin.settings.libraryUrl).onChange(async (v) => {
+        this.plugin.settings.libraryUrl = v.trim();
+        await this.plugin.saveSettings();
+        this.display();
       })
     );
     new import_obsidian.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(

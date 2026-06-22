@@ -1,0 +1,10 @@
+{
+  "schemaVersion": "1.0",
+  "library": [
+    {
+      "name": "NVDA Price Alert",
+      "description": "Sample task that checks the NVDA stock price and alerts when it drops below $172.",
+      "file": "nvda-price-alert.json"
+    }
+  ]
+}
