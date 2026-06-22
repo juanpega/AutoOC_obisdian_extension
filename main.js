@@ -3273,30 +3273,21 @@ var ImportModal = class extends import_obsidian.Modal {
   }
   renderLibraryPanel(panel) {
     var _a;
-    const resolvedUrl = normalizeLibraryUrl(this.plugin.settings.libraryUrl);
-    panel.createEl("div", {
-      text: `Library source: ${resolvedUrl}`,
-      cls: "setting-item-description"
-    });
-    panel.createEl("div", {
-      text: "You can change this URL in AutoOC settings.",
-      cls: "setting-item-description"
-    });
+    panel.empty();
     const loadRow = panel.createDiv("auto-oc-import-library-load");
     loadRow.style.display = "flex";
     loadRow.style.gap = "8px";
-    loadRow.style.marginTop = "12px";
     loadRow.style.marginBottom = "12px";
+    const resolvedUrl = normalizeLibraryUrl(this.plugin.settings.libraryUrl);
     const btnLoad = loadRow.createEl("button", {
       text: "\u{1F504} Load library",
       cls: "auto-oc-btn-secondary"
     });
+    btnLoad.title = `Source: ${resolvedUrl}`;
     btnLoad.onclick = async () => {
       btnLoad.disabled = true;
       btnLoad.textContent = "Loading\u2026";
       await this.loadLibraryIndex();
-      btnLoad.disabled = false;
-      btnLoad.textContent = "\u{1F504} Load library";
       this.renderLibraryPanel(panel);
     };
     const listContainer = panel.createDiv("auto-oc-import-library-list");

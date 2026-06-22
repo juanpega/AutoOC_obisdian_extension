@@ -3832,32 +3832,23 @@ class ImportModal extends Modal {
   }
 
   private renderLibraryPanel(panel: HTMLElement) {
-    const resolvedUrl = normalizeLibraryUrl(this.plugin.settings.libraryUrl);
-    panel.createEl("div", {
-      text: `Library source: ${resolvedUrl}`,
-      cls: "setting-item-description",
-    });
-    panel.createEl("div", {
-      text: "You can change this URL in AutoOC settings.",
-      cls: "setting-item-description",
-    });
+    panel.empty();
 
     const loadRow = panel.createDiv("auto-oc-import-library-load");
     loadRow.style.display = "flex";
     loadRow.style.gap = "8px";
-    loadRow.style.marginTop = "12px";
     loadRow.style.marginBottom = "12px";
 
+    const resolvedUrl = normalizeLibraryUrl(this.plugin.settings.libraryUrl);
     const btnLoad = loadRow.createEl("button", {
       text: "🔄 Load library",
       cls: "auto-oc-btn-secondary",
     });
+    btnLoad.title = `Source: ${resolvedUrl}`;
     btnLoad.onclick = async () => {
       btnLoad.disabled = true;
       btnLoad.textContent = "Loading…";
       await this.loadLibraryIndex();
-      btnLoad.disabled = false;
-      btnLoad.textContent = "🔄 Load library";
       this.renderLibraryPanel(panel);
     };
 
