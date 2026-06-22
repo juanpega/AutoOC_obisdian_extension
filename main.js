@@ -168,13 +168,13 @@ var DEFAULT_SETTINGS = {
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 7200,
-  // 2 h por defecto
+  // 2 h default
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30
 };
 var VIEW_TYPE = "auto-oc-view";
-var DAY_NAMES = ["Dom", "Lun", "Mar", "Mi\xE9", "Jue", "Vie", "S\xE1b"];
+var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 var INITIAL_DUE_CHECK_DELAY_MS = 3e4;
 var DUE_LAUNCH_GAP_MS = 1e4;
 var DEFAULT_TASK_TIMEOUT_SECONDS = 7200;
@@ -254,7 +254,7 @@ function generateId() {
 function formatDateTime(iso) {
   if (!iso) return "\u2014";
   const d = new Date(iso);
-  return d.toLocaleDateString("es-ES") + " " + d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" });
+  return d.toLocaleDateString("en-US") + " " + d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
 }
 function padTwo(n) {
   return String(n).padStart(2, "0");
@@ -291,13 +291,13 @@ function formatTaskOutput(stdout, stderr) {
   const cleanStderr = normalizeCommandOutput(stderr);
   const parts = [];
   if (cleanStdout) {
-    parts.push(`## Respuesta
+    parts.push(`## Response
 
 ${cleanStdout}`);
   }
   const touchedFiles = extractTouchedFiles(cleanStderr);
   if (touchedFiles.length > 0) {
-    parts.push(`## Archivos tocados
+    parts.push(`## Touched files
 
 ${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
   }
@@ -316,13 +316,13 @@ function extractSection(output, title) {
 }
 function cleanWorkflowContext(output) {
   if (!output) return "";
-  return output.replace(/\[código de salida:.*?\]/g, "").replace(/\[iniciando proceso desacoplado…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
+  return output.replace(/\[exit code:.*?\]/g, "").replace(/\[starting detached process…\]/g, "").replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "").replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "").replace(/\.{3,}/g, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 function extractContextForHandoff(output) {
   const cleaned = cleanWorkflowContext(output);
   if (!cleaned) return "";
-  const response = extractSection(cleaned, "Respuesta");
-  const touchedFiles = extractSection(cleaned, "Archivos tocados");
+  const response = extractSection(cleaned, "Response");
+  const touchedFiles = extractSection(cleaned, "Touched files");
   const trace = extractSection(cleaned, "OpenCode trace").replace(/^```text\s*/, "").replace(/```$/, "").trim();
   const parts = [];
   if (response) parts.push(`Response: ${response}`);
@@ -1060,7 +1060,7 @@ DONE:" + $exitCode + "
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
-    this.settings.tasks[idx].output = "[iniciando proceso desacoplado\u2026]\n";
+    this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -1145,9 +1145,9 @@ DONE:" + $exitCode + "
       if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
         timeoutWarned = true;
         t.output += `
-[\u23F1 timeout warning: ${timeoutSeconds}s superados; sigo esperando el resultado final]`;
+[\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings();
-        new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" super\xF3 ${timeoutSeconds}s; sigo esperando.`);
+        new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (!fs2.existsSync(doneFile)) {
         t.output += ".";
@@ -1181,15 +1181,15 @@ DONE:" + $exitCode + "
       }
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
       const normalized = formatTaskOutput(stdout, stderr);
-      t.output = normalized || "(sin output)";
+      t.output = normalized || "(no output)";
       if (exitCode !== 0) {
         t.status = "failed";
         t.output += `
-[c\xF3digo de salida: ${exitCode}]`;
-        new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" fall\xF3 (c\xF3digo ${exitCode}).`);
+[exit code: ${exitCode}]`;
+        new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" ? "pending" : "completed";
-        new import_obsidian.Notice(`AutoOC: \u2705 "${task.name}" completada.`);
+        new import_obsidian.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, task.id, t.output);
@@ -1669,7 +1669,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output"
     });
     btnLog.disabled = !task.output && task.status !== "running";
-    btnLog.title = task.output ? "" : "A\xFAn no hay output";
+    btnLog.title = task.output ? "" : "No output yet";
     btnLog.onclick = (e) => {
       e.stopPropagation();
       new LiveLogModal(this.app, task, this.plugin).open();
@@ -2584,10 +2584,10 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
             cls: "auto-oc-workflow-label"
           });
           const presets = [
-            { label: "\xBFErrores?", prompt: "Did the previous task complete without errors or failures? Look for error messages, stack traces, or exit codes in the output. If no errors were found, reply YES. If there were errors, reply NO." },
-            { label: "\xBFTests OK?", prompt: "Were all tests executed successfully? Check the output for test failures, assertion errors, or test suite crashes. If all tests passed, reply YES. If any test failed, reply NO." },
-            { label: "\xBFBuild OK?", prompt: "Was the build successful? Check for compilation errors, linker errors, or build failures. If the build completed without errors, reply YES. Otherwise reply NO." },
-            { label: "\xBFQueda trabajo?", prompt: "Based on the output, is there remaining work that requires a follow-up step? Look for TODO comments, unfinished tasks, or incomplete implementations. If more work is needed, reply YES. If the task is fully complete, reply NO." },
+            { label: "Errors?", prompt: "Did the previous task complete without errors or failures? Look for error messages, stack traces, or exit codes in the output. If no errors were found, reply YES. If there were errors, reply NO." },
+            { label: "Tests OK?", prompt: "Were all tests executed successfully? Check the output for test failures, assertion errors, or test suite crashes. If all tests passed, reply YES. If any test failed, reply NO." },
+            { label: "Build OK?", prompt: "Was the build successful? Check for compilation errors, linker errors, or build failures. If the build completed without errors, reply YES. Otherwise reply NO." },
+            { label: "Work left?", prompt: "Based on the output, is there remaining work that requires a follow-up step? Look for TODO comments, unfinished tasks, or incomplete implementations. If more work is needed, reply YES. If the task is fully complete, reply NO." },
             { label: "Custom", prompt: "" }
           ];
           for (const p of presets) {
@@ -2780,11 +2780,11 @@ var LiveLogModal = class extends import_obsidian.Modal {
     this.task = latest;
     if (this.statusEl) {
       const isRunning = latest.status === "running";
-      this.statusEl.textContent = `Estado: ${latest.status}` + (latest.lastRun ? `  |  Inicio: ${formatDateTime(latest.lastRun)}` : "") + (isRunning ? "  \u23F3" : "");
+      this.statusEl.textContent = `Status: ${latest.status}` + (latest.lastRun ? `  |  Started: ${formatDateTime(latest.lastRun)}` : "") + (isRunning ? "  \u23F3" : "");
       this.statusEl.className = "auto-oc-log-status auto-oc-badge-" + latest.status;
     }
     if (this.renderEl) {
-      const newContent = latest.output || "(sin output a\xFAn\u2026)";
+      const newContent = latest.output || "(no output yet\u2026)";
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();
@@ -3120,16 +3120,16 @@ DONE:" + $exitCode)`
           const normalized = normalizeCommandOutput(output);
           const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
           if (this.logEl) {
-            this.logEl.textContent = normalized || "(sin output)";
-            this.logEl.textContent += exitCode === 0 ? "\n\n[\u2705 completado]" : `
+            this.logEl.textContent = normalized || "(no output)";
+            this.logEl.textContent += exitCode === 0 ? "\n\n[\u2705 completed]" : `
 
-[\u274C c\xF3digo ${exitCode}]`;
+[\u274C code ${exitCode}]`;
           }
         }, 2e3);
       })
     );
     this.logEl = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
-    this.logEl.textContent = "(aqu\xED aparecer\xE1 el output\u2026)";
+    this.logEl.textContent = "(output will appear here\u2026)";
   }
   onClose() {
     this.contentEl.empty();

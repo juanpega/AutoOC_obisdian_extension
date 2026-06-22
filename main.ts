@@ -105,9 +105,9 @@ interface ScheduledTask {
   useRalphLoop: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;    // "HH:MM"
-  scheduleDate: string;    // "YYYY-MM-DD" — usado en tipo 'once'
-  scheduleDays: number[];  // [0–6] Dom–Sáb — usado en tipo 'weekly'
-  scheduleMonthDays: number[]; // [1–31] — usado en tipo 'monthly'
+  scheduleDate: string;    // "YYYY-MM-DD" — used in 'once' type
+  scheduleDays: number[];  // [0–6] Sun–Sat — used in 'weekly' type
+  scheduleMonthDays: number[]; // [1–31] — used in 'monthly' type
   status: TaskStatus;
   lastRun: string;         // ISO string
   output: string;
@@ -238,14 +238,14 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
-  taskTimeoutSeconds: 7200,  // 2 h por defecto
+  taskTimeoutSeconds: 7200,  // 2 h default
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
 };
 
 export const VIEW_TYPE = "auto-oc-view";
-const DAY_NAMES = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const INITIAL_DUE_CHECK_DELAY_MS = 30_000;
 const DUE_LAUNCH_GAP_MS = 10_000;
 const DEFAULT_TASK_TIMEOUT_SECONDS = 7200;
@@ -342,9 +342,9 @@ function formatDateTime(iso: string): string {
   if (!iso) return "—";
   const d = new Date(iso);
   return (
-    d.toLocaleDateString("es-ES") +
+    d.toLocaleDateString("en-US") +
     " " +
-    d.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })
+    d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })
   );
 }
 
@@ -396,12 +396,12 @@ function formatTaskOutput(stdout: string, stderr: string): string {
   const parts: string[] = [];
 
   if (cleanStdout) {
-    parts.push(`## Respuesta\n\n${cleanStdout}`);
+    parts.push(`## Response\n\n${cleanStdout}`);
   }
 
   const touchedFiles = extractTouchedFiles(cleanStderr);
   if (touchedFiles.length > 0) {
-    parts.push(`## Archivos tocados\n\n${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
+    parts.push(`## Touched files\n\n${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
   }
 
   if (cleanStderr) {
@@ -419,8 +419,8 @@ function extractSection(output: string, title: string): string {
 function cleanWorkflowContext(output: string): string {
   if (!output) return "";
   return output
-    .replace(/\[código de salida:.*?\]/g, "")
-    .replace(/\[iniciando proceso desacoplado…\]/g, "")
+    .replace(/\[exit code:.*?\]/g, "")
+    .replace(/\[starting detached process…\]/g, "")
     .replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "")
     .replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "")
     .replace(/\.{3,}/g, "")
@@ -432,8 +432,8 @@ function extractContextForHandoff(output: string): string {
   const cleaned = cleanWorkflowContext(output);
   if (!cleaned) return "";
 
-  const response = extractSection(cleaned, "Respuesta");
-  const touchedFiles = extractSection(cleaned, "Archivos tocados");
+  const response = extractSection(cleaned, "Response");
+  const touchedFiles = extractSection(cleaned, "Touched files");
   const trace = extractSection(cleaned, "OpenCode trace").replace(/^```text\s*/, "").replace(/```$/, "").trim();
   const parts: string[] = [];
 
@@ -790,7 +790,7 @@ export default class AutoOCPlugin extends Plugin {
 
     this.addSettingTab(new AutoOCSettingTab(this.app, this));
 
-    // Scheduler: comprueba cada 60 segundos
+    // Scheduler: check every 60 seconds
     this.registerInterval(
       window.setInterval(() => this.runDueAll(), 60_000)
     );
@@ -1174,7 +1174,7 @@ export default class AutoOCPlugin extends Plugin {
 
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = new Date().toISOString();
-    this.settings.tasks[idx].output = "[iniciando proceso desacoplado…]\n";
+    this.settings.tasks[idx].output = "[starting detached process…]\n";
     await this.saveSettings();
 
     new Notice(`AutoOC: running "${task.name}"…`);
@@ -1261,9 +1261,9 @@ export default class AutoOCPlugin extends Plugin {
       // Soft timeout: warn once, but keep polling because OpenCode may still finish successfully.
       if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
         timeoutWarned = true;
-        t.output += `\n[⏱ timeout warning: ${timeoutSeconds}s superados; sigo esperando el resultado final]`;
+        t.output += `\n[⏱ timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings();
-        new Notice(`AutoOC: ⏱ "${task.name}" superó ${timeoutSeconds}s; sigo esperando.`);
+        new Notice(`AutoOC: ⏱ "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
 
       if (!fs.existsSync(doneFile)) {
@@ -1289,14 +1289,14 @@ export default class AutoOCPlugin extends Plugin {
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
       const normalized = formatTaskOutput(stdout, stderr);
 
-      t.output = normalized || "(sin output)";
+      t.output = normalized || "(no output)";
       if (exitCode !== 0) {
         t.status = "failed";
-        t.output += `\n[código de salida: ${exitCode}]`;
-        new Notice(`AutoOC: ❌ "${task.name}" falló (código ${exitCode}).`);
+        t.output += `\n[exit code: ${exitCode}]`;
+        new Notice(`AutoOC: ❌ "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" ? "pending" : "completed";
-        new Notice(`AutoOC: ✅ "${task.name}" completada.`);
+        new Notice(`AutoOC: ✅ "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, task.id, t.output);
@@ -1841,7 +1841,7 @@ class AutoOCView extends ItemView {
       cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output",
     });
     btnLog.disabled = !task.output && task.status !== "running";
-    btnLog.title = task.output ? "" : "Aún no hay output";
+    btnLog.title = task.output ? "" : "No output yet";
     btnLog.onclick = (e) => {
       e.stopPropagation();
       new LiveLogModal(this.app, task, this.plugin).open();
@@ -2986,10 +2986,10 @@ class CreateWorkflowModal extends Modal {
           });
 
           const presets = [
-            { label: "¿Errores?", prompt: "Did the previous task complete without errors or failures? Look for error messages, stack traces, or exit codes in the output. If no errors were found, reply YES. If there were errors, reply NO." },
-            { label: "¿Tests OK?", prompt: "Were all tests executed successfully? Check the output for test failures, assertion errors, or test suite crashes. If all tests passed, reply YES. If any test failed, reply NO." },
-            { label: "¿Build OK?", prompt: "Was the build successful? Check for compilation errors, linker errors, or build failures. If the build completed without errors, reply YES. Otherwise reply NO." },
-            { label: "¿Queda trabajo?", prompt: "Based on the output, is there remaining work that requires a follow-up step? Look for TODO comments, unfinished tasks, or incomplete implementations. If more work is needed, reply YES. If the task is fully complete, reply NO." },
+            { label: "Errors?", prompt: "Did the previous task complete without errors or failures? Look for error messages, stack traces, or exit codes in the output. If no errors were found, reply YES. If there were errors, reply NO." },
+            { label: "Tests OK?", prompt: "Were all tests executed successfully? Check the output for test failures, assertion errors, or test suite crashes. If all tests passed, reply YES. If any test failed, reply NO." },
+            { label: "Build OK?", prompt: "Was the build successful? Check for compilation errors, linker errors, or build failures. If the build completed without errors, reply YES. Otherwise reply NO." },
+            { label: "Work left?", prompt: "Based on the output, is there remaining work that requires a follow-up step? Look for TODO comments, unfinished tasks, or incomplete implementations. If more work is needed, reply YES. If the task is fully complete, reply NO." },
             { label: "Custom", prompt: "" },
           ];
 
@@ -3198,15 +3198,15 @@ class LiveLogModal extends Modal {
     if (this.statusEl) {
       const isRunning = latest.status === "running";
       this.statusEl.textContent =
-        `Estado: ${latest.status}` +
-        (latest.lastRun ? `  |  Inicio: ${formatDateTime(latest.lastRun)}` : "") +
+        `Status: ${latest.status}` +
+        (latest.lastRun ? `  |  Started: ${formatDateTime(latest.lastRun)}` : "") +
         (isRunning ? "  ⏳" : "");
       this.statusEl.className =
         "auto-oc-log-status auto-oc-badge-" + latest.status;
     }
 
     if (this.renderEl) {
-      const newContent = latest.output || "(sin output aún…)";
+      const newContent = latest.output || "(no output yet…)";
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();
@@ -3608,15 +3608,15 @@ class DiagnosticModal extends Modal {
           const normalized = normalizeCommandOutput(output);
           const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
           if (this.logEl) {
-            this.logEl.textContent = normalized || "(sin output)";
-            this.logEl.textContent += exitCode === 0 ? "\n\n[\u2705 completado]" : `\n\n[\u274c c\u00f3digo ${exitCode}]`;
+            this.logEl.textContent = normalized || "(no output)";
+            this.logEl.textContent += exitCode === 0 ? "\n\n[\u2705 completed]" : `\n\n[\u274c code ${exitCode}]`;
           }
         }, 2000);
       })
     );
 
     this.logEl = contentEl.createEl("pre", { cls: "auto-oc-output-pre auto-oc-log-pre" });
-    this.logEl.textContent = "(aquí aparecerá el output…)";
+    this.logEl.textContent = "(output will appear here…)";
   }
 
   onClose() { this.contentEl.empty(); }
