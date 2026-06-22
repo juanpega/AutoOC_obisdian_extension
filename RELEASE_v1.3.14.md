@@ -1,4 +1,4 @@
-# Release v1.3.13
+# Release v1.3.14
 
 ## Summary
 This release adds the ability to import and export tasks and workflows as portable JSON files, browse a shared library from a GitHub URL, and share reusable task packs with other users.
@@ -13,13 +13,13 @@ This release adds the ability to import and export tasks and workflows as portab
 - LICENSE file (MIT) and author/contact information in README.
 
 ## Changed
-- Bumped version to `1.3.13` in `manifest.json` and `package.json`.
+- Bumped version to `1.3.14` in `manifest.json` and `package.json`.
 
 ## Fixed
 - N/A
 
 ## Installation
-1. Download release asset `auto-oc-v1.3.13.zip`.
+1. Download release asset `auto-oc-v1.3.14.zip`.
 2. Extract files into `.obsidian/plugins/auto-oc/`.
 3. Reload Obsidian (`Ctrl+Shift+P` -> `Reload app without saving`).
 4. Enable plugin in Community plugins.
