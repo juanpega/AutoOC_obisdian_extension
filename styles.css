@@ -588,6 +588,15 @@
   border-bottom: none;
 }
 
+.auto-oc-import-paste {
+  width: 100%;
+  min-height: 220px;
+  font-family: var(--font-monospace);
+  font-size: 0.8rem;
+  line-height: 1.45;
+  tab-size: 2;
+}
+
 .auto-oc-tab-btn {
   background: transparent;
   color: var(--text-muted);

@@ -3633,10 +3633,11 @@ class ImportModal extends Modal {
   private filePath: string | null = null;
   private previewData: AutoOCExportFile | null = null;
   private previewEl: HTMLElement | null = null;
-  private sourceMode: "file" | "library" = "file";
+  private sourceMode: "file" | "library" | "paste" = "file";
   private libraryEntries: LibraryEntry[] = [];
   private libraryError: string | null = null;
   private selectedLibraryFile: string | null = null;
+  private pastedJson = "";
 
   constructor(app: App, plugin: AutoOCPlugin) {
     super(app);
@@ -3652,7 +3653,7 @@ class ImportModal extends Modal {
 
     contentEl.createEl("h3", { text: "📥 Import Tasks & Workflows" });
     contentEl.createEl("p", {
-      text: "Import from a local JSON file or browse the shared library configured in settings. Imported items use this system's default model and agent when the saved agent is unavailable. Duplicate names are renamed automatically.",
+      text: "Import from a local JSON file, paste JSON directly, or browse the shared library configured in settings. Imported items use this system's default model and agent when the saved agent is unavailable. Duplicate names are renamed automatically.",
       cls: "setting-item-description",
     });
 
@@ -3660,6 +3661,10 @@ class ImportModal extends Modal {
     const tabBar = contentEl.createDiv("auto-oc-tab-bar");
     const btnFile = tabBar.createEl("button", {
       text: "📁 From file",
+      cls: "auto-oc-tab-btn",
+    });
+    const btnPaste = tabBar.createEl("button", {
+      text: "📋 Paste JSON",
       cls: "auto-oc-tab-btn",
     });
     const btnLibrary = tabBar.createEl("button", {
@@ -3671,16 +3676,20 @@ class ImportModal extends Modal {
 
     const renderPanel = () => {
       btnFile.toggleClass("active", this.sourceMode === "file");
+      btnPaste.toggleClass("active", this.sourceMode === "paste");
       btnLibrary.toggleClass("active", this.sourceMode === "library");
       panel.empty();
       if (this.sourceMode === "file") {
         this.renderFilePanel(panel);
+      } else if (this.sourceMode === "paste") {
+        this.renderPastePanel(panel);
       } else {
         this.renderLibraryPanel(panel);
       }
     };
 
     btnFile.onclick = () => { this.sourceMode = "file"; renderPanel(); };
+    btnPaste.onclick = () => { this.sourceMode = "paste"; renderPanel(); };
     btnLibrary.onclick = () => { this.sourceMode = "library"; renderPanel(); };
 
     // Common preview area
@@ -3745,6 +3754,81 @@ class ImportModal extends Modal {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setValue(this.filePath ?? "");
       });
+  }
+
+  private renderPastePanel(panel: HTMLElement) {
+    panel.createEl("p", {
+      text: "Paste an AutoOC JSON export below. The preview will update automatically when the JSON is valid.",
+      cls: "setting-item-description",
+    });
+
+    const textarea = panel.createEl("textarea", {
+      cls: "auto-oc-modal-textarea auto-oc-import-paste",
+    });
+    textarea.value = this.pastedJson;
+    textarea.rows = 12;
+    textarea.spellcheck = false;
+    textarea.placeholder = '{\n  "autoOCExport": { ... },\n  "tasks": [ ... ],\n  "workflows": [ ... ]\n}';
+    textarea.style.width = "100%";
+    textarea.style.fontFamily = "var(--font-monospace)";
+    textarea.style.fontSize = "0.8rem";
+
+    const parse = () => {
+      this.pastedJson = textarea.value.trim();
+      if (!this.pastedJson) {
+        this.previewData = null;
+        this.renderPreview();
+        this.updateImportButton();
+        return;
+      }
+      try {
+        const data = JSON.parse(this.pastedJson) as AutoOCExportFile;
+        this.validateExport(data);
+        this.previewData = data;
+        this.filePath = null;
+        this.selectedLibraryFile = null;
+        new Notice(`AutoOC: parsed ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+      } catch (e) {
+        this.previewData = null;
+      }
+      this.renderPreview();
+      this.updateImportButton();
+    };
+
+    textarea.oninput = parse;
+
+    const actions = panel.createDiv("auto-oc-import-paste-actions");
+    actions.style.display = "flex";
+    actions.style.gap = "8px";
+    actions.style.marginTop = "8px";
+
+    const btnClear = actions.createEl("button", {
+      text: "Clear",
+      cls: "auto-oc-btn-secondary",
+    });
+    btnClear.onclick = () => {
+      textarea.value = "";
+      this.pastedJson = "";
+      this.previewData = null;
+      this.renderPreview();
+      this.updateImportButton();
+    };
+
+    const btnFormat = actions.createEl("button", {
+      text: "Format JSON",
+      cls: "auto-oc-btn-secondary",
+    });
+    btnFormat.onclick = () => {
+      try {
+        const parsed = JSON.parse(textarea.value);
+        const formatted = JSON.stringify(parsed, null, 2);
+        textarea.value = formatted;
+        this.pastedJson = formatted;
+        parse();
+      } catch (e) {
+        new Notice(`AutoOC: cannot format — ${String(e)}`);
+      }
+    };
   }
 
   private renderLibraryPanel(panel: HTMLElement) {
