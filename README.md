@@ -245,6 +245,18 @@ npm run pack:release
 3. Zip ends up in `release/auto-oc-<version>.zip` with SHA256 hash in console.
 4. Publish that zip in your GitHub Release.
 
+## Author & License
+
+Created by **Juan Pedro Gil**.
+
+- Website: [inncrea.es](https://inncrea.es)
+- Email: [juanpedro266@gmail.com](mailto:juanpedro266@gmail.com)
+- Repository: [https://github.com/juanpega/AutoOC_obisdian_extension](https://github.com/juanpega/AutoOC_obisdian_extension)
+
+This project is released under the **MIT License**.
+
+You are free to download, use, modify, and distribute it. If you create your own version or fork, please keep a mention of the original author (Juan Pedro Gil) or a link back to this repository.
+
 ## Current Status
 
 - Diagnostic working
@@ -311,6 +323,18 @@ npm run pack:release
 
 3. El zip queda en `release/auto-oc-<version>.zip` con hash SHA256 en consola.
 4. Publica ese zip en tu GitHub Release.
+
+## Autor y licencia
+
+Creado por **Juan Pedro Gil**.
+
+- Web: [inncrea.es](https://inncrea.es)
+- Email: [juanpedro266@gmail.com](mailto:juanpedro266@gmail.com)
+- Repositorio: [https://github.com/juanpega/AutoOC_obisdian_extension](https://github.com/juanpega/AutoOC_obisdian_extension)
+
+Este proyecto se publica bajo la licencia **MIT**.
+
+Puedes descargarlo, usarlo, modificarlo y distribuirlo libremente. Si creas tu propia versión o fork, por favor mantén una mención al autor original (Juan Pedro Gil) o un enlace a este repositorio.
 
 ## Estado actual
 
