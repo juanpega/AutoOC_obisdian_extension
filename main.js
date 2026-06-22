@@ -1378,7 +1378,7 @@ DONE:" + $exitCode + "
     }
     return candidate;
   }
-  async exportToFile(tasks, workflows, name, description) {
+  buildExportJson(tasks, workflows, name, description) {
     const taskExportIdMap = /* @__PURE__ */ new Map();
     const exportTasks = tasks.map((t, i) => {
       const exportId = `task-${i}`;
@@ -1399,7 +1399,10 @@ DONE:" + $exitCode + "
       tasks: exportTasks,
       workflows: exportWorkflows
     };
-    const json = JSON.stringify(data, null, 2);
+    return JSON.stringify(data, null, 2);
+  }
+  async exportToFile(tasks, workflows, name, description) {
+    const json = this.buildExportJson(tasks, workflows, name, description);
     try {
       const electron = window.require("electron");
       const result = await electron.remote.dialog.showSaveDialog({
@@ -3062,25 +3065,55 @@ ${stepNames}` : stepNames;
       summary.textContent = `Will export ${explicitTasks} selected task(s)` + (autoTasks > 0 ? ` + ${autoTasks} task(s) required by workflows` : "") + ` and ${payload.workflows.length} selected workflow(s).`;
     };
     updateSummary();
-    new import_obsidian.Setting(contentEl).addButton(
-      (btn) => btn.setButtonText("Save JSON\u2026").setCta().onClick(async () => {
-        const payload = this.plugin.buildExportSelectionPayload(
-          this.selectedTaskIds,
-          this.selectedWorkflowIds
-        );
-        if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-          new import_obsidian.Notice("AutoOC: nothing selected to export.");
-          return;
-        }
-        await this.plugin.exportToFile(
-          payload.tasks,
-          payload.workflows,
-          this.name,
-          this.description
-        );
-        this.close();
-      })
+    const btnRow = contentEl.createDiv("auto-oc-export-actions");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "8px";
+    btnRow.style.marginTop = "12px";
+    const getPayload = () => this.plugin.buildExportSelectionPayload(
+      this.selectedTaskIds,
+      this.selectedWorkflowIds
     );
+    const btnCopy = btnRow.createEl("button", {
+      text: "\u{1F4CB} Copy JSON",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnCopy.onclick = async () => {
+      const payload = getPayload();
+      if (payload.tasks.length === 0 && payload.workflows.length === 0) {
+        new import_obsidian.Notice("AutoOC: nothing selected to export.");
+        return;
+      }
+      const json = this.plugin.buildExportJson(
+        payload.tasks,
+        payload.workflows,
+        this.name,
+        this.description
+      );
+      try {
+        await navigator.clipboard.writeText(json);
+        new import_obsidian.Notice("AutoOC: JSON copied to clipboard.");
+      } catch (e) {
+        new import_obsidian.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
+      }
+    };
+    const btnSave = btnRow.createEl("button", {
+      text: "\u{1F4BE} Save JSON\u2026",
+      cls: "auto-oc-btn-primary"
+    });
+    btnSave.onclick = async () => {
+      const payload = getPayload();
+      if (payload.tasks.length === 0 && payload.workflows.length === 0) {
+        new import_obsidian.Notice("AutoOC: nothing selected to export.");
+        return;
+      }
+      await this.plugin.exportToFile(
+        payload.tasks,
+        payload.workflows,
+        this.name,
+        this.description
+      );
+      this.close();
+    };
   }
   onClose() {
     this.contentEl.empty();

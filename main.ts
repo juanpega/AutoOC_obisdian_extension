@@ -1569,12 +1569,12 @@ export default class AutoOCPlugin extends Plugin {
     return candidate;
   }
 
-  async exportToFile(
+  buildExportJson(
     tasks: ScheduledTask[],
     workflows: Workflow[],
     name?: string,
     description?: string
-  ): Promise<void> {
+  ): string {
     const taskExportIdMap = new Map<string, string>();
     const exportTasks = tasks.map((t, i) => {
       const exportId = `task-${i}`;
@@ -1597,7 +1597,16 @@ export default class AutoOCPlugin extends Plugin {
       workflows: exportWorkflows,
     };
 
-    const json = JSON.stringify(data, null, 2);
+    return JSON.stringify(data, null, 2);
+  }
+
+  async exportToFile(
+    tasks: ScheduledTask[],
+    workflows: Workflow[],
+    name?: string,
+    description?: string
+  ): Promise<void> {
+    const json = this.buildExportJson(tasks, workflows, name, description);
 
     try {
       // @ts-ignore — Electron API available on desktop Obsidian
@@ -3599,28 +3608,59 @@ class ExportModal extends Modal {
     };
     updateSummary();
 
-    new Setting(contentEl).addButton((btn) =>
-      btn
-        .setButtonText("Save JSON…")
-        .setCta()
-        .onClick(async () => {
-          const payload = this.plugin.buildExportSelectionPayload(
-            this.selectedTaskIds,
-            this.selectedWorkflowIds
-          );
-          if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-            new Notice("AutoOC: nothing selected to export.");
-            return;
-          }
-          await this.plugin.exportToFile(
-            payload.tasks,
-            payload.workflows,
-            this.name,
-            this.description
-          );
-          this.close();
-        })
-    );
+    const btnRow = contentEl.createDiv("auto-oc-export-actions");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "8px";
+    btnRow.style.marginTop = "12px";
+
+    const getPayload = () =>
+      this.plugin.buildExportSelectionPayload(
+        this.selectedTaskIds,
+        this.selectedWorkflowIds
+      );
+
+    const btnCopy = btnRow.createEl("button", {
+      text: "📋 Copy JSON",
+      cls: "auto-oc-btn-secondary",
+    });
+    btnCopy.onclick = async () => {
+      const payload = getPayload();
+      if (payload.tasks.length === 0 && payload.workflows.length === 0) {
+        new Notice("AutoOC: nothing selected to export.");
+        return;
+      }
+      const json = this.plugin.buildExportJson(
+        payload.tasks,
+        payload.workflows,
+        this.name,
+        this.description
+      );
+      try {
+        await navigator.clipboard.writeText(json);
+        new Notice("AutoOC: JSON copied to clipboard.");
+      } catch (e) {
+        new Notice(`AutoOC: could not copy — ${String(e)}`);
+      }
+    };
+
+    const btnSave = btnRow.createEl("button", {
+      text: "💾 Save JSON…",
+      cls: "auto-oc-btn-primary",
+    });
+    btnSave.onclick = async () => {
+      const payload = getPayload();
+      if (payload.tasks.length === 0 && payload.workflows.length === 0) {
+        new Notice("AutoOC: nothing selected to export.");
+        return;
+      }
+      await this.plugin.exportToFile(
+        payload.tasks,
+        payload.workflows,
+        this.name,
+        this.description
+      );
+      this.close();
+    };
   }
 
   onClose() {
