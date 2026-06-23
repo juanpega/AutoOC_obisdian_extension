@@ -84,7 +84,7 @@ function launchHiddenPS(psScriptFile) {
   const path2 = require("path");
   const vbsFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const vbs = `Set sh = CreateObject("WScript.Shell")\r
-sh.Run "powershell.exe -NoLogo -NonInteractive -WindowStyle Hidden -File """ & "${psScriptFile.replace(/"/g, '""')}" & """", 0, False\r
+sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & "${psScriptFile.replace(/"/g, '""')}" & """", 0, False\r
 `;
   fs2.writeFileSync(vbsFile, vbs, "utf8");
   const { spawn: spawn2 } = require("child_process");
