@@ -93,8 +93,9 @@ function psUtf8Prelude(): string[] {
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly";
+type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
+type IntervalUnit = "seconds" | "minutes" | "hours";
 
 interface ScheduledTask {
   id: string;
@@ -108,6 +109,8 @@ interface ScheduledTask {
   scheduleDate: string;    // "YYYY-MM-DD" — used in 'once' type
   scheduleDays: number[];  // [0–6] Sun–Sat — used in 'weekly' type
   scheduleMonthDays: number[]; // [1–31] — used in 'monthly' type
+  scheduleIntervalValue: number; // e.g. 10 — used in 'interval' type
+  scheduleIntervalUnit: IntervalUnit; // seconds | minutes | hours — used in 'interval' type
   status: TaskStatus;
   lastRun: string;         // ISO string
   output: string;
@@ -142,6 +145,8 @@ interface Workflow {
   scheduleDate: string;
   scheduleDays: number[];
   scheduleMonthDays: number[];
+  scheduleIntervalValue: number;
+  scheduleIntervalUnit: IntervalUnit;
 }
 
 interface AutoOCSettings {
@@ -173,6 +178,8 @@ interface ExportTask {
   scheduleDate: string;
   scheduleDays: number[];
   scheduleMonthDays: number[];
+  scheduleIntervalValue: number;
+  scheduleIntervalUnit: IntervalUnit;
   useRalphLoop: boolean;
   agent: string;
   branch?: string;
@@ -195,6 +202,8 @@ interface ExportWorkflow {
   scheduleDate: string;
   scheduleDays: number[];
   scheduleMonthDays: number[];
+  scheduleIntervalValue: number;
+  scheduleIntervalUnit: IntervalUnit;
   handoffBranch?: boolean;
   handoffOutput?: boolean;
   steps: ExportWorkflowStep[];
@@ -325,6 +334,15 @@ function isDayScheduleDue(now: Date, scheduleTime: string, lastRun?: string): bo
   return new Date(lastRun).toDateString() !== now.toDateString();
 }
 
+function intervalToMs(value: number, unit: IntervalUnit): number {
+  const multiplier: Record<IntervalUnit, number> = {
+    seconds: 1000,
+    minutes: 60 * 1000,
+    hours: 60 * 60 * 1000,
+  };
+  return Math.max(1, value) * multiplier[unit];
+}
+
 function parseMonthDays(input: string): number[] | null {
   const trimmed = input.trim();
   if (!trimmed) return [];
@@ -437,6 +455,8 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     scheduleDate: task.scheduleDate,
     scheduleDays: task.scheduleDays,
     scheduleMonthDays: task.scheduleMonthDays || [],
+    scheduleIntervalValue: task.scheduleIntervalValue ?? 10,
+    scheduleIntervalUnit: task.scheduleIntervalUnit ?? "minutes",
     useRalphLoop: task.useRalphLoop,
     agent: task.agent,
     branch: task.branch,
@@ -458,6 +478,8 @@ function toExportWorkflow(
     scheduleDate: workflow.scheduleDate,
     scheduleDays: workflow.scheduleDays,
     scheduleMonthDays: workflow.scheduleMonthDays || [],
+    scheduleIntervalValue: workflow.scheduleIntervalValue ?? 10,
+    scheduleIntervalUnit: workflow.scheduleIntervalUnit ?? "minutes",
     handoffBranch: workflow.handoffBranch,
     handoffOutput: workflow.handoffOutput,
     steps: workflow.steps.map((step) => ({
@@ -810,6 +832,14 @@ function isTaskDue(task: ScheduledTask): boolean {
     return isDayScheduleDue(now, task.scheduleTime, task.lastRun);
   }
 
+  if (task.scheduleType === "interval") {
+    const value = task.scheduleIntervalValue ?? 10;
+    const unit = task.scheduleIntervalUnit ?? "minutes";
+    const ms = intervalToMs(value, unit);
+    if (!task.lastRun) return true;
+    return now.getTime() - new Date(task.lastRun).getTime() >= ms;
+  }
+
   return false;
 }
 
@@ -842,6 +872,14 @@ function isWorkflowDue(wf: Workflow): boolean {
     return isDayScheduleDue(now, wf.scheduleTime || "00:00", wf.lastRun);
   }
 
+  if (wf.scheduleType === "interval") {
+    const value = wf.scheduleIntervalValue ?? 10;
+    const unit = wf.scheduleIntervalUnit ?? "minutes";
+    const ms = intervalToMs(value, unit);
+    if (!wf.lastRun) return true;
+    return now.getTime() - new Date(wf.lastRun).getTime() >= ms;
+  }
+
   return false;
 }
 
@@ -855,6 +893,8 @@ export default class AutoOCPlugin extends Plugin {
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
   private dueCheckInProgress = false;
+  // Workflows that have been manually stopped; checked in step callbacks to abort chaining
+  private stoppingWorkflows = new Set<string>();
 
   // Update-check state
   latestVersion: string | null = null;
@@ -921,9 +961,9 @@ export default class AutoOCPlugin extends Plugin {
 
     this.addSettingTab(new AutoOCSettingTab(this.app, this));
 
-    // Scheduler: check every 60 seconds
+    // Scheduler: check every 5 seconds so interval schedules (seconds/minutes/hours) are responsive
     this.registerInterval(
-      window.setInterval(() => this.runDueAll(), 60_000)
+      window.setInterval(() => this.runDueAll(), 5_000)
     );
 
     // Initial check only after Obsidian has restored its layout, plus an extra
@@ -1023,6 +1063,14 @@ export default class AutoOCPlugin extends Plugin {
         task.scheduleMonthDays = [];
         changed = true;
       }
+      if (task.scheduleIntervalValue === undefined) {
+        task.scheduleIntervalValue = 10;
+        changed = true;
+      }
+      if (task.scheduleIntervalUnit === undefined) {
+        task.scheduleIntervalUnit = "minutes";
+        changed = true;
+      }
     }
     // Stale workflow cleanup + migration for missing schedule fields
     if (!this.settings.workflows) this.settings.workflows = [];
@@ -1042,6 +1090,14 @@ export default class AutoOCPlugin extends Plugin {
       }
       if (!Array.isArray(wf.scheduleMonthDays)) {
         wf.scheduleMonthDays = [];
+        changed = true;
+      }
+      if (wf.scheduleIntervalValue === undefined) {
+        wf.scheduleIntervalValue = 10;
+        changed = true;
+      }
+      if (wf.scheduleIntervalUnit === undefined) {
+        wf.scheduleIntervalUnit = "minutes";
         changed = true;
       }
       if (wf.handoffOutput !== true) {
@@ -1430,7 +1486,7 @@ export default class AutoOCPlugin extends Plugin {
         t.output += `\n[exit code: ${exitCode}]`;
         new Notice(`AutoOC: ❌ "${task.name}" failed (code ${exitCode}).`);
       } else {
-        t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" ? "pending" : "completed";
+        t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
         new Notice(`AutoOC: ✅ "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
@@ -1465,6 +1521,38 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
     }
     new Notice(`AutoOC: ⏹ Task stopped.`);
+  }
+
+  async killWorkflow(id: string) {
+    const wf = this.settings.workflows.find((w) => w.id === id);
+    if (!wf) return;
+
+    this.stoppingWorkflows.add(id);
+
+    // Stop the currently running task in the workflow, if any
+    if (wf.status === "running" && wf.currentStep >= 0 && wf.currentStep < wf.steps.length) {
+      const currentStep = wf.steps[wf.currentStep];
+      const currentTask = this.settings.tasks.find((t) => t.id === currentStep?.taskId);
+      if (currentTask?.status === "running") {
+        await this.killTask(currentTask.id);
+      }
+    }
+
+    if (wf.status === "running") {
+      wf.status = "failed";
+      const stepLabel = wf.currentStep >= 0 ? ` at step ${wf.currentStep + 1}/${wf.steps.length}` : "";
+      wf.steps.forEach((step) => {
+        const task = this.settings.tasks.find((t) => t.id === step.taskId);
+        if (task && task.status === "running") {
+          task.status = "failed";
+          task.output += "\n[workflow stopped manually]";
+        }
+      });
+      await this.saveSettings();
+      new Notice(`AutoOC: ⏹ Workflow "${wf.name}" stopped${stepLabel}.`);
+    }
+
+    this.stoppingWorkflows.delete(id);
   }
 
   async runDueAll() {
@@ -1688,6 +1776,8 @@ export default class AutoOCPlugin extends Plugin {
         scheduleDate: et.scheduleDate ?? "",
         scheduleDays: et.scheduleDays ?? [],
         scheduleMonthDays: et.scheduleMonthDays ?? [],
+        scheduleIntervalValue: et.scheduleIntervalValue ?? 10,
+        scheduleIntervalUnit: et.scheduleIntervalUnit ?? "minutes",
         status: "pending",
         lastRun: "",
         output: "",
@@ -1730,6 +1820,8 @@ export default class AutoOCPlugin extends Plugin {
         scheduleDate: ew.scheduleDate ?? "",
         scheduleDays: ew.scheduleDays ?? [],
         scheduleMonthDays: ew.scheduleMonthDays ?? [],
+        scheduleIntervalValue: ew.scheduleIntervalValue ?? 10,
+        scheduleIntervalUnit: ew.scheduleIntervalUnit ?? "minutes",
       };
       this.settings.workflows.push(workflow);
       workflowsImported++;
@@ -1819,7 +1911,7 @@ export default class AutoOCPlugin extends Plugin {
     await this.runTask(task, async (completedTask, exitCode) => {
       // Refresh workflow reference (may have been reloaded)
       const currentWf = this.settings.workflows[wfIdx];
-      if (!currentWf || currentWf.status !== "running") return;
+      if (!currentWf || currentWf.status !== "running" || this.stoppingWorkflows.has(currentWf.id)) return;
       const currentStep = currentWf.steps[stepIndex];
       const transitionMode = currentStep.transitionMode ?? (currentStep.forceContinue ? "force" : currentStep.evaluatePrompt !== undefined ? "eval" : "default");
 
@@ -2135,6 +2227,10 @@ class AutoOCView extends ItemView {
     } else if (task.scheduleType === "weekly") {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `🔁 ${days || "no days"} at ${task.scheduleTime}`;
+    } else if (task.scheduleType === "interval") {
+      const value = task.scheduleIntervalValue ?? 10;
+      const unit = task.scheduleIntervalUnit ?? "minutes";
+      scheduleText = `🔁 Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
       scheduleText = `🔁 Day ${days || "no days"} of each month at ${task.scheduleTime}`;
@@ -2473,6 +2569,10 @@ class AutoOCView extends ItemView {
       } else if (wfScheduleType === "monthly") {
         const days = wfScheduleMonthDays.join(", ");
         schedMeta.createEl("span", { text: `🔁 Day ${days || "no days"} of each month at ${wfScheduleTime}` });
+      } else if (wfScheduleType === "interval") {
+        const value = workflow.scheduleIntervalValue ?? 10;
+        const unit = workflow.scheduleIntervalUnit ?? "minutes";
+        schedMeta.createEl("span", { text: `🔁 Every ${value} ${unit}` });
       }
     }
 
@@ -2487,6 +2587,20 @@ class AutoOCView extends ItemView {
       e.stopPropagation();
       this.plugin.runWorkflow(workflow);
     };
+
+    if (workflow.status === "running") {
+      const btnStop = actions.createEl("button", {
+        text: "⏹ Stop",
+        cls: "auto-oc-btn-stop",
+      });
+      btnStop.title = "Stop workflow now";
+      btnStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnStop.disabled = true;
+        btnStop.textContent = "Stopping…";
+        await this.plugin.killWorkflow(workflow.id);
+      };
+    }
 
     const btnEdit = actions.createEl("button", {
       text: "✏️ Edit",
@@ -2556,6 +2670,8 @@ class CreateTaskModal extends Modal {
             scheduleDate: todayString(),
             scheduleDays: [],
             scheduleMonthDays: [],
+            scheduleIntervalValue: 10,
+            scheduleIntervalUnit: "minutes",
           };
   }
 
@@ -2732,6 +2848,7 @@ class CreateTaskModal extends Modal {
         dd.addOption("daily", "Daily (fixed time)");
         dd.addOption("weekly", "Weekdays");
         dd.addOption("monthly", "Monthly (days of month)");
+        dd.addOption("interval", "Interval (every X seconds/minutes/hours)");
         dd.setValue(this.draft.scheduleType ?? "manual");
         dd.onChange((v) => {
           this.draft.scheduleType = v as ScheduleType;
@@ -2796,7 +2913,33 @@ class CreateTaskModal extends Modal {
         });
     }
 
-    if (this.draft.scheduleType !== "manual") {
+    // Interval — only for 'interval'
+    if (this.draft.scheduleType === "interval") {
+      new Setting(contentEl)
+        .setName("Interval")
+        .setDesc("Run the task repeatedly every X units")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.inputEl.type = "number";
+          text.inputEl.min = "1";
+          text
+            .setPlaceholder("10")
+            .setValue(String(this.draft.scheduleIntervalValue ?? 10))
+            .onChange((v) => {
+              const n = parseInt(v, 10);
+              this.draft.scheduleIntervalValue = isNaN(n) || n < 1 ? 1 : n;
+            });
+        })
+        .addDropdown((dd) => {
+          dd.addOption("seconds", "Seconds");
+          dd.addOption("minutes", "Minutes");
+          dd.addOption("hours", "Hours");
+          dd.setValue(this.draft.scheduleIntervalUnit ?? "minutes");
+          dd.onChange((v) => (this.draft.scheduleIntervalUnit = v as IntervalUnit));
+        });
+    }
+
+    if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
       new Setting(contentEl)
         .setName("Time")
         .setDesc("Format HH:MM (24h)")
@@ -2828,6 +2971,7 @@ class CreateTaskModal extends Modal {
           }
           if (
             this.draft.scheduleType !== "manual" &&
+            this.draft.scheduleType !== "interval" &&
             !/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")
           ) {
             new Notice("Invalid time. Use HH:MM format.");
@@ -2873,6 +3017,8 @@ class CreateTaskModal extends Modal {
               scheduleDate: this.draft.scheduleDate ?? "",
               scheduleDays: this.draft.scheduleDays ?? [],
               scheduleMonthDays: this.draft.scheduleMonthDays ?? [],
+              scheduleIntervalValue: this.draft.scheduleIntervalValue ?? 10,
+              scheduleIntervalUnit: this.draft.scheduleIntervalUnit ?? "minutes",
               status: "pending",
               lastRun: "",
               output: "",
@@ -2912,7 +3058,7 @@ class CreateWorkflowModal extends Modal {
     this.editWorkflow = editWorkflow;
     this.draft = editWorkflow
       ? { ...editWorkflow }
-      : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [], scheduleMonthDays: [] };
+      : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [], scheduleMonthDays: [], scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes" };
     this.selectedTaskIds = editWorkflow
       ? editWorkflow.steps.map((s) => s.taskId)
       : [];
@@ -3008,6 +3154,7 @@ class CreateWorkflowModal extends Modal {
         dd.addOption("daily", "Daily (fixed time)");
         dd.addOption("weekly", "Weekdays");
         dd.addOption("monthly", "Monthly (days of month)");
+        dd.addOption("interval", "Interval (every X seconds/minutes/hours)");
         dd.setValue(this.draft.scheduleType ?? "manual");
         dd.onChange((v) => {
           this.draft.scheduleType = v as ScheduleType;
@@ -3068,7 +3215,33 @@ class CreateWorkflowModal extends Modal {
         });
     }
 
-    if (this.draft.scheduleType !== "manual") {
+    // Interval — only for 'interval'
+    if (this.draft.scheduleType === "interval") {
+      new Setting(contentEl)
+        .setName("Interval")
+        .setDesc("Run the workflow repeatedly every X units")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.inputEl.type = "number";
+          text.inputEl.min = "1";
+          text
+            .setPlaceholder("10")
+            .setValue(String(this.draft.scheduleIntervalValue ?? 10))
+            .onChange((v) => {
+              const n = parseInt(v, 10);
+              this.draft.scheduleIntervalValue = isNaN(n) || n < 1 ? 1 : n;
+            });
+        })
+        .addDropdown((dd) => {
+          dd.addOption("seconds", "Seconds");
+          dd.addOption("minutes", "Minutes");
+          dd.addOption("hours", "Hours");
+          dd.setValue(this.draft.scheduleIntervalUnit ?? "minutes");
+          dd.onChange((v) => (this.draft.scheduleIntervalUnit = v as IntervalUnit));
+        });
+    }
+
+    if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
       new Setting(contentEl)
         .setName("Time")
         .setDesc("Format HH:MM (24h)")
@@ -3107,6 +3280,7 @@ class CreateWorkflowModal extends Modal {
           }
           if (
             this.draft.scheduleType !== "manual" &&
+            this.draft.scheduleType !== "interval" &&
             !/^\d{2}:\d{2}$/.test(this.draft.scheduleTime ?? "")
           ) {
             new Notice("Invalid time. Use HH:MM format.");
@@ -3153,6 +3327,8 @@ class CreateWorkflowModal extends Modal {
                 scheduleDate: this.draft.scheduleDate ?? "",
                 scheduleDays: this.draft.scheduleDays ?? [],
                 scheduleMonthDays: this.draft.scheduleMonthDays ?? [],
+                scheduleIntervalValue: this.draft.scheduleIntervalValue ?? 10,
+                scheduleIntervalUnit: this.draft.scheduleIntervalUnit ?? "minutes",
               };
             }
           } else {
@@ -3171,6 +3347,8 @@ class CreateWorkflowModal extends Modal {
               scheduleDate: this.draft.scheduleDate ?? todayString(),
               scheduleDays: this.draft.scheduleDays ?? [],
               scheduleMonthDays: this.draft.scheduleMonthDays ?? [],
+              scheduleIntervalValue: this.draft.scheduleIntervalValue ?? 10,
+              scheduleIntervalUnit: this.draft.scheduleIntervalUnit ?? "minutes",
             };
             this.plugin.settings.workflows.push(workflow);
           }
