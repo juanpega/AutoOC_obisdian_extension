@@ -4575,6 +4575,9 @@ class ImportModal extends Modal {
   private libraryError: string | null = null;
   private selectedLibraryFile: string | null = null;
   private pastedJson = "";
+  // Last validation result (errors + warnings). Rendered in the
+  // preview so the user can see exactly what's wrong with the file.
+  private lastValidation: { ok: boolean; errors: string[]; warnings: string[] } | null = null;
 
   constructor(app: App, plugin: AutoOCPlugin) {
     super(app);
@@ -4719,14 +4722,26 @@ class ImportModal extends Modal {
         return;
       }
       try {
-        const data = JSON.parse(this.pastedJson) as AutoOCExportFile;
-        this.validateExport(data);
-        this.previewData = data;
-        this.filePath = null;
-        this.selectedLibraryFile = null;
-        new Notice(`AutoOC: parsed ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+        const data = JSON.parse(this.pastedJson);
+        const result = this.validateExport(data);
+        this.lastValidation = result;
+        if (!result.ok) {
+          this.previewData = null;
+          new Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) — see the preview panel.`, 8000);
+        } else {
+          this.previewData = data;
+          this.filePath = null;
+          this.selectedLibraryFile = null;
+          if (result.warnings.length > 0) {
+            new Notice(`AutoOC: parsed ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s) with ${result.warnings.length} warning(s).`, 6000);
+          } else {
+            new Notice(`AutoOC: parsed ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+          }
+        }
       } catch (e) {
         this.previewData = null;
+        this.lastValidation = { ok: false, errors: [`Could not parse JSON: ${String(e)}`], warnings: [] };
+        new Notice(`AutoOC: could not parse JSON — ${String(e)}`, 8000);
       }
       this.renderPreview();
       this.updateImportButton();
@@ -4859,11 +4874,22 @@ class ImportModal extends Modal {
       const raw = fs.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw) as AutoOCExportFile;
       this.validateExport(data);
-      this.previewData = data;
-      new Notice(`AutoOC: loaded ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+      const result = this.validateExport(data);
+      this.lastValidation = result;
+      if (!result.ok) {
+        this.previewData = null;
+        new Notice(`AutoOC: file has ${result.errors.length} error(s) — see the preview panel.`, 8000);
+      } else {
+        this.previewData = data;
+        if (result.warnings.length > 0) {
+          new Notice(`AutoOC: loaded ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s) with ${result.warnings.length} warning(s).`, 6000);
+        } else {
+          new Notice(`AutoOC: loaded ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+        }
+      }
     } catch (e) {
       this.previewData = null;
-      new Notice(`AutoOC: could not read file — ${String(e)}`);
+      new Notice(`AutoOC: could not read file — ${String(e)}`, 8000);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -4892,22 +4918,210 @@ class ImportModal extends Modal {
       const url = noCacheUrl(getLibraryFileUrl(this.plugin.settings.libraryUrl, fileName));
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = (await res.json()) as AutoOCExportFile;
-      this.validateExport(data);
-      this.previewData = data;
-      new Notice(`AutoOC: loaded "${fileName}" — ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+      const data = (await res.json());
+      const result = this.validateExport(data);
+      this.lastValidation = result;
+      if (!result.ok) {
+        this.previewData = null;
+        new Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) — see the preview panel.`, 8000);
+      } else {
+        this.previewData = data;
+        if (result.warnings.length > 0) {
+          new Notice(`AutoOC: loaded "${fileName}" — ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s) with ${result.warnings.length} warning(s).`, 6000);
+        } else {
+          new Notice(`AutoOC: loaded "${fileName}" — ${data.tasks?.length ?? 0} task(s), ${data.workflows?.length ?? 0} workflow(s).`);
+        }
+      }
     } catch (e) {
       this.previewData = null;
-      new Notice(`AutoOC: could not load file — ${String(e)}`);
+      new Notice(`AutoOC: could not load file — ${String(e)}`, 8000);
     }
     this.renderPreview();
     this.updateImportButton();
   }
 
-  private validateExport(data: AutoOCExportFile) {
-    if (!data.autoOCExport || data.autoOCExport.schemaVersion !== "1.0") {
-      throw new Error("Invalid AutoOC export file (missing or unsupported schema).");
+  // Validate an imported JSON. Collects ALL issues before throwing so
+  // the user gets a complete diagnostic in one Notice instead of
+  // fixing one error at a time. The shape and rules mirror what
+  // `importFromData` expects.
+  private validateExport(data: any): { ok: boolean; errors: string[]; warnings: string[] } {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+
+    if (!data || typeof data !== "object") {
+      return { ok: false, errors: ["The file is not a JSON object."], warnings: [] };
     }
+    if (!data.autoOCExport || typeof data.autoOCExport !== "object") {
+      return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
+    }
+    const sv = data.autoOCExport.schemaVersion;
+    const SUPPORTED = ["1.0", "1.4.0"];
+    if (!sv) {
+      errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
+    } else if (!SUPPORTED.includes(sv)) {
+      errors.push("Unsupported `schemaVersion`: \"" + sv + "\". Expected one of: " + SUPPORTED.join(", "));
+    }
+    if (!Array.isArray(data.tasks)) {
+      errors.push("`tasks` must be an array (can be empty).");
+    }
+    if (!Array.isArray(data.workflows)) {
+      errors.push("`workflows` must be an array (can be empty).");
+    }
+
+    // Validate tasks
+    const taskExportIds = new Set<string>();
+    if (Array.isArray(data.tasks)) {
+      const seenNames = new Set<string>();
+      data.tasks.forEach((t: any, i: number) => {
+        const where = "task[" + i + "]";
+        if (!t || typeof t !== "object") { errors.push(where + " is not an object."); return; }
+        if (typeof t.exportId !== "string" || !t.exportId.trim()) {
+          errors.push(where + ".exportId is missing or empty.");
+        } else {
+          if (taskExportIds.has(t.exportId)) {
+            errors.push(where + ".exportId \"" + t.exportId + "\" is duplicated.");
+          }
+          taskExportIds.add(t.exportId);
+        }
+        if (typeof t.name !== "string" || !t.name.trim()) {
+          errors.push(where + ".name is missing or empty.");
+        } else if (seenNames.has(t.name)) {
+          warnings.push(where + ".name \"" + t.name + "\" is duplicated; imports will rename automatically.");
+        } else {
+          seenNames.add(t.name);
+        }
+        if (typeof t.prompt !== "string" || !t.prompt.trim()) {
+          errors.push(where + ".prompt is missing or empty.");
+        }
+        const validSchedules = ["manual", "once", "daily", "weekly", "monthly"];
+        if (t.scheduleType && !validSchedules.includes(t.scheduleType)) {
+          errors.push(where + ".scheduleType \"" + t.scheduleType + "\" is invalid. Expected: " + validSchedules.join(", "));
+        }
+        if (t.scheduleType === "once" && (!t.scheduleDate || !/^\d{4}-\d{2}-\d{2}$/.test(t.scheduleDate))) {
+          warnings.push(where + ": scheduleType is 'once' but scheduleDate is empty or not YYYY-MM-DD.");
+        }
+        if (t.scheduleType === "weekly" && (!Array.isArray(t.scheduleDays) || t.scheduleDays.length === 0)) {
+          warnings.push(where + ": scheduleType is 'weekly' but scheduleDays is empty.");
+        }
+        if (Array.isArray(t.scheduleDays)) {
+          t.scheduleDays.forEach((d: any) => {
+            if (typeof d !== "number" || d < 0 || d > 6) {
+              errors.push(where + ".scheduleDays contains an invalid value: " + JSON.stringify(d) + " (must be 0-6).");
+            }
+          });
+        }
+        if (Array.isArray(t.scheduleMonthDays)) {
+          t.scheduleMonthDays.forEach((d: any) => {
+            if (typeof d !== "number" || d < 1 || d > 31) {
+              errors.push(where + ".scheduleMonthDays contains an invalid value: " + JSON.stringify(d) + " (must be 1-31).");
+            }
+          });
+        }
+      });
+    }
+
+    // Validate workflows. We do this in two passes:
+    //   1. Collect all step ids so transitions can resolve them
+    //   2. Validate each step's structure and its transitions
+    // Doing it in one pass would incorrectly flag forward references
+    // (step N's transition to step N+1) as broken.
+    if (Array.isArray(data.workflows)) {
+      data.workflows.forEach((w: any, wi: number) => {
+        const wwhere = "workflow[" + wi + "]";
+        if (!w || typeof w !== "object") { errors.push(wwhere + " is not an object."); return; }
+        if (typeof w.name !== "string" || !w.name.trim()) {
+          errors.push(wwhere + ".name is missing or empty.");
+        }
+        if (!Array.isArray(w.steps)) {
+          errors.push(wwhere + ".steps must be an array.");
+          return;
+        }
+        const steps = w.steps as any[];
+
+        // Pass 1: collect step ids and report duplicates / missing ids.
+        const stepIds = new Set<string>();
+        steps.forEach((s: any, i: number) => {
+          const swhere = wwhere + ".steps[" + i + "]";
+          if (!s || typeof s !== "object") { return; }
+          if (typeof s.id !== "string" || !s.id.trim()) {
+            errors.push(swhere + ".id is missing or empty.");
+          } else {
+            if (stepIds.has(s.id)) {
+              errors.push(swhere + ".id \"" + s.id + "\" is duplicated within the workflow.");
+            }
+            stepIds.add(s.id);
+          }
+        });
+
+        // Pass 2: validate each step's structure and its transitions.
+        steps.forEach((s: any, i: number) => {
+          const swhere = wwhere + ".steps[" + i + "]";
+          if (!s || typeof s !== "object") { return; }
+          const kind = s.stepKind || "task";
+          if (!["task", "delay", "code"].includes(kind)) {
+            errors.push(swhere + ".stepKind \"" + kind + "\" is invalid. Expected: task, delay, or code.");
+          }
+          if (kind === "task") {
+            if (typeof s.taskExportId !== "string" || !s.taskExportId.trim()) {
+              errors.push(swhere + " (task) is missing taskExportId.");
+            } else if (!taskExportIds.has(s.taskExportId)) {
+              errors.push(swhere + " (task) references taskExportId \"" + s.taskExportId + "\" which is not defined in `tasks`.");
+            }
+          }
+          if (kind === "delay") {
+            if (typeof s.delayValue !== "number" || s.delayValue < 0) {
+              errors.push(swhere + " (delay) is missing or has an invalid delayValue (must be a non-negative number).");
+            }
+            if (s.delayUnit && !["seconds", "minutes", "hours"].includes(s.delayUnit)) {
+              errors.push(swhere + ".delayUnit \"" + s.delayUnit + "\" is invalid. Expected: seconds, minutes, hours.");
+            }
+          }
+          if (kind === "code") {
+            if (typeof s.code !== "string" || !s.code.trim()) {
+              errors.push(swhere + " (code) is missing the `code` field.");
+            }
+            if (s.codeLang && s.codeLang !== "javascript") {
+              warnings.push(swhere + ".codeLang is \"" + s.codeLang + "\"; only 'javascript' is currently supported.");
+            }
+          }
+          if (s.transitions !== undefined && !Array.isArray(s.transitions)) {
+            errors.push(swhere + ".transitions must be an array.");
+          }
+          if (Array.isArray(s.transitions)) {
+            const validModes = ["default", "force", "eval", "conditional"];
+            s.transitions.forEach((t: any, ti: number) => {
+              const twhere = swhere + ".transitions[" + ti + "]";
+              if (!t || typeof t !== "object") { errors.push(twhere + " is not an object."); return; }
+              if (typeof t.toStepId !== "string" || !t.toStepId.trim()) {
+                errors.push(twhere + ".toStepId is missing.");
+              } else if (!stepIds.has(t.toStepId)) {
+                errors.push(twhere + ".toStepId \"" + t.toStepId + "\" references a step that doesn't exist in this workflow.");
+              }
+              if (t.mode && !validModes.includes(t.mode)) {
+                errors.push(twhere + ".mode \"" + t.mode + "\" is invalid. Expected: " + validModes.join(", "));
+              }
+              if (t.mode === "eval" && (typeof t.evaluatePrompt !== "string" || !t.evaluatePrompt.trim())) {
+                errors.push(twhere + " (eval) is missing evaluatePrompt.");
+              }
+              if (t.mode === "conditional" && (typeof t.condition !== "string" || !t.condition.trim())) {
+                errors.push(twhere + " (conditional) is missing the `condition` expression.");
+              }
+            });
+          }
+        });
+        // Entry step check: at least one step must have no incoming transitions.
+        const incoming = new Set<string>();
+        steps.forEach((s: any) => {
+          (s.transitions || []).forEach((t: any) => incoming.add(t.toStepId));
+        });
+        const entryCandidates = steps.filter((s: any) => s.id && !incoming.has(s.id));
+        if (steps.length > 0 && entryCandidates.length === 0) {
+          errors.push(wwhere + " has no entry step (every step is the target of a transition).");
+        }
+      });
+    }
+
+    return { ok: errors.length === 0, errors, warnings };
   }
 
   private updateImportButton() {
@@ -4921,11 +5135,34 @@ class ImportModal extends Modal {
   private renderPreview() {
     if (!this.previewEl) return;
     this.previewEl.empty();
-    if (!this.previewData) {
-      this.previewEl.createEl("p", {
-        text: "No valid export loaded yet.",
-        cls: "auto-oc-empty",
+
+    // If the last validation produced errors, show them — the user
+    // will see exactly why the import is blocked and where to fix it.
+    if (this.lastValidation && this.lastValidation.errors.length > 0 && !this.previewData) {
+      const errBox = this.previewEl.createDiv("auto-oc-import-errors");
+      errBox.style.background = "rgba(224, 108, 117, 0.12)";
+      errBox.style.border = "1px solid var(--background-modifier-error, #e06c75)";
+      errBox.style.padding = "10px 12px";
+      errBox.style.borderRadius = "6px";
+      errBox.style.color = "var(--text-error, #e06c75)";
+      const title = errBox.createEl("div", { text: `❌ ${this.lastValidation.errors.length} error(s) found — fix them before importing` });
+      title.style.fontWeight = "600";
+      title.style.marginBottom = "6px";
+      const list = errBox.createEl("ul", { cls: "auto-oc-import-error-list" });
+      list.style.margin = "0";
+      list.style.paddingLeft = "20px";
+      this.lastValidation.errors.forEach((msg) => {
+        list.createEl("li", { text: msg });
       });
+    }
+
+    if (!this.previewData) {
+      if (!this.lastValidation || this.lastValidation.errors.length === 0) {
+        this.previewEl.createEl("p", {
+          text: "No valid export loaded yet.",
+          cls: "auto-oc-empty",
+        });
+      }
       return;
     }
 
@@ -4951,6 +5188,27 @@ class ImportModal extends Modal {
     counts.style.marginBottom = "0";
     counts.createEl("li", { text: `${this.previewData.tasks?.length ?? 0} task(s)` });
     counts.createEl("li", { text: `${this.previewData.workflows?.length ?? 0} workflow(s)` });
+
+    // Warnings (non-blocking)
+    if (this.lastValidation && this.lastValidation.warnings.length > 0) {
+      const warnBox = box.createDiv("auto-oc-import-warnings");
+      warnBox.style.marginTop = "10px";
+      warnBox.style.padding = "8px 10px";
+      warnBox.style.background = "rgba(216, 166, 87, 0.10)";
+      warnBox.style.border = "1px solid rgba(216, 166, 87, 0.4)";
+      warnBox.style.borderRadius = "6px";
+      warnBox.style.color = "var(--text-warning, #d8a657)";
+      warnBox.createEl("div", {
+        text: `⚠ ${this.lastValidation.warnings.length} warning(s)`,
+        attr: { style: "font-weight:600;margin-bottom:4px" },
+      });
+      const wlist = warnBox.createEl("ul", { cls: "auto-oc-import-warn-list" });
+      wlist.style.margin = "0";
+      wlist.style.paddingLeft = "20px";
+      this.lastValidation.warnings.forEach((msg) => {
+        wlist.createEl("li", { text: msg });
+      });
+    }
   }
 
   onClose() {

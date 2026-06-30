@@ -5759,6 +5759,9 @@ var ImportModal = class extends import_obsidian.Modal {
     this.libraryError = null;
     this.selectedLibraryFile = null;
     this.pastedJson = "";
+    // Last validation result (errors + warnings). Rendered in the
+    // preview so the user can see exactly what's wrong with the file.
+    this.lastValidation = null;
     this.plugin = plugin;
   }
   onOpen() {
@@ -5880,7 +5883,7 @@ var ImportModal = class extends import_obsidian.Modal {
     textarea.style.fontFamily = "var(--font-monospace)";
     textarea.style.fontSize = "0.8rem";
     const parse = () => {
-      var _a, _b, _c, _d;
+      var _a, _b, _c, _d, _e, _f, _g, _h;
       this.pastedJson = textarea.value.trim();
       if (!this.pastedJson) {
         this.previewData = null;
@@ -5890,13 +5893,25 @@ var ImportModal = class extends import_obsidian.Modal {
       }
       try {
         const data = JSON.parse(this.pastedJson);
-        this.validateExport(data);
-        this.previewData = data;
-        this.filePath = null;
-        this.selectedLibraryFile = null;
-        new import_obsidian.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s).`);
+        const result = this.validateExport(data);
+        this.lastValidation = result;
+        if (!result.ok) {
+          this.previewData = null;
+          new import_obsidian.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        } else {
+          this.previewData = data;
+          this.filePath = null;
+          this.selectedLibraryFile = null;
+          if (result.warnings.length > 0) {
+            new import_obsidian.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          } else {
+            new import_obsidian.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          }
+        }
       } catch (e) {
         this.previewData = null;
+        this.lastValidation = { ok: false, errors: [`Could not parse JSON: ${String(e)}`], warnings: [] };
+        new import_obsidian.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
       }
       this.renderPreview();
       this.updateImportButton();
@@ -6012,17 +6027,28 @@ var ImportModal = class extends import_obsidian.Modal {
     return null;
   }
   async loadFilePreview() {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
       const raw = fs.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
-      this.previewData = data;
-      new import_obsidian.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s).`);
+      const result = this.validateExport(data);
+      this.lastValidation = result;
+      if (!result.ok) {
+        this.previewData = null;
+        new import_obsidian.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+      } else {
+        this.previewData = data;
+        if (result.warnings.length > 0) {
+          new import_obsidian.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+        } else {
+          new import_obsidian.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+        }
+      }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian.Notice(`AutoOC: could not read file \u2014 ${String(e)}`);
+      new import_obsidian.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -6045,26 +6071,212 @@ var ImportModal = class extends import_obsidian.Modal {
     }
   }
   async loadLibraryFile(fileName) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     try {
       const url = noCacheUrl(getLibraryFileUrl(this.plugin.settings.libraryUrl, fileName));
       const res = await fetch(url, { cache: "no-store" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      this.validateExport(data);
-      this.previewData = data;
-      new import_obsidian.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s).`);
+      const result = this.validateExport(data);
+      this.lastValidation = result;
+      if (!result.ok) {
+        this.previewData = null;
+        new import_obsidian.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+      } else {
+        this.previewData = data;
+        if (result.warnings.length > 0) {
+          new import_obsidian.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+        } else {
+          new import_obsidian.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+        }
+      }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian.Notice(`AutoOC: could not load file \u2014 ${String(e)}`);
+      new import_obsidian.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
   }
+  // Validate an imported JSON. Collects ALL issues before throwing so
+  // the user gets a complete diagnostic in one Notice instead of
+  // fixing one error at a time. The shape and rules mirror what
+  // `importFromData` expects.
   validateExport(data) {
-    if (!data.autoOCExport || data.autoOCExport.schemaVersion !== "1.0") {
-      throw new Error("Invalid AutoOC export file (missing or unsupported schema).");
+    const errors = [];
+    const warnings = [];
+    if (!data || typeof data !== "object") {
+      return { ok: false, errors: ["The file is not a JSON object."], warnings: [] };
     }
+    if (!data.autoOCExport || typeof data.autoOCExport !== "object") {
+      return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
+    }
+    const sv = data.autoOCExport.schemaVersion;
+    const SUPPORTED = ["1.0", "1.4.0"];
+    if (!sv) {
+      errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
+    } else if (!SUPPORTED.includes(sv)) {
+      errors.push('Unsupported `schemaVersion`: "' + sv + '". Expected one of: ' + SUPPORTED.join(", "));
+    }
+    if (!Array.isArray(data.tasks)) {
+      errors.push("`tasks` must be an array (can be empty).");
+    }
+    if (!Array.isArray(data.workflows)) {
+      errors.push("`workflows` must be an array (can be empty).");
+    }
+    const taskExportIds = /* @__PURE__ */ new Set();
+    if (Array.isArray(data.tasks)) {
+      const seenNames = /* @__PURE__ */ new Set();
+      data.tasks.forEach((t, i) => {
+        const where = "task[" + i + "]";
+        if (!t || typeof t !== "object") {
+          errors.push(where + " is not an object.");
+          return;
+        }
+        if (typeof t.exportId !== "string" || !t.exportId.trim()) {
+          errors.push(where + ".exportId is missing or empty.");
+        } else {
+          if (taskExportIds.has(t.exportId)) {
+            errors.push(where + '.exportId "' + t.exportId + '" is duplicated.');
+          }
+          taskExportIds.add(t.exportId);
+        }
+        if (typeof t.name !== "string" || !t.name.trim()) {
+          errors.push(where + ".name is missing or empty.");
+        } else if (seenNames.has(t.name)) {
+          warnings.push(where + '.name "' + t.name + '" is duplicated; imports will rename automatically.');
+        } else {
+          seenNames.add(t.name);
+        }
+        if (typeof t.prompt !== "string" || !t.prompt.trim()) {
+          errors.push(where + ".prompt is missing or empty.");
+        }
+        const validSchedules = ["manual", "once", "daily", "weekly", "monthly"];
+        if (t.scheduleType && !validSchedules.includes(t.scheduleType)) {
+          errors.push(where + '.scheduleType "' + t.scheduleType + '" is invalid. Expected: ' + validSchedules.join(", "));
+        }
+        if (t.scheduleType === "once" && (!t.scheduleDate || !/^\d{4}-\d{2}-\d{2}$/.test(t.scheduleDate))) {
+          warnings.push(where + ": scheduleType is 'once' but scheduleDate is empty or not YYYY-MM-DD.");
+        }
+        if (t.scheduleType === "weekly" && (!Array.isArray(t.scheduleDays) || t.scheduleDays.length === 0)) {
+          warnings.push(where + ": scheduleType is 'weekly' but scheduleDays is empty.");
+        }
+        if (Array.isArray(t.scheduleDays)) {
+          t.scheduleDays.forEach((d) => {
+            if (typeof d !== "number" || d < 0 || d > 6) {
+              errors.push(where + ".scheduleDays contains an invalid value: " + JSON.stringify(d) + " (must be 0-6).");
+            }
+          });
+        }
+        if (Array.isArray(t.scheduleMonthDays)) {
+          t.scheduleMonthDays.forEach((d) => {
+            if (typeof d !== "number" || d < 1 || d > 31) {
+              errors.push(where + ".scheduleMonthDays contains an invalid value: " + JSON.stringify(d) + " (must be 1-31).");
+            }
+          });
+        }
+      });
+    }
+    if (Array.isArray(data.workflows)) {
+      data.workflows.forEach((w, wi) => {
+        const wwhere = "workflow[" + wi + "]";
+        if (!w || typeof w !== "object") {
+          errors.push(wwhere + " is not an object.");
+          return;
+        }
+        if (typeof w.name !== "string" || !w.name.trim()) {
+          errors.push(wwhere + ".name is missing or empty.");
+        }
+        if (!Array.isArray(w.steps)) {
+          errors.push(wwhere + ".steps must be an array.");
+          return;
+        }
+        const steps = w.steps;
+        const stepIds = /* @__PURE__ */ new Set();
+        steps.forEach((s, i) => {
+          const swhere = wwhere + ".steps[" + i + "]";
+          if (!s || typeof s !== "object") {
+            return;
+          }
+          if (typeof s.id !== "string" || !s.id.trim()) {
+            errors.push(swhere + ".id is missing or empty.");
+          } else {
+            if (stepIds.has(s.id)) {
+              errors.push(swhere + '.id "' + s.id + '" is duplicated within the workflow.');
+            }
+            stepIds.add(s.id);
+          }
+        });
+        steps.forEach((s, i) => {
+          const swhere = wwhere + ".steps[" + i + "]";
+          if (!s || typeof s !== "object") {
+            return;
+          }
+          const kind = s.stepKind || "task";
+          if (!["task", "delay", "code"].includes(kind)) {
+            errors.push(swhere + '.stepKind "' + kind + '" is invalid. Expected: task, delay, or code.');
+          }
+          if (kind === "task") {
+            if (typeof s.taskExportId !== "string" || !s.taskExportId.trim()) {
+              errors.push(swhere + " (task) is missing taskExportId.");
+            } else if (!taskExportIds.has(s.taskExportId)) {
+              errors.push(swhere + ' (task) references taskExportId "' + s.taskExportId + '" which is not defined in `tasks`.');
+            }
+          }
+          if (kind === "delay") {
+            if (typeof s.delayValue !== "number" || s.delayValue < 0) {
+              errors.push(swhere + " (delay) is missing or has an invalid delayValue (must be a non-negative number).");
+            }
+            if (s.delayUnit && !["seconds", "minutes", "hours"].includes(s.delayUnit)) {
+              errors.push(swhere + '.delayUnit "' + s.delayUnit + '" is invalid. Expected: seconds, minutes, hours.');
+            }
+          }
+          if (kind === "code") {
+            if (typeof s.code !== "string" || !s.code.trim()) {
+              errors.push(swhere + " (code) is missing the `code` field.");
+            }
+            if (s.codeLang && s.codeLang !== "javascript") {
+              warnings.push(swhere + '.codeLang is "' + s.codeLang + `"; only 'javascript' is currently supported.`);
+            }
+          }
+          if (s.transitions !== void 0 && !Array.isArray(s.transitions)) {
+            errors.push(swhere + ".transitions must be an array.");
+          }
+          if (Array.isArray(s.transitions)) {
+            const validModes = ["default", "force", "eval", "conditional"];
+            s.transitions.forEach((t, ti) => {
+              const twhere = swhere + ".transitions[" + ti + "]";
+              if (!t || typeof t !== "object") {
+                errors.push(twhere + " is not an object.");
+                return;
+              }
+              if (typeof t.toStepId !== "string" || !t.toStepId.trim()) {
+                errors.push(twhere + ".toStepId is missing.");
+              } else if (!stepIds.has(t.toStepId)) {
+                errors.push(twhere + '.toStepId "' + t.toStepId + `" references a step that doesn't exist in this workflow.`);
+              }
+              if (t.mode && !validModes.includes(t.mode)) {
+                errors.push(twhere + '.mode "' + t.mode + '" is invalid. Expected: ' + validModes.join(", "));
+              }
+              if (t.mode === "eval" && (typeof t.evaluatePrompt !== "string" || !t.evaluatePrompt.trim())) {
+                errors.push(twhere + " (eval) is missing evaluatePrompt.");
+              }
+              if (t.mode === "conditional" && (typeof t.condition !== "string" || !t.condition.trim())) {
+                errors.push(twhere + " (conditional) is missing the `condition` expression.");
+              }
+            });
+          }
+        });
+        const incoming = /* @__PURE__ */ new Set();
+        steps.forEach((s) => {
+          (s.transitions || []).forEach((t) => incoming.add(t.toStepId));
+        });
+        const entryCandidates = steps.filter((s) => s.id && !incoming.has(s.id));
+        if (steps.length > 0 && entryCandidates.length === 0) {
+          errors.push(wwhere + " has no entry step (every step is the target of a transition).");
+        }
+      });
+    }
+    return { ok: errors.length === 0, errors, warnings };
   }
   updateImportButton() {
     const btnImport = this._importBtn;
@@ -6077,11 +6289,30 @@ var ImportModal = class extends import_obsidian.Modal {
     var _a, _b, _c, _d;
     if (!this.previewEl) return;
     this.previewEl.empty();
-    if (!this.previewData) {
-      this.previewEl.createEl("p", {
-        text: "No valid export loaded yet.",
-        cls: "auto-oc-empty"
+    if (this.lastValidation && this.lastValidation.errors.length > 0 && !this.previewData) {
+      const errBox = this.previewEl.createDiv("auto-oc-import-errors");
+      errBox.style.background = "rgba(224, 108, 117, 0.12)";
+      errBox.style.border = "1px solid var(--background-modifier-error, #e06c75)";
+      errBox.style.padding = "10px 12px";
+      errBox.style.borderRadius = "6px";
+      errBox.style.color = "var(--text-error, #e06c75)";
+      const title = errBox.createEl("div", { text: `\u274C ${this.lastValidation.errors.length} error(s) found \u2014 fix them before importing` });
+      title.style.fontWeight = "600";
+      title.style.marginBottom = "6px";
+      const list = errBox.createEl("ul", { cls: "auto-oc-import-error-list" });
+      list.style.margin = "0";
+      list.style.paddingLeft = "20px";
+      this.lastValidation.errors.forEach((msg) => {
+        list.createEl("li", { text: msg });
       });
+    }
+    if (!this.previewData) {
+      if (!this.lastValidation || this.lastValidation.errors.length === 0) {
+        this.previewEl.createEl("p", {
+          text: "No valid export loaded yet.",
+          cls: "auto-oc-empty"
+        });
+      }
       return;
     }
     const box = this.previewEl.createDiv("auto-oc-import-preview-box");
@@ -6104,6 +6335,25 @@ var ImportModal = class extends import_obsidian.Modal {
     counts.style.marginBottom = "0";
     counts.createEl("li", { text: `${(_b = (_a = this.previewData.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s)` });
     counts.createEl("li", { text: `${(_d = (_c = this.previewData.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s)` });
+    if (this.lastValidation && this.lastValidation.warnings.length > 0) {
+      const warnBox = box.createDiv("auto-oc-import-warnings");
+      warnBox.style.marginTop = "10px";
+      warnBox.style.padding = "8px 10px";
+      warnBox.style.background = "rgba(216, 166, 87, 0.10)";
+      warnBox.style.border = "1px solid rgba(216, 166, 87, 0.4)";
+      warnBox.style.borderRadius = "6px";
+      warnBox.style.color = "var(--text-warning, #d8a657)";
+      warnBox.createEl("div", {
+        text: `\u26A0 ${this.lastValidation.warnings.length} warning(s)`,
+        attr: { style: "font-weight:600;margin-bottom:4px" }
+      });
+      const wlist = warnBox.createEl("ul", { cls: "auto-oc-import-warn-list" });
+      wlist.style.margin = "0";
+      wlist.style.paddingLeft = "20px";
+      this.lastValidation.warnings.forEach((msg) => {
+        wlist.createEl("li", { text: msg });
+      });
+    }
   }
   onClose() {
     this.contentEl.empty();
