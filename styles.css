@@ -525,10 +525,25 @@
 
 .auto-oc-tab-bar {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   margin-bottom: 12px;
   border-bottom: 2px solid var(--background-modifier-border);
+  padding-bottom: 8px;
+}
+
+.auto-oc-tab-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
   flex-wrap: wrap;
+}
+
+.auto-oc-tab-row-tools {
+  /* Holds the creation button on the left and Export/Import on the
+     right; the auto-oc-tab-spacer between them pushes the right
+     group to the edge of the panel. */
+  align-items: center;
 }
 
 .auto-oc-tab-spacer {
@@ -1146,4 +1161,72 @@
 .auto-oc-modal-x:hover {
   background: var(--background-modifier-hover);
   color: var(--text-normal);
+}
+
+/* ── Visual Builder Modal ─────────────────────────────────────────────── */
+
+.auto-oc-fullscreen-modal {
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.auto-oc-fullscreen-modal .modal-content {
+  flex: 1 1 auto !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  overflow: hidden !important;
+  box-sizing: border-box !important;
+}
+
+.auto-oc-fullscreen-modal .modal-close-button {
+  /* Move the default close button out of the way of the toolbar */
+  z-index: 2;
+}
+
+.auto-oc-visual-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.auto-oc-visual-toolbar .toolbar-title {
+  font-weight: 600;
+  color: var(--text-normal);
+  margin-right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.auto-oc-visual-toolbar .toolbar-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.auto-oc-visual-toolbar .toolbar-spacer {
+  flex: 1;
+}
+
+.auto-oc-visual-iframe-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+  background: var(--background-primary);
+  display: flex;
+}
+
+.auto-oc-visual-iframe-wrap iframe {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  display: block;
 }

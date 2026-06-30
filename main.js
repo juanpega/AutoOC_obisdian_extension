@@ -4,6 +4,9 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __esm = (fn, res) => function __init() {
+  return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -26,6 +29,1925 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
+// visualBuilderHtml.generated.ts
+var visualBuilderHtml_generated_exports = {};
+__export(visualBuilderHtml_generated_exports, {
+  visualBuilderHtml: () => visualBuilderHtml
+});
+var visualBuilderHtml;
+var init_visualBuilderHtml_generated = __esm({
+  "visualBuilderHtml.generated.ts"() {
+    visualBuilderHtml = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AutoOC \u2014 Visual Workflow Builder</title>
+  <style>
+    :root {
+      --bg: #15171c;
+      --bg-2: #1b1e25;
+      --bg-3: #232730;
+      --bg-4: #2c313c;
+      --bg-5: #383e4a;
+      --border: #2c313c;
+      --border-soft: #232730;
+      --text: #d8dde6;
+      --text-muted: #8a93a3;
+      --text-dim: #5d6371;
+      --accent: #6f9eff;
+      --accent-2: #4a7dff;
+      --accent-soft: rgba(111, 158, 255, 0.16);
+      --ok: #6ec27c;
+      --warn: #d8a657;
+      --err: #e06c75;
+      --info: #5fb3d4;
+      --purple: #b07ad9;
+      --delay: #d8a657;
+      --code: #e879b3;
+      --grid: rgba(255, 255, 255, 0.04);
+      --grid-major: rgba(255, 255, 255, 0.08);
+      --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.3);
+      --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.5);
+      --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.55);
+    }
+    [data-theme="light"] {
+      --bg: #f4f5f7;
+      --bg-2: #ffffff;
+      --bg-3: #f0f1f4;
+      --bg-4: #e3e6ec;
+      --bg-5: #d6dae2;
+      --border: #d8dce4;
+      --border-soft: #e8eaf0;
+      --text: #1a1d24;
+      --text-muted: #5f6776;
+      --text-dim: #9ba1ad;
+      --accent: #2d5fe6;
+      --accent-2: #1a47b8;
+      --accent-soft: rgba(45, 95, 230, 0.12);
+      --ok: #2e8b3a;
+      --warn: #b3802a;
+      --err: #c43c47;
+      --info: #2b86a8;
+      --purple: #7e3eb1;
+      --delay: #b3802a;
+      --code: #c43c75;
+      --grid: rgba(0, 0, 0, 0.05);
+      --grid-major: rgba(0, 0, 0, 0.1);
+      --shadow-1: 0 1px 3px rgba(0, 0, 0, 0.08);
+      --shadow-2: 0 4px 14px rgba(0, 0, 0, 0.1);
+      --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.18);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; height: 100%;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", system-ui, sans-serif;
+      font-size: 13px; color: var(--text); background: var(--bg);
+      overflow: hidden;
+    }
+    button {
+      font-family: inherit; font-size: 12px; color: var(--text);
+      background: var(--bg-3); border: 1px solid var(--border); border-radius: 5px;
+      padding: 5px 10px; cursor: pointer;
+      transition: background 0.12s, border-color 0.12s, color 0.12s;
+      display: inline-flex; align-items: center; gap: 5px;
+    }
+    button:hover { background: var(--bg-4); border-color: var(--accent); }
+    button:active { transform: translateY(0.5px); }
+    button.primary {
+      background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600;
+    }
+    button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+    button.ghost { background: transparent; border-color: transparent; color: var(--text-muted); }
+    button.ghost:hover { color: var(--text); background: var(--bg-3); border-color: var(--border); }
+    button.danger:hover { border-color: var(--err); color: var(--err); }
+    button.tiny { padding: 2px 6px; font-size: 11px; border-radius: 4px; }
+    input, select, textarea {
+      font-family: inherit; font-size: 12px; color: var(--text);
+      background: var(--bg-2); border: 1px solid var(--border); border-radius: 4px;
+      padding: 5px 8px; width: 100%;
+      transition: border-color 0.12s, box-shadow 0.12s;
+    }
+    input:focus, select:focus, textarea:focus {
+      outline: none; border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-soft);
+    }
+    input[type="checkbox"] { width: auto; }
+    textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+    label {
+      display: block; font-size: 11px; color: var(--text-muted);
+      margin-bottom: 3px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+    }
+    .field { margin-bottom: 10px; }
+    .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .hint-inline { font-size: 11px; color: var(--text-muted); margin-top: 4px; line-height: 1.4; }
+    .checkbox-row {
+      display: flex; align-items: center; gap: 6px; padding: 4px 0;
+      font-size: 12px; text-transform: none; letter-spacing: 0;
+      font-weight: 400; color: var(--text); cursor: pointer;
+    }
+    .app {
+      display: grid;
+      grid-template-rows: 38px 1fr 22px;
+      grid-template-columns: 240px 1fr;
+      grid-template-areas: "tabs tabs" "sidebar main" "status status";
+      height: 100vh;
+    }
+    .tabs {
+      grid-area: tabs; background: var(--bg-2);
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-end; gap: 1px;
+      padding: 0 8px; overflow-x: auto; scrollbar-width: thin;
+    }
+    .tab {
+      display: flex; align-items: center; gap: 6px;
+      padding: 7px 12px 6px; font-size: 12px; color: var(--text-muted);
+      background: transparent; border: 1px solid transparent;
+      border-bottom: none; border-top-left-radius: 6px; border-top-right-radius: 6px;
+      cursor: pointer; white-space: nowrap; max-width: 220px;
+      position: relative; transition: color 0.12s, background 0.12s;
+    }
+    .tab:hover { color: var(--text); background: var(--bg-3); }
+    .tab.active { color: var(--text); background: var(--bg); border-color: var(--border); }
+    .tab.active::after {
+      content: ""; position: absolute;
+      left: 0; right: 0; bottom: -1px; height: 1px; background: var(--bg);
+    }
+    .tab .tab-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--purple); }
+    .tab .tab-name { overflow: hidden; text-overflow: ellipsis; max-width: 160px; }
+    .tab .tab-close { opacity: 0.5; padding: 0 4px; border-radius: 3px; }
+    .tab .tab-close:hover { opacity: 1; background: var(--bg-4); }
+    .tab-add {
+      padding: 7px 10px 6px; color: var(--text-muted); cursor: pointer;
+      border-radius: 6px 6px 0 0; font-size: 12px;
+    }
+    .tab-add:hover { color: var(--text); background: var(--bg-3); }
+    .sidebar {
+      grid-area: sidebar; background: var(--bg-2);
+      border-right: 1px solid var(--border);
+      display: flex; flex-direction: column; overflow: hidden;
+    }
+    .sb-section { display: flex; flex-direction: column; overflow: hidden; }
+    .sb-section.flex-grow { flex: 1; min-height: 0; }
+    .sb-head {
+      padding: 8px 10px; display: flex; align-items: center; gap: 6px;
+      border-bottom: 1px solid var(--border-soft);
+    }
+    .sb-head h3 { margin: 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); flex: 1; }
+    .sb-body { flex: 1; overflow-y: auto; padding: 8px; min-height: 0; }
+    .sb-search { padding: 8px 10px 4px; }
+    .sb-search input { font-size: 12px; }
+    .lib-item {
+      background: var(--bg-3); border: 1px solid var(--border);
+      border-radius: 5px; padding: 6px 8px; margin-bottom: 5px;
+      cursor: grab; transition: border-color 0.12s, background 0.12s;
+    }
+    .lib-item:hover { border-color: var(--accent); background: var(--bg-4); }
+    .lib-item:active { cursor: grabbing; }
+    .lib-item .lib-title { font-weight: 600; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lib-item .lib-meta { font-size: 10.5px; color: var(--text-muted); display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+    .lib-item .lib-meta .chip { background: var(--bg-2); padding: 1px 4px; border-radius: 3px; }
+    .lib-empty { text-align: center; color: var(--text-muted); font-size: 11.5px; padding: 16px 8px; border: 1px dashed var(--border); border-radius: 5px; line-height: 1.5; }
+    .lib-special {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 10px; border-radius: 5px; margin-bottom: 5px;
+      background: var(--bg-3); border: 1px solid var(--border);
+      cursor: grab; transition: border-color 0.12s, background 0.12s;
+    }
+    .lib-special:hover { border-color: var(--accent); background: var(--bg-4); }
+    .lib-special .lib-icon {
+      width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+      border-radius: 4px; background: var(--bg-2); font-size: 13px; flex-shrink: 0;
+    }
+    .lib-special .lib-icon.delay { color: var(--delay); }
+    .lib-special .lib-icon.code { color: var(--code); }
+    .lib-special .lib-name { font-weight: 600; font-size: 12px; }
+    .lib-special .lib-sub { font-size: 10.5px; color: var(--text-muted); }
+    .canvas-wrap { grid-area: main; position: relative; background: var(--bg); overflow: hidden; }
+    .canvas { position: absolute; inset: 0; cursor: grab; }
+    .canvas.panning { cursor: grabbing; }
+    .canvas.space-pan { cursor: grab; }
+    .canvas.space-pan.panning { cursor: grabbing; }
+    .canvas.connecting { cursor: crosshair; }
+    .grid-bg {
+      position: absolute; inset: -2000px; pointer-events: none;
+      background-image:
+        linear-gradient(to right, var(--grid) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid) 1px, transparent 1px),
+        linear-gradient(to right, var(--grid-major) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--grid-major) 1px, transparent 1px);
+      background-size: 20px 20px, 20px 20px, 100px 100px, 100px 100px;
+      z-index: 0;
+    }
+    .canvas-content { position: absolute; inset: 0; transform-origin: 0 0; z-index: 1; }
+    .canvas svg.edges { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+    .canvas svg.edges .edge-hit { pointer-events: stroke; cursor: pointer; }
+    .node {
+      position: absolute; width: 220px; background: var(--bg-2);
+      border: 1.5px solid var(--border); border-radius: 8px;
+      box-shadow: var(--shadow-1);
+      transition: box-shadow 0.12s, border-color 0.12s, transform 0.12s;
+      z-index: 2; user-select: none;
+    }
+    .node:hover { box-shadow: var(--shadow-2); }
+    .node.selected { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow-2); z-index: 3; }
+    .node.dragging { box-shadow: var(--shadow-3); transform: scale(1.02); z-index: 4; }
+    .node.invalid { border-color: var(--err); }
+    .node.warn { border-color: var(--warn); }
+    .node-head {
+      padding: 6px 10px 5px; border-bottom: 1px solid var(--border-soft);
+      display: flex; align-items: center; gap: 6px;
+      background: var(--bg-3); border-top-left-radius: 7px; border-top-right-radius: 7px;
+      cursor: grab;
+    }
+    .node.dragging .node-head { cursor: grabbing; }
+    .node-kind {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.05em;
+      text-transform: uppercase; padding: 1px 5px; border-radius: 3px;
+      background: var(--bg-2); color: var(--text-muted);
+      flex-shrink: 0;
+    }
+    .node-kind.task { color: var(--accent); }
+    .node-kind.delay { color: var(--delay); }
+    .node-kind.code { color: var(--code); }
+    .node-name { font-weight: 600; font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .node-id { font-size: 10px; color: var(--text-dim); font-family: ui-monospace, monospace; flex-shrink: 0; }
+    .node-body { padding: 8px 10px 9px; min-height: 32px; }
+    .node-body .node-detail { font-size: 11px; color: var(--text-muted); line-height: 1.4; }
+    .node-body .node-detail.empty { color: var(--err); font-style: italic; }
+    .node-body .node-meta { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; font-size: 10px; color: var(--text-muted); }
+    .node-body .node-meta .chip { background: var(--bg-3); padding: 1px 5px; border-radius: 3px; border: 1px solid var(--border-soft); }
+    .node-body .node-meta .chip.code-lang { color: var(--code); border-color: var(--code); }
+    .node-body .node-meta .chip.delay-unit { color: var(--delay); border-color: var(--delay); }
+    .node-port {
+      position: absolute; width: 14px; height: 14px; border-radius: 50%;
+      background: var(--bg-2); border: 2px solid var(--port-color, var(--accent));
+      top: 50%; transform: translateY(-50%);
+      cursor: crosshair; z-index: 3;
+    }
+    .node-port.in { left: -8px; --port-color: var(--port-in, var(--accent)); }
+    .node-port.out { right: -8px; --port-color: var(--port-out, var(--ok)); }
+    .node-port:hover { background: var(--port-color); transform: translateY(-50%) scale(1.3); box-shadow: 0 0 0 4px var(--accent-soft); }
+    .node-port.connecting { background: var(--port-color); transform: translateY(-50%) scale(1.3); }
+    .node-add-port {
+      position: absolute; right: -8px; top: calc(50% + 24px);
+      width: 14px; height: 14px; border-radius: 50%;
+      background: var(--bg-2); border: 2px dashed var(--accent);
+      color: var(--accent); font-size: 10px; line-height: 10px;
+      text-align: center; cursor: pointer; z-index: 3;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .node-add-port:hover { background: var(--accent); color: #fff; }
+    .edge-path { fill: none; stroke-width: 2; transition: stroke-width 0.12s; }
+    .edge-path.default { stroke: var(--ok); }
+    .edge-path.force { stroke: var(--accent); stroke-width: 2.5; }
+    .edge-path.eval { stroke: var(--warn); stroke-dasharray: 6 4; }
+    .edge-path.conditional { stroke: var(--code); stroke-dasharray: 2 3; stroke-width: 2.5; }
+    .edge-hit { fill: none; stroke: transparent; stroke-width: 18; cursor: pointer; }
+    .edge-group.selected .edge-path { stroke-width: 4; }
+    .edge-group.selected .edge-hit { stroke: rgba(111, 158, 255, 0.15); stroke-width: 24; }
+    .edge-ghost { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 4 4; pointer-events: none; }
+    .edge-label {
+      fill: var(--text); font-size: 10px; font-weight: 600;
+      text-anchor: middle; pointer-events: none;
+      paint-order: stroke; stroke: var(--bg); stroke-width: 4; stroke-linejoin: round;
+    }
+    .panel-overlay {
+      position: absolute; right: 0; top: 0; bottom: 0;
+      width: 320px; background: var(--bg-2); border-left: 1px solid var(--border);
+      display: none; flex-direction: column; z-index: 20;
+      box-shadow: var(--shadow-2);
+    }
+    .panel-overlay.open { display: flex; }
+    .panel-overlay header {
+      padding: 8px 12px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px; background: var(--bg-3);
+    }
+    .panel-overlay header .panel-tag {
+      font-size: 9.5px; padding: 1px 6px; border-radius: 3px;
+      font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase;
+    }
+    .panel-overlay header .panel-tag.task { background: var(--accent); color: #fff; }
+    .panel-overlay header .panel-tag.workflow { background: var(--purple); color: #fff; }
+    .panel-overlay header .panel-tag.step { background: var(--ok); color: #0e2a13; }
+    .panel-overlay header .panel-tag.edge { background: var(--warn); color: #2a1f0a; }
+    .panel-overlay header .panel-tag.delay { background: var(--delay); color: #2a1f0a; }
+    .panel-overlay header .panel-tag.code { background: var(--code); color: #2a0a1a; }
+    .panel-overlay header .panel-title { font-weight: 700; font-size: 13px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .panel-overlay header button { padding: 2px 6px; }
+    .panel-overlay .body { flex: 1; overflow-y: auto; padding: 12px; }
+    .panel-overlay .section { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-soft); }
+    .panel-overlay .section:first-child { margin-top: 0; padding-top: 0; border-top: none; }
+    .panel-overlay .section h4 { margin: 0 0 8px 0; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-muted); }
+    .panel-overlay footer { padding: 8px 12px; border-top: 1px solid var(--border); display: flex; gap: 6px; justify-content: flex-end; background: var(--bg-3); }
+    .statusbar {
+      grid-area: status; background: var(--bg-2);
+      border-top: 1px solid var(--border);
+      display: flex; align-items: center; gap: 12px;
+      padding: 0 10px; font-size: 11px; color: var(--text-muted);
+    }
+    .statusbar .pill { background: var(--bg-3); padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border-soft); }
+    .statusbar .pill.err { color: var(--err); border-color: var(--err); }
+    .canvas-controls {
+      position: absolute; right: 12px; bottom: 12px;
+      display: flex; flex-direction: column; gap: 4px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 4px; box-shadow: var(--shadow-1); z-index: 10;
+    }
+    .canvas-controls button { padding: 4px 6px; }
+    .canvas-actions {
+      position: absolute; left: 12px; top: 12px;
+      display: flex; gap: 4px; z-index: 10;
+    }
+    .canvas-actions button { background: var(--bg-2); border: 1px solid var(--border); box-shadow: var(--shadow-1); }
+    .minimap-wrap {
+      position: absolute; right: 12px; top: 12px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 6px; box-shadow: var(--shadow-1);
+      overflow: hidden; z-index: 10;
+    }
+    .minimap-head {
+      display: flex; align-items: center; gap: 4px;
+      padding: 4px 8px; font-size: 10px; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: var(--text-muted); border-bottom: 1px solid var(--border-soft);
+      background: var(--bg-3);
+    }
+    .minimap svg { display: block; }
+    .toast {
+      position: fixed; bottom: 32px; left: 50%;
+      transform: translateX(-50%) translateY(8px);
+      background: var(--bg-3); color: var(--text);
+      border: 1px solid var(--border); border-left: 3px solid var(--accent);
+      padding: 8px 14px; border-radius: 5px; font-size: 12px;
+      z-index: 300; box-shadow: var(--shadow-2);
+      opacity: 0; pointer-events: none; transition: opacity 0.18s, transform 0.18s;
+    }
+    .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    .toast.error { border-left-color: var(--err); }
+    .toast.ok { border-left-color: var(--ok); }
+    .toast.warn { border-left-color: var(--warn); }
+    .ctx-menu {
+      position: fixed; background: var(--bg-2);
+      border: 1px solid var(--border); border-radius: 6px;
+      box-shadow: var(--shadow-2); padding: 4px;
+      min-width: 200px; z-index: 100; font-size: 12px;
+    }
+    .ctx-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 5px 8px; border-radius: 4px; cursor: pointer; color: var(--text);
+    }
+    .ctx-item:hover { background: var(--accent-soft); }
+    .ctx-item.danger { color: var(--err); }
+    .ctx-divider { height: 1px; background: var(--border-soft); margin: 4px 0; }
+    .modal-backdrop {
+      position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55);
+      display: none; align-items: center; justify-content: center; z-index: 150;
+    }
+    .modal-backdrop.open { display: flex; }
+    .modal {
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 8px; padding: 16px 18px;
+      width: 520px; max-width: 95vw; box-shadow: var(--shadow-3);
+    }
+    .modal h3 { margin: 0 0 12px 0; font-size: 14px; }
+    .modal pre {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 4px; padding: 8px; font-size: 11px;
+      max-height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all;
+    }
+    .modal .row { display: flex; gap: 6px; justify-content: flex-end; margin-top: 14px; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-thumb { background: var(--bg-4); border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--bg-5); }
+    ::-webkit-scrollbar-track { background: transparent; }
+    .validation-icon {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 16px; height: 16px; border-radius: 50%;
+      font-size: 11px; font-weight: 700; color: #fff; flex-shrink: 0;
+    }
+    .validation-icon.err { background: var(--err); }
+    .validation-icon.warn { background: var(--warn); color: #2a1f0a; }
+    .node-seq {
+      position: absolute; top: -10px; left: -10px;
+      width: 22px; height: 22px; border-radius: 50%;
+      background: var(--accent); color: #fff; font-size: 11px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 5; box-shadow: var(--shadow-1);
+    }
+    .branch-badge {
+      position: absolute; right: -6px; top: -6px;
+      min-width: 18px; height: 18px; border-radius: 9px;
+      background: var(--code); color: #fff; font-size: 10px; font-weight: 700;
+      display: flex; align-items: center; justify-content: center;
+      z-index: 5; box-shadow: var(--shadow-1); padding: 0 5px;
+    }
+    .help-banner {
+      position: absolute; left: 12px; bottom: 12px;
+      max-width: 340px; padding: 8px 12px;
+      background: var(--bg-2); border: 1px solid var(--border);
+      border-radius: 6px; font-size: 11.5px; line-height: 1.5;
+      color: var(--text-muted); z-index: 10; box-shadow: var(--shadow-1);
+    }
+    .help-banner b { color: var(--text); }
+    .help-banner .close { float: right; cursor: pointer; opacity: 0.6; }
+    .help-banner .close:hover { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <div class="tabs" id="tabs">
+      <div class="tab-add" id="tabAdd">+ new</div>
+    </div>
+    <aside class="sidebar">
+      <div class="sb-section flex-grow">
+        <div class="sb-head">
+          <h3>Workflows</h3>
+          <button class="tiny ghost" id="sbAddWf" title="New workflow">+</button>
+        </div>
+        <div class="sb-body" id="wfList" style="padding:6px 8px"></div>
+      </div>
+      <div class="sb-section flex-grow" style="border-top:1px solid var(--border)">
+        <div class="sb-head">
+          <h3>Add step</h3>
+        </div>
+        <div class="sb-body" id="stepList">
+          <div class="lib-special" data-kind="task" draggable="true" title="Drag onto the canvas to add a task step">
+            <div class="lib-icon" style="color:var(--accent)">\u26A1</div>
+            <div><div class="lib-name">Task</div><div class="lib-sub">Run an OpenCode prompt</div></div>
+          </div>
+          <div class="lib-special" data-kind="delay" draggable="true" title="Drag onto the canvas to add a delay step">
+            <div class="lib-icon delay">\u23F1</div>
+            <div><div class="lib-name">Delay</div><div class="lib-sub">Wait N seconds/minutes/hours</div></div>
+          </div>
+          <div class="lib-special" data-kind="code" draggable="true" title="Drag onto the canvas to add a programmable step">
+            <div class="lib-icon code">{ }</div>
+            <div><div class="lib-name">Code</div><div class="lib-sub">Run JavaScript, pass input/output</div></div>
+          </div>
+        </div>
+      </div>
+      <div class="sb-section flex-grow" style="border-top:1px solid var(--border)">
+        <div class="sb-head">
+          <h3>Task library</h3>
+          <button class="tiny ghost" id="sbAddTask" title="New task">+</button>
+        </div>
+        <div class="sb-search">
+          <input type="text" id="libSearch" placeholder="Search tasks..." />
+        </div>
+        <div class="sb-body" id="taskList"></div>
+      </div>
+    </aside>
+
+    <div class="canvas-wrap" id="canvasWrap">
+      <div class="canvas" id="canvas">
+        <div class="grid-bg"></div>
+        <div class="canvas-content" id="canvasContent">
+          <svg class="edges" id="edges"></svg>
+          <div id="nodesLayer"></div>
+        </div>
+      </div>
+      <div class="canvas-actions">
+        <button class="ghost" id="btnAutoLayout" title="Auto-arrange steps (left to right)">Auto-layout</button>
+        <button class="ghost" id="btnFit" title="Fit to view (F)">Fit</button>
+        <button class="ghost" id="btnValidate" title="Validate workflow">Validate</button>
+        <button class="ghost" id="btnTrace" title="Show execution order">Trace</button>
+        <button class="primary" id="btnApply" title="Save changes back to AutoOC">Apply to AutoOC</button>
+      </div>
+      <div class="canvas-controls">
+        <button class="ghost icon" id="btnZoomIn" title="Zoom in (+)">+</button>
+        <button class="ghost icon" id="btnZoomReset" title="Reset zoom">\xB7</button>
+        <button class="ghost icon" id="btnZoomOut" title="Zoom out (-)">\u2212</button>
+      </div>
+      <div class="minimap-wrap" id="minimap" style="display:none">
+        <div class="minimap-head">Minimap</div>
+        <svg id="mmSvg" width="180" height="100" viewBox="0 0 180 100" preserveAspectRatio="xMidYMid meet"></svg>
+      </div>
+      <div class="help-banner" id="helpBanner">
+        <span class="close" id="helpClose">\u2715</span>
+        <b>Visual Builder</b><br>
+        Drag a <b>Task</b>, <b>Delay</b>, or <b>Code</b> from the left onto the canvas.
+        Drag an <b>output port</b> to another node to connect. Click an edge to set its
+        <b>transition mode</b> (default / force / AI eval / conditional JS). Use the
+        <b>Apply to AutoOC</b> button to save changes back to the extension.
+      </div>
+    </div>
+
+    <aside class="panel-overlay" id="panel">
+      <header>
+        <span class="panel-tag workflow" id="panelTag">workflow</span>
+        <div class="panel-title" id="panelTitle">Workflow</div>
+        <button class="ghost" id="panelClose">\u2715</button>
+      </header>
+      <div class="body" id="panelBody"></div>
+      <footer>
+        <button class="danger ghost" id="panelDelete">Delete</button>
+        <div style="flex:1"></div>
+        <button class="primary" id="panelOk">Done</button>
+      </footer>
+    </aside>
+
+    <div class="statusbar">
+      <span class="pill" id="statTasks">0 tasks</span>
+      <span class="pill" id="statWorkflows">0 workflows</span>
+      <span class="pill" id="statSteps">0 steps</span>
+      <span id="statMsg">Connected to AutoOC</span>
+      <div style="flex:1"></div>
+      <span class="zoom-pct" id="zoomPct">100%</span>
+    </div>
+  </div>
+
+  <div class="ctx-menu" id="ctxMenu" style="display:none"></div>
+
+  <div class="modal-backdrop" id="validationModal">
+    <div class="modal">
+      <h3>Validation report</h3>
+      <div id="validationReport" style="font-size:12px;line-height:1.6;max-height:380px;overflow-y:auto"></div>
+      <div class="row">
+        <button class="ghost" id="validationClose">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script>
+  /* \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550
+     AutoOC Visual Builder (v1.4)
+     - Designed to run as a standalone HTML file or inside the AutoOC
+       Obsidian extension via an iframe.
+     - When running inside the extension, it communicates with the parent
+       through postMessage: the extension posts {type:"load", state},
+       the builder edits it, and posts {type:"apply", state} when the user
+       clicks "Apply to AutoOC".
+     - When running standalone, the state is kept in localStorage and can
+       also be exported/imported as JSON.
+     \u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550 */
+  "use strict";
+
+  // \u2500\u2500 State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const state = { tasks: [], workflows: [] };
+  let ui = {
+    activeWorkflowId: null,
+    selection: { type: null, ref: null }, // { type: "task"|"step"|"edge"|"workflow", ref }
+    view: { pan: { x: 0, y: 0 }, zoom: 1 },
+    snap: true,
+    traceOn: false,
+  };
+  let spaceHeld = false;
+  let connectState = null;
+  let inExtension = false;
+  let isDirty = false;
+
+  // \u2500\u2500 Constants \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const SCHEDULE_TYPES = [
+    { v: "manual", l: "Manual" },
+    { v: "once", l: "Once" },
+    { v: "daily", l: "Daily" },
+    { v: "weekly", l: "Weekly" },
+    { v: "monthly", l: "Monthly" },
+    { v: "interval", l: "Every X time" },
+  ];
+  const INTERVAL_UNITS = [
+    { v: "seconds", l: "seconds" },
+    { v: "minutes", l: "minutes" },
+    { v: "hours", l: "hours" },
+  ];
+  const TRANSITION_MODES = [
+    { v: "default",     l: "Default",                    desc: "Continue to the next step only if the previous one succeeded." },
+    { v: "force",       l: "Force continue",             desc: "Always follow this edge, even if the previous step failed." },
+    { v: "eval",        l: "AI decides",                desc: "Send the previous output to the model and let it decide whether to follow this edge." },
+    { v: "conditional", l: "Conditional (JavaScript)",   desc: "Evaluate a JavaScript expression against the runtime context. True \u2192 follow." },
+  ];
+  const AGENT_PRESETS = ["build", "plan"];
+  const MODEL_PRESETS = [
+    "opencode/deepseek-v4-flash-free",
+    "opencode/glm-5-free",
+    "opencode/gpt-5",
+    "opencode/claude-sonnet-4-5",
+  ];
+  const GRID_SIZE = 20;
+  const NODE_W = 220;
+  const NODE_H_TASK = 100;
+  const NODE_H_DELAY = 80;
+  const NODE_H_CODE = 120;
+  const MIN_ZOOM = 0.25;
+  const MAX_ZOOM = 2.5;
+
+  // \u2500\u2500 Utilities \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  const $  = (s, r=document) => r.querySelector(s);
+  const $$ = (s, r=document) => Array.from(r.querySelectorAll(s));
+  const uid = () => "id-" + Date.now().toString(36) + Math.random().toString(36).slice(2,7);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+  function defaultTask() {
+    return {
+      id: uid(), name: "New task", prompt: "", model: "", agent: "build",
+      useRalphLoop: false, scheduleType: "manual", scheduleTime: "09:00",
+      scheduleDate: "", scheduleDays: [], scheduleMonthDays: [],
+      scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
+      status: "pending", lastRun: "", output: "", createdAt: new Date().toISOString(),
+      branch: "", createBranch: false, color: "#4a7dff", icon: "\u26A1",
+    };
+  }
+  function defaultWorkflow() {
+    return {
+      id: uid(), name: "New workflow", description: "",
+      scheduleType: "manual", scheduleTime: "09:00", scheduleDate: "",
+      scheduleDays: [], scheduleMonthDays: [],
+      scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
+      handoffBranch: false, handoffOutput: true, steps: [], color: "#b07ad9",
+    };
+  }
+  function defaultStepForTask(taskId) {
+    return {
+      id: uid(), stepKind: "task", taskId,
+      transitions: [], position: { x: 0, y: 0 },
+    };
+  }
+  function defaultStepForDelay(value = 5, unit = "minutes") {
+    return {
+      id: uid(), stepKind: "delay",
+      delayValue: value, delayUnit: unit,
+      transitions: [], position: { x: 0, y: 0 },
+    };
+  }
+  function defaultStepForCode() {
+    return {
+      id: uid(), stepKind: "code",
+      code: "// input is the previous step's output\\n// Set 'output' to the value passed to the next step\\noutput = String(input).toUpperCase();",
+      codeLang: "javascript",
+      codeInputVar: "input",
+      codeOutputVar: "output",
+      transitions: [], position: { x: 0, y: 0 },
+    };
+  }
+  const findTask = (id) => state.tasks.find(t => t.id === id);
+  const findWorkflow = (id) => state.workflows.find(w => w.id === id);
+  const activeWorkflow = () => findWorkflow(ui.activeWorkflowId);
+  const stepTask = (s) => s && s.taskId ? findTask(s.taskId) : null;
+  const snap = (v) => ui.snap ? Math.round(v / GRID_SIZE) * GRID_SIZE : v;
+
+  // \u2500\u2500 Toast \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  let toastTimer;
+  function toast(msg, kind = "ok") {
+    const el = $("#toast");
+    el.textContent = msg;
+    el.className = "toast show " + kind;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => { el.className = "toast " + kind; }, 2400);
+  }
+
+  // \u2500\u2500 PostMessage protocol (extension integration) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function setupPostMessage() {
+    window.addEventListener("message", (ev) => {
+      const data = ev.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "load") {
+        // Replace the state with the extension's state.
+        state.tasks = (data.state.tasks || []).map(migrateTask);
+        state.workflows = (data.state.workflows || []).map(migrateWorkflow);
+        // Ensure all steps have an id and a position.
+        for (const w of state.workflows) {
+          for (let i = 0; i < w.steps.length; i++) {
+            const s = w.steps[i];
+            if (!s.id) s.id = uid();
+            if (!s.stepKind) s.stepKind = "task";
+            if (!s.position) s.position = { x: 60 + i * 280, y: 60 };
+            if (!Array.isArray(s.transitions)) s.transitions = [];
+          }
+        }
+        if (state.workflows.length > 0 && !ui.activeWorkflowId) {
+          ui.activeWorkflowId = state.workflows[0].id;
+        }
+        if (ui.activeWorkflowId) {
+          ui.selection = { type: "workflow", ref: ui.activeWorkflowId };
+        }
+        inExtension = true;
+        $("#helpBanner").style.display = "none";
+        renderAll();
+        fitToView();
+        toast("Loaded from AutoOC", "ok");
+      } else if (data.type === "request-apply") {
+        applyToExtension();
+      } else if (data.type === "ping") {
+        // No-op for now
+      }
+    });
+    // Tell the parent we're ready.
+    try { window.parent.postMessage({ type: "ready" }, "*"); } catch (e) {}
+  }
+
+  function applyToExtension() {
+    if (!inExtension) {
+      toast("Running standalone \u2014 use Export to save as JSON", "warn");
+      return;
+    }
+    // Send back the current state.
+    const payload = {
+      type: "apply",
+      state: {
+        tasks: state.tasks,
+        workflows: state.workflows.map((w) => ({
+          ...w,
+          steps: w.steps.map((s) => ({
+            id: s.id,
+            stepKind: s.stepKind || "task",
+            taskId: s.taskId,
+            transitionMode: s.transitionMode,
+            evaluatePrompt: s.evaluatePrompt,
+            forceContinue: s.forceContinue,
+            delayValue: s.delayValue,
+            delayUnit: s.delayUnit,
+            code: s.code,
+            codeLang: s.codeLang,
+            codeInputVar: s.codeInputVar,
+            codeOutputVar: s.codeOutputVar,
+            transitions: s.transitions,
+            position: s.position,
+          })),
+        })),
+      },
+    };
+    try {
+      window.parent.postMessage(payload, "*");
+      isDirty = false;
+      toast("Applied to AutoOC", "ok");
+    } catch (e) {
+      toast("Could not apply: " + e.message, "error");
+    }
+  }
+
+  // Migration: take an object from the extension and fill in any missing
+  // fields so the builder has a complete, well-formed state.
+  function migrateTask(t) {
+    return Object.assign(defaultTask(), t, {
+      id: t.id || uid(),
+      scheduleMonthDays: t.scheduleMonthDays || [],
+      scheduleDays: t.scheduleDays || [],
+    });
+  }
+  function migrateWorkflow(w) {
+    const dw = defaultWorkflow();
+    const out = Object.assign(dw, w, {
+      id: w.id || uid(),
+      steps: (w.steps || []).map((s) => Object.assign({
+        id: s.id || uid(),
+        stepKind: s.stepKind || "task",
+        transitions: s.transitions || [],
+        position: s.position || { x: 0, y: 0 },
+      }, s)),
+    });
+    return out;
+  }
+
+  // \u2500\u2500 Top-level render \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderAll() {
+    renderTabs();
+    renderSidebar();
+    renderCanvas();
+    renderPanel();
+    renderStatus();
+    renderMinimap();
+  }
+
+  // \u2500\u2500 Tabs \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderTabs() {
+    const root = $("#tabs");
+    root.innerHTML = "";
+    state.workflows.forEach(w => {
+      const el = document.createElement("div");
+      el.className = "tab" + (w.id === ui.activeWorkflowId ? " active" : "");
+      el.dataset.id = w.id;
+      el.innerHTML = \`
+        <span class="tab-dot" style="background:\${esc(w.color || "#b07ad9")}"></span>
+        <span class="tab-name" title="\${esc(w.name)}">\${esc(w.name || "(unnamed)")}</span>
+        <span class="tab-close" data-act="close" title="Close">\u2715</span>
+      \`;
+      el.addEventListener("click", (e) => {
+        if (e.target.dataset.act === "close") { e.stopPropagation(); closeWorkflow(w.id); return; }
+        setActiveWorkflow(w.id);
+      });
+      el.addEventListener("dblclick", () => {
+        const n = prompt("Rename workflow", w.name);
+        if (n && n.trim()) { w.name = n.trim(); renderAll(); }
+      });
+      root.appendChild(el);
+    });
+    const add = document.createElement("div");
+    add.className = "tab-add";
+    add.textContent = "+ new";
+    add.addEventListener("click", newWorkflow);
+    root.appendChild(add);
+  }
+  function setActiveWorkflow(id) {
+    ui.activeWorkflowId = id;
+    ui.selection = { type: "workflow", ref: id };
+    renderAll();
+    fitToView();
+  }
+
+  // \u2500\u2500 Sidebar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderSidebar() {
+    const wfRoot = $("#wfList");
+    if (state.workflows.length === 0) {
+      wfRoot.innerHTML = '<div class="lib-empty">No workflows yet.<br>Click <b>+</b> above to create one.</div>';
+    } else {
+      wfRoot.innerHTML = state.workflows.map(w => {
+        const taskCount = w.steps.length;
+        return \`
+          <div class="wf-list-item \${w.id === ui.activeWorkflowId ? "active" : ""}" data-id="\${w.id}">
+            <span class="wf-dot" style="background:\${esc(w.color || "#b07ad9")}"></span>
+            <span class="wf-name">\${esc(w.name || "(unnamed)")}</span>
+            <span class="wf-count">\${taskCount} step\${taskCount === 1 ? "" : "s"}</span>
+          </div>
+        \`;
+      }).join("");
+      $$(".wf-list-item", wfRoot).forEach(el => el.addEventListener("click", () => setActiveWorkflow(el.dataset.id)));
+    }
+    renderTaskLibrary();
+  }
+  function renderTaskLibrary() {
+    const root = $("#taskList");
+    const q = ($("#libSearch").value || "").trim().toLowerCase();
+    const filtered = state.tasks.filter(t => {
+      if (!q) return true;
+      return (t.name || "").toLowerCase().includes(q) || (t.prompt || "").toLowerCase().includes(q) || (t.agent || "").toLowerCase().includes(q);
+    });
+    if (filtered.length === 0) {
+      root.innerHTML = '<div class="lib-empty">' + (state.tasks.length === 0 ? 'No tasks yet.<br>Click <b>+</b> to create one.' : 'No tasks match &quot;' + esc(q) + '&quot;') + '</div>';
+      return;
+    }
+    root.innerHTML = filtered.map(t => \`
+      <div class="lib-item" data-id="\${t.id}" draggable="true" title="Drag onto the canvas to add a task step">
+        <div class="lib-title" style="display:flex;align-items:center;gap:6px">
+          <span style="color:\${esc(t.color || "#4a7dff")}">\${esc(t.icon || "\u26A1")}</span>
+          <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">\${esc(t.name || "(unnamed)")}</span>
+        </div>
+        <div class="lib-meta">
+          <span class="chip">\${esc(t.agent || "build")}</span>
+          \${t.useRalphLoop ? '<span class="chip" style="color:var(--warn)">ralph</span>' : ""}
+        </div>
+      </div>
+    \`).join("");
+    $$(".lib-item", root).forEach(el => {
+      el.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", JSON.stringify({ kind: "lib-task", taskId: el.dataset.id }));
+        e.dataTransfer.effectAllowed = "copy";
+      });
+      el.addEventListener("click", () => {
+        ui.selection = { type: "task", ref: el.dataset.id };
+        renderPanel();
+      });
+    });
+  }
+
+  // \u2500\u2500 Canvas: nodes & edges \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderCanvas() {
+    const wf = activeWorkflow();
+    const layer = $("#nodesLayer");
+    const edges = $("#edges");
+    if (!wf) {
+      layer.innerHTML = '<div style="position:absolute;left:50%;top:40%;transform:translate(-50%,-50%);text-align:center;color:var(--text-muted);font-size:14px;line-height:1.6;width:340px"><div style="font-size:48px;opacity:0.25;margin-bottom:12px">\u2295</div><b style="color:var(--text)">No workflow open</b><br>Click <b>+ new</b> in the tab bar to create one.</div>';
+      edges.innerHTML = "";
+      return;
+    }
+    if (wf.steps.length === 0) {
+      layer.innerHTML = '<div style="position:absolute;left:50%;top:38%;transform:translate(-50%,-50%);text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6;pointer-events:none"><div style="font-size:48px;opacity:0.25;margin-bottom:12px">\u{1F4E6}</div><b style="color:var(--text)">' + esc(wf.name) + '</b><br>Drag a <b>Task</b>, <b>Delay</b>, or <b>Code</b> from the left onto the canvas to add a step.</div>';
+      edges.innerHTML = "";
+      return;
+    }
+    layer.innerHTML = wf.steps.map((s, i) => renderNodeHtml(s, i, wf)).join("");
+    wf.steps.forEach((s, i) => {
+      const el = $(\`.node[data-idx="\${i}"]\`, layer);
+      if (el) attachNodeEvents(el, i, wf);
+    });
+    renderEdges(wf);
+    applyTransform();
+  }
+
+  function nodeHeight(s) {
+    if (s.stepKind === "delay") return NODE_H_DELAY;
+    if (s.stepKind === "code") return NODE_H_CODE;
+    return NODE_H_TASK;
+  }
+
+  function renderNodeHtml(s, i, wf) {
+    const kind = s.stepKind || "task";
+    const selected = (ui.selection.type === "step" && ui.selection.ref && ui.selection.ref.wfId === wf.id && ui.selection.ref.idx === i);
+    const seqHtml = ui.traceOn ? '<div class="node-seq">' + (i + 1) + '</div>' : "";
+    const branchHtml = (s.transitions && s.transitions.length > 1) ? '<div class="branch-badge">' + s.transitions.length + '</div>' : "";
+
+    let body = "";
+    if (kind === "task") {
+      const t = stepTask(s);
+      const tName = t ? t.name : "(missing task)";
+      const color = (t && t.color) || "#4a7dff";
+      const icon = (t && t.icon) || "\u26A1";
+      body = \`
+        <div class="node-head" style="border-top:3px solid \${esc(color)}">
+          <span class="node-kind task">TASK</span>
+          <span class="node-name">\${esc(icon)} \${esc(tName)}</span>
+          <span class="node-id">#\${esc(s.id.slice(-4))}</span>
+        </div>
+        <div class="node-body">
+          <div class="node-detail">\${t ? esc((t.prompt || "(no prompt)").slice(0, 90)) + ((t.prompt || "").length > 90 ? "\u2026" : "") : '<span class="empty">(task missing)</span>'}</div>
+          <div class="node-meta">
+            <span class="chip">\${esc((t && t.agent) || "build")}</span>
+            \${(t && t.useRalphLoop) ? '<span class="chip" style="color:var(--warn)">ralph</span>' : ""}
+          </div>
+        </div>
+      \`;
+    } else if (kind === "delay") {
+      body = \`
+        <div class="node-head" style="border-top:3px solid var(--delay)">
+          <span class="node-kind delay">DELAY</span>
+          <span class="node-name">\u23F1 Wait \${esc(String(s.delayValue || 0))} \${esc(s.delayUnit || "seconds")}</span>
+          <span class="node-id">#\${esc(s.id.slice(-4))}</span>
+        </div>
+        <div class="node-body">
+          <div class="node-detail">The workflow pauses for <b>\${esc(String(s.delayValue || 0))} \${esc(s.delayUnit || "seconds")}</b> before continuing.</div>
+          <div class="node-meta">
+            <span class="chip delay-unit">\${esc(s.delayUnit || "seconds")}</span>
+          </div>
+        </div>
+      \`;
+    } else if (kind === "code") {
+      const lang = s.codeLang || "javascript";
+      body = \`
+        <div class="node-head" style="border-top:3px solid var(--code)">
+          <span class="node-kind code">CODE</span>
+          <span class="node-name">{ } JavaScript</span>
+          <span class="node-id">#\${esc(s.id.slice(-4))}</span>
+        </div>
+        <div class="node-body">
+          <div class="node-detail">\${esc((s.code || "").split("\\n").slice(0, 3).join(" / ").slice(0, 100))}\${(s.code || "").length > 100 ? "\u2026" : ""}</div>
+          <div class="node-meta">
+            <span class="chip code-lang">\${esc(lang)}</span>
+            <span class="chip">\${esc(s.codeInputVar || "input")} \u2192 \${esc(s.codeOutputVar || "output")}</span>
+          </div>
+        </div>
+      \`;
+    }
+
+    const h = nodeHeight(s);
+    return \`
+      <div class="node \${selected ? "selected" : ""}" data-idx="\${i}" style="left:\${s.position.x}px;top:\${s.position.y}px;height:\${h}px">
+        \${seqHtml}\${branchHtml}
+        \${body}
+        <div class="node-port in" data-port="in" data-idx="\${i}" title="Input"></div>
+        <div class="node-port out" data-port="out" data-idx="\${i}" title="Drag to another node to connect"></div>
+        <div class="node-add-port" data-port="add" data-idx="\${i}" title="Add new outgoing transition">+</div>
+      </div>
+    \`;
+  }
+
+  function attachNodeEvents(el, idx, wf) {
+    const s = wf.steps[idx];
+    // Drag-to-move (start on .node-head).
+    el.addEventListener("mousedown", (e) => {
+      if (e.target.classList.contains("node-port")) return;
+      if (e.target.classList.contains("node-add-port")) return;
+      if (e.button !== 0) return;
+      const startX = e.clientX, startY = e.clientY;
+      const origPos = { ...s.position };
+      let movedX = 0, movedY = 0, dragged = false;
+      const onMove = (ev) => {
+        movedX = ev.clientX - startX;
+        movedY = ev.clientY - startY;
+        if (!dragged && (Math.abs(movedX) > 3 || Math.abs(movedY) > 3)) { dragged = true; el.classList.add("dragging"); }
+        s.position = { x: snap(origPos.x + movedX / ui.view.zoom), y: snap(origPos.y + movedY / ui.view.zoom) };
+        el.style.left = s.position.x + "px";
+        el.style.top  = s.position.y + "px";
+        renderEdges(wf);
+        renderMinimap();
+      };
+      const onUp = () => {
+        document.removeEventListener("mousemove", onMove);
+        document.removeEventListener("mouseup", onUp);
+        el.classList.remove("dragging");
+        ui.selection = { type: "step", ref: { wfId: wf.id, idx } };
+        renderPanel();
+        renderCanvas();
+      };
+      document.addEventListener("mousemove", onMove);
+      document.addEventListener("mouseup", onUp);
+    });
+    el.addEventListener("dblclick", (e) => {
+      if (e.target.classList.contains("node-port")) return;
+      if (e.target.classList.contains("node-add-port")) return;
+      ui.selection = { type: "step", ref: { wfId: wf.id, idx } };
+      renderPanel();
+      renderCanvas();
+    });
+    el.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: "Edit step", action: () => { ui.selection = { type: "step", ref: { wfId: wf.id, idx } }; renderAll(); } },
+        { label: "Open task (if task step)", action: () => { if (s.taskId) { ui.selection = { type: "task", ref: s.taskId }; renderAll(); } } },
+        { divider: true },
+        { label: "Add transition from this step", action: () => {
+          if (!s.transitions) s.transitions = [];
+          const target = wf.steps.find((x, i) => i !== idx);
+          if (target) {
+            s.transitions.push({ toStepId: target.id, mode: "default" });
+            renderAll();
+          }
+        }},
+        { divider: true },
+        { label: "Duplicate step", action: () => duplicateStep(wf.id, idx) },
+        { label: "Delete step", danger: true, action: () => removeStep(wf.id, idx) },
+      ]);
+    });
+    // Output port: start a connection drag.
+    $$(".node-port.out", el).forEach(p => {
+      p.addEventListener("mousedown", (e) => {
+        e.stopPropagation(); e.preventDefault();
+        startConnectionDrag(idx, e);
+      });
+    });
+    // "+" port: open the add-transition menu.
+    const addPort = $(".node-add-port", el);
+    if (addPort) {
+      addPort.addEventListener("mousedown", (e) => { e.stopPropagation(); e.preventDefault(); });
+      addPort.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const others = wf.steps.filter((x, i) => i !== idx);
+        if (others.length === 0) { toast("No other steps to connect to", "warn"); return; }
+        showContextMenu(e.clientX, e.clientY, [
+          { label: "Connect to next step", action: () => {
+            if (!s.transitions) s.transitions = [];
+            const next = wf.steps[idx + 1] || wf.steps[0];
+            s.transitions.push({ toStepId: next.id, mode: "default" });
+            renderAll();
+          }},
+          { divider: true },
+          ...others.map((o) => ({
+            label: (o.stepKind === "delay" ? "\u23F1 " : o.stepKind === "code" ? "{ } " : "\u26A1 ") + (o.stepKind === "task" ? ((stepTask(o) || {}).name || "(task)") : o.stepKind === "delay" ? (o.delayValue + " " + o.delayUnit) : "JavaScript"),
+            action: () => {
+              if (!s.transitions) s.transitions = [];
+              s.transitions.push({ toStepId: o.id, mode: "default" });
+              renderAll();
+            }
+          })),
+        ]);
+      });
+    }
+    // Input port: also start a connection drag (rare but possible).
+    const inPort = $(".node-port.in", el);
+    if (inPort) {
+      inPort.addEventListener("mousedown", (e) => { e.stopPropagation(); e.preventDefault(); });
+    }
+  }
+
+  function startConnectionDrag(fromIdx, e) {
+    const wf = activeWorkflow();
+    if (!wf) return;
+    const fromStep = wf.steps[fromIdx];
+    if (!fromStep) return;
+    const onMove = (ev) => {
+      const rect = $("#canvasContent").getBoundingClientRect();
+      const x = (ev.clientX - rect.left) / ui.view.zoom;
+      const y = (ev.clientY - rect.top) / ui.view.zoom;
+      const fp = fromStep.position;
+      const x1 = fp.x + NODE_W, y1 = fp.y + nodeHeight(fromStep) / 2;
+      $("#edges").innerHTML = \`<path class="edge-ghost" d="M \${x1} \${y1} C \${x1 + 60} \${y1} \${x - 60} \${y} \${x} \${y}" />\`;
+    };
+    const onUp = (ev) => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      $("#edges").innerHTML = "";
+      // Try to find a target step (hovered node or input port).
+      let targetStep = null;
+      const el = document.elementFromPoint(ev.clientX, ev.clientY);
+      if (el) {
+        const port = el.closest(".node-port.in");
+        const node = el.closest(".node");
+        if (port) {
+          const idx = parseInt(port.dataset.idx, 10);
+          targetStep = wf.steps[idx];
+        } else if (node) {
+          const idx = parseInt(node.dataset.idx, 10);
+          targetStep = wf.steps[idx];
+        }
+      }
+      if (targetStep && targetStep.id !== fromStep.id) {
+        if (!fromStep.transitions) fromStep.transitions = [];
+        // Check for duplicate.
+        if (!fromStep.transitions.find((t) => t.toStepId === targetStep.id)) {
+          fromStep.transitions.push({ toStepId: targetStep.id, mode: "default" });
+          renderAll();
+          toast("Connection added", "ok");
+        } else {
+          toast("Connection already exists", "warn");
+        }
+      }
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+
+  function renderEdges(wf) {
+    const svg = $("#edges");
+    if (wf.steps.length === 0) { svg.innerHTML = ""; return; }
+    const parts = [];
+    parts.push(\`
+      <defs>
+        <marker id="ah-default" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--ok)"/>
+        </marker>
+        <marker id="ah-force" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--accent)"/>
+        </marker>
+        <marker id="ah-eval" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--warn)"/>
+        </marker>
+        <marker id="ah-conditional" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto">
+          <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--code)"/>
+        </marker>
+      </defs>
+    \`);
+    // For each step, draw an outgoing edge for each transition.
+    for (let i = 0; i < wf.steps.length; i++) {
+      const a = wf.steps[i];
+      const trs = a.transitions || [];
+      for (let tIdx = 0; tIdx < trs.length; tIdx++) {
+        const t = trs[tIdx];
+        const b = wf.steps.find((x) => x.id === t.toStepId);
+        if (!b) continue;
+        const ap = a.position, bp = b.position;
+        const x1 = ap.x + NODE_W;
+        const y1 = ap.y + nodeHeight(a) / 2;
+        // Distribute target y based on transition index for branching clarity.
+        const yOffset = (tIdx - (trs.length - 1) / 2) * 30;
+        const x2 = bp.x;
+        const y2 = bp.y + nodeHeight(b) / 2 + yOffset;
+        const dx = Math.max(60, Math.abs(x2 - x1) * 0.5);
+        const path = \`M \${x1} \${y1} C \${x1 + dx} \${y1} \${x2 - dx} \${y2} \${x2} \${y2}\`;
+        const mode = t.mode || "default";
+        const selected = (ui.selection.type === "edge" && ui.selection.ref && ui.selection.ref.wfId === wf.id && ui.selection.ref.fromId === a.id && ui.selection.ref.toId === b.id);
+        const marker = mode === "force" ? "ah-force" : mode === "eval" ? "ah-eval" : mode === "conditional" ? "ah-conditional" : "ah-default";
+        const labelText = mode === "default" ? "" : TRANSITION_MODES.find((m) => m.v === mode)?.l.split(" ")[0] || mode;
+        const lx = (x1 + x2) / 2;
+        const ly = (y1 + y2) / 2 - 8;
+        parts.push(\`
+          <g class="edge-group \${selected ? "selected" : ""}" data-from="\${a.id}" data-to="\${b.id}">
+            <path class="edge-hit" d="\${path}"/>
+            <path class="edge-path \${esc(mode)}" d="\${path}" marker-end="url(#\${marker})"/>
+            \${labelText ? '<text class="edge-label" x="' + lx + '" y="' + ly + '">' + esc(labelText) + '</text>' : ""}
+          </g>
+        \`);
+      }
+    }
+    svg.innerHTML = parts.join("");
+    $$(".edge-group", svg).forEach(g => {
+      const fromId = g.dataset.from;
+      const toId = g.dataset.to;
+      g.addEventListener("click", (e) => {
+        e.stopPropagation();
+        ui.selection = { type: "edge", ref: { wfId: wf.id, fromId, toId } };
+        renderPanel();
+        renderCanvas();
+      });
+    });
+  }
+
+  // \u2500\u2500 Canvas: pan, zoom, drop \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function applyTransform() {
+    const content = $("#canvasContent");
+    content.style.transform = \`translate(\${ui.view.pan.x}px, \${ui.view.pan.y}px) scale(\${ui.view.zoom})\`;
+    $("#zoomPct").textContent = Math.round(ui.view.zoom * 100) + "%";
+  }
+  function setupCanvasEvents() {
+    const canvas = $("#canvas");
+    canvas.addEventListener("mousedown", (e) => {
+      const onNode = e.target.closest(".node");
+      const onEdge = e.target.closest(".edge-group");
+      const onPort = e.target.classList.contains("node-port");
+      if (onNode || onEdge || onPort) return;
+      if (e.button === 1 || (e.button === 0 && spaceHeld)) {
+        startPan(e);
+      } else if (e.button === 0) {
+        ui.selection = ui.activeWorkflowId ? { type: "workflow", ref: ui.activeWorkflowId } : { type: null, ref: null };
+        renderPanel(); renderCanvas();
+      }
+    });
+    canvas.addEventListener("contextmenu", (e) => {
+      if (e.target.closest(".node") || e.target.closest(".edge-group")) return;
+      e.preventDefault();
+      const wf = activeWorkflow();
+      if (!wf) return;
+      const me = $("#canvasContent").getBoundingClientRect();
+      const x = snap((e.clientX - me.left) / ui.view.zoom - NODE_W / 2);
+      const y = snap((e.clientY - me.top) / ui.view.zoom - 40);
+      showContextMenu(e.clientX, e.clientY, [
+        { label: "Add task step here", action: () => addStepAtPoint("task", x, y) },
+        { label: "Add delay step here", action: () => addStepAtPoint("delay", x, y) },
+        { label: "Add code step here", action: () => addStepAtPoint("code", x, y) },
+        { divider: true },
+        { label: "Auto-layout", action: autoLayout },
+        { label: "Fit to view", action: fitToView, shortcut: "F" },
+        { label: "Edit workflow", action: () => { ui.selection = { type: "workflow", ref: wf.id }; renderAll(); } },
+      ]);
+    });
+    canvas.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) {
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        zoomAt(e.clientX, e.clientY, factor);
+      } else {
+        ui.view.pan.x -= e.deltaX;
+        ui.view.pan.y -= e.deltaY;
+        applyTransform();
+      }
+    }, { passive: false });
+    canvas.addEventListener("dragover", (e) => {
+      if (e.dataTransfer.types.includes("text/plain")) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        canvas.classList.add("drag-over");
+      }
+    });
+    canvas.addEventListener("dragleave", () => canvas.classList.remove("drag-over"));
+    canvas.addEventListener("drop", (e) => {
+      e.preventDefault();
+      canvas.classList.remove("drag-over");
+      let payload;
+      try { payload = JSON.parse(e.dataTransfer.getData("text/plain")); } catch { return; }
+      const me = $("#canvasContent").getBoundingClientRect();
+      const x = snap((e.clientX - me.left) / ui.view.zoom - NODE_W / 2);
+      const y = snap((e.clientY - me.top) / ui.view.zoom - 30);
+      if (payload.kind === "lib-task" && payload.taskId) {
+        addStepAtPoint("task", x, y, { taskId: payload.taskId });
+      } else if (payload.kind === "step-template") {
+        addStepAtPoint(payload.stepKind, x, y);
+      }
+    });
+  }
+  function startPan(e) {
+    const startX = e.clientX, startY = e.clientY;
+    const startPan = { ...ui.view.pan };
+    const canvas = $("#canvas");
+    canvas.classList.add("panning");
+    const onMove = (ev) => {
+      ui.view.pan.x = startPan.x + (ev.clientX - startX);
+      ui.view.pan.y = startPan.y + (ev.clientY - startY);
+      applyTransform();
+    };
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      canvas.classList.remove("panning");
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }
+  function zoomAt(clientX, clientY, factor) {
+    const rect = $("#canvas").getBoundingClientRect();
+    const cx = clientX - rect.left, cy = clientY - rect.top;
+    const oldZoom = ui.view.zoom;
+    const newZoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, oldZoom * factor));
+    const ratio = newZoom / oldZoom;
+    ui.view.pan.x = cx - (cx - ui.view.pan.x) * ratio;
+    ui.view.pan.y = cy - (cy - ui.view.pan.y) * ratio;
+    ui.view.zoom = newZoom;
+    applyTransform(); renderMinimap();
+  }
+  function fitToView() {
+    const wf = activeWorkflow();
+    if (!wf || wf.steps.length === 0) { ui.view.pan = { x: 60, y: 60 }; ui.view.zoom = 1; applyTransform(); return; }
+    const xs = wf.steps.map(s => s.position.x);
+    const ys = wf.steps.map(s => s.position.y);
+    const widths = wf.steps.map(s => NODE_W);
+    const heights = wf.steps.map(s => nodeHeight(s));
+    const minX = Math.min.apply(null, xs), maxX = Math.max.apply(null, xs.map((x, i) => x + widths[i]));
+    const minY = Math.min.apply(null, ys), maxY = Math.max.apply(null, ys.map((y, i) => y + heights[i]));
+    const w = maxX - minX, h = maxY - minY;
+    const rect = $("#canvas").getBoundingClientRect();
+    const padding = 60;
+    const sx = (rect.width - padding * 2) / w;
+    const sy = (rect.height - padding * 2) / h;
+    const z = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, Math.min(sx, sy, 1)));
+    ui.view.zoom = z;
+    ui.view.pan.x = padding - minX * z + (rect.width - padding * 2 - w * z) / 2;
+    ui.view.pan.y = padding - minY * z + (rect.height - padding * 2 - h * z) / 2;
+    applyTransform();
+  }
+  function autoLayout() {
+    const wf = activeWorkflow();
+    if (!wf || wf.steps.length === 0) return;
+    const gapX = 100;
+    wf.steps.forEach((s, i) => { s.position = { x: 60 + i * (NODE_W + gapX), y: 60 }; });
+    renderAll();
+    fitToView();
+    toast("Auto-layout applied", "ok");
+  }
+
+  // Add a step of the given kind at a given canvas position.
+  function addStepAtPoint(kind, x, y, extra) {
+    const wf = activeWorkflow();
+    if (!wf) { toast("No active workflow", "error"); return; }
+    let step;
+    if (kind === "task") {
+      if (extra && extra.taskId) step = defaultStepForTask(extra.taskId);
+      else if (state.tasks.length > 0) step = defaultStepForTask(state.tasks[0].id);
+      else { toast("Create a task first", "warn"); return; }
+    } else if (kind === "delay") {
+      step = defaultStepForDelay();
+    } else if (kind === "code") {
+      step = defaultStepForCode();
+    } else {
+      toast("Unknown step kind: " + kind, "error"); return;
+    }
+    step.position = { x: (x == null ? 60 : x), y: (y == null ? 60 : y) };
+    wf.steps.push(step);
+    renderAll();
+    toast(kind[0].toUpperCase() + kind.slice(1) + " step added", "ok");
+  }
+
+  // \u2500\u2500 Minimap \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderMinimap() {
+    const wf = activeWorkflow();
+    const mm = $("#minimap");
+    if (!wf || wf.steps.length === 0) { mm.style.display = "none"; return; }
+    mm.style.display = "block";
+    const svg = $("#mmSvg");
+    const W = 180, H = 100;
+    const xs = wf.steps.map(s => s.position.x);
+    const ys = wf.steps.map(s => s.position.y);
+    const minX = Math.min.apply(null, xs), minY = Math.min.apply(null, ys);
+    const maxX = Math.max.apply(null, wf.steps.map((s) => s.position.x + NODE_W));
+    const maxY = Math.max.apply(null, wf.steps.map((s) => s.position.y + nodeHeight(s)));
+    const w = maxX - minX || 1, h = maxY - minY || 1;
+    const scale = Math.min((W - 8) / w, (H - 8) / h);
+    const offX = 4 - minX * scale, offY = 4 - minY * scale;
+    svg.innerHTML = \`<rect x="0" y="0" width="\${W}" height="\${H}" fill="var(--bg-3)"/>\` +
+      wf.steps.map((s) => {
+        const color = s.stepKind === "delay" ? "var(--delay)" :
+                      s.stepKind === "code" ? "var(--code)" :
+                      ((stepTask(s) || {}).color || "var(--accent)");
+        return \`<rect x="\${s.position.x * scale + offX}" y="\${s.position.y * scale + offY}" width="\${NODE_W * scale}" height="\${nodeHeight(s) * scale}" rx="2" fill="\${color}"/>\`;
+      }).join("");
+  }
+
+  // \u2500\u2500 Property panel \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderPanel() {
+    const sel = ui.selection;
+    const panel = $("#panel");
+    const tag = $("#panelTag");
+    const title = $("#panelTitle");
+    const body = $("#panelBody");
+    if (!sel || !sel.type) { panel.classList.remove("open"); return; }
+    panel.classList.add("open");
+    if (sel.type === "workflow") {
+      const w = findWorkflow(sel.ref);
+      if (!w) { panel.classList.remove("open"); return; }
+      tag.className = "panel-tag workflow"; tag.textContent = "workflow";
+      title.textContent = w.name || "(unnamed)";
+      body.innerHTML = editorWorkflowHtml(w);
+    } else if (sel.type === "step") {
+      const wf = findWorkflow(sel.ref.wfId);
+      const s = wf && wf.steps[sel.ref.idx];
+      if (!wf || !s) { panel.classList.remove("open"); return; }
+      const kind = s.stepKind || "task";
+      tag.className = "panel-tag " + kind; tag.textContent = kind;
+      title.textContent = (kind === "task" ? "Task step" : kind === "delay" ? "Delay step" : "Code step") + " #" + (sel.ref.idx + 1);
+      body.innerHTML = editorStepHtml(s, wf);
+    } else if (sel.type === "edge") {
+      const wf = findWorkflow(sel.ref.wfId);
+      if (!wf) { panel.classList.remove("open"); return; }
+      const fromStep = wf.steps.find((s) => s.id === sel.ref.fromId);
+      const toStep = wf.steps.find((s) => s.id === sel.ref.toId);
+      const t = (fromStep && fromStep.transitions || []).find((t) => t.toStepId === sel.ref.toId);
+      if (!fromStep || !toStep || !t) { panel.classList.remove("open"); return; }
+      tag.className = "panel-tag edge"; tag.textContent = "edge";
+      title.textContent = "Transition";
+      body.innerHTML = editorEdgeHtml(t, fromStep, toStep, wf);
+    } else if (sel.type === "task") {
+      const t = findTask(sel.ref);
+      if (!t) { panel.classList.remove("open"); return; }
+      tag.className = "panel-tag task"; tag.textContent = "task";
+      title.textContent = t.name || "(unnamed)";
+      body.innerHTML = editorTaskHtml(t);
+    }
+    wirePanelFields();
+  }
+
+  function editorTaskHtml(t) {
+    return \`
+      <div class="field"><label>Name *</label><input data-f="name" value="\${esc(t.name)}" /></div>
+      <div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">\${esc(t.prompt)}</textarea></div>
+      <div class="row-2">
+        <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." /><datalist id="dlModels">\${MODEL_PRESETS.map(m => '<option value="' + esc(m) + '"></option>').join("")}</datalist></div>
+        <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" /><datalist id="dlAgents">\${AGENT_PRESETS.map(a => '<option value="' + esc(a) + '"></option>').join("")}</datalist></div>
+      </div>
+      <div class="row-2">
+        <div class="field"><label>Icon</label><select data-f="icon">\${["\u26A1","\u2728","\u{1F9E0}","\u{1F4DD}","\u{1F50D}","\u{1F4A1}","\u{1F6E0}","\u{1F4CA}","\u{1F4E5}","\u{1F4E4}","\u{1F504}","\u{1F680}","\u{1F916}","\u{1F4DA}","\u{1F9EA}","\u{1F514}"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
+        <div class="field"><label>Color</label><select data-f="color">\${["#4a7dff","#b07ad9","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (t.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">\u25CF ' + esc(c) + '</option>').join("")}</select></div>
+      </div>
+      <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="useRalphLoop" \${t.useRalphLoop ? "checked" : ""} /> Use Ralph Loop</label></div>
+      <div class="section">
+        <h4>Schedule</h4>
+        <div class="row-2">
+          <div class="field"><label>Type</label><select data-f="scheduleType">\${SCHEDULE_TYPES.map(s => '<option value="' + s.v + '" ' + (t.scheduleType === s.v ? "selected" : "") + '>' + s.l + '</option>').join("")}</select></div>
+          <div class="field"><label>Time</label><input data-f="scheduleTime" value="\${esc(t.scheduleTime)}" /></div>
+        </div>
+        <div class="sched-once" style="\${t.scheduleType === "once" ? "" : "display:none"}"><div class="field"><label>Date</label><input data-f="scheduleDate" value="\${esc(t.scheduleDate)}" /></div></div>
+        <div class="sched-weekly" style="\${t.scheduleType === "weekly" ? "" : "display:none"}"><div class="field"><label>Days</label><div style="display:flex;gap:4px;flex-wrap:wrap">\${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d, i) => '<label class="checkbox-row" style="background:var(--bg-3);padding:3px 6px;border-radius:4px;font-size:11px"><input type="checkbox" data-f="scheduleDays" data-day="' + i + '" ' + (t.scheduleDays.includes(i) ? "checked" : "") + ' />' + d + '</label>').join("")}</div></div></div>
+        <div class="sched-monthly" style="\${t.scheduleType === "monthly" ? "" : "display:none"}"><div class="field"><label>Days of month</label><input data-f="scheduleMonthDays" value="\${esc((t.scheduleMonthDays || []).join(","))}" /></div></div>
+        <div class="sched-interval" style="\${t.scheduleType === "interval" ? "" : "display:none"}"><div class="row-2"><div class="field"><label>Every</label><input type="number" min="1" data-f="scheduleIntervalValue" value="\${t.scheduleIntervalValue || 10}" /></div><div class="field"><label>Unit</label><select data-f="scheduleIntervalUnit">\${INTERVAL_UNITS.map(u => '<option value="' + u.v + '" ' + (t.scheduleIntervalUnit === u.v ? "selected" : "") + '>' + u.l + '</option>').join("")}</select></div></div></div>
+      </div>
+      <div class="section">
+        <h4>Git</h4>
+        <div class="field"><label>Branch</label><input data-f="branch" value="\${esc(t.branch)}" /></div>
+        <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="createBranch" \${t.createBranch ? "checked" : ""} /> Create branch if missing</label></div>
+      </div>
+      <div class="section">
+        <h4>Usage</h4>
+        <div class="hint-inline">\${(() => {
+          const usedIn = state.workflows.filter(w => w.steps.some(s => s.taskId === t.id));
+          if (usedIn.length === 0) return "Not used in any workflow yet.";
+          return "Used in " + usedIn.length + " workflow" + (usedIn.length > 1 ? "s" : "") + ": " + usedIn.map(w => esc(w.name)).join(", ");
+        })()}</div>
+      </div>
+    \`;
+  }
+
+  function editorWorkflowHtml(w) {
+    return \`
+      <div class="field"><label>Name *</label><input data-f="name" value="\${esc(w.name)}" /></div>
+      <div class="field"><label>Description</label><textarea data-f="description" rows="2">\${esc(w.description)}</textarea></div>
+      <div class="row-2">
+        <div class="field"><label>Color</label><select data-f="color">\${["#b07ad9","#4a7dff","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (w.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">\u25CF ' + esc(c) + '</option>').join("")}</select></div>
+        <div class="field"><label>Steps</label><div style="padding:6px 8px;background:var(--bg-3);border-radius:4px;font-size:12px">\${w.steps.length}</div></div>
+      </div>
+      <div class="section">
+        <h4>Schedule</h4>
+        <div class="row-2">
+          <div class="field"><label>Type</label><select data-f="scheduleType">\${SCHEDULE_TYPES.map(s => '<option value="' + s.v + '" ' + (w.scheduleType === s.v ? "selected" : "") + '>' + s.l + '</option>').join("")}</select></div>
+          <div class="field"><label>Time</label><input data-f="scheduleTime" value="\${esc(w.scheduleTime)}" /></div>
+        </div>
+        <div class="sched-once" style="\${w.scheduleType === "once" ? "" : "display:none"}"><div class="field"><label>Date</label><input data-f="scheduleDate" value="\${esc(w.scheduleDate)}" /></div></div>
+        <div class="sched-weekly" style="\${w.scheduleType === "weekly" ? "" : "display:none"}"><div class="field"><label>Days</label><div style="display:flex;gap:4px;flex-wrap:wrap">\${["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map((d, i) => '<label class="checkbox-row" style="background:var(--bg-3);padding:3px 6px;border-radius:4px;font-size:11px"><input type="checkbox" data-f="scheduleDays" data-day="' + i + '" ' + (w.scheduleDays.includes(i) ? "checked" : "") + ' />' + d + '</label>').join("")}</div></div></div>
+        <div class="sched-monthly" style="\${w.scheduleType === "monthly" ? "" : "display:none"}"><div class="field"><label>Days</label><input data-f="scheduleMonthDays" value="\${esc((w.scheduleMonthDays || []).join(","))}" /></div></div>
+        <div class="sched-interval" style="\${w.scheduleType === "interval" ? "" : "display:none"}"><div class="row-2"><div class="field"><label>Every</label><input type="number" min="1" data-f="scheduleIntervalValue" value="\${w.scheduleIntervalValue || 10}" /></div><div class="field"><label>Unit</label><select data-f="scheduleIntervalUnit">\${INTERVAL_UNITS.map(u => '<option value="' + u.v + '" ' + (w.scheduleIntervalUnit === u.v ? "selected" : "") + '>' + u.l + '</option>').join("")}</select></div></div></div>
+      </div>
+      <div class="section">
+        <h4>Handoffs</h4>
+        <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="handoffOutput" \${w.handoffOutput ? "checked" : ""} /> Pass output to next step</label></div>
+        <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="handoffBranch" \${w.handoffBranch ? "checked" : ""} /> Pass git branch between steps</label></div>
+      </div>
+    \`;
+  }
+
+  function editorStepHtml(s, wf) {
+    const kind = s.stepKind || "task";
+    let body = "";
+    if (kind === "task") {
+      const t = stepTask(s);
+      body = \`
+        <div class="field"><label>Task</label><select data-f="taskId">\${state.tasks.map(x => '<option value="' + x.id + '" ' + (x.id === s.taskId ? "selected" : "") + '>' + esc((x.icon || "\u26A1") + " " + (x.name || "(unnamed)")) + '</option>').join("")}</select></div>
+        \${t ? '<div class="hint-inline">' + esc((t.prompt || "(no prompt)").slice(0, 200)) + ((t.prompt || "").length > 200 ? "\u2026" : "") + '</div>' : ""}
+      \`;
+    } else if (kind === "delay") {
+      body = \`
+        <div class="row-2">
+          <div class="field"><label>Wait value</label><input type="number" min="0" data-f="delayValue" value="\${esc(s.delayValue || 0)}" /></div>
+          <div class="field"><label>Unit</label><select data-f="delayUnit">\${INTERVAL_UNITS.map(u => '<option value="' + u.v + '" ' + (s.delayUnit === u.v ? "selected" : "") + '>' + u.l + '</option>').join("")}</select></div>
+        </div>
+        <div class="hint-inline">The workflow pauses for the specified time before continuing to the next step.</div>
+      \`;
+    } else if (kind === "code") {
+      body = \`
+        <div class="row-2">
+          <div class="field"><label>Input variable</label><input data-f="codeInputVar" value="\${esc(s.codeInputVar || "input")}" /></div>
+          <div class="field"><label>Output variable</label><input data-f="codeOutputVar" value="\${esc(s.codeOutputVar || "output")}" /></div>
+        </div>
+        <div class="field"><label>JavaScript code</label><textarea data-f="code" rows="9" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px" placeholder="// input is the previous step's output as a string&#10;// set output to the value passed to the next step">\${esc(s.code || "")}</textarea></div>
+        <div class="hint-inline">Available globals: <code>input</code>, <code>outputs</code> (map of stepId \u2192 output), <code>JSON</code>, <code>Math</code>, <code>Date</code>. The result of the expression assigned to <code>\${esc(s.codeOutputVar || "output")}</code> is passed to the next step.</div>
+      \`;
+    }
+    return \`
+      \${body}
+      <div class="section">
+        <h4>Outgoing transitions (\${(s.transitions || []).length})</h4>
+        \${(s.transitions || []).map((t, i) => {
+          const target = wf.steps.find((x) => x.id === t.toStepId);
+          if (!target) return '<div class="hint-inline">\u26A0 Target step missing</div>';
+          const targetName = target.stepKind === "task" ? ((stepTask(target) || {}).name || "(task)") :
+                            target.stepKind === "delay" ? "\u23F1 " + target.delayValue + " " + target.delayUnit :
+                            "{ } Code";
+          return \`
+            <div style="display:flex;align-items:center;gap:6px;padding:4px 0;border-bottom:1px solid var(--border-soft)">
+              <span class="chip" style="background:var(--bg-3);font-size:10px">\${esc((TRANSITION_MODES.find(m => m.v === (t.mode || "default")) || {}).l || t.mode || "default")}</span>
+              <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px">\u2192 \${esc(targetName)}</span>
+              <button class="tiny btn-edit-edge" data-i="\${i}">\u2699</button>
+              <button class="tiny btn-del-edge danger" data-i="\${i}">\u2715</button>
+            </div>
+          \`;
+        }).join("") || '<div class="hint-inline">No outgoing transitions. Drag the output port to another node, or click the <b>+</b> on the node to add one.</div>'}
+        <div style="margin-top:8px"><button class="tiny" id="btnAddTransition">+ Add transition</button></div>
+      </div>
+      <div class="section">
+        <h4>Step id</h4>
+        <div class="hint-inline" style="font-family:ui-monospace,monospace;font-size:10.5px">\${esc(s.id)}</div>
+      </div>
+    \`;
+  }
+
+  function editorEdgeHtml(t, fromStep, toStep, wf) {
+    const fromName = fromStep.stepKind === "task" ? ((stepTask(fromStep) || {}).name || "(task)") :
+                      fromStep.stepKind === "delay" ? "\u23F1 " + fromStep.delayValue + " " + fromStep.delayUnit :
+                      "{ } Code";
+    const toName = toStep.stepKind === "task" ? ((stepTask(toStep) || {}).name || "(task)") :
+                    toStep.stepKind === "delay" ? "\u23F1 " + toStep.delayValue + " " + toStep.delayUnit :
+                    "{ } Code";
+    return \`
+      <div class="hint-inline">From <b>\${esc(fromName)}</b> to <b>\${esc(toName)}</b></div>
+      <div class="section">
+        <h4>Transition mode</h4>
+        <div class="field"><label>Mode</label><select data-f="mode">\${TRANSITION_MODES.map(m => '<option value="' + m.v + '" ' + (t.mode === m.v ? "selected" : "") + '>' + esc(m.l) + '</option>').join("")}</select></div>
+        <div class="hint-inline" id="transDesc">\${esc((TRANSITION_MODES.find(m => m.v === t.mode) || {}).desc || "")}</div>
+      </div>
+      <div class="section sched-eval" style="\${t.mode === "eval" ? "" : "display:none"}">
+        <h4>Evaluation prompt (AI)</h4>
+        <div class="field"><label>Prompt</label><textarea data-f="evaluatePrompt" rows="3" placeholder="How should the AI decide?">\${esc(t.evaluatePrompt || "")}</textarea></div>
+      </div>
+      <div class="section sched-conditional" style="\${t.mode === "conditional" ? "" : "display:none"}">
+        <h4>JavaScript condition</h4>
+        <div class="field"><label>Expression (return truthy to follow)</label><textarea data-f="condition" rows="4" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px" placeholder="// input: previous step output as string&#10;// outputs: { stepId: output, ... }&#10;return input.includes('success');">\${esc(t.condition || "")}</textarea></div>
+        <div class="hint-inline">Return truthy to follow this edge. Has access to: <code>input</code> (last output), <code>outputs</code> (map of stepId \u2192 output), <code>JSON</code>, <code>Math</code>, <code>Date</code>.</div>
+      </div>
+      <div class="section">
+        <h4>Force continue</h4>
+        <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="forceContinue" \${t.forceContinue ? "checked" : ""} /> Skip all checks and always follow</label></div>
+      </div>
+    \`;
+  }
+
+  function wirePanelFields() {
+    const body = $("#panelBody");
+    const sel = ui.selection;
+    if (!sel || !sel.type) return;
+    $$("[data-f]", body).forEach(el => {
+      el.addEventListener("input", onPanelField);
+      el.addEventListener("change", onPanelField);
+    });
+    function onPanelField() {
+      const target = getTarget();
+      if (!target) return;
+      const f = this.dataset.f;
+      let v = this.type === "checkbox" ? this.checked : (this.type === "number" ? (parseInt(this.value, 10) || 0) : this.value);
+      if (f === "scheduleDays") {
+        const day = parseInt(this.dataset.day, 10);
+        target.scheduleDays = target.scheduleDays || [];
+        if (this.checked) { if (!target.scheduleDays.includes(day)) target.scheduleDays.push(day); }
+        else target.scheduleDays = target.scheduleDays.filter(x => x !== day);
+        target.scheduleDays.sort((a, b) => a - b);
+      } else if (f === "scheduleMonthDays" && typeof v === "string") {
+        target.scheduleMonthDays = v.split(/[;,\\s]+/).map(x => parseInt(x, 10)).filter(x => !isNaN(x) && x >= 1 && x <= 31);
+      } else {
+        target[f] = v;
+      }
+      if (f === "scheduleType") {
+        body.querySelectorAll(".sched-once, .sched-weekly, .sched-monthly, .sched-interval").forEach(el => el.style.display = "none");
+        const el = body.querySelector(".sched-" + target.scheduleType);
+        if (el) el.style.display = "";
+      }
+      if (f === "transitionMode" || f === "mode") {
+        const t = getTarget();
+        const mode = t && t.mode;
+        body.querySelectorAll(".sched-eval, .sched-conditional").forEach(el => el.style.display = "none");
+        const el = mode && body.querySelector(".sched-" + mode);
+        if (el) el.style.display = "";
+        const desc = body.querySelector("#transDesc");
+        if (desc) desc.textContent = (TRANSITION_MODES.find(m => m.v === mode) || {}).desc || "";
+      }
+      isDirty = true;
+      if (sel.type === "step" || sel.type === "edge" || f === "name" || f === "icon" || f === "color" || f === "taskId") renderAll();
+      else renderCanvas();
+    }
+    function getTarget() {
+      if (sel.type === "task") return findTask(sel.ref);
+      if (sel.type === "workflow") return findWorkflow(sel.ref);
+      if (sel.type === "step") {
+        const wf = findWorkflow(sel.ref.wfId);
+        return wf && wf.steps[sel.ref.idx];
+      }
+      if (sel.type === "edge") {
+        const wf = findWorkflow(sel.ref.wfId);
+        const from = wf && wf.steps.find(s => s.id === sel.ref.fromId);
+        return from && from.transitions.find(t => t.toStepId === sel.ref.toId);
+      }
+      return null;
+    }
+    // Edit/Delete edge buttons inside step editor
+    $$(".btn-edit-edge", body).forEach(b => b.addEventListener("click", () => {
+      const i = parseInt(b.dataset.i, 10);
+      const wf = findWorkflow(sel.ref.wfId);
+      const s = wf && wf.steps[sel.ref.idx];
+      if (!s || !s.transitions[i]) return;
+      ui.selection = { type: "edge", ref: { wfId: wf.id, fromId: s.id, toId: s.transitions[i].toStepId } };
+      renderAll();
+    }));
+    $$(".btn-del-edge", body).forEach(b => b.addEventListener("click", () => {
+      const i = parseInt(b.dataset.i, 10);
+      const wf = findWorkflow(sel.ref.wfId);
+      const s = wf && wf.steps[sel.ref.idx];
+      if (!s) return;
+      s.transitions.splice(i, 1);
+      renderAll();
+    }));
+    const addBtn = $("#btnAddTransition", body);
+    if (addBtn) addBtn.addEventListener("click", () => {
+      const wf = findWorkflow(sel.ref.wfId);
+      const s = wf && wf.steps[sel.ref.idx];
+      if (!s) return;
+      const others = wf.steps.filter((x) => x.id !== s.id);
+      if (others.length === 0) { toast("No other steps to connect to", "warn"); return; }
+      showContextMenu(addBtn.getBoundingClientRect().left, addBtn.getBoundingClientRect().bottom, [
+        ...others.map((o) => ({
+          label: (o.stepKind === "delay" ? "\u23F1 " : o.stepKind === "code" ? "{ } " : "\u26A1 ") + (o.stepKind === "task" ? ((stepTask(o) || {}).name || "(task)") : o.stepKind === "delay" ? (o.delayValue + " " + o.delayUnit) : "JavaScript"),
+          action: () => {
+            if (!s.transitions) s.transitions = [];
+            if (s.transitions.find(t => t.toStepId === o.id)) { toast("Already connected", "warn"); return; }
+            s.transitions.push({ toStepId: o.id, mode: "default" });
+            renderAll();
+          }
+        })),
+      ]);
+    });
+  }
+
+  // \u2500\u2500 Context menu \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function showContextMenu(x, y, items) {
+    const m = $("#ctxMenu");
+    m.innerHTML = items.map((it, i) => {
+      if (it.divider) return '<div class="ctx-divider"></div>';
+      return '<div class="ctx-item ' + (it.danger ? "danger" : "") + '" data-i="' + i + '">' + esc(it.label) + (it.shortcut ? '<span class="ctx-shortcut">' + esc(it.shortcut) + '</span>' : "") + '</div>';
+    }).join("");
+    m.style.left = "0px"; m.style.top = "0px"; m.style.display = "block";
+    const rect = m.getBoundingClientRect();
+    let left = x, top = y;
+    if (left + rect.width > window.innerWidth) left = window.innerWidth - rect.width - 4;
+    if (top + rect.height > window.innerHeight) top = window.innerHeight - rect.height - 4;
+    m.style.left = left + "px"; m.style.top = top + "px";
+    $$(".ctx-item", m).forEach(el => el.addEventListener("click", () => {
+      const it = items[+el.dataset.i];
+      m.style.display = "none";
+      if (it && it.action) it.action();
+    }));
+    const closeOnClick = (e) => { if (!m.contains(e.target)) { m.style.display = "none"; document.removeEventListener("mousedown", closeOnClick); } };
+    setTimeout(() => document.addEventListener("mousedown", closeOnClick), 0);
+  }
+
+  // \u2500\u2500 Status bar \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function renderStatus() {
+    const totalSteps = state.workflows.reduce((acc, w) => acc + w.steps.length, 0);
+    $("#statTasks").textContent = state.tasks.length + " tasks";
+    $("#statWorkflows").textContent = state.workflows.length + " workflows";
+    $("#statSteps").textContent = totalSteps + " steps";
+    $("#statMsg").textContent = inExtension ? (isDirty ? "Modified \u2014 click Apply to save" : "Connected to AutoOC") : "Standalone mode";
+  }
+
+  // \u2500\u2500 High-level actions \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function newTask() {
+    const t = defaultTask();
+    state.tasks.push(t);
+    renderAll();
+    ui.selection = { type: "task", ref: t.id };
+    renderPanel();
+  }
+  function newWorkflow() {
+    const w = defaultWorkflow();
+    state.workflows.push(w);
+    setActiveWorkflow(w.id);
+  }
+  function closeWorkflow(id) {
+    if (state.workflows.length > 1) {
+      if (!confirm("Delete this workflow?")) return;
+    }
+    const idx = state.workflows.findIndex(x => x.id === id);
+    state.workflows.splice(idx, 1);
+    if (ui.activeWorkflowId === id) {
+      const newActive = state.workflows[Math.max(0, idx - 1)] || state.workflows[0];
+      ui.activeWorkflowId = newActive ? newActive.id : null;
+      ui.selection = newActive ? { type: "workflow", ref: newActive.id } : { type: null, ref: null };
+    }
+    renderAll();
+  }
+  function duplicateStep(wfId, idx) {
+    const wf = findWorkflow(wfId);
+    if (!wf) return;
+    const orig = wf.steps[idx];
+    if (!orig) return;
+    const copy = JSON.parse(JSON.stringify(orig));
+    copy.id = uid();
+    copy.position = { x: orig.position.x + 40, y: orig.position.y + 60 };
+    wf.steps.splice(idx + 1, 0, copy);
+    renderAll();
+  }
+  function removeStep(wfId, idx) {
+    if (!confirm("Delete this step?")) return;
+    const wf = findWorkflow(wfId);
+    if (!wf) return;
+    // Also clean up any transitions pointing to this step.
+    const removed = wf.steps[idx];
+    wf.steps.splice(idx, 1);
+    if (removed) {
+      for (const s of wf.steps) {
+        if (s.transitions) s.transitions = s.transitions.filter(t => t.toStepId !== removed.id);
+      }
+    }
+    renderAll();
+  }
+
+  // \u2500\u2500 Validation \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function validateAll() {
+    const issues = [];
+    state.workflows.forEach(w => {
+      const wIssues = [];
+      if (w.steps.length === 0) wIssues.push({ kind: "warn", msg: "Workflow has no steps" });
+      w.steps.forEach((s, i) => {
+        if (s.stepKind === "task") {
+          const t = findTask(s.taskId);
+          if (!t) wIssues.push({ kind: "err", msg: "Step " + (i+1) + ": task no longer exists" });
+          else if (!t.prompt || !t.prompt.trim()) wIssues.push({ kind: "err", msg: "Step " + (i+1) + " (" + t.name + "): task has no prompt" });
+        }
+        if (s.stepKind === "code" && (!s.code || !s.code.trim())) {
+          wIssues.push({ kind: "err", msg: "Step " + (i+1) + " (code): code is empty" });
+        }
+        if (s.stepKind === "code" && s.transitions) {
+          // Code steps with "eval" transition mode are not supported.
+          for (const t of s.transitions) {
+            if (t.mode === "eval") {
+              wIssues.push({ kind: "warn", msg: "Step " + (i+1) + " (code): AI eval transition from a code step is unusual" });
+            }
+          }
+        }
+        if (s.transitions) {
+          for (const t of s.transitions) {
+            if (t.mode === "conditional" && (!t.condition || !t.condition.trim())) {
+              wIssues.push({ kind: "warn", msg: "Step " + (i+1) + " \u2192 step: conditional transition has no expression" });
+            }
+            if (!wf.steps.find(x => x.id === t.toStepId)) {
+              wIssues.push({ kind: "err", msg: "Step " + (i+1) + ": transition points to a missing step" });
+            }
+          }
+        }
+      });
+      if (wIssues.length > 0) issues.push({ wf: w, issues: wIssues });
+    });
+    return issues;
+  }
+  function showValidation() {
+    const issues = validateAll();
+    const root = $("#validationReport");
+    if (issues.length === 0) {
+      root.innerHTML = '<div style="padding:24px 8px;text-align:center"><div style="font-size:36px;color:var(--ok)">\u2713</div><div style="font-weight:600;margin-top:8px">All workflows look good.</div></div>';
+    } else {
+      root.innerHTML = issues.map(({ wf, issues }) => {
+        return '<div style="margin-bottom:14px"><div style="font-weight:600;margin-bottom:4px">' + esc(wf.name) + '</div><div style="padding-left:14px;border-left:2px solid var(--border-soft)">' +
+          issues.map(i => '<div style="display:flex;gap:6px;align-items:flex-start;padding:3px 0"><span class="validation-icon ' + i.kind + '" style="width:14px;height:14px;font-size:9px;flex-shrink:0;margin-top:2px">' + (i.kind === "err" ? "!" : "?") + '</span><span style="font-size:12px">' + esc(i.msg) + '</span></div>').join("") +
+          '</div></div>';
+      }).join("");
+    }
+    $("#validationModal").classList.add("open");
+  }
+
+  // \u2500\u2500 Library drag (step templates) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function setupLibraryDrag() {
+    $$(".lib-special").forEach(el => {
+      el.addEventListener("dragstart", (e) => {
+        e.dataTransfer.setData("text/plain", JSON.stringify({ kind: "step-template", stepKind: el.dataset.kind }));
+        e.dataTransfer.effectAllowed = "copy";
+      });
+      el.addEventListener("click", () => {
+        // Double-click or click: add at center of canvas
+        const wf = activeWorkflow();
+        if (!wf) { toast("Open or create a workflow first", "warn"); return; }
+        const lastX = wf.steps.length ? Math.max.apply(null, wf.steps.map(s => s.position.x)) + NODE_W + 80 : 60;
+        addStepAtPoint(el.dataset.kind, lastX, 60);
+      });
+    });
+  }
+
+  // \u2500\u2500 Wire everything \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function bindEvents() {
+    $("#btnApply").addEventListener("click", () => {
+      if (inExtension) applyToExtension();
+      else exportJson();
+    });
+    $("#btnAutoLayout").addEventListener("click", autoLayout);
+    $("#btnFit").addEventListener("click", fitToView);
+    $("#btnValidate").addEventListener("click", showValidation);
+    $("#btnTrace").addEventListener("click", () => {
+      ui.traceOn = !ui.traceOn;
+      renderCanvas();
+      toast(ui.traceOn ? "Trace on" : "Trace off", "ok");
+    });
+    $("#btnZoomIn").addEventListener("click", () => {
+      const r = $("#canvas").getBoundingClientRect();
+      zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1.2);
+    });
+    $("#btnZoomOut").addEventListener("click", () => {
+      const r = $("#canvas").getBoundingClientRect();
+      zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / 1.2);
+    });
+    $("#btnZoomReset").addEventListener("click", () => {
+      const r = $("#canvas").getBoundingClientRect();
+      zoomAt(r.left + r.width / 2, r.top + r.height / 2, 1 / ui.view.zoom);
+    });
+    $("#sbAddTask").addEventListener("click", newTask);
+    $("#sbAddWf").addEventListener("click", newWorkflow);
+    $("#libSearch").addEventListener("input", renderTaskLibrary);
+    $("#panelClose").addEventListener("click", () => { ui.selection = { type: null, ref: null }; renderAll(); });
+    $("#panelOk").addEventListener("click", () => { ui.selection = { type: null, ref: null }; renderAll(); });
+    $("#panelDelete").addEventListener("click", () => {
+      const sel = ui.selection;
+      if (sel.type === "task") {
+        if (!confirm("Delete this task? It will be removed from every workflow that uses it.")) return;
+        state.tasks = state.tasks.filter(t => t.id !== sel.ref);
+        state.workflows.forEach(w => { w.steps = w.steps.filter(s => s.taskId !== sel.ref); });
+      } else if (sel.type === "workflow") {
+        closeWorkflow(sel.ref);
+        return;
+      } else if (sel.type === "step") {
+        removeStep(sel.ref.wfId, sel.ref.idx);
+        return;
+      } else if (sel.type === "edge") {
+        const wf = findWorkflow(sel.ref.wfId);
+        const from = wf && wf.steps.find(s => s.id === sel.ref.fromId);
+        if (from) from.transitions = (from.transitions || []).filter(t => t.toStepId !== sel.ref.toId);
+      }
+      ui.selection = { type: null, ref: null };
+      renderAll();
+    });
+    $("#validationClose").addEventListener("click", () => $("#validationModal").classList.remove("open"));
+    $("#helpClose").addEventListener("click", () => $("#helpBanner").style.display = "none");
+
+    document.addEventListener("keydown", (e) => {
+      if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA" || e.target.tagName === "SELECT") return;
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const sel = ui.selection;
+        if (sel.type === "step") { e.preventDefault(); removeStep(sel.ref.wfId, sel.ref.idx); return; }
+        if (sel.type === "edge") {
+          e.preventDefault();
+          const wf = findWorkflow(sel.ref.wfId);
+          const from = wf && wf.steps.find(s => s.id === sel.ref.fromId);
+          if (from) from.transitions = (from.transitions || []).filter(t => t.toStepId !== sel.ref.toId);
+          renderAll();
+        }
+      }
+      if (e.key === "Escape") {
+        ui.selection = ui.activeWorkflowId ? { type: "workflow", ref: ui.activeWorkflowId } : { type: null, ref: null };
+        renderAll();
+      }
+      if (e.key === "f" || e.key === "F") { e.preventDefault(); fitToView(); }
+      if (e.key === " ") { spaceHeld = true; $("#canvas").classList.add("space-pan"); }
+    });
+    document.addEventListener("keyup", (e) => { if (e.key === " ") { spaceHeld = false; $("#canvas").classList.remove("space-pan"); } });
+  }
+
+  // Standalone export (when not running in the extension).
+  function exportJson() {
+    const data = {
+      autoOCExport: {
+        schemaVersion: "1.4.0",
+        exportedAt: new Date().toISOString(),
+        pluginVersion: "1.4.0",
+        name: "Visual Builder export",
+        description: "Exported from the standalone Visual Builder",
+      },
+      tasks: state.tasks,
+      workflows: state.workflows,
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "autooc-visual-export-" + new Date().toISOString().slice(0, 10) + ".json";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 100);
+    toast("JSON downloaded", "ok");
+  }
+
+  // \u2500\u2500 Init \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+  function init() {
+    setupPostMessage();
+    bindEvents();
+    setupCanvasEvents();
+    setupLibraryDrag();
+    renderAll();
+    $("#statMsg").textContent = "Waiting for AutoOC\u2026";
+  }
+  init();
+  <\/script>
+</body>
+</html>
+`;
+  }
+});
+
 // main.ts
 var main_exports = {};
 __export(main_exports, {
@@ -38,6 +1960,7 @@ var import_child_process = require("child_process");
 var os = __toESM(require("os"));
 var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
+var visualBuilderHtml2 = (init_visualBuilderHtml_generated(), __toCommonJS(visualBuilderHtml_generated_exports)).visualBuilderHtml;
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
   if (os.platform() === "win32") {
@@ -235,6 +2158,26 @@ function setAutoOCModalSize(modal, widthPx) {
   modal.contentEl.style.overflowX = "hidden";
   modal.contentEl.style.overflowY = "auto";
 }
+function setAutoOCModalFullscreen(modal) {
+  const modalEl = modal.modalEl;
+  if (!modalEl) return;
+  modalEl.style.width = "min(1400px, calc(100vw - 40px))";
+  modalEl.style.height = "calc(100vh - 80px)";
+  modalEl.style.maxWidth = "calc(100vw - 40px)";
+  modalEl.style.maxHeight = "calc(100vh - 40px)";
+  modalEl.style.overflow = "hidden";
+  modalEl.addClass("auto-oc-fullscreen-modal");
+  modal.contentEl.style.flex = "1 1 auto";
+  modal.contentEl.style.minHeight = "0";
+  modal.contentEl.style.width = "100%";
+  modal.contentEl.style.height = "auto";
+  modal.contentEl.style.maxWidth = "100%";
+  modal.contentEl.style.padding = "0";
+  modal.contentEl.style.overflow = "hidden";
+  modal.contentEl.style.display = "flex";
+  modal.contentEl.style.flexDirection = "column";
+  modal.contentEl.style.boxSizing = "border-box";
+}
 var GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
 var GITHUB_BRANCH = "main";
 var REMOTE_MANIFEST_URL = `https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}/manifest.json`;
@@ -315,10 +2258,27 @@ function toExportWorkflow(workflow, exportId, taskExportIdMap) {
     steps: workflow.steps.map((step) => {
       var _a2;
       return {
-        taskExportId: (_a2 = taskExportIdMap.get(step.taskId)) != null ? _a2 : "",
+        id: step.id,
+        stepKind: step.stepKind || "task",
+        taskExportId: step.taskId ? (_a2 = taskExportIdMap.get(step.taskId)) != null ? _a2 : "" : void 0,
         transitionMode: step.transitionMode,
         evaluatePrompt: step.evaluatePrompt,
-        forceContinue: step.forceContinue
+        forceContinue: step.forceContinue,
+        delayValue: step.delayValue,
+        delayUnit: step.delayUnit,
+        code: step.code,
+        codeLang: step.codeLang,
+        codeInputVar: step.codeInputVar,
+        codeOutputVar: step.codeOutputVar,
+        transitions: step.transitions && step.transitions.length > 0 ? step.transitions.map((t) => ({
+          toStepId: t.toStepId,
+          mode: t.mode,
+          evaluatePrompt: t.evaluatePrompt,
+          condition: t.condition,
+          conditionLang: t.conditionLang,
+          forceContinue: t.forceContinue
+        })) : void 0,
+        position: step.position
       };
     })
   };
@@ -767,6 +2727,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       callback: () => this.activateView()
     });
     this.addCommand({
+      id: "open-visual-builder",
+      name: "Open AutoOC Visual Builder",
+      callback: () => this.openVisualBuilder()
+    });
+    this.addCommand({
       id: "create-task",
       name: "Create new OpenCode task",
       callback: () => new CreateTaskModal(this.app, this).open()
@@ -870,6 +2835,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     this.activateView();
   }
+  // Open the visual builder as a centered, near-fullscreen modal. The
+  // visual builder is a standalone HTML/JS app that we host in an
+  // iframe; it communicates with the plugin through postMessage so the
+  // user can edit visually and apply changes back to the settings.
+  openVisualBuilder() {
+    new VisualBuilderModal(this.app, this).open();
+  }
   async loadSettings() {
     var _a, _b;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -925,6 +2897,35 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       if (wf.handoffOutput !== true) {
         wf.handoffOutput = true;
         changed = true;
+      }
+      if (Array.isArray(wf.steps)) {
+        for (let i = 0; i < wf.steps.length; i++) {
+          const s = wf.steps[i];
+          if (!s.id) {
+            s.id = generateId();
+            changed = true;
+          }
+          if (!s.stepKind) {
+            s.stepKind = "task";
+            changed = true;
+          }
+          if (!s.position) {
+            s.position = { x: 40 + i * 280, y: 60 };
+            changed = true;
+          }
+          if (!s.transitions || s.transitions.length === 0) {
+            const next = wf.steps[i + 1];
+            if (next) {
+              s.transitions = [{
+                toStepId: next.id,
+                mode: s.transitionMode || "default",
+                evaluatePrompt: s.evaluatePrompt,
+                forceContinue: s.forceContinue
+              }];
+              changed = true;
+            }
+          }
+        }
       }
     }
     if (!this.settings.defaultModel) {
@@ -1464,7 +3465,7 @@ DONE:" + $exitCode + "
     );
     const data = {
       autoOCExport: {
-        schemaVersion: "1.0",
+        schemaVersion: "1.4.0",
         exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -1499,7 +3500,7 @@ DONE:" + $exitCode + "
     const referencedTaskIds = /* @__PURE__ */ new Set();
     for (const wf of workflows) {
       for (const step of wf.steps) {
-        referencedTaskIds.add(step.taskId);
+        if (step.taskId) referencedTaskIds.add(step.taskId);
       }
     }
     const autoIncludedTasks = this.settings.tasks.filter(
@@ -1518,8 +3519,12 @@ DONE:" + $exitCode + "
   }
   async importFromData(data) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
-    if (!data.autoOCExport || data.autoOCExport.schemaVersion !== "1.0") {
-      throw new Error("Invalid AutoOC export file (missing or unsupported schema).");
+    if (!data.autoOCExport) {
+      throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
+    }
+    const sv = data.autoOCExport.schemaVersion;
+    if (sv !== "1.0" && sv !== "1.4.0") {
+      throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
     const exportIdToTaskId = /* @__PURE__ */ new Map();
     let tasksImported = 0;
@@ -1551,18 +3556,62 @@ DONE:" + $exitCode + "
     }
     let workflowsImported = 0;
     for (const ew of data.workflows || []) {
+      const exportIdToStepId = /* @__PURE__ */ new Map();
       const steps = [];
+      const legacySteps = [];
+      let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
-        const taskId = exportIdToTaskId.get(s.taskExportId);
-        if (!taskId) continue;
-        steps.push({
-          taskId,
+        const stepKind = s.stepKind || "task";
+        const step = {
+          id: s.id || generateId(),
+          stepKind,
+          taskId: s.taskExportId ? exportIdToTaskId.get(s.taskExportId) : void 0,
           transitionMode: s.transitionMode,
           evaluatePrompt: s.evaluatePrompt,
-          forceContinue: s.forceContinue
-        });
+          forceContinue: s.forceContinue,
+          delayValue: s.delayValue,
+          delayUnit: s.delayUnit,
+          code: s.code,
+          codeLang: s.codeLang,
+          codeInputVar: s.codeInputVar,
+          codeOutputVar: s.codeOutputVar,
+          transitions: s.transitions,
+          position: s.position
+        };
+        if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
+          step.transitions = void 0;
+          legacySteps.push(step);
+        } else {
+          steps.push(step);
+        }
+        exportIdToStepId.set(step.id, step.id);
       }
-      if (steps.length < 2) continue;
+      if (legacySteps.length > 0) {
+        for (let i = 0; i < legacySteps.length; i++) {
+          const cur = legacySteps[i];
+          const next = legacySteps[i + 1];
+          if (next) {
+            cur.transitions = [{
+              toStepId: next.id,
+              mode: cur.transitionMode || "default",
+              evaluatePrompt: cur.evaluatePrompt,
+              forceContinue: cur.forceContinue
+            }];
+          }
+          steps.push(cur);
+        }
+      }
+      if (steps.length > 0 && steps.every((s) => !s.transitions || s.transitions.length === 0)) {
+        for (let i = 0; i < steps.length - 1; i++) {
+          steps[i].transitions = [{
+            toStepId: steps[i + 1].id,
+            mode: steps[i].transitionMode || "default",
+            evaluatePrompt: steps[i].evaluatePrompt,
+            forceContinue: steps[i].forceContinue
+          }];
+        }
+      }
+      if (steps.length === 0) continue;
       const workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
@@ -1597,23 +3646,233 @@ DONE:" + $exitCode + "
     }
     for (let i = 0; i < wf.steps.length; i++) {
       const step = wf.steps[i];
-      const t = this.settings.tasks.find((t2) => t2.id === step.taskId);
-      if (!t) {
+      if (step.stepKind === "task" && !this.settings.tasks.find((t) => t.id === step.taskId)) {
         new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
         return;
       }
     }
+    this.workflowRuntime = this.workflowRuntime || /* @__PURE__ */ new Map();
+    this.workflowRuntime.set(wf.id, {
+      stepOutputs: /* @__PURE__ */ new Map(),
+      stepIndex: 0
+    });
     wf.status = "running";
     wf.currentStep = 0;
     wf.lastRun = (/* @__PURE__ */ new Date()).toISOString();
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
-    await this.runWorkflowStep(idx, 0);
+    const entryStep = this.findEntryStep(wf);
+    if (!entryStep) {
+      wf.status = "failed";
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
+      return;
+    }
+    await this.runWorkflowStepById(wf.id, entryStep.id);
+  }
+  // Find the entry step: a step that has no incoming transitions from any other
+  // step in the workflow. If multiple are candidates, picks the one with the
+  // smallest position.x (visual order). Falls back to the first step.
+  findEntryStep(wf) {
+    if (wf.steps.length === 0) return null;
+    const incoming = /* @__PURE__ */ new Set();
+    for (const s of wf.steps) {
+      for (const t of s.transitions || []) {
+        incoming.add(t.toStepId);
+      }
+    }
+    const candidates = wf.steps.filter((s) => !incoming.has(s.id));
+    if (candidates.length === 0) return wf.steps[0];
+    candidates.sort((a, b) => {
+      var _a, _b, _c, _d;
+      return ((_b = (_a = a.position) == null ? void 0 : _a.x) != null ? _b : 0) - ((_d = (_c = b.position) == null ? void 0 : _c.x) != null ? _d : 0);
+    });
+    return candidates[0];
+  }
+  async runWorkflowStepById(workflowId, stepId) {
+    const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
+    if (wfIdx === -1) return;
+    const wf = this.settings.workflows[wfIdx];
+    if (!wf || wf.status !== "running") return;
+    const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
+    if (stepIdx === -1) {
+      wf.status = "failed";
+      new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
+      await this.saveSettings();
+      return;
+    }
+    if (this.stoppingWorkflows.has(workflowId)) return;
+    await this.runWorkflowStep(wfIdx, stepIdx);
+  }
+  // Resolve the next step from a list of transitions. For each transition:
+  // - "force" / "default": follow unconditionally if the previous step
+  //   succeeded (force ignores failure, default requires success).
+  // - "eval": call the model to decide.
+  // - "conditional": evaluate the JS `condition` against the runtime
+  //   context (input = last output, outputs = map of stepId → output).
+  // Returns the target step id, or null if the workflow should stop.
+  async resolveNextStep(wf, currentStep, currentStepIndex, lastOutput, lastSucceeded, transitions) {
+    var _a, _b;
+    if (!transitions || transitions.length === 0) {
+      const next = wf.steps[currentStepIndex + 1];
+      if (next) return { nextStepId: next.id, reason: "linear" };
+      return { nextStepId: null, reason: "end" };
+    }
+    for (const t of transitions) {
+      const target = wf.steps.find((s) => s.id === t.toStepId);
+      if (!target) continue;
+      if (t.mode === "force" || t.forceContinue) {
+        return { nextStepId: t.toStepId, reason: "force" };
+      }
+      if (t.mode === "default") {
+        if (lastSucceeded) return { nextStepId: t.toStepId, reason: "default" };
+        continue;
+      }
+      if (t.mode === "eval") {
+        new import_obsidian.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
+        try {
+          const cwd = this.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
+          const model = ((_a = this.availableModels[0]) == null ? void 0 : _a.value) || this.settings.defaultModel || "opencode/default";
+          const prompt = ((_b = t.evaluatePrompt) == null ? void 0 : _b.trim()) || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
+          const evalFullPrompt = `${prompt}
+
+Previous step output:
+---
+${lastOutput}
+---
+
+Reply ONLY with YES or NO.`;
+          const evalResult = await this.evaluateWithOpencode(evalFullPrompt, model, cwd);
+          const isYes = /\bYES\b/i.test(evalResult.output) && !/\bNO\b/i.test(evalResult.output);
+          if (isYes) {
+            return { nextStepId: t.toStepId, reason: "eval:yes" };
+          }
+        } catch (err) {
+          new import_obsidian.Notice(`AutoOC: eval error \u2014 ${String(err)}`);
+        }
+        continue;
+      }
+      if (t.mode === "conditional") {
+        try {
+          const ok = this.evaluateCondition(t.condition || "", lastOutput, this.getRuntimeOutputs(wf.id));
+          if (ok) return { nextStepId: t.toStepId, reason: "conditional:true" };
+        } catch (err) {
+          new import_obsidian.Notice(`AutoOC: condition error \u2014 ${String(err)}`);
+        }
+        continue;
+      }
+    }
+    return { nextStepId: null, reason: "no-match" };
+  }
+  getRuntimeOutputs(workflowId) {
+    const rt = this.workflowRuntime;
+    if (!rt) return {};
+    const ctx = rt.get(workflowId);
+    if (!ctx) return {};
+    const out = {};
+    for (const [k, v] of ctx.stepOutputs.entries()) out[k] = v;
+    return out;
+  }
+  // Run a JavaScript condition expression against a runtime context.
+  // Variables exposed: input (last step output), outputs (map of stepId → output),
+  // workflow (object with name/id), step (current step), require (Node require).
+  evaluateCondition(expression, input, outputs) {
+    if (!expression || !expression.trim()) return false;
+    const vm = require("vm");
+    const sandbox = {
+      input: input || "",
+      outputs,
+      String,
+      Number,
+      Boolean,
+      Array,
+      Object,
+      JSON,
+      Math,
+      Date,
+      RegExp,
+      console: { log: () => {
+      } }
+    };
+    vm.createContext(sandbox);
+    const result = vm.runInContext("(" + expression + ")", sandbox, { timeout: 500 });
+    return !!result;
   }
   async runWorkflowStep(wfIdx, stepIndex) {
     const wf = this.settings.workflows[wfIdx];
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
+    if (!step) {
+      wf.status = "completed";
+      await this.saveSettings();
+      return;
+    }
+    const rt = this.workflowRuntime.get(wf.id);
+    if (rt) rt.stepIndex = stepIndex;
+    if (step.stepKind === "delay") {
+      await this.runDelayStep(wf, step, stepIndex);
+      return;
+    }
+    if (step.stepKind === "code") {
+      await this.runCodeStep(wf, step, stepIndex);
+      return;
+    }
+    await this.runTaskStep(wf, step, stepIndex);
+  }
+  async runDelayStep(wf, step, stepIndex) {
+    const value = Math.max(0, step.delayValue || 0);
+    const unit = step.delayUnit || "seconds";
+    const ms = value * (unit === "hours" ? 36e5 : unit === "minutes" ? 6e4 : 1e3);
+    const ctx = this.workflowRuntime.get(wf.id);
+    if (ctx) ctx.stepOutputs.set(step.id, `[delay ${value} ${unit}]`);
+    new import_obsidian.Notice(`AutoOC: \u23F1 Waiting ${value} ${unit} in "${wf.name}"...`);
+    if (this.stoppingWorkflows.has(wf.id)) {
+      await this.completeStep(wf, step, stepIndex, true, "[delay skipped: workflow stopped]");
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    await this.completeStep(wf, step, stepIndex, true, `[delay ${value} ${unit}]`);
+  }
+  async runCodeStep(wf, step, stepIndex) {
+    const ctx = this.workflowRuntime.get(wf.id);
+    const inputVar = step.codeInputVar || "input";
+    const outputVar = step.codeOutputVar || "output";
+    const inputVal = ctx && ctx.stepOutputs.size > 0 ? Array.from(ctx.stepOutputs.values()).pop() : "";
+    const outputs = {};
+    if (ctx) for (const [k, v] of ctx.stepOutputs.entries()) outputs[k] = v;
+    const vm = require("vm");
+    const sandbox = {
+      input: inputVal,
+      outputs,
+      String,
+      Number,
+      Boolean,
+      Array,
+      Object,
+      JSON,
+      Math,
+      Date,
+      RegExp,
+      console: { log: () => {
+      } }
+    };
+    try {
+      const context = vm.createContext(sandbox);
+      const code = step.code || "";
+      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 1e4 });
+      const out = String(result == null ? "" : result);
+      if (ctx) ctx.stepOutputs.set(step.id, out);
+      new import_obsidian.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
+      await this.completeStep(wf, step, stepIndex, true, out);
+    } catch (err) {
+      const msg = `[code error: ${String(err)}]`;
+      if (ctx) ctx.stepOutputs.set(step.id, msg);
+      new import_obsidian.Notice(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`);
+      await this.completeStep(wf, step, stepIndex, false, msg);
+    }
+  }
+  async runTaskStep(wf, step, stepIndex) {
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
@@ -1623,96 +3882,113 @@ DONE:" + $exitCode + "
     }
     const task = this.settings.tasks[taskIdx];
     const taskOverrides = {};
-    if (stepIndex > 0) {
-      const prevStep = wf.steps[stepIndex - 1];
-      const prevTaskIdx = this.settings.tasks.findIndex((t) => t.id === prevStep.taskId);
-      if (prevTaskIdx !== -1) {
-        const prevTask = this.settings.tasks[prevTaskIdx];
-        if (wf.handoffBranch && prevTask.branch) {
-          taskOverrides.branch = prevTask.branch;
-          taskOverrides.createBranch = false;
-        }
-        const handoffEnabled = true;
-        if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
-          const cleanOutput = extractContextForHandoff(prevTask.output);
-          if (cleanOutput) {
-            const contextText = cleanOutput;
-            const contextBlock = ` Previous task output from "${prevTask.name}" to use as context: ${contextText} End of previous task output.`;
-            taskOverrides.prompt = `${task.prompt}${contextBlock}`;
-            new import_obsidian.Notice(`AutoOC: \u21AA Passing context from "${prevTask.name}" to "${task.name}" (${contextText.length} chars)`);
-          } else {
-            new import_obsidian.Notice(`AutoOC: handoff skipped \u2014 previous output was empty after filtering.`);
-          }
+    if (wf.handoffOutput) {
+      const ctx = this.workflowRuntime.get(wf.id);
+      if (ctx && ctx.stepOutputs.size > 0) {
+        const previousOutput = String(Array.from(ctx.stepOutputs.values()).pop() || "");
+        const cleanOutput = extractContextForHandoff(previousOutput);
+        if (cleanOutput) {
+          const contextBlock = ` Previous step output to use as context: ${cleanOutput} End of previous step output.`;
+          taskOverrides.prompt = `${task.prompt}${contextBlock}`;
         }
       }
     }
     wf.currentStep = stepIndex;
     await this.saveSettings();
     await this.runTask(task, async (completedTask, exitCode) => {
-      var _a, _b;
-      const currentWf = this.settings.workflows[wfIdx];
+      const currentWf = this.settings.workflows.find((w) => w.id === wf.id);
       if (!currentWf || currentWf.status !== "running" || this.stoppingWorkflows.has(currentWf.id)) return;
       const currentStep = currentWf.steps[stepIndex];
-      const transitionMode = (_a = currentStep.transitionMode) != null ? _a : currentStep.forceContinue ? "force" : currentStep.evaluatePrompt !== void 0 ? "eval" : "default";
-      if (stepIndex >= currentWf.steps.length - 1) {
-        currentWf.status = exitCode === 0 && completedTask.status !== "failed" ? "completed" : "failed";
-        currentWf.currentStep = stepIndex;
-        new import_obsidian.Notice(
-          currentWf.status === "completed" ? `AutoOC: \u2705 Workflow "${currentWf.name}" completed (${currentWf.steps.length}/${currentWf.steps.length} steps).` : `AutoOC: \u274C Workflow "${currentWf.name}" failed at final step ${stepIndex + 1}.`
-        );
-        await this.saveSettings();
-        return;
-      }
-      let shouldContinue = false;
-      if (transitionMode === "force") {
-        shouldContinue = true;
-      } else if (transitionMode === "eval") {
-        new import_obsidian.Notice(`AutoOC: Evaluating step ${stepIndex + 1} \u2192 ${stepIndex + 2} for "${currentWf.name}"...`);
-        try {
-          const cwd = completedTask.workingDirectory || this.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-          const prompt = ((_b = currentStep.evaluatePrompt) == null ? void 0 : _b.trim()) || "Did the previous task complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
-          const evalFullPrompt = `${prompt}
-
-Previous task output:
----
-${completedTask.output}
----
-
-Reply ONLY with YES or NO.`;
-          const evalResult = await this.evaluateWithOpencode(evalFullPrompt, completedTask.model, cwd);
-          const isYes = /\bYES\b/i.test(evalResult.output) && !/\bNO\b/i.test(evalResult.output);
-          shouldContinue = isYes;
-          completedTask.output += `
-
-[Workflow evaluation (step ${stepIndex + 1}\u2192${stepIndex + 2}): ${evalResult.output.trim().slice(0, 300)}]`;
-        } catch (err) {
-          completedTask.output += `
-
-[Workflow evaluation error: ${String(err)}]`;
-          shouldContinue = false;
-        }
-      } else {
-        shouldContinue = exitCode === 0 && completedTask.status !== "failed";
-      }
-      if (shouldContinue) {
-        currentWf.currentStep = stepIndex + 1;
-        await this.saveSettings();
-        new import_obsidian.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" step ${stepIndex + 2}/${currentWf.steps.length}...`);
-        setTimeout(() => {
-          this.runWorkflowStep(wfIdx, stepIndex + 1);
-        }, 500);
-      } else {
-        const failedByTask = transitionMode === "default" && (exitCode !== 0 || completedTask.status === "failed");
+      const lastOutput = completedTask.output || "";
+      const ctx = this.workflowRuntime.get(currentWf.id);
+      if (ctx) ctx.stepOutputs.set(currentStep.id, lastOutput);
+      const lastSucceeded = exitCode === 0 && completedTask.status !== "failed";
+      const transitions = currentStep.transitions && currentStep.transitions.length > 0 ? currentStep.transitions : (() => {
+        const next = currentWf.steps[stepIndex + 1];
+        if (!next) return [];
+        const mode = currentStep.transitionMode || "default";
+        return [{
+          toStepId: next.id,
+          mode,
+          evaluatePrompt: currentStep.evaluatePrompt,
+          forceContinue: currentStep.forceContinue
+        }];
+      })();
+      const { nextStepId, reason } = await this.resolveNextStep(
+        currentWf,
+        currentStep,
+        stepIndex,
+        lastOutput,
+        lastSucceeded,
+        transitions
+      );
+      if (!nextStepId) {
+        const failedByTask = !lastSucceeded;
         currentWf.status = failedByTask ? "failed" : "completed";
         completedTask.output += failedByTask ? `
 [Workflow failed at step ${stepIndex + 1}/${currentWf.steps.length}]` : `
-[Workflow stopped at step ${stepIndex + 1}/${currentWf.steps.length}]`;
+[Workflow completed at step ${stepIndex + 1}/${currentWf.steps.length}]`;
         new import_obsidian.Notice(
-          failedByTask ? `AutoOC: \u274C Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.` : `AutoOC: \u23F8 Workflow "${currentWf.name}" stopped at step ${stepIndex + 1}/${currentWf.steps.length}.`
+          failedByTask ? `AutoOC: \u274C Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.` : `AutoOC: \u2705 Workflow "${currentWf.name}" completed at step ${stepIndex + 1}/${currentWf.steps.length}.`
         );
+        this.workflowRuntime.delete(currentWf.id);
         await this.saveSettings();
+        return;
       }
+      const nextIdx = currentWf.steps.findIndex((s) => s.id === nextStepId);
+      if (nextIdx === -1) {
+        currentWf.status = "failed";
+        new import_obsidian.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
+        await this.saveSettings();
+        return;
+      }
+      currentWf.currentStep = nextIdx;
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
+      setTimeout(() => {
+        this.runWorkflowStepById(currentWf.id, nextStepId);
+      }, 200);
     }, taskOverrides);
+  }
+  // Complete a non-task step and move to the next one.
+  async completeStep(wf, step, stepIndex, succeeded, output) {
+    const ctx = this.workflowRuntime.get(wf.id);
+    if (ctx) ctx.stepOutputs.set(step.id, output);
+    const transitions = step.transitions && step.transitions.length > 0 ? step.transitions : (() => {
+      const wfRef2 = this.settings.workflows.find((w) => w.id === wf.id);
+      if (!wfRef2) return [];
+      const next = wfRef2.steps[stepIndex + 1];
+      if (!next) return [];
+      return [{ toStepId: next.id, mode: "default" }];
+    })();
+    const { nextStepId, reason } = await this.resolveNextStep(
+      wf,
+      step,
+      stepIndex,
+      output,
+      succeeded,
+      transitions
+    );
+    if (!nextStepId) {
+      const wfRef2 = this.settings.workflows.find((w) => w.id === wf.id);
+      if (wfRef2) {
+        wfRef2.status = succeeded ? "completed" : "failed";
+        await this.saveSettings();
+        new import_obsidian.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
+      }
+      this.workflowRuntime.delete(wf.id);
+      return;
+    }
+    const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
+    if (wfRef) {
+      const nextIdx = wfRef.steps.findIndex((s) => s.id === nextStepId);
+      if (nextIdx >= 0) {
+        wfRef.currentStep = nextIdx;
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
+        setTimeout(() => this.runWorkflowStepById(wf.id, nextStepId), 200);
+      }
+    }
   }
 };
 var AutoOCView = class extends import_obsidian.ItemView {
@@ -1749,8 +4025,10 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
+    this.renderHeader(containerEl);
     const tabBar = containerEl.createDiv("auto-oc-tab-bar");
-    const btnTasks = tabBar.createEl("button", {
+    const navRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-nav");
+    const btnTasks = navRow.createEl("button", {
       text: "\u{1F4CB} Tasks",
       cls: "auto-oc-tab-btn"
     });
@@ -1758,28 +4036,48 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.currentTab = "tasks";
       this.render();
     };
-    const btnWorkflows = tabBar.createEl("button", {
-      text: "\u{1F517} Workflows",
+    const btnWorkflows = navRow.createEl("button", {
+      text: "\u{1F517} WorkFlows",
       cls: "auto-oc-tab-btn"
     });
     btnWorkflows.onclick = () => {
       this.currentTab = "workflows";
       this.render();
     };
-    const btnCli = tabBar.createEl("button", {
+    const btnVisualBuilder = navRow.createEl("button", {
+      text: "\u2728 WF Visual Builder",
+      cls: "auto-oc-tab-btn"
+    });
+    btnVisualBuilder.title = "Open the n8n-style visual workflow builder (loads and saves to this extension)";
+    btnVisualBuilder.onclick = () => this.plugin.openVisualBuilder();
+    const btnCli = navRow.createEl("button", {
       text: "OpenCode CLI",
       cls: "auto-oc-tab-btn"
     });
     btnCli.onclick = () => this.openCli();
-    const spacer = tabBar.createDiv("auto-oc-tab-spacer");
-    spacer.style.flex = "1";
-    const btnExport = tabBar.createEl("button", {
+    const toolsRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-tools");
+    if (this.currentTab === "tasks") {
+      const btnNewTask = toolsRow.createEl("button", {
+        text: "+ New Task",
+        cls: "auto-oc-btn-primary"
+      });
+      btnNewTask.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
+    } else if (this.currentTab === "workflows") {
+      const btnNewWorkflow = toolsRow.createEl("button", {
+        text: "+ New Workflow",
+        cls: "auto-oc-btn-primary"
+      });
+      btnNewWorkflow.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
+    }
+    const toolsSpacer = toolsRow.createDiv("auto-oc-tab-spacer");
+    toolsSpacer.style.flex = "1";
+    const btnExport = toolsRow.createEl("button", {
       text: "\u{1F4E4} Export",
       cls: "auto-oc-tab-btn"
     });
     btnExport.title = "Export tasks and workflows to JSON";
     btnExport.onclick = () => new ExportModal(this.app, this.plugin).open();
-    const btnImport = tabBar.createEl("button", {
+    const btnImport = toolsRow.createEl("button", {
       text: "\u{1F4E5} Import",
       cls: "auto-oc-tab-btn"
     });
@@ -1793,7 +4091,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.renderTasks(containerEl);
     }
   }
-  renderTasks(containerEl) {
+  // Renders the extension header at the top of the panel: title,
+  // version, check-updates button, and a status pill when an update
+  // is available or in progress. This was previously rendered inside
+  // each tab's view; extracting it here keeps the title and update
+  // controls visible at all times.
+  renderHeader(containerEl) {
     const header = containerEl.createDiv("auto-oc-header");
     const titleRow = header.createDiv("auto-oc-title-row");
     titleRow.createEl("h4", { text: "\u23F0 AutoOC Scheduler" });
@@ -1836,12 +4139,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
         title: this.plugin.updateCheckError
       });
     }
-    const btnRow = header.createDiv("auto-oc-btn-row");
-    const btnNew = btnRow.createEl("button", {
-      text: "+ New Task",
-      cls: "auto-oc-btn-primary"
-    });
-    btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
+  }
+  renderTasks(containerEl) {
     const filterBar = containerEl.createDiv("auto-oc-filter-bar");
     const searchInput = filterBar.createEl("input", {
       type: "text",
@@ -2049,16 +4348,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
   }
   // ── Workflows rendering ──────────────────────────────────────────────────
   renderWorkflows(containerEl) {
-    const header = containerEl.createDiv("auto-oc-header");
-    const titleRow = header.createDiv("auto-oc-title-row");
-    titleRow.createEl("h4", { text: "\u{1F517} Workflows" });
-    const btnRow = header.createDiv("auto-oc-btn-row");
-    const btnNew = btnRow.createEl("button", {
-      text: "+ New Workflow",
-      cls: "auto-oc-btn-primary"
-    });
-    btnNew.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
-    const help = header.createDiv("auto-oc-workflow-panel-help");
+    const help = containerEl.createDiv("auto-oc-workflow-panel-help");
     help.createSpan({
       text: "Workflows run tasks in order using their own schedule. Per-step transitions decide whether the next task starts: success, force, or AI decides."
     });
@@ -2293,6 +4583,183 @@ var AutoOCView = class extends import_obsidian.ItemView {
         this.expandedWorkflows.delete(workflow.id);
       }
     };
+  }
+};
+var VisualBuilderModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.iframe = null;
+    this.ready = false;
+    this.isDirty = false;
+    // Tracks the in-flight settings mutation; the modal closes on success
+    // if the user clicked "Apply and close".
+    this.closeAfterApply = false;
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl, modalEl, titleEl } = this;
+    contentEl.empty();
+    if (titleEl && titleEl.style) {
+      titleEl.style.display = "none";
+    }
+    setAutoOCModalFullscreen(this);
+    preventBackdropClose(this);
+    const toolbar = contentEl.createDiv("auto-oc-visual-toolbar");
+    const titleSpan = toolbar.createSpan("toolbar-title");
+    titleSpan.textContent = "\u2728 WF Visual Builder";
+    titleSpan.style.fontSize = "13px";
+    const btnReload = toolbar.createEl("button", { text: "Reload state" });
+    btnReload.onclick = () => this.sendState();
+    const btnApply = toolbar.createEl("button", { text: "Apply and close" });
+    btnApply.title = "Apply the changes from the visual builder back to AutoOC and close this window";
+    btnApply.addClass("mod-cta");
+    btnApply.onclick = () => {
+      this.closeAfterApply = true;
+      this.requestApply();
+    };
+    const spacer = toolbar.createDiv("toolbar-spacer");
+    const hint = toolbar.createSpan("toolbar-hint");
+    hint.textContent = "Drag a Task / Delay / Code from the left, connect ports to wire transitions, click an edge to change its mode (Default / Force / AI / Conditional), then Apply.";
+    contentEl.appendChild(toolbar);
+    const iframeWrap = contentEl.createDiv("auto-oc-visual-iframe-wrap");
+    const iframe = iframeWrap.createEl("iframe");
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.border = "0";
+    iframe.style.display = "block";
+    iframe.style.flex = "1 1 auto";
+    iframe.srcdoc = visualBuilderHtml2;
+    this.iframe = iframe;
+    this.messageHandler = (ev) => {
+      const data = ev.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "ready") {
+        this.ready = true;
+        this.sendState();
+      } else if (data.type === "apply") {
+        this.applyExternalState(data.state).then(() => {
+          if (this.closeAfterApply) this.close();
+        });
+      } else if (data.type === "log") {
+        console.log("[VisualBuilder]", data.message);
+      }
+    };
+    window.addEventListener("message", this.messageHandler);
+  }
+  onClose() {
+    var _a;
+    if (this.messageHandler) {
+      window.removeEventListener("message", this.messageHandler);
+      this.messageHandler = void 0;
+    }
+    this.iframe = null;
+    this.ready = false;
+    (_a = this.plugin.view) == null ? void 0 : _a.refresh();
+  }
+  // Send the current tasks/workflows to the iframe.
+  sendState() {
+    if (!this.iframe || !this.iframe.contentWindow) return;
+    const payload = {
+      type: "load",
+      state: {
+        tasks: this.plugin.settings.tasks,
+        workflows: this.plugin.settings.workflows,
+        meta: {
+          availableAgents: this.plugin.availableAgents,
+          availableModels: this.plugin.availableModels,
+          pluginVersion: this.plugin.manifest.version
+        }
+      }
+    };
+    try {
+      this.iframe.contentWindow.postMessage(payload, "*");
+    } catch (e) {
+      console.error("VisualBuilder postMessage failed:", e);
+    }
+  }
+  // Ask the iframe to send back the current state.
+  requestApply() {
+    if (!this.iframe || !this.iframe.contentWindow) return;
+    this.iframe.contentWindow.postMessage({ type: "request-apply" }, "*");
+  }
+  // Replace tasks/workflows with the values provided by the iframe. Uses the
+  // existing importFromData path so all migration + validation rules apply.
+  async applyExternalState(state) {
+    var _a;
+    if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.workflows)) {
+      new import_obsidian.Notice("Visual Builder: invalid state payload.");
+      return;
+    }
+    const oldTasks = this.plugin.settings.tasks;
+    const oldWorkflows = this.plugin.settings.workflows;
+    const newTasks = state.tasks.map((t) => {
+      var _a2;
+      const id = oldTasks.find((x) => x.id === t.id) ? t.id : t.id || generateId();
+      return {
+        id,
+        name: t.name || "Unnamed",
+        prompt: t.prompt || "",
+        model: t.model || this.plugin.getEffectiveDefaultModel(),
+        agent: t.agent || this.plugin.getEffectiveAgent(),
+        useRalphLoop: !!t.useRalphLoop,
+        scheduleType: t.scheduleType || "manual",
+        scheduleTime: t.scheduleTime || "09:00",
+        scheduleDate: t.scheduleDate || "",
+        scheduleDays: t.scheduleDays || [],
+        scheduleMonthDays: t.scheduleMonthDays || [],
+        scheduleIntervalValue: (_a2 = t.scheduleIntervalValue) != null ? _a2 : 10,
+        scheduleIntervalUnit: t.scheduleIntervalUnit || "minutes",
+        status: "pending",
+        lastRun: "",
+        output: "",
+        createdAt: t.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+        branch: t.branch || "",
+        createBranch: !!t.createBranch
+      };
+    });
+    const newWorkflows = state.workflows.map((w) => {
+      var _a2;
+      const id = oldWorkflows.find((x) => x.id === w.id) ? w.id : w.id || generateId();
+      return {
+        id,
+        name: w.name || "Unnamed",
+        description: w.description || "",
+        steps: (w.steps || []).map((s, i) => ({
+          id: s.id || generateId(),
+          stepKind: s.stepKind || "task",
+          taskId: s.taskId,
+          transitionMode: s.transitionMode,
+          evaluatePrompt: s.evaluatePrompt,
+          forceContinue: s.forceContinue,
+          delayValue: s.delayValue,
+          delayUnit: s.delayUnit,
+          code: s.code,
+          codeLang: s.codeLang,
+          codeInputVar: s.codeInputVar,
+          codeOutputVar: s.codeOutputVar,
+          transitions: s.transitions,
+          position: s.position || { x: 40 + i * 280, y: 60 }
+        })),
+        status: "pending",
+        currentStep: -1,
+        createdAt: w.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+        lastRun: w.lastRun,
+        handoffBranch: !!w.handoffBranch,
+        handoffOutput: w.handoffOutput !== false,
+        scheduleType: w.scheduleType || "manual",
+        scheduleTime: w.scheduleTime || "09:00",
+        scheduleDate: w.scheduleDate || "",
+        scheduleDays: w.scheduleDays || [],
+        scheduleMonthDays: w.scheduleMonthDays || [],
+        scheduleIntervalValue: (_a2 = w.scheduleIntervalValue) != null ? _a2 : 10,
+        scheduleIntervalUnit: w.scheduleIntervalUnit || "minutes"
+      };
+    });
+    this.plugin.settings.tasks = newTasks;
+    this.plugin.settings.workflows = newWorkflows;
+    await this.plugin.saveSettings();
+    (_a = this.plugin.view) == null ? void 0 : _a.refresh();
+    new import_obsidian.Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
   }
 };
 var CreateTaskModal = class extends import_obsidian.Modal {
@@ -2597,10 +5064,11 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     this.plugin = plugin;
     this.editWorkflow = editWorkflow;
     this.draft = editWorkflow ? { ...editWorkflow } : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [], scheduleMonthDays: [], scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes" };
-    this.selectedTaskIds = editWorkflow ? editWorkflow.steps.map((s) => s.taskId) : [];
+    this.selectedTaskIds = editWorkflow ? editWorkflow.steps.map((s) => s.taskId || "") : [];
     this.stepConfigs = {};
     if (editWorkflow) {
       for (const step of editWorkflow.steps) {
+        if (!step.taskId) continue;
         this.stepConfigs[step.taskId] = {
           transitionMode: (_a = step.transitionMode) != null ? _a : step.forceContinue ? "force" : step.evaluatePrompt !== void 0 ? "eval" : "default",
           evaluatePrompt: step.evaluatePrompt,
@@ -2773,15 +5241,29 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
           new import_obsidian.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
-        const steps = this.selectedTaskIds.map((tid) => {
+        const steps = this.selectedTaskIds.map((tid, idx) => {
           var _a2, _b2, _c2;
-          return {
+          const next = steps && steps[idx + 1];
+          const step = {
+            id: generateId(),
+            stepKind: "task",
             taskId: tid,
+            transitions: [],
+            position: { x: 60 + idx * 280, y: 60 },
             transitionMode: ((_a2 = this.stepConfigs[tid]) == null ? void 0 : _a2.transitionMode) || "default",
-            evaluatePrompt: ((_b2 = this.stepConfigs[tid]) == null ? void 0 : _b2.evaluatePrompt) || void 0,
-            forceContinue: ((_c2 = this.stepConfigs[tid]) == null ? void 0 : _c2.forceContinue) || void 0
+            evaluatePrompt: (_b2 = this.stepConfigs[tid]) == null ? void 0 : _b2.evaluatePrompt,
+            forceContinue: (_c2 = this.stepConfigs[tid]) == null ? void 0 : _c2.forceContinue
           };
+          return step;
         });
+        for (let i = 0; i < steps.length - 1; i++) {
+          steps[i].transitions = [{
+            toStepId: steps[i + 1].id,
+            mode: steps[i].transitionMode || "default",
+            evaluatePrompt: steps[i].evaluatePrompt,
+            forceContinue: steps[i].forceContinue
+          }];
+        }
         if (this.editWorkflow) {
           const idx = this.plugin.settings.workflows.findIndex(
             (w) => w.id === this.editWorkflow.id

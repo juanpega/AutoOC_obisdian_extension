@@ -2,13 +2,15 @@
 
 Obsidian plugin to schedule and run OpenCode CLI tasks and workflows with model selection, manual execution, logging, diagnostics, task stopping, and a direct OpenCode CLI launcher.
 
+> **v1.4.0 — Visual Builder is now part of the extension.** A new `✨ Visual Builder` button (next to `📥 Import`) opens an n8n-style node-based editor that loads your existing tasks and workflows, lets you design new flows visually, and applies the changes back to the extension. The visual builder is the canonical UI from now on; **any new feature must be implemented there as well as in the classic list view**. See [Visual Builder](#visual-builder-v140) below.
+
 ## Features
 
 - Create tasks with:
   - name
   - prompt/goal
   - OpenCode model
-  - schedule: once, daily, or weekly
+  - schedule: manual, once, daily, weekly, monthly, or interval
   - Ralph Loop option
 - Manual task execution
 - Automatic checking of due tasks
@@ -22,6 +24,50 @@ Obsidian plugin to schedule and run OpenCode CLI tasks and workflows with model 
 - Schedulable workflows that chain existing tasks in order
 - Workflow transitions: continue on success, force continue, or AI decides from previous output
 - Runtime handoff between workflow steps for branch and output context
+- **Visual Builder** (v1.4.0): an n8n-style node-based editor with:
+  - Three step kinds — **Task** (run an OpenCode prompt), **Delay** (wait N seconds/minutes/hours), **Code** (run JavaScript with the previous step's output as `input` and assign `output` for the next step)
+  - **Conditional transitions** — each edge can be `Default`, `Force`, `AI decides` (model evaluates a prompt), or `Conditional` (a JavaScript expression that returns truthy to follow)
+  - Branching / DAG — every step can declare multiple outgoing transitions, so a single step can fork into several paths based on the previous output
+  - Pan/zoom canvas, drag-to-rearrange, drag from the library to add steps, click an edge to change its transition mode
+  - Apply changes back to AutoOC with a single button (replaces the export/import dance)
+- Export/import workflows as JSON files (schemaVersion `1.4.0`) — works for sharing and for users who still prefer the classic list view
+
+## Visual Builder (v1.4.0)
+
+The Visual Builder is a new n8n-style editor that ships inside the extension. Open it from the AutoOC panel by clicking the **`✨ Visual Builder`** button (next to `📥 Import`).
+
+### Step kinds
+
+- **Task** (blue) — runs an OpenCode prompt. Same fields as a regular task.
+- **Delay** (amber) — pauses the workflow for N seconds / minutes / hours. Useful for "wait 5 minutes and check again" patterns.
+- **Code** (pink) — runs a JavaScript snippet. The previous step's output is available as `input` (string). Set the `output` variable to a string; that becomes the next step's input. Available globals: `input`, `outputs` (map of `stepId → output`), `JSON`, `Math`, `Date`. Code is sandboxed with a 10s timeout.
+
+### Transitions
+
+Drag from the green output port of a node to another node to create an edge. Click the edge to open the transition editor in the right panel. Each edge can be one of:
+
+- **Default** — follow only if the previous step succeeded
+- **Force** — always follow this edge, even if the previous step failed
+- **AI decides** — the model is given the previous output + your evaluation prompt; follow if it answers "yes"
+- **Conditional** — a JavaScript expression evaluated against the runtime context. Has access to `input` (last output), `outputs` (map of all step outputs), and standard JS globals. Follow if the expression returns truthy.
+
+A single step can declare multiple outgoing transitions, so a node can branch into several paths. The runner picks the first transition that matches (for `default` and `conditional`) or the model-picked one (for `eval`).
+
+### Workflow authoring workflow
+
+1. Open the Visual Builder from the AutoOC panel
+2. Drag `Task`, `Delay`, or `Code` from the left sidebar onto the canvas
+3. Drag from a node's output port to another node's input port to connect them
+4. Click an edge and pick the transition mode you want
+5. Press **`Apply to AutoOC`** in the top bar — the changes are written back to the extension's settings immediately
+6. You can keep editing in either UI; the Visual Builder is two-way bound
+
+### Tips
+
+- Press **F** to fit all nodes in the viewport; **Auto-layout** arranges them left to right
+- Click a node and press **Delete** to remove it (incoming edges are auto-cleaned)
+- **Trace** mode shows numbered badges on each step in execution order
+- **Validate** surfaces errors (empty prompt, missing task reference, transition target deleted, …)
 
 ## Requirements
 
@@ -37,6 +83,7 @@ Obsidian plugin to schedule and run OpenCode CLI tasks and workflows with model 
 - `main.js`: final build consumed by Obsidian
 - `esbuild.config.mjs`: build/bundle
 - `deploy.mjs`: copies files to `.obsidian/plugins/auto-oc`
+- `util/ui_workflow_builder/`: the standalone Visual Builder app. Lives inside the plugin folder so the extension can host it in an iframe. Open `util/ui_workflow_builder/index.html` directly in a browser to use it standalone.
 
 ## Local Installation (without publishing)
 
@@ -77,6 +124,15 @@ node deploy.mjs "C:/path/to/your/vault"
 1. Open the AutoOC panel.
 2. Press `OpenCode CLI`.
 3. Work in the terminal session opened in the vault/project directory.
+
+### Visual Builder (v1.4.0+)
+1. Open the AutoOC panel.
+2. Press `✨ Visual Builder` (next to `📥 Import`).
+3. A **centered, near-fullscreen modal** opens with the n8n-style canvas.
+4. Drag `Task`, `Delay`, or `Code` from the left sidebar onto the canvas.
+5. Drag from a node's output port to another node's input port to connect them.
+6. Click an edge to set the transition mode (`Default` / `Force` / `AI decides` / `Conditional`).
+7. Press **Apply and close** to save the workflow back to the extension and close the modal. The classic Tasks/Workflows tabs will reflect the new state immediately.
 
 ## Ralph Loop from Extension
 
@@ -262,6 +318,22 @@ You are free to download, use, modify, and distribute it. If you create your own
 - Diagnostic working
 - Task execution using silent launcher on Windows
 - Logs available from UI
+- Visual Builder (n8n-style node editor) ships inside the extension
+- Workflows can branch via explicit transitions (DAG), with conditional JavaScript and AI-evaluated edges
+- Code and Delay steps supported alongside regular Task steps
+
+## Contributing
+
+**New features MUST be implemented in both UIs**: the classic Tasks/Workflows list view (`AutoOCView`) AND the Visual Builder (`util/ui_workflow_builder/index.html` + `VisualBuilderView` in `main.ts`).
+
+The data model is the source of truth — every new field added to `ScheduledTask`, `Workflow`, or `WorkflowStep` must be:
+
+1. **Exposed** in the classic view (form fields, list rendering, etc.)
+2. **Exposed** in the Visual Builder (node templates, property panel editor, JSON round-trip)
+3. **Round-tripped** through the export/import format (bump `schemaVersion` in `AutoOCExportFile` and add a migration in `importFromData` if it changes shape)
+4. **Migrated** for users on older versions via the code in `loadSettings()`
+
+The Visual Builder is the canonical UI for any non-trivial workflow change. New step kinds, new transition modes, new visual node types, new connection shapes — all of those land in the Visual Builder first and are mirrored in the classic view.
 
 ---
 
@@ -341,6 +413,22 @@ Puedes descargarlo, usarlo, modificarlo y distribuirlo libremente. Si creas tu p
 - Diagnostico funcionando
 - Ejecucion de tareas usando launcher silencioso en Windows
 - Logs disponibles desde UI
+- Visual Builder (editor visual estilo n8n) integrado en la extensión
+- Workflows con branching via transiciones explícitas (DAG), incluyendo evaluación condicional JavaScript y por IA
+- Steps de tipo **Code** (JavaScript) y **Delay** soportados además de los tradicionales **Task**
+
+## Cómo contribuir (ES)
+
+**Las nuevas funcionalidades DEBEN implementarse en ambas UIs**: la vista clásica de Tasks/Workflows (`AutoOCView`) Y el Visual Builder (`util/ui_workflow_builder/index.html` + `VisualBuilderView` en `main.ts`).
+
+El modelo de datos es la fuente de verdad — cada nuevo campo añadido a `ScheduledTask`, `Workflow` o `WorkflowStep` debe:
+
+1. **Exponerse** en la vista clásica (formularios, listados, etc.)
+2. **Exponerse** en el Visual Builder (plantillas de nodo, editor del panel de propiedades, round-trip JSON)
+3. **Hacer round-trip** a través del formato export/import (subir `schemaVersion` en `AutoOCExportFile` y añadir migración en `importFromData` si cambia la forma)
+4. **Migrarse** para usuarios en versiones anteriores mediante el código en `loadSettings()`
+
+El Visual Builder es la UI canónica para cualquier cambio no trivial en workflows. Nuevos tipos de paso, nuevos modos de transición, nuevos tipos de nodos visuales, nuevas formas de conexión — todo eso aterriza primero en el Visual Builder y se refleja después en la vista clásica.
 
 ---
 

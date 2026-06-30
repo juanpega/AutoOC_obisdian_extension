@@ -13,6 +13,17 @@ import { spawn, exec } from "child_process";
 import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
+// The visual builder is shipped as a self-contained HTML file under
+// `util/ui_workflow_builder/index.html`. A pre-build step
+// (scripts/inline-visual-builder.mjs) reads the file at build time and
+// emits `visualBuilderHtml.generated.ts` with the HTML as a string
+// constant. The extension then serves the builder from memory via an
+// iframe `srcdoc`, which avoids any file://, path-resolution, or
+// sandbox issues. The standalone HTML file is still kept in the repo
+// (under `util/`) so the builder can be opened directly in a browser
+// for development and testing.
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const visualBuilderHtml: string = require("./visualBuilderHtml.generated").visualBuilderHtml;
 
 // Resolve the opencode binary: on Windows prefer .cmd so Electron finds it without PATH
 function resolveOpencodeBin(configured: string): string {
@@ -97,6 +108,47 @@ type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interv
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 type IntervalUnit = "seconds" | "minutes" | "hours";
 
+// v1.4 step model: a step can be a task, a delay, or a programmable code block.
+// Workflows are no longer strictly linear — each step declares its outgoing
+// transitions explicitly, allowing branching and conditional paths.
+type StepKind = "task" | "delay" | "code";
+type TransitionMode = "default" | "force" | "eval" | "conditional";
+
+interface WorkflowTransition {
+  toStepId: string;
+  mode: TransitionMode;
+  // for "eval" — prompt sent to the model to decide
+  evaluatePrompt?: string;
+  // for "conditional" — JavaScript expression evaluated against the runtime
+  // context (last output available as `input`, all previous outputs as `outputs[stepId]`)
+  condition?: string;
+  conditionLang?: "javascript";
+  forceContinue?: boolean;
+}
+
+interface WorkflowStep {
+  id: string;
+  stepKind: StepKind;
+  // task-specific
+  taskId?: string;
+  // legacy fields (used when transitions[] is missing) — kept for back-compat
+  transitionMode?: "default" | "force" | "eval";
+  evaluatePrompt?: string;
+  forceContinue?: boolean;
+  // delay-specific
+  delayValue?: number;
+  delayUnit?: "seconds" | "minutes" | "hours";
+  // code-specific (programmable step)
+  code?: string;
+  codeLang?: "javascript";
+  codeInputVar?: string;  // variable name for the input (default "input")
+  codeOutputVar?: string; // variable name for the output (default "output")
+  // DAG
+  transitions?: WorkflowTransition[];
+  // visual position (used by the visual builder)
+  position?: { x: number; y: number };
+}
+
 interface ScheduledTask {
   id: string;
   name: string;
@@ -121,13 +173,6 @@ interface ScheduledTask {
 }
 
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
-
-interface WorkflowStep {
-  taskId: string;
-  transitionMode?: "default" | "force" | "eval";
-  evaluatePrompt?: string;   // Prompt to evaluate whether to continue to next step
-  forceContinue?: boolean;   // Skip evaluation, always continue
-}
 
 interface Workflow {
   id: string;
@@ -186,11 +231,35 @@ interface ExportTask {
   createBranch?: boolean;
 }
 
+interface ExportWorkflowTransition {
+  toStepId: string;
+  mode: TransitionMode;
+  evaluatePrompt?: string;
+  condition?: string;
+  conditionLang?: "javascript";
+  forceContinue?: boolean;
+}
+
 interface ExportWorkflowStep {
-  taskExportId: string;
+  id: string;
+  stepKind: StepKind;
+  // task
+  taskExportId?: string;
   transitionMode?: "default" | "force" | "eval";
   evaluatePrompt?: string;
   forceContinue?: boolean;
+  // delay
+  delayValue?: number;
+  delayUnit?: "seconds" | "minutes" | "hours";
+  // code
+  code?: string;
+  codeLang?: "javascript";
+  codeInputVar?: string;
+  codeOutputVar?: string;
+  // DAG
+  transitions?: ExportWorkflowTransition[];
+  // visual position
+  position?: { x: number; y: number };
 }
 
 interface ExportWorkflow {
@@ -389,6 +458,35 @@ function setAutoOCModalSize(modal: Modal, widthPx: number): void {
   modal.contentEl.style.overflowY = "auto";
 }
 
+// Make a modal take nearly the full viewport, centered. Used by the
+// Visual Builder modal so it feels like a real editor rather than a
+// cramped sidebar leaf.
+function setAutoOCModalFullscreen(modal: Modal): void {
+  const modalEl = (modal as any).modalEl as HTMLElement | undefined;
+  if (!modalEl) return;
+  modalEl.style.width = "min(1400px, calc(100vw - 40px))";
+  modalEl.style.height = "calc(100vh - 80px)";
+  modalEl.style.maxWidth = "calc(100vw - 40px)";
+  modalEl.style.maxHeight = "calc(100vh - 40px)";
+  modalEl.style.overflow = "hidden";
+  modalEl.addClass("auto-oc-fullscreen-modal");
+  // The modal's content panel is a flex child of the modal. Make it grow
+  // to fill the modal's body and become a vertical flex container for
+  // the toolbar + iframe. Without `flex: 1` the content panel would
+  // collapse to its intrinsic height and the iframe (which is 100% of
+  // its parent) would render at a tiny default size.
+  modal.contentEl.style.flex = "1 1 auto";
+  modal.contentEl.style.minHeight = "0";
+  modal.contentEl.style.width = "100%";
+  modal.contentEl.style.height = "auto";
+  modal.contentEl.style.maxWidth = "100%";
+  modal.contentEl.style.padding = "0";
+  modal.contentEl.style.overflow = "hidden";
+  modal.contentEl.style.display = "flex";
+  modal.contentEl.style.flexDirection = "column";
+  modal.contentEl.style.boxSizing = "border-box";
+}
+
 // ─── Update / Version Check ───────────────────────────────────────────────────
 
 const GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
@@ -483,10 +581,29 @@ function toExportWorkflow(
     handoffBranch: workflow.handoffBranch,
     handoffOutput: workflow.handoffOutput,
     steps: workflow.steps.map((step) => ({
-      taskExportId: taskExportIdMap.get(step.taskId) ?? "",
+      id: step.id,
+      stepKind: step.stepKind || "task",
+      taskExportId: step.taskId ? (taskExportIdMap.get(step.taskId) ?? "") : undefined,
       transitionMode: step.transitionMode,
       evaluatePrompt: step.evaluatePrompt,
       forceContinue: step.forceContinue,
+      delayValue: step.delayValue,
+      delayUnit: step.delayUnit,
+      code: step.code,
+      codeLang: step.codeLang,
+      codeInputVar: step.codeInputVar,
+      codeOutputVar: step.codeOutputVar,
+      transitions: step.transitions && step.transitions.length > 0
+        ? step.transitions.map((t) => ({
+            toStepId: t.toStepId,
+            mode: t.mode,
+            evaluatePrompt: t.evaluatePrompt,
+            condition: t.condition,
+            conditionLang: t.conditionLang,
+            forceContinue: t.forceContinue,
+          }))
+        : undefined,
+      position: step.position,
     })),
   };
 }
@@ -926,6 +1043,12 @@ export default class AutoOCPlugin extends Plugin {
     });
 
     this.addCommand({
+      id: "open-visual-builder",
+      name: "Open AutoOC Visual Builder",
+      callback: () => this.openVisualBuilder(),
+    });
+
+    this.addCommand({
       id: "create-task",
       name: "Create new OpenCode task",
       callback: () => new CreateTaskModal(this.app, this).open(),
@@ -1048,6 +1171,14 @@ export default class AutoOCPlugin extends Plugin {
     this.activateView();
   }
 
+  // Open the visual builder as a centered, near-fullscreen modal. The
+  // visual builder is a standalone HTML/JS app that we host in an
+  // iframe; it communicates with the plugin through postMessage so the
+  // user can edit visually and apply changes back to the settings.
+  openVisualBuilder(): void {
+    new VisualBuilderModal(this.app, this).open();
+  }
+
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     delete (this.settings as any).chatHistory;
@@ -1103,6 +1234,28 @@ export default class AutoOCPlugin extends Plugin {
       if (wf.handoffOutput !== true) {
         wf.handoffOutput = true;
         changed = true;
+      }
+      // v1.4 migration: steps gain id, stepKind, transitions, position.
+      if (Array.isArray(wf.steps)) {
+        for (let i = 0; i < wf.steps.length; i++) {
+          const s = wf.steps[i];
+          if (!s.id) { s.id = generateId(); changed = true; }
+          if (!s.stepKind) { s.stepKind = "task"; changed = true; }
+          if (!s.position) { s.position = { x: 40 + i * 280, y: 60 }; changed = true; }
+          // Build linear transitions for legacy steps that don't have any.
+          if (!s.transitions || s.transitions.length === 0) {
+            const next = wf.steps[i + 1];
+            if (next) {
+              s.transitions = [{
+                toStepId: next.id,
+                mode: (s.transitionMode as TransitionMode) || "default",
+                evaluatePrompt: s.evaluatePrompt,
+                forceContinue: s.forceContinue,
+              }];
+              changed = true;
+            }
+          }
+        }
       }
     }
     if (!this.settings.defaultModel) {
@@ -1675,7 +1828,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const data: AutoOCExportFile = {
       autoOCExport: {
-        schemaVersion: "1.0",
+        schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -1729,7 +1882,7 @@ export default class AutoOCPlugin extends Plugin {
     const referencedTaskIds = new Set<string>();
     for (const wf of workflows) {
       for (const step of wf.steps) {
-        referencedTaskIds.add(step.taskId);
+        if (step.taskId) referencedTaskIds.add(step.taskId);
       }
     }
     const autoIncludedTasks = this.settings.tasks.filter(
@@ -1756,8 +1909,13 @@ export default class AutoOCPlugin extends Plugin {
     tasksImported: number;
     workflowsImported: number;
   }> {
-    if (!data.autoOCExport || data.autoOCExport.schemaVersion !== "1.0") {
-      throw new Error("Invalid AutoOC export file (missing or unsupported schema).");
+    if (!data.autoOCExport) {
+      throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
+    }
+    // Accept both 1.0 (legacy) and 1.4.x (current) schema versions.
+    const sv = data.autoOCExport.schemaVersion;
+    if (sv !== "1.0" && sv !== "1.4.0") {
+      throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
     const exportIdToTaskId = new Map<string, string>();
@@ -1792,18 +1950,77 @@ export default class AutoOCPlugin extends Plugin {
 
     let workflowsImported = 0;
     for (const ew of data.workflows || []) {
+      const exportIdToStepId = new Map<string, string>();
       const steps: WorkflowStep[] = [];
+      // First pass: create all steps so we can resolve the transition targets in
+      // a second pass (since the transition target references step ids, not
+      // indices).
+      const legacySteps: WorkflowStep[] = [];
+      let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
-        const taskId = exportIdToTaskId.get(s.taskExportId);
-        if (!taskId) continue;
-        steps.push({
-          taskId,
-          transitionMode: s.transitionMode,
-          evaluatePrompt: s.evaluatePrompt,
-          forceContinue: s.forceContinue,
-        });
+        const stepKind: StepKind = (s as any).stepKind || "task";
+        const step: WorkflowStep = {
+          id: (s as any).id || generateId(),
+          stepKind,
+          taskId: (s as any).taskExportId ? exportIdToTaskId.get((s as any).taskExportId) : undefined,
+          transitionMode: (s as any).transitionMode,
+          evaluatePrompt: (s as any).evaluatePrompt,
+          forceContinue: (s as any).forceContinue,
+          delayValue: (s as any).delayValue,
+          delayUnit: (s as any).delayUnit,
+          code: (s as any).code,
+          codeLang: (s as any).codeLang,
+          codeInputVar: (s as any).codeInputVar,
+          codeOutputVar: (s as any).codeOutputVar,
+          transitions: (s as any).transitions,
+          position: (s as any).position,
+        };
+        // Legacy: if no transitions are present but stepKind is "task", build
+        // a default linear transition to the next step.
+        if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
+          step.transitions = undefined; // resolved later
+          legacySteps.push(step);
+        } else {
+          steps.push(step);
+        }
+        exportIdToStepId.set(step.id, step.id);
       }
-      if (steps.length < 2) continue;
+
+      // Resolve legacy linear transitions: each task step points to the next.
+      if (legacySteps.length > 0) {
+        for (let i = 0; i < legacySteps.length; i++) {
+          const cur = legacySteps[i];
+          const next = legacySteps[i + 1];
+          if (next) {
+            cur.transitions = [{
+              toStepId: next.id,
+              mode: (cur.transitionMode as TransitionMode) || "default",
+              evaluatePrompt: cur.evaluatePrompt,
+              forceContinue: cur.forceContinue,
+            }];
+          }
+          steps.push(cur);
+        }
+        // Steps need to be in DAG order: do a topological sort if transitions
+        // reference step ids. For now, just keep the original order if all
+        // transitions point forward.
+      }
+
+      // For delay/code steps without transitions, attempt to wire them to
+      // the next legacy step in order. This preserves the visual builder
+      // output where users have alternating task/delay/code steps.
+      if (steps.length > 0 && steps.every((s) => !s.transitions || s.transitions.length === 0)) {
+        for (let i = 0; i < steps.length - 1; i++) {
+          steps[i].transitions = [{
+            toStepId: steps[i + 1].id,
+            mode: (steps[i].transitionMode as TransitionMode) || "default",
+            evaluatePrompt: steps[i].evaluatePrompt,
+            forceContinue: steps[i].forceContinue,
+          }];
+        }
+      }
+
+      if (steps.length === 0) continue;
 
       const workflow: Workflow = {
         id: generateId(),
@@ -1841,15 +2058,21 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
 
-    // Validate all tasks exist
+    // Validate: every task step must reference a real task.
     for (let i = 0; i < wf.steps.length; i++) {
       const step = wf.steps[i];
-      const t = this.settings.tasks.find((t) => t.id === step.taskId);
-      if (!t) {
+      if (step.stepKind === "task" && !this.settings.tasks.find((t) => t.id === step.taskId)) {
         new Notice(`AutoOC: Workflow "${wf.name}" — step ${i + 1} references a deleted task.`);
         return;
       }
     }
+
+    // Initialize the runtime context that flows between steps.
+    (this as any).workflowRuntime = (this as any).workflowRuntime || new Map();
+    (this as any).workflowRuntime.set(wf.id, {
+      stepOutputs: new Map<string, string>(),
+      stepIndex: 0,
+    });
 
     wf.status = "running";
     wf.currentStep = 0;
@@ -1857,14 +2080,224 @@ export default class AutoOCPlugin extends Plugin {
     await this.saveSettings();
     new Notice(`AutoOC: ⚡ Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
 
-    await this.runWorkflowStep(idx, 0);
+    // Find the entry step: one with no incoming transitions, or the first step.
+    const entryStep = this.findEntryStep(wf);
+    if (!entryStep) {
+      wf.status = "failed";
+      await this.saveSettings();
+      new Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
+      return;
+    }
+    await this.runWorkflowStepById(wf.id, entryStep.id);
+  }
+
+  // Find the entry step: a step that has no incoming transitions from any other
+  // step in the workflow. If multiple are candidates, picks the one with the
+  // smallest position.x (visual order). Falls back to the first step.
+  findEntryStep(wf: Workflow): WorkflowStep | null {
+    if (wf.steps.length === 0) return null;
+    const incoming = new Set<string>();
+    for (const s of wf.steps) {
+      for (const t of s.transitions || []) {
+        incoming.add(t.toStepId);
+      }
+    }
+    const candidates = wf.steps.filter((s) => !incoming.has(s.id));
+    if (candidates.length === 0) return wf.steps[0];
+    candidates.sort((a, b) => (a.position?.x ?? 0) - (b.position?.x ?? 0));
+    return candidates[0];
+  }
+
+  async runWorkflowStepById(workflowId: string, stepId: string): Promise<void> {
+    const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
+    if (wfIdx === -1) return;
+    const wf = this.settings.workflows[wfIdx];
+    if (!wf || wf.status !== "running") return;
+    const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
+    if (stepIdx === -1) {
+      wf.status = "failed";
+      new Notice(`AutoOC: Workflow "${wf.name}" — step ${stepId} not found.`);
+      await this.saveSettings();
+      return;
+    }
+    if (this.stoppingWorkflows.has(workflowId)) return;
+    await this.runWorkflowStep(wfIdx, stepIdx);
+  }
+
+  // Resolve the next step from a list of transitions. For each transition:
+  // - "force" / "default": follow unconditionally if the previous step
+  //   succeeded (force ignores failure, default requires success).
+  // - "eval": call the model to decide.
+  // - "conditional": evaluate the JS `condition` against the runtime
+  //   context (input = last output, outputs = map of stepId → output).
+  // Returns the target step id, or null if the workflow should stop.
+  async resolveNextStep(
+    wf: Workflow,
+    currentStep: WorkflowStep,
+    currentStepIndex: number,
+    lastOutput: string,
+    lastSucceeded: boolean,
+    transitions: WorkflowTransition[]
+  ): Promise<{ nextStepId: string | null; reason: string }> {
+    if (!transitions || transitions.length === 0) {
+      // Default: linear +1 if it exists.
+      const next = wf.steps[currentStepIndex + 1];
+      if (next) return { nextStepId: next.id, reason: "linear" };
+      return { nextStepId: null, reason: "end" };
+    }
+    for (const t of transitions) {
+      const target = wf.steps.find((s) => s.id === t.toStepId);
+      if (!target) continue;
+      if (t.mode === "force" || t.forceContinue) {
+        return { nextStepId: t.toStepId, reason: "force" };
+      }
+      if (t.mode === "default") {
+        if (lastSucceeded) return { nextStepId: t.toStepId, reason: "default" };
+        continue;
+      }
+      if (t.mode === "eval") {
+        new Notice(`AutoOC: Evaluating transition for "${wf.name}" → ${target.id}...`);
+        try {
+          const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+          const model = this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
+          const prompt = t.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
+          const evalFullPrompt = `${prompt}\n\nPrevious step output:\n---\n${lastOutput}\n---\n\nReply ONLY with YES or NO.`;
+          const evalResult = await this.evaluateWithOpencode(evalFullPrompt, model, cwd);
+          const isYes = /\bYES\b/i.test(evalResult.output) && !/\bNO\b/i.test(evalResult.output);
+          if (isYes) {
+            return { nextStepId: t.toStepId, reason: "eval:yes" };
+          }
+        } catch (err) {
+          new Notice(`AutoOC: eval error — ${String(err)}`);
+        }
+        continue;
+      }
+      if (t.mode === "conditional") {
+        try {
+          const ok = this.evaluateCondition(t.condition || "", lastOutput, this.getRuntimeOutputs(wf.id));
+          if (ok) return { nextStepId: t.toStepId, reason: "conditional:true" };
+        } catch (err) {
+          new Notice(`AutoOC: condition error — ${String(err)}`);
+        }
+        continue;
+      }
+    }
+    return { nextStepId: null, reason: "no-match" };
+  }
+
+  getRuntimeOutputs(workflowId: string): Record<string, string> {
+    const rt = (this as any).workflowRuntime;
+    if (!rt) return {};
+    const ctx = rt.get(workflowId);
+    if (!ctx) return {};
+    const out: Record<string, string> = {};
+    for (const [k, v] of ctx.stepOutputs.entries()) out[k] = v;
+    return out;
+  }
+
+  // Run a JavaScript condition expression against a runtime context.
+  // Variables exposed: input (last step output), outputs (map of stepId → output),
+  // workflow (object with name/id), step (current step), require (Node require).
+  evaluateCondition(expression: string, input: string, outputs: Record<string, string>): boolean {
+    if (!expression || !expression.trim()) return false;
+    const vm = require("vm");
+    const sandbox = {
+      input: input || "",
+      outputs,
+      String,
+      Number,
+      Boolean,
+      Array,
+      Object,
+      JSON,
+      Math,
+      Date,
+      RegExp,
+      console: { log: () => {} },
+    };
+    vm.createContext(sandbox);
+    const result = vm.runInContext("(" + expression + ")", sandbox, { timeout: 500 });
+    return !!result;
   }
 
   async runWorkflowStep(wfIdx: number, stepIndex: number) {
     const wf = this.settings.workflows[wfIdx];
     if (!wf || wf.status !== "running") return;
-
     const step = wf.steps[stepIndex];
+    if (!step) {
+      wf.status = "completed";
+      await this.saveSettings();
+      return;
+    }
+
+    // Record the current step in the runtime.
+    const rt = (this as any).workflowRuntime.get(wf.id);
+    if (rt) rt.stepIndex = stepIndex;
+
+    // Dispatch by stepKind.
+    if (step.stepKind === "delay") {
+      await this.runDelayStep(wf, step, stepIndex);
+      return;
+    }
+    if (step.stepKind === "code") {
+      await this.runCodeStep(wf, step, stepIndex);
+      return;
+    }
+
+    // Default: task step.
+    await this.runTaskStep(wf, step, stepIndex);
+  }
+
+  async runDelayStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    const value = Math.max(0, step.delayValue || 0);
+    const unit = step.delayUnit || "seconds";
+    const ms = value * (unit === "hours" ? 3600_000 : unit === "minutes" ? 60_000 : 1000);
+    const ctx = (this as any).workflowRuntime.get(wf.id);
+    if (ctx) ctx.stepOutputs.set(step.id, `[delay ${value} ${unit}]`);
+    new Notice(`AutoOC: ⏱ Waiting ${value} ${unit} in "${wf.name}"...`);
+    if (this.stoppingWorkflows.has(wf.id)) {
+      await this.completeStep(wf, step, stepIndex, true, "[delay skipped: workflow stopped]");
+      return;
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, ms));
+    await this.completeStep(wf, step, stepIndex, true, `[delay ${value} ${unit}]`);
+  }
+
+  async runCodeStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    const ctx = (this as any).workflowRuntime.get(wf.id);
+    const inputVar = step.codeInputVar || "input";
+    const outputVar = step.codeOutputVar || "output";
+    const inputVal = (ctx && ctx.stepOutputs.size > 0) ? Array.from(ctx.stepOutputs.values()).pop() : "";
+    const outputs: Record<string, string> = {};
+    if (ctx) for (const [k, v] of ctx.stepOutputs.entries()) outputs[k] = v;
+    const vm = require("vm");
+    const sandbox: Record<string, any> = {
+      input: inputVal,
+      outputs,
+      String, Number, Boolean, Array, Object, JSON, Math, Date, RegExp,
+      console: { log: () => {} },
+    };
+    try {
+      const context = vm.createContext(sandbox);
+      const code = step.code || "";
+      // Expose the configured variable names by aliasing `input` and `outputs`.
+      // We prepend a small preamble so the user can name their input/output
+      // variables freely while we still inject the standard ones.
+      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 10_000 });
+      const out = String(result == null ? "" : result);
+      if (ctx) ctx.stepOutputs.set(step.id, out);
+      new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
+      await this.completeStep(wf, step, stepIndex, true, out);
+    } catch (err) {
+      const msg = `[code error: ${String(err)}]`;
+      if (ctx) ctx.stepOutputs.set(step.id, msg);
+      new Notice(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`);
+      await this.completeStep(wf, step, stepIndex, false, msg);
+    }
+  }
+
+  async runTaskStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
@@ -1872,34 +2305,18 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       return;
     }
-
     const task = this.settings.tasks[taskIdx];
     const taskOverrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {};
 
-    // Apply handoff from previous step
-    if (stepIndex > 0) {
-      const prevStep = wf.steps[stepIndex - 1];
-      const prevTaskIdx = this.settings.tasks.findIndex((t) => t.id === prevStep.taskId);
-      if (prevTaskIdx !== -1) {
-        const prevTask = this.settings.tasks[prevTaskIdx];
-
-        if (wf.handoffBranch && prevTask.branch) {
-          taskOverrides.branch = prevTask.branch;
-          taskOverrides.createBranch = false;
-        }
-
-        // Output handoff is enabled by default so workflow steps can build on each other.
-        const handoffEnabled = true;
-        if (handoffEnabled && prevTask.output && prevTask.output.trim()) {
-          const cleanOutput = extractContextForHandoff(prevTask.output);
-          if (cleanOutput) {
-            const contextText = cleanOutput;
-            const contextBlock = ` Previous task output from "${prevTask.name}" to use as context: ${contextText} End of previous task output.`;
-            taskOverrides.prompt = `${task.prompt}${contextBlock}`;
-            new Notice(`AutoOC: ↪ Passing context from "${prevTask.name}" to "${task.name}" (${contextText.length} chars)`);
-          } else {
-            new Notice(`AutoOC: handoff skipped — previous output was empty after filtering.`);
-          }
+    // Apply handoff from the most recent task/code step in the runtime.
+    if (wf.handoffOutput) {
+      const ctx = (this as any).workflowRuntime.get(wf.id);
+      if (ctx && ctx.stepOutputs.size > 0) {
+        const previousOutput: string = String(Array.from(ctx.stepOutputs.values()).pop() || "");
+        const cleanOutput = extractContextForHandoff(previousOutput);
+        if (cleanOutput) {
+          const contextBlock = ` Previous step output to use as context: ${cleanOutput} End of previous step output.`;
+          taskOverrides.prompt = `${task.prompt}${contextBlock}`;
         }
       }
     }
@@ -1907,77 +2324,115 @@ export default class AutoOCPlugin extends Plugin {
     wf.currentStep = stepIndex;
     await this.saveSettings();
 
-    // Run the task with completion callback for chaining
     await this.runTask(task, async (completedTask, exitCode) => {
-      // Refresh workflow reference (may have been reloaded)
-      const currentWf = this.settings.workflows[wfIdx];
+      const currentWf = this.settings.workflows.find((w) => w.id === wf.id);
       if (!currentWf || currentWf.status !== "running" || this.stoppingWorkflows.has(currentWf.id)) return;
       const currentStep = currentWf.steps[stepIndex];
-      const transitionMode = currentStep.transitionMode ?? (currentStep.forceContinue ? "force" : currentStep.evaluatePrompt !== undefined ? "eval" : "default");
+      const lastOutput = completedTask.output || "";
+      const ctx = (this as any).workflowRuntime.get(currentWf.id);
+      if (ctx) ctx.stepOutputs.set(currentStep.id, lastOutput);
+      const lastSucceeded = exitCode === 0 && completedTask.status !== "failed";
 
-      // Check if this is the last step
-      if (stepIndex >= currentWf.steps.length - 1) {
-        currentWf.status = exitCode === 0 && completedTask.status !== "failed" ? "completed" : "failed";
-        currentWf.currentStep = stepIndex;
+      const transitions = currentStep.transitions && currentStep.transitions.length > 0
+        ? currentStep.transitions
+        : (() => {
+            // Legacy fallback: synthesize a single transition from the
+            // current step to the next step in array order using the
+            // transitionMode field.
+            const next = currentWf.steps[stepIndex + 1];
+            if (!next) return [];
+            const mode = (currentStep.transitionMode as TransitionMode) || "default";
+            return [{
+              toStepId: next.id,
+              mode,
+              evaluatePrompt: currentStep.evaluatePrompt,
+              forceContinue: currentStep.forceContinue,
+            } as WorkflowTransition];
+          })();
+
+      const { nextStepId, reason } = await this.resolveNextStep(
+        currentWf,
+        currentStep,
+        stepIndex,
+        lastOutput,
+        lastSucceeded,
+        transitions
+      );
+
+      if (!nextStepId) {
+        const failedByTask = !lastSucceeded;
+        currentWf.status = failedByTask ? "failed" : "completed";
+        completedTask.output += failedByTask
+          ? `\n[Workflow failed at step ${stepIndex + 1}/${currentWf.steps.length}]`
+          : `\n[Workflow completed at step ${stepIndex + 1}/${currentWf.steps.length}]`;
         new Notice(
-          currentWf.status === "completed"
-            ? `AutoOC: ✅ Workflow "${currentWf.name}" completed (${currentWf.steps.length}/${currentWf.steps.length} steps).`
-            : `AutoOC: ❌ Workflow "${currentWf.name}" failed at final step ${stepIndex + 1}.`
+          failedByTask
+            ? `AutoOC: ❌ Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.`
+            : `AutoOC: ✅ Workflow "${currentWf.name}" completed at step ${stepIndex + 1}/${currentWf.steps.length}.`
         );
+        // Clear runtime context for this workflow.
+        (this as any).workflowRuntime.delete(currentWf.id);
         await this.saveSettings();
         return;
       }
 
-      // Evaluate transition to next step
-      let shouldContinue = false;
-
-      if (transitionMode === "force") {
-        shouldContinue = true;
-      } else if (transitionMode === "eval") {
-        new Notice(`AutoOC: Evaluating step ${stepIndex + 1} → ${stepIndex + 2} for "${currentWf.name}"...`);
-        try {
-          const cwd = completedTask.workingDirectory || this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-          const prompt = currentStep.evaluatePrompt?.trim() || "Did the previous task complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
-          const evalFullPrompt = `${prompt}\n\nPrevious task output:\n---\n${completedTask.output}\n---\n\nReply ONLY with YES or NO.`;
-          const evalResult = await this.evaluateWithOpencode(evalFullPrompt, completedTask.model, cwd);
-
-          // Parse: if output contains YES and not NO, continue
-          const isYes = /\bYES\b/i.test(evalResult.output) && !/\bNO\b/i.test(evalResult.output);
-          shouldContinue = isYes;
-
-          // Append evaluation note to task output
-          completedTask.output += `\n\n[Workflow evaluation (step ${stepIndex + 1}→${stepIndex + 2}): ${evalResult.output.trim().slice(0, 300)}]`;
-        } catch (err) {
-          completedTask.output += `\n\n[Workflow evaluation error: ${String(err)}]`;
-          shouldContinue = false;
-        }
-      } else {
-        // Default: continue only if task succeeded
-        shouldContinue = exitCode === 0 && completedTask.status !== "failed";
+      const nextIdx = currentWf.steps.findIndex((s) => s.id === nextStepId);
+      if (nextIdx === -1) {
+        currentWf.status = "failed";
+        new Notice(`AutoOC: ❌ Workflow "${currentWf.name}" — transition target ${nextStepId} not found.`);
+        await this.saveSettings();
+        return;
       }
 
-      if (shouldContinue) {
-        currentWf.currentStep = stepIndex + 1;
-        await this.saveSettings();
-        new Notice(`AutoOC: ⚡ Workflow "${currentWf.name}" step ${stepIndex + 2}/${currentWf.steps.length}...`);
-        // Small delay to let UI update
-        setTimeout(() => {
-          this.runWorkflowStep(wfIdx, stepIndex + 1);
-        }, 500);
-      } else {
-        const failedByTask = transitionMode === "default" && (exitCode !== 0 || completedTask.status === "failed");
-        currentWf.status = failedByTask ? "failed" : "completed";
-        completedTask.output += failedByTask
-          ? `\n[Workflow failed at step ${stepIndex + 1}/${currentWf.steps.length}]`
-          : `\n[Workflow stopped at step ${stepIndex + 1}/${currentWf.steps.length}]`;
-        new Notice(
-          failedByTask
-            ? `AutoOC: ❌ Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.`
-            : `AutoOC: ⏸ Workflow "${currentWf.name}" stopped at step ${stepIndex + 1}/${currentWf.steps.length}.`
-        );
-        await this.saveSettings();
-      }
+      currentWf.currentStep = nextIdx;
+      await this.saveSettings();
+      new Notice(`AutoOC: ⚡ Workflow "${currentWf.name}" → step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
+      setTimeout(() => {
+        this.runWorkflowStepById(currentWf.id, nextStepId);
+      }, 200);
     }, taskOverrides);
+  }
+
+  // Complete a non-task step and move to the next one.
+  async completeStep(wf: Workflow, step: WorkflowStep, stepIndex: number, succeeded: boolean, output: string) {
+    const ctx = (this as any).workflowRuntime.get(wf.id);
+    if (ctx) ctx.stepOutputs.set(step.id, output);
+    const transitions = step.transitions && step.transitions.length > 0
+      ? step.transitions
+      : (() => {
+          const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
+          if (!wfRef) return [];
+          const next = wfRef.steps[stepIndex + 1];
+          if (!next) return [];
+          return [{ toStepId: next.id, mode: "default" as TransitionMode }];
+        })();
+
+    const { nextStepId, reason } = await this.resolveNextStep(
+      wf, step, stepIndex, output, succeeded, transitions
+    );
+
+    if (!nextStepId) {
+      const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
+      if (wfRef) {
+        wfRef.status = succeeded ? "completed" : "failed";
+        await this.saveSettings();
+        new Notice(succeeded
+          ? `AutoOC: ✅ Workflow "${wfRef.name}" completed.`
+          : `AutoOC: ❌ Workflow "${wfRef.name}" failed.`);
+      }
+      (this as any).workflowRuntime.delete(wf.id);
+      return;
+    }
+    const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
+    if (wfRef) {
+      const nextIdx = wfRef.steps.findIndex((s) => s.id === nextStepId);
+      if (nextIdx >= 0) {
+        wfRef.currentStep = nextIdx;
+        await this.saveSettings();
+        new Notice(`AutoOC: ⚡ Workflow "${wfRef.name}" → step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
+        setTimeout(() => this.runWorkflowStepById(wf.id, nextStepId), 200);
+      }
+    }
   }
 }
 
@@ -2013,37 +2468,71 @@ class AutoOCView extends ItemView {
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
 
-    // ── Tab buttons ──
+    // ── Row 0: extension header (title + version + update controls) ──
+    this.renderHeader(containerEl);
+
+    // ── Tab bar ──
+    // The tab bar is split into multiple rows:
+    //   Row 1 (left-aligned): the navigation tabs (Tasks / WorkFlows /
+    //                         Visual Builder / OpenCode CLI)
+    //   Row 2: creation button on the left, Export/Import on the right.
+    //          The creation button is contextual to the active tab:
+    //          "+ New Task" for Tasks, "+ New Workflow" for WorkFlows.
     const tabBar = containerEl.createDiv("auto-oc-tab-bar");
-    const btnTasks = tabBar.createEl("button", {
+
+    // Row 1: navigation tabs
+    const navRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-nav");
+    const btnTasks = navRow.createEl("button", {
       text: "📋 Tasks",
       cls: "auto-oc-tab-btn",
     });
     btnTasks.onclick = () => { this.currentTab = "tasks"; this.render(); };
 
-    const btnWorkflows = tabBar.createEl("button", {
-      text: "🔗 Workflows",
+    const btnWorkflows = navRow.createEl("button", {
+      text: "🔗 WorkFlows",
       cls: "auto-oc-tab-btn",
     });
     btnWorkflows.onclick = () => { this.currentTab = "workflows"; this.render(); };
 
-    const btnCli = tabBar.createEl("button", {
+    const btnVisualBuilder = navRow.createEl("button", {
+      text: "✨ WF Visual Builder",
+      cls: "auto-oc-tab-btn",
+    });
+    btnVisualBuilder.title = "Open the n8n-style visual workflow builder (loads and saves to this extension)";
+    btnVisualBuilder.onclick = () => this.plugin.openVisualBuilder();
+
+    const btnCli = navRow.createEl("button", {
       text: "OpenCode CLI",
       cls: "auto-oc-tab-btn",
     });
     btnCli.onclick = () => this.openCli();
 
-    const spacer = tabBar.createDiv("auto-oc-tab-spacer");
-    spacer.style.flex = "1";
-
-    const btnExport = tabBar.createEl("button", {
+    // Row 2: creation button (left) + spacer + import/export (right).
+    // The creation button is contextual to the active tab.
+    const toolsRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-tools");
+    if (this.currentTab === "tasks") {
+      const btnNewTask = toolsRow.createEl("button", {
+        text: "+ New Task",
+        cls: "auto-oc-btn-primary",
+      });
+      btnNewTask.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
+    } else if (this.currentTab === "workflows") {
+      const btnNewWorkflow = toolsRow.createEl("button", {
+        text: "+ New Workflow",
+        cls: "auto-oc-btn-primary",
+      });
+      btnNewWorkflow.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
+    }
+    const toolsSpacer = toolsRow.createDiv("auto-oc-tab-spacer");
+    toolsSpacer.style.flex = "1";
+    const btnExport = toolsRow.createEl("button", {
       text: "📤 Export",
       cls: "auto-oc-tab-btn",
     });
     btnExport.title = "Export tasks and workflows to JSON";
     btnExport.onclick = () => new ExportModal(this.app, this.plugin).open();
 
-    const btnImport = tabBar.createEl("button", {
+    const btnImport = toolsRow.createEl("button", {
       text: "📥 Import",
       cls: "auto-oc-tab-btn",
     });
@@ -2062,10 +2551,13 @@ class AutoOCView extends ItemView {
     }
   }
 
-  private renderTasks(containerEl: HTMLElement) {
-    // ── Header ──
+  // Renders the extension header at the top of the panel: title,
+  // version, check-updates button, and a status pill when an update
+  // is available or in progress. This was previously rendered inside
+  // each tab's view; extracting it here keeps the title and update
+  // controls visible at all times.
+  private renderHeader(containerEl: HTMLElement): void {
     const header = containerEl.createDiv("auto-oc-header");
-
     const titleRow = header.createDiv("auto-oc-title-row");
     titleRow.createEl("h4", { text: "⏰ AutoOC Scheduler" });
 
@@ -2110,18 +2602,16 @@ class AutoOCView extends ItemView {
         title: this.plugin.updateCheckError,
       });
     }
+  }
 
-    const btnRow = header.createDiv("auto-oc-btn-row");
-
-    const btnNew = btnRow.createEl("button", {
-      text: "+ New Task",
-      cls: "auto-oc-btn-primary",
-    });
-    btnNew.onclick = () => new CreateTaskModal(this.app, this.plugin).open();
+  private renderTasks(containerEl: HTMLElement) {
+    // The extension header (title + version + check-updates) and the
+    // "+ New Task" button are rendered by `render()` so they sit at
+    // the top of the panel, not duplicated per tab.
 
     // ── Filters Bar ──
     const filterBar = containerEl.createDiv("auto-oc-filter-bar");
-    
+
     const searchInput = filterBar.createEl("input", {
       type: "text",
       placeholder: "🔍 Search name or prompt...",
@@ -2361,19 +2851,12 @@ class AutoOCView extends ItemView {
   // ── Workflows rendering ──────────────────────────────────────────────────
 
   private renderWorkflows(containerEl: HTMLElement) {
-    // Header
-    const header = containerEl.createDiv("auto-oc-header");
-    const titleRow = header.createDiv("auto-oc-title-row");
-    titleRow.createEl("h4", { text: "🔗 Workflows" });
+    // The extension header (title + version + check-updates) and the
+    // "+ New Workflow" button are rendered by `render()` so they sit
+    // at the top of the panel, not duplicated per tab.
 
-    const btnRow = header.createDiv("auto-oc-btn-row");
-    const btnNew = btnRow.createEl("button", {
-      text: "+ New Workflow",
-      cls: "auto-oc-btn-primary",
-    });
-    btnNew.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
-
-    const help = header.createDiv("auto-oc-workflow-panel-help");
+    // A short reminder of how workflows work.
+    const help = containerEl.createDiv("auto-oc-workflow-panel-help");
     help.createSpan({
       text: "Workflows run tasks in order using their own schedule. Per-step transitions decide whether the next task starts: success, force, or AI decides.",
     });
@@ -2643,6 +3126,224 @@ class AutoOCView extends ItemView {
         this.expandedWorkflows.delete(workflow.id);
       }
     };
+  }
+}
+
+// ─── Visual Builder View ──────────────────────────────────────────────────────
+//
+// Hosts the standalone HTML visual builder (util/ui_workflow_builder) inside
+// an iframe. The iframe talks to the extension through `postMessage`:
+//   1. On load, the iframe posts {type:"ready"}.
+//   2. The view responds with {type:"load", state: {tasks, workflows}}.
+//   3. The user edits and posts {type:"apply", state: {...}}.
+//   4. The view merges the state into the plugin's settings.
+//
+// We intentionally run the visual builder as an iframe (rather than inlining
+// its HTML/JS) so the same code can be opened in a regular browser and remain
+// fully self-contained — useful for designing on machines without Obsidian.
+
+class VisualBuilderModal extends Modal {
+  private plugin: AutoOCPlugin;
+  private iframe: HTMLIFrameElement | null = null;
+  private ready: boolean = false;
+  private isDirty: boolean = false;
+  // Tracks the in-flight settings mutation; the modal closes on success
+  // if the user clicked "Apply and close".
+  private closeAfterApply: boolean = false;
+
+  constructor(app: App, plugin: AutoOCPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+    const { contentEl, modalEl, titleEl } = this;
+    contentEl.empty();
+    // Hide the default Obsidian modal title — we render our own
+    // toolbar at the top of the content area instead. Hiding the title
+    // gives the visual builder more vertical space.
+    if (titleEl && (titleEl as HTMLElement).style) {
+      (titleEl as HTMLElement).style.display = "none";
+    }
+    // Resize the modal to be a near-fullscreen, centered window. This
+    // gives the visual builder a comfortable working area, unlike the
+    // cramped sidebar leaf it lived in before.
+    setAutoOCModalFullscreen(this);
+    preventBackdropClose(this);
+
+    // ── Toolbar ──
+    const toolbar = contentEl.createDiv("auto-oc-visual-toolbar");
+    const titleSpan = toolbar.createSpan("toolbar-title");
+    titleSpan.textContent = "✨ WF Visual Builder";
+    titleSpan.style.fontSize = "13px";
+    const btnReload = toolbar.createEl("button", { text: "Reload state" });
+    btnReload.onclick = () => this.sendState();
+    const btnApply = toolbar.createEl("button", { text: "Apply and close" });
+    btnApply.title = "Apply the changes from the visual builder back to AutoOC and close this window";
+    btnApply.addClass("mod-cta");
+    btnApply.onclick = () => {
+      this.closeAfterApply = true;
+      this.requestApply();
+    };
+    const spacer = toolbar.createDiv("toolbar-spacer");
+    const hint = toolbar.createSpan("toolbar-hint");
+    hint.textContent = "Drag a Task / Delay / Code from the left, connect ports to wire transitions, click an edge to change its mode (Default / Force / AI / Conditional), then Apply.";
+    contentEl.appendChild(toolbar);
+
+    // ── iframe ──
+    const iframeWrap = contentEl.createDiv("auto-oc-visual-iframe-wrap");
+    const iframe = iframeWrap.createEl("iframe");
+    // Explicit dimensions in case the stylesheet didn't load yet
+    // (e.g. when the modal is first opened) so the iframe doesn't
+    // render at its default 300x150 placeholder size.
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.border = "0";
+    iframe.style.display = "block";
+    iframe.style.flex = "1 1 auto";
+    iframe.srcdoc = visualBuilderHtml;
+    this.iframe = iframe;
+
+    // Listen for postMessage from the iframe. We register a `this`-bound
+    // handler so we can unregister it in onClose.
+    this.messageHandler = (ev: MessageEvent) => {
+      const data = ev.data;
+      if (!data || typeof data !== "object") return;
+      if (data.type === "ready") {
+        this.ready = true;
+        this.sendState();
+      } else if (data.type === "apply") {
+        this.applyExternalState(data.state).then(() => {
+          if (this.closeAfterApply) this.close();
+        });
+      } else if (data.type === "log") {
+        // eslint-disable-next-line no-console
+        console.log("[VisualBuilder]", data.message);
+      }
+    };
+    window.addEventListener("message", this.messageHandler);
+  }
+
+  // Stored so we can unregister it in onClose.
+  private messageHandler?: (ev: MessageEvent) => void;
+
+  onClose() {
+    if (this.messageHandler) {
+      window.removeEventListener("message", this.messageHandler);
+      this.messageHandler = undefined;
+    }
+    this.iframe = null;
+    this.ready = false;
+    // Refresh the underlying AutoOC view so changes appear immediately.
+    this.plugin.view?.refresh();
+  }
+
+  // Send the current tasks/workflows to the iframe.
+  sendState() {
+    if (!this.iframe || !this.iframe.contentWindow) return;
+    const payload = {
+      type: "load",
+      state: {
+        tasks: this.plugin.settings.tasks,
+        workflows: this.plugin.settings.workflows,
+        meta: {
+          availableAgents: this.plugin.availableAgents,
+          availableModels: this.plugin.availableModels,
+          pluginVersion: this.plugin.manifest.version,
+        },
+      },
+    };
+    try {
+      this.iframe.contentWindow.postMessage(payload, "*");
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("VisualBuilder postMessage failed:", e);
+    }
+  }
+
+  // Ask the iframe to send back the current state.
+  requestApply() {
+    if (!this.iframe || !this.iframe.contentWindow) return;
+    this.iframe.contentWindow.postMessage({ type: "request-apply" }, "*");
+  }
+
+  // Replace tasks/workflows with the values provided by the iframe. Uses the
+  // existing importFromData path so all migration + validation rules apply.
+  async applyExternalState(state: any) {
+    if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.workflows)) {
+      new Notice("Visual Builder: invalid state payload.");
+      return;
+    }
+    // Replace by id; unknown ids get fresh ones.
+    const oldTasks = this.plugin.settings.tasks;
+    const oldWorkflows = this.plugin.settings.workflows;
+    const newTasks: ScheduledTask[] = state.tasks.map((t: any) => {
+      // Preserve id if it exists, otherwise generate.
+      const id = (oldTasks.find((x) => x.id === t.id) ? t.id : t.id || generateId());
+      return {
+        id,
+        name: t.name || "Unnamed",
+        prompt: t.prompt || "",
+        model: t.model || this.plugin.getEffectiveDefaultModel(),
+        agent: t.agent || this.plugin.getEffectiveAgent(),
+        useRalphLoop: !!t.useRalphLoop,
+        scheduleType: t.scheduleType || "manual",
+        scheduleTime: t.scheduleTime || "09:00",
+        scheduleDate: t.scheduleDate || "",
+        scheduleDays: t.scheduleDays || [],
+        scheduleMonthDays: t.scheduleMonthDays || [],
+        scheduleIntervalValue: t.scheduleIntervalValue ?? 10,
+        scheduleIntervalUnit: t.scheduleIntervalUnit || "minutes",
+        status: "pending",
+        lastRun: "",
+        output: "",
+        createdAt: t.createdAt || new Date().toISOString(),
+        branch: t.branch || "",
+        createBranch: !!t.createBranch,
+      };
+    });
+    const newWorkflows: Workflow[] = state.workflows.map((w: any) => {
+      const id = (oldWorkflows.find((x) => x.id === w.id) ? w.id : w.id || generateId());
+      return {
+        id,
+        name: w.name || "Unnamed",
+        description: w.description || "",
+        steps: (w.steps || []).map((s: any, i: number) => ({
+          id: s.id || generateId(),
+          stepKind: s.stepKind || "task",
+          taskId: s.taskId,
+          transitionMode: s.transitionMode,
+          evaluatePrompt: s.evaluatePrompt,
+          forceContinue: s.forceContinue,
+          delayValue: s.delayValue,
+          delayUnit: s.delayUnit,
+          code: s.code,
+          codeLang: s.codeLang,
+          codeInputVar: s.codeInputVar,
+          codeOutputVar: s.codeOutputVar,
+          transitions: s.transitions,
+          position: s.position || { x: 40 + i * 280, y: 60 },
+        })),
+        status: "pending",
+        currentStep: -1,
+        createdAt: w.createdAt || new Date().toISOString(),
+        lastRun: w.lastRun,
+        handoffBranch: !!w.handoffBranch,
+        handoffOutput: w.handoffOutput !== false,
+        scheduleType: w.scheduleType || "manual",
+        scheduleTime: w.scheduleTime || "09:00",
+        scheduleDate: w.scheduleDate || "",
+        scheduleDays: w.scheduleDays || [],
+        scheduleMonthDays: w.scheduleMonthDays || [],
+        scheduleIntervalValue: w.scheduleIntervalValue ?? 10,
+        scheduleIntervalUnit: w.scheduleIntervalUnit || "minutes",
+      };
+    });
+    this.plugin.settings.tasks = newTasks;
+    this.plugin.settings.workflows = newWorkflows;
+    await this.plugin.saveSettings();
+    this.plugin.view?.refresh();
+    new Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
   }
 }
 
@@ -3060,11 +3761,12 @@ class CreateWorkflowModal extends Modal {
       ? { ...editWorkflow }
       : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [], scheduleMonthDays: [], scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes" };
     this.selectedTaskIds = editWorkflow
-      ? editWorkflow.steps.map((s) => s.taskId)
+      ? editWorkflow.steps.map((s) => s.taskId || "")
       : [];
     this.stepConfigs = {};
     if (editWorkflow) {
       for (const step of editWorkflow.steps) {
+        if (!step.taskId) continue;
         this.stepConfigs[step.taskId] = {
           transitionMode: step.transitionMode ?? (step.forceContinue ? "force" : step.evaluatePrompt !== undefined ? "eval" : "default"),
           evaluatePrompt: step.evaluatePrompt,
@@ -3301,12 +4003,29 @@ class CreateWorkflowModal extends Modal {
             return;
           }
 
-          const steps: WorkflowStep[] = this.selectedTaskIds.map((tid) => ({
-            taskId: tid,
-            transitionMode: this.stepConfigs[tid]?.transitionMode || "default",
-            evaluatePrompt: this.stepConfigs[tid]?.evaluatePrompt || undefined,
-            forceContinue: this.stepConfigs[tid]?.forceContinue || undefined,
-          }));
+          const steps: WorkflowStep[] = this.selectedTaskIds.map((tid, idx) => {
+            const next = steps && steps[idx + 1];
+            const step: WorkflowStep = {
+              id: generateId(),
+              stepKind: "task" as StepKind,
+              taskId: tid,
+              transitions: [],
+              position: { x: 60 + idx * 280, y: 60 },
+              transitionMode: this.stepConfigs[tid]?.transitionMode || "default",
+              evaluatePrompt: this.stepConfigs[tid]?.evaluatePrompt,
+              forceContinue: this.stepConfigs[tid]?.forceContinue,
+            };
+            return step;
+          });
+          // Wire linear transitions between consecutive steps.
+          for (let i = 0; i < steps.length - 1; i++) {
+            steps[i].transitions = [{
+              toStepId: steps[i + 1].id,
+              mode: (steps[i].transitionMode || "default") as TransitionMode,
+              evaluatePrompt: steps[i].evaluatePrompt,
+              forceContinue: steps[i].forceContinue,
+            }];
+          }
 
           if (this.editWorkflow) {
             const idx = this.plugin.settings.workflows.findIndex(
