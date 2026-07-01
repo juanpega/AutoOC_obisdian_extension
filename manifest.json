@@ -1,9 +1,9 @@
 {
   "id": "auto-oc",
   "name": "AutoOC — OpenCode Task Scheduler",
-  "version": "1.3.16",
+  "version": "1.4.0",
   "minAppVersion": "1.0.0",
-  "description": "Schedule and run OpenCode CLI tasks at specific times, with model selection and output capture.",
+  "description": "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
   "author": "JuanPe",
   "authorUrl": "",
   "isDesktopOnly": true
