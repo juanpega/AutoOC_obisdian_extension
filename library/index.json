@@ -2,6 +2,11 @@
   "schemaVersion": "1.0",
   "library": [
     {
+      "name": "bidirectional-skill-sync-github-opencode",
+      "description": "Detects missing skills between .github and .opencode and adapts them in both directions.",
+      "file": "bidirectional-skill-sync-github-opencode.json"
+    },
+    {
       "name": "NVDA Price Alert",
       "description": "Sample task that checks the NVDA stock price and alerts when it drops below $172.",
       "file": "nvda-price-alert.json"

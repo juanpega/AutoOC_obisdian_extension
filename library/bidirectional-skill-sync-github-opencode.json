@@ -1,0 +1,105 @@
+{
+  "autoOCExport": {
+    "schemaVersion": "1.4.0",
+    "exportedAt": "2026-07-01T00:00:00.000Z",
+    "pluginVersion": "1.4.0",
+    "name": "bidirectional-skill-sync-github-opencode",
+    "description": "Detects missing skills between .github and .opencode and adapts them in both directions."
+  },
+  "tasks": [
+    {
+      "exportId": "task-0",
+      "name": "sync_skills_bidirectional",
+      "prompt": "You are running inside a repository that may contain both .github skills and .opencode skills. Read the workflow input JSON from the previous step and execute a bidirectional sync by adaptation, not blind copy. Goals: 1) For each skill listed in missingInOpenCode, read its source from .github/skills/<skill>/SKILL.md and create an adapted OpenCode version under .opencode/skills/<skill>/SKILL.md. 2) For each skill listed in missingInGithub, read its source from .opencode/skills/<skill>/SKILL.md and create an adapted GitHub Copilot version under .github/skills/<skill>/SKILL.md. Preserve intent, triggers, and operational behavior while adjusting wording, invocation style, and tool references to fit the destination ecosystem. Keep structure clean and minimal, avoid touching unrelated files, and do not rewrite existing destination skills unless required for compatibility. Completion criteria: all missing skills from both sides are created in destination folders with adapted content and valid markdown. Return a final JSON summary with keys: createdInOpenCode, createdInGithub, skipped, errors, status.",
+      "scheduleType": "manual",
+      "scheduleTime": "09:00",
+      "scheduleDate": "",
+      "scheduleDays": [],
+      "scheduleMonthDays": [],
+      "scheduleIntervalValue": 10,
+      "scheduleIntervalUnit": "minutes",
+      "useRalphLoop": true,
+      "agent": "build",
+      "branch": "",
+      "createBranch": false
+    }
+  ],
+  "workflows": [
+    {
+      "exportId": "wf-0",
+      "name": "scan_and_sync_skills_bidirectional",
+      "description": "Scans .github/skills and .opencode/skills, runs AI sync only when differences are found, and reports post-sync state.",
+      "scheduleType": "manual",
+      "scheduleTime": "09:00",
+      "scheduleDate": "",
+      "scheduleDays": [],
+      "scheduleMonthDays": [],
+      "scheduleIntervalValue": 10,
+      "scheduleIntervalUnit": "minutes",
+      "handoffBranch": false,
+      "handoffOutput": true,
+      "steps": [
+        {
+          "id": "step-0-scan",
+          "stepKind": "code",
+          "code": "function toSkillNames(items) { const raw = Array.isArray(items) ? items : []; const names = raw.map(x => String(x || '').replace(/\\\\/g, '/')).map(x => x.endsWith('/') ? x.slice(0, -1) : x).map(x => x.split('/').pop()).filter(Boolean).filter(x => !x.includes('.')); return Array.from(new Set(names)).sort(); } const githubBase = '.github/skills'; const opencodeBase = '.opencode/skills'; const githubExists = vault.exists(githubBase); const opencodeExists = vault.exists(opencodeBase); const githubSkills = githubExists ? toSkillNames(vault.list(githubBase)) : []; const opencodeSkills = opencodeExists ? toSkillNames(vault.list(opencodeBase)) : []; const gSet = new Set(githubSkills); const oSet = new Set(opencodeSkills); const missingInOpenCode = githubSkills.filter(s => !oSet.has(s)); const missingInGithub = opencodeSkills.filter(s => !gSet.has(s)); output = JSON.stringify({ githubBase, opencodeBase, githubExists, opencodeExists, githubSkills, opencodeSkills, missingInOpenCode, missingInGithub, needsWork: missingInOpenCode.length > 0 || missingInGithub.length > 0, counts: { github: githubSkills.length, opencode: opencodeSkills.length, missingInOpenCode: missingInOpenCode.length, missingInGithub: missingInGithub.length } });",
+          "codeLang": "javascript",
+          "codeInputVar": "input",
+          "codeOutputVar": "output",
+          "codeAllowVault": true,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": [
+            {
+              "toStepId": "step-1-sync",
+              "mode": "conditional",
+              "condition": "JSON.parse(input).needsWork === true",
+              "conditionLang": "javascript"
+            },
+            {
+              "toStepId": "step-noop",
+              "mode": "conditional",
+              "condition": "JSON.parse(input).needsWork !== true",
+              "conditionLang": "javascript"
+            }
+          ]
+        },
+        {
+          "id": "step-1-sync",
+          "stepKind": "task",
+          "taskExportId": "task-0",
+          "transitions": [
+            {
+              "toStepId": "step-2-rescan",
+              "mode": "default"
+            }
+          ]
+        },
+        {
+          "id": "step-2-rescan",
+          "stepKind": "code",
+          "code": "function toSkillNames(items) { const raw = Array.isArray(items) ? items : []; const names = raw.map(x => String(x || '').replace(/\\\\/g, '/')).map(x => x.endsWith('/') ? x.slice(0, -1) : x).map(x => x.split('/').pop()).filter(Boolean).filter(x => !x.includes('.')); return Array.from(new Set(names)).sort(); } const githubBase = '.github/skills'; const opencodeBase = '.opencode/skills'; const githubSkills = vault.exists(githubBase) ? toSkillNames(vault.list(githubBase)) : []; const opencodeSkills = vault.exists(opencodeBase) ? toSkillNames(vault.list(opencodeBase)) : []; const gSet = new Set(githubSkills); const oSet = new Set(opencodeSkills); const missingInOpenCode = githubSkills.filter(s => !oSet.has(s)); const missingInGithub = opencodeSkills.filter(s => !gSet.has(s)); output = JSON.stringify({ status: missingInOpenCode.length === 0 && missingInGithub.length === 0 ? 'SYNCED' : 'PARTIAL', missingInOpenCode, missingInGithub, counts: { github: githubSkills.length, opencode: opencodeSkills.length, missingInOpenCode: missingInOpenCode.length, missingInGithub: missingInGithub.length } });",
+          "codeLang": "javascript",
+          "codeInputVar": "input",
+          "codeOutputVar": "output",
+          "codeAllowVault": true,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": []
+        },
+        {
+          "id": "step-noop",
+          "stepKind": "code",
+          "code": "const data = JSON.parse(input || '{}'); output = JSON.stringify({ status: 'NO_CHANGES_NEEDED', message: 'No missing skills detected between .github/skills and .opencode/skills.', counts: data.counts || {} });",
+          "codeLang": "javascript",
+          "codeInputVar": "input",
+          "codeOutputVar": "output",
+          "codeAllowVault": false,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": []
+        }
+      ]
+    }
+  ]
+}
