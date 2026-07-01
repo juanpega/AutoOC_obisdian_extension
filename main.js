@@ -586,6 +586,7 @@ var init_visualBuilderHtml_generated = __esm({
 
   // \u2500\u2500 State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   const state = { tasks: [], workflows: [] };
+  const meta = { availableAgents: [], availableModels: [] };
   let ui = {
     activeWorkflowId: null,
     selection: { type: null, ref: null }, // { type: "task"|"step"|"edge"|"workflow", ref }
@@ -640,13 +641,15 @@ var init_visualBuilderHtml_generated = __esm({
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   function defaultTask() {
+    const defaultModel = optionValue(meta.availableModels[0]) || "";
+    const defaultAgent = optionValue(meta.availableAgents[0]) || "build";
     return {
-      id: uid(), name: "New task", prompt: "", model: "", agent: "build",
+      id: uid(), name: "New task", prompt: "", model: defaultModel, agent: defaultAgent,
       useRalphLoop: false, scheduleType: "manual", scheduleTime: "09:00",
       scheduleDate: "", scheduleDays: [], scheduleMonthDays: [],
       scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
       status: "pending", lastRun: "", output: "", createdAt: new Date().toISOString(),
-      branch: "", createBranch: false, color: "#4a7dff", icon: "\u26A1",
+      workingDirectory: "", branch: "", createBranch: false, color: "#4a7dff", icon: "\u26A1",
     };
   }
   function defaultWorkflow() {
@@ -686,6 +689,20 @@ var init_visualBuilderHtml_generated = __esm({
   const activeWorkflow = () => findWorkflow(ui.activeWorkflowId);
   const stepTask = (s) => s && s.taskId ? findTask(s.taskId) : null;
   const snap = (v) => ui.snap ? Math.round(v / GRID_SIZE) * GRID_SIZE : v;
+  const optionValue = (x) => typeof x === "string" ? x : (x && x.value) || "";
+  const optionLabel = (x) => typeof x === "string" ? x : (x && x.label) || optionValue(x);
+  const uniqueOptions = (primary, fallback, current) => {
+    const seen = new Set();
+    const out = [];
+    [...(primary || []), ...(fallback || []), current].forEach((item) => {
+      const value = optionValue(item);
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      out.push({ value, label: optionLabel(item) });
+    });
+    return out;
+  };
+  const dataListHtml = (id, options) => '<datalist id="' + id + '">' + options.map(o => '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>').join("") + '</datalist>';
 
   // \u2500\u2500 Toast \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   let toastTimer;
@@ -706,6 +723,8 @@ var init_visualBuilderHtml_generated = __esm({
         // Replace the state with the extension's state.
         state.tasks = (data.state.tasks || []).map(migrateTask);
         state.workflows = (data.state.workflows || []).map(migrateWorkflow);
+        meta.availableAgents = (data.state.meta && data.state.meta.availableAgents) || [];
+        meta.availableModels = (data.state.meta && data.state.meta.availableModels) || [];
         // Ensure all steps have an id and a position.
         for (const w of state.workflows) {
           for (let i = 0; i < w.steps.length; i++) {
@@ -727,6 +746,12 @@ var init_visualBuilderHtml_generated = __esm({
         renderAll();
         fitToView();
         toast("Loaded from AutoOC", "ok");
+      } else if (data.type === "meta") {
+        meta.availableAgents = (data.meta && data.meta.availableAgents) || [];
+        meta.availableModels = (data.meta && data.meta.availableModels) || [];
+        renderPanel();
+        renderStatus();
+        toast("Model/agent lists updated", "ok");
       } else if (data.type === "request-apply") {
         applyToExtension();
       } else if (data.type === "ping") {
@@ -740,6 +765,12 @@ var init_visualBuilderHtml_generated = __esm({
   function applyToExtension() {
     if (!inExtension) {
       toast("Running standalone \u2014 use Export to save as JSON", "warn");
+      return;
+    }
+    const validation = validateAll();
+    const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
+    if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
+      showValidation();
       return;
     }
     // Send back the current state.
@@ -762,6 +793,9 @@ var init_visualBuilderHtml_generated = __esm({
             codeLang: s.codeLang,
             codeInputVar: s.codeInputVar,
             codeOutputVar: s.codeOutputVar,
+            codeAllowVault: s.codeAllowVault,
+            codeAllowFiles: s.codeAllowFiles,
+            codeAllowTerminal: s.codeAllowTerminal,
             transitions: s.transitions,
             position: s.position,
           })),
@@ -1433,12 +1467,16 @@ var init_visualBuilderHtml_generated = __esm({
   }
 
   function editorTaskHtml(t) {
+    const modelOptions = uniqueOptions(meta.availableModels, MODEL_PRESETS, t.model);
+    const agentOptions = uniqueOptions(meta.availableAgents, AGENT_PRESETS, t.agent);
+    const modelHint = meta.availableModels.length ? meta.availableModels.length + " model(s) loaded from AutoOC" : "No discovered models loaded yet";
+    const agentHint = meta.availableAgents.length ? meta.availableAgents.length + " agent(s) loaded from AutoOC" : "No discovered agents loaded yet";
     return \`
       <div class="field"><label>Name *</label><input data-f="name" value="\${esc(t.name)}" /></div>
       <div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">\${esc(t.prompt)}</textarea></div>
       <div class="row-2">
-        <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." /><datalist id="dlModels">\${MODEL_PRESETS.map(m => '<option value="' + esc(m) + '"></option>').join("")}</datalist></div>
-        <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" /><datalist id="dlAgents">\${AGENT_PRESETS.map(a => '<option value="' + esc(a) + '"></option>').join("")}</datalist></div>
+        <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">\u{1F504} Refresh Models</button></div>
+        <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" />\${dataListHtml("dlAgents", agentOptions)}<div class="hint-inline">\${esc(agentHint)}</div><button type="button" class="tiny btn-refresh-agents">\u{1F504} Refresh Agents</button></div>
       </div>
       <div class="row-2">
         <div class="field"><label>Icon</label><select data-f="icon">\${["\u26A1","\u2728","\u{1F9E0}","\u{1F4DD}","\u{1F50D}","\u{1F4A1}","\u{1F6E0}","\u{1F4CA}","\u{1F4E5}","\u{1F4E4}","\u{1F504}","\u{1F680}","\u{1F916}","\u{1F4DA}","\u{1F9EA}","\u{1F514}"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
@@ -1458,6 +1496,7 @@ var init_visualBuilderHtml_generated = __esm({
       </div>
       <div class="section">
         <h4>Git</h4>
+        <div class="field"><label>Project path</label><input data-f="workingDirectory" value="\${esc(t.workingDirectory || "")}" placeholder="Empty = global setting / vault root" /></div>
         <div class="field"><label>Branch</label><input data-f="branch" value="\${esc(t.branch)}" /></div>
         <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="createBranch" \${t.createBranch ? "checked" : ""} /> Create branch if missing</label></div>
       </div>
@@ -1523,6 +1562,11 @@ var init_visualBuilderHtml_generated = __esm({
           <div class="field"><label>Output variable</label><input data-f="codeOutputVar" value="\${esc(s.codeOutputVar || "output")}" /></div>
         </div>
         <div class="field"><label>JavaScript code</label><textarea data-f="code" rows="9" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px" placeholder="// input is the previous step's output as a string&#10;// set output to the value passed to the next step">\${esc(s.code || "")}</textarea></div>
+        <div class="section"><h4>Permissions</h4>
+          <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="codeAllowVault" \${s.codeAllowVault ? "checked" : ""} /> Vault API (vault.read/write/list)</label></div>
+          <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="codeAllowFiles" \${s.codeAllowFiles ? "checked" : ""} /> Local files API (files.read/write/list)</label></div>
+          <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="codeAllowTerminal" \${s.codeAllowTerminal ? "checked" : ""} /> Terminal API (terminal.run)</label></div>
+        </div>
         <div class="hint-inline">Available globals: <code>input</code>, <code>outputs</code> (map of stepId \u2192 output), <code>JSON</code>, <code>Math</code>, <code>Date</code>. The result of the expression assigned to <code>\${esc(s.codeOutputVar || "output")}</code> is passed to the next step.</div>
       \`;
     }
@@ -1676,6 +1720,21 @@ var init_visualBuilderHtml_generated = __esm({
         })),
       ]);
     });
+    $$(".btn-refresh-models", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("models")));
+    $$(".btn-refresh-agents", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("agents")));
+  }
+
+  function requestMetaRefresh(kind) {
+    if (!inExtension) {
+      toast("Refresh is available inside AutoOC", "warn");
+      return;
+    }
+    try {
+      window.parent.postMessage({ type: kind === "agents" ? "refresh-agents" : "refresh-models" }, "*");
+      toast("Refreshing " + kind + "\u2026", "ok");
+    } catch (e) {
+      toast("Could not refresh " + kind + ": " + e.message, "error");
+    }
   }
 
   // \u2500\u2500 Context menu \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -2030,6 +2089,19 @@ function psUtf8Prelude() {
     `$OutputEncoding = $utf8NoBom`
   ];
 }
+function setupCodeTextarea(textarea) {
+  textarea.addClass("auto-oc-code-editor");
+  textarea.spellcheck = false;
+  textarea.addEventListener("keydown", (e) => {
+    if (e.key !== "Tab") return;
+    e.preventDefault();
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+    textarea.value = textarea.value.slice(0, start) + "  " + textarea.value.slice(end);
+    textarea.selectionStart = textarea.selectionEnd = start + 2;
+    textarea.dispatchEvent(new Event("input"));
+  });
+}
 var FALLBACK_MODELS = [];
 var FALLBACK_AGENTS = [
   { value: "build", label: "build" },
@@ -2127,7 +2199,7 @@ function parseMonthDays(input) {
   return [...new Set(days)].sort((a, b) => a - b);
 }
 function delay(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
+  return new Promise((resolve2) => window.setTimeout(resolve2, ms));
 }
 function preventBackdropClose(modal) {
   const contentEl = modal.contentEl;
@@ -2221,6 +2293,9 @@ function compareVersions(a, b) {
 function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
+function t_or_undef(incoming, fallback) {
+  return incoming === void 0 ? fallback : incoming;
+}
 function toExportTask(task, exportId) {
   var _a, _b;
   return {
@@ -2270,6 +2345,9 @@ function toExportWorkflow(workflow, exportId, taskExportIdMap) {
         codeLang: step.codeLang,
         codeInputVar: step.codeInputVar,
         codeOutputVar: step.codeOutputVar,
+        codeAllowVault: step.codeAllowVault,
+        codeAllowFiles: step.codeAllowFiles,
+        codeAllowTerminal: step.codeAllowTerminal,
         transitions: step.transitions && step.transitions.length > 0 ? step.transitions.map((t) => ({
           toStepId: t.toStepId,
           mode: t.mode,
@@ -3078,7 +3156,7 @@ Continue?`
   // Quick evaluation via same detached PS + polling mechanism. Used for workflow
   // transition validation prompts.
   async evaluateWithOpencode(prompt, model, cwd) {
-    return new Promise((resolve) => {
+    return new Promise((resolve2) => {
       const fs2 = require("fs");
       const path2 = require("path");
       const tmpDir = require("os").tmpdir();
@@ -3121,7 +3199,7 @@ DONE:" + $exitCode + "
             fs2.unlinkSync(psFile);
           } catch (e) {
           }
-          resolve({ output: "evaluation timeout", exitCode: -1 });
+          resolve2({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
         if (!fs2.existsSync(outFile)) return;
@@ -3138,7 +3216,7 @@ DONE:" + $exitCode + "
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
-        resolve({ output: normalizeCommandOutput(output), exitCode });
+        resolve2({ output: normalizeCommandOutput(output), exitCode });
       }, 2e3);
     });
   }
@@ -3575,6 +3653,9 @@ DONE:" + $exitCode + "
           codeLang: s.codeLang,
           codeInputVar: s.codeInputVar,
           codeOutputVar: s.codeOutputVar,
+          codeAllowVault: s.codeAllowVault,
+          codeAllowFiles: s.codeAllowFiles,
+          codeAllowTerminal: s.codeAllowTerminal,
           transitions: s.transitions,
           position: s.position
         };
@@ -3659,6 +3740,11 @@ DONE:" + $exitCode + "
     wf.status = "running";
     wf.currentStep = 0;
     wf.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    wf.steps.forEach((step) => {
+      step.status = "pending";
+      step.output = "";
+      step.lastRun = "";
+    });
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
     const entryStep = this.findEntryStep(wf);
@@ -3795,7 +3881,8 @@ Reply ONLY with YES or NO.`;
       } }
     };
     vm.createContext(sandbox);
-    const result = vm.runInContext("(" + expression + ")", sandbox, { timeout: 500 });
+    const src = expression.trim().startsWith("return") ? `(function(){ ${expression} })()` : `(${expression})`;
+    const result = vm.runInContext(src, sandbox, { timeout: 500 });
     return !!result;
   }
   async runWorkflowStep(wfIdx, stepIndex) {
@@ -3807,6 +3894,10 @@ Reply ONLY with YES or NO.`;
       await this.saveSettings();
       return;
     }
+    step.status = "running";
+    step.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+    step.output = "";
+    await this.saveSettings();
     const rt = this.workflowRuntime.get(wf.id);
     if (rt) rt.stepIndex = stepIndex;
     if (step.stepKind === "delay") {
@@ -3830,7 +3921,7 @@ Reply ONLY with YES or NO.`;
       await this.completeStep(wf, step, stepIndex, true, "[delay skipped: workflow stopped]");
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, ms));
+    await new Promise((resolve2) => setTimeout(resolve2, ms));
     await this.completeStep(wf, step, stepIndex, true, `[delay ${value} ${unit}]`);
   }
   async runCodeStep(wf, step, stepIndex) {
@@ -3841,6 +3932,22 @@ Reply ONLY with YES or NO.`;
     const outputs = {};
     if (ctx) for (const [k, v] of ctx.stepOutputs.entries()) outputs[k] = v;
     const vm = require("vm");
+    const vaultBase = this.app.vault.adapter.basePath || ".";
+    const defaultCwd = this.settings.workingDirectory || vaultBase;
+    const resolveInVault = (p) => {
+      const resolved = path.resolve(vaultBase, p || ".");
+      const root = path.resolve(vaultBase);
+      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        throw new Error(`Path escapes vault: ${p}`);
+      }
+      return resolved;
+    };
+    const readText = (p) => fs.readFileSync(p, "utf8");
+    const writeText = (p, content) => {
+      fs.mkdirSync(path.dirname(p), { recursive: true });
+      fs.writeFileSync(p, String(content), "utf8");
+      return p;
+    };
     const sandbox = {
       input: inputVal,
       outputs,
@@ -3856,6 +3963,48 @@ Reply ONLY with YES or NO.`;
       console: { log: () => {
       } }
     };
+    if (step.codeAllowVault) {
+      sandbox.vault = {
+        basePath: vaultBase,
+        resolve: (p) => resolveInVault(p),
+        read: (p) => readText(resolveInVault(p)),
+        write: (p, content) => writeText(resolveInVault(p), content),
+        append: (p, content) => {
+          const full = resolveInVault(p);
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.appendFileSync(full, String(content), "utf8");
+          return full;
+        },
+        exists: (p) => fs.existsSync(resolveInVault(p)),
+        list: (p = ".") => fs.readdirSync(resolveInVault(p))
+      };
+    }
+    if (step.codeAllowFiles) {
+      sandbox.files = {
+        cwd: defaultCwd,
+        resolve: (p) => path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p || "."),
+        read: (p) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
+        write: (p, content) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
+        append: (p, content) => {
+          const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p);
+          fs.mkdirSync(path.dirname(full), { recursive: true });
+          fs.appendFileSync(full, String(content), "utf8");
+          return full;
+        },
+        exists: (p) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
+        list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p))
+      };
+    }
+    if (step.codeAllowTerminal) {
+      const { execSync } = require("child_process");
+      sandbox.terminal = {
+        run: (command, options = {}) => execSync(String(command), {
+          cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
+          timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 12e4),
+          encoding: "utf8"
+        })
+      };
+    }
     try {
       const context = vm.createContext(sandbox);
       const code = step.code || "";
@@ -3954,6 +4103,9 @@ Reply ONLY with YES or NO.`;
   async completeStep(wf, step, stepIndex, succeeded, output) {
     const ctx = this.workflowRuntime.get(wf.id);
     if (ctx) ctx.stepOutputs.set(step.id, output);
+    step.status = succeeded ? "completed" : "failed";
+    step.output = output;
+    step.lastRun = (/* @__PURE__ */ new Date()).toISOString();
     const transitions = step.transitions && step.transitions.length > 0 ? step.transitions : (() => {
       const wfRef2 = this.settings.workflows.find((w) => w.id === wf.id);
       if (!wfRef2) return [];
@@ -4374,7 +4526,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     }
   }
   renderWorkflowCard(parent, workflow) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     const summary = card.createDiv("auto-oc-card-summary");
     const nameEl = summary.createEl("span", {
@@ -4404,34 +4556,105 @@ var AutoOCView = class extends import_obsidian.ItemView {
       desc.createEl("span", { text: workflow.description.slice(0, 200) });
     }
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
+    const stepLabel = (step) => {
+      var _a2, _b2;
+      if (step.stepKind === "code") return "{ } Code";
+      if (step.stepKind === "delay") return `\u23F1 ${(_a2 = step.delayValue) != null ? _a2 : 5} ${(_b2 = step.delayUnit) != null ? _b2 : "minutes"}`;
+      const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
+      return t ? t.name : "(deleted task)";
+    };
+    const transitionModeLabel = (mode) => {
+      if (mode === "force") return "force";
+      if (mode === "eval") return "AI";
+      if (mode === "conditional") return "condition";
+      return "default";
+    };
     for (let i = 0; i < workflow.steps.length; i++) {
       const step = workflow.steps[i];
       const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
+      const stepName = stepLabel(step);
       const stepItem = stepsDiv.createDiv("auto-oc-workflow-task-detail");
       const isCurrent = workflow.status === "running" && workflow.currentStep === i;
       const isDone = workflow.currentStep > i || workflow.status === "completed" && workflow.currentStep >= i;
       const icon = isDone ? "\u2705" : isCurrent ? "\u23F3" : "\u2B1C";
       const stepHeader = stepItem.createDiv("auto-oc-workflow-task-header");
       stepHeader.createSpan({
-        text: `${icon} Step ${i + 1}: ${task ? task.name : "(deleted task)"}`,
+        text: `${icon} Step ${i + 1}: ${stepName}`,
         cls: "auto-oc-workflow-task-title"
       });
+      if (step.stepKind !== "task" && step.status) {
+        stepHeader.createSpan({
+          text: step.status,
+          cls: `auto-oc-badge auto-oc-badge-${step.status}`
+        });
+      }
       if (task) {
         stepHeader.createSpan({
           text: task.status,
           cls: `auto-oc-badge auto-oc-badge-${task.status}`
         });
       }
-      if (i < workflow.steps.length - 1) {
-        const transitionMode = (_a = step.transitionMode) != null ? _a : step.forceContinue ? "force" : step.evaluatePrompt !== void 0 ? "eval" : "default";
+      const transitions = step.transitions && step.transitions.length > 0 ? step.transitions : workflow.steps[i + 1] ? [{ toStepId: workflow.steps[i + 1].id, mode: step.transitionMode || "default" }] : [];
+      if (transitions.length > 0) {
+        const transitionSummary = transitions.map((transition) => {
+          const target = workflow.steps.find((candidate) => candidate.id === transition.toStepId);
+          return `\u2192 ${target ? stepLabel(target) : "missing step"} [${transitionModeLabel(transition.mode)}]`;
+        }).join(" \xB7 ");
         stepHeader.createSpan({
-          text: transitionMode === "force" ? " \u2192 [force]" : transitionMode === "eval" ? " \u2192 [eval]" : " \u2192 [default]",
+          text: ` ${transitionSummary}`,
           cls: "auto-oc-workflow-transition-label"
         });
       }
-      if (!task) continue;
+      if (!task) {
+        if (step.stepKind === "code") {
+          const codePreview = stepItem.createDiv("auto-oc-workflow-task-prompt");
+          codePreview.createSpan({
+            text: (step.code || "(empty code step)").slice(0, 180) + ((step.code || "").length > 180 ? "\u2026" : "")
+          });
+          const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
+          const btnCodeLog = stepActions.createEl("button", {
+            text: "\u{1F4C4} Log",
+            cls: "auto-oc-btn-output"
+          });
+          btnCodeLog.disabled = !step.output;
+          btnCodeLog.onclick = (e) => {
+            e.stopPropagation();
+            new TextPreviewModal(this.app, `Code step ${i + 1} output`, step.output || "").open();
+          };
+          const btnEditCode = stepActions.createEl("button", {
+            text: "\u270F\uFE0F Edit Code",
+            cls: "auto-oc-btn-edit"
+          });
+          btnEditCode.onclick = (e) => {
+            e.stopPropagation();
+            new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
+          };
+        } else if (step.stepKind === "delay") {
+          const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
+          stepMeta.createSpan({ text: `Pauses for ${(_a = step.delayValue) != null ? _a : 5} ${(_b = step.delayUnit) != null ? _b : "minutes"}` });
+          const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
+          const btnDelayLog = stepActions.createEl("button", {
+            text: "\u{1F4C4} Log",
+            cls: "auto-oc-btn-output"
+          });
+          btnDelayLog.disabled = !step.output;
+          btnDelayLog.onclick = (e) => {
+            e.stopPropagation();
+            new TextPreviewModal(this.app, `Delay step ${i + 1} output`, step.output || "").open();
+          };
+          const btnEditDelay = stepActions.createEl("button", {
+            text: "\u270F\uFE0F Edit Delay",
+            cls: "auto-oc-btn-edit"
+          });
+          btnEditDelay.onclick = (e) => {
+            e.stopPropagation();
+            new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
+          };
+        }
+        continue;
+      }
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-      const modelLabel = (_c = (_b = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _b.label) != null ? _c : task.model;
+      const modelLabel = (_d = (_c = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _c.label) != null ? _d : task.model;
       taskMeta.createSpan({ text: `\u{1F916} ${modelLabel || "(no model)"}` });
       taskMeta.createSpan({ text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
       if (task.branch) taskMeta.createSpan({ text: `\u{1F33F} ${task.branch}${task.createBranch ? " (create)" : ""}` });
@@ -4517,8 +4740,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const days = wfScheduleMonthDays.join(", ");
         schedMeta.createEl("span", { text: `\u{1F501} Day ${days || "no days"} of each month at ${wfScheduleTime}` });
       } else if (wfScheduleType === "interval") {
-        const value = (_d = workflow.scheduleIntervalValue) != null ? _d : 10;
-        const unit = (_e = workflow.scheduleIntervalUnit) != null ? _e : "minutes";
+        const value = (_e = workflow.scheduleIntervalValue) != null ? _e : 10;
+        const unit = (_f = workflow.scheduleIntervalUnit) != null ? _f : "minutes";
         schedMeta.createEl("span", { text: `\u{1F501} Every ${value} ${unit}` });
       }
     }
@@ -4610,6 +4833,12 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
     titleSpan.style.fontSize = "13px";
     const btnReload = toolbar.createEl("button", { text: "Reload state" });
     btnReload.onclick = () => this.sendState();
+    const btnSave = toolbar.createEl("button", { text: "Apply" });
+    btnSave.title = "Apply the changes from the visual builder back to AutoOC without closing this window";
+    btnSave.onclick = () => {
+      this.closeAfterApply = false;
+      this.requestApply();
+    };
     const btnApply = toolbar.createEl("button", { text: "Apply and close" });
     btnApply.title = "Apply the changes from the visual builder back to AutoOC and close this window";
     btnApply.addClass("mod-cta");
@@ -4640,6 +4869,15 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         this.applyExternalState(data.state).then(() => {
           if (this.closeAfterApply) this.close();
         });
+      } else if (data.type === "refresh-agents") {
+        const cwd = this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
+        this.plugin.refreshAgents(cwd);
+        new import_obsidian.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
+        this.sendMeta();
+      } else if (data.type === "refresh-models") {
+        this.plugin.refreshModels();
+        new import_obsidian.Notice("AutoOC: models updated.");
+        this.sendMeta();
       } else if (data.type === "log") {
         console.log("[VisualBuilder]", data.message);
       }
@@ -4677,13 +4915,33 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       console.error("VisualBuilder postMessage failed:", e);
     }
   }
+  sendMeta() {
+    if (!this.iframe || !this.iframe.contentWindow) return;
+    const payload = {
+      type: "meta",
+      meta: {
+        availableAgents: this.plugin.availableAgents,
+        availableModels: this.plugin.availableModels,
+        pluginVersion: this.plugin.manifest.version
+      }
+    };
+    try {
+      this.iframe.contentWindow.postMessage(payload, "*");
+    } catch (e) {
+      console.error("VisualBuilder postMessage failed:", e);
+    }
+  }
   // Ask the iframe to send back the current state.
   requestApply() {
     if (!this.iframe || !this.iframe.contentWindow) return;
     this.iframe.contentWindow.postMessage({ type: "request-apply" }, "*");
   }
-  // Replace tasks/workflows with the values provided by the iframe. Uses the
-  // existing importFromData path so all migration + validation rules apply.
+  // Replace tasks/workflows with the values provided by the iframe. Smart-merge:
+  // for tasks/workflows that already exist in the extension, keep runtime state
+  // (status, lastRun, output) and any field the iframe did not send (workingDirectory
+  // and the Git branch fields live in the classic modal, not the VB property panel).
+  // This means editing a task in the visual builder no longer wipes the last
+  // execution log or the "currently running" indicator.
   async applyExternalState(state) {
     var _a;
     if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.workflows)) {
@@ -4693,66 +4951,90 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
     const newTasks = state.tasks.map((t) => {
-      var _a2;
-      const id = oldTasks.find((x) => x.id === t.id) ? t.id : t.id || generateId();
+      var _a2, _b, _c, _d;
+      const existing = oldTasks.find((x) => x.id === t.id);
+      const id = existing ? t.id : t.id || generateId();
+      const contentChanged = !existing || existing.prompt !== (t.prompt || "") || existing.model !== (t.model || existing.model) || existing.agent !== (t.agent || existing.agent) || existing.scheduleType !== (t.scheduleType || existing.scheduleType) || existing.name !== (t.name || existing.name);
+      const status = (existing == null ? void 0 : existing.status) === "running" ? "running" : contentChanged ? "pending" : (existing == null ? void 0 : existing.status) || "pending";
+      const lastRun = (existing == null ? void 0 : existing.lastRun) || "";
+      const output = (existing == null ? void 0 : existing.output) || "";
       return {
         id,
         name: t.name || "Unnamed",
         prompt: t.prompt || "",
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
-        useRalphLoop: !!t.useRalphLoop,
+        useRalphLoop: t.useRalphLoop !== void 0 ? !!t.useRalphLoop : (_a2 = existing == null ? void 0 : existing.useRalphLoop) != null ? _a2 : false,
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
-        scheduleDays: t.scheduleDays || [],
-        scheduleMonthDays: t.scheduleMonthDays || [],
-        scheduleIntervalValue: (_a2 = t.scheduleIntervalValue) != null ? _a2 : 10,
-        scheduleIntervalUnit: t.scheduleIntervalUnit || "minutes",
-        status: "pending",
-        lastRun: "",
-        output: "",
-        createdAt: t.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
-        branch: t.branch || "",
-        createBranch: !!t.createBranch
+        scheduleDays: Array.isArray(t.scheduleDays) ? t.scheduleDays : [],
+        scheduleMonthDays: Array.isArray(t.scheduleMonthDays) ? t.scheduleMonthDays : [],
+        scheduleIntervalValue: typeof t.scheduleIntervalValue === "number" ? t.scheduleIntervalValue : (_b = existing == null ? void 0 : existing.scheduleIntervalValue) != null ? _b : 10,
+        scheduleIntervalUnit: t.scheduleIntervalUnit || (existing == null ? void 0 : existing.scheduleIntervalUnit) || "minutes",
+        status,
+        lastRun,
+        output,
+        createdAt: (existing == null ? void 0 : existing.createdAt) || t.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+        // Preserve classic-only fields when older Visual Builder payloads do
+        // not send them.
+        workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_c = existing == null ? void 0 : existing.workingDirectory) != null ? _c : "",
+        branch: t.branch !== void 0 ? t.branch || "" : (existing == null ? void 0 : existing.branch) || "",
+        createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_d = existing == null ? void 0 : existing.createBranch) != null ? _d : false
       };
     });
     const newWorkflows = state.workflows.map((w) => {
-      var _a2;
-      const id = oldWorkflows.find((x) => x.id === w.id) ? w.id : w.id || generateId();
+      var _a2, _b, _c, _d;
+      const existing = oldWorkflows.find((x) => x.id === w.id);
+      const id = existing ? w.id : w.id || generateId();
+      const structureChanged = !existing || existing.steps.length !== (w.steps || []).length || existing.name !== (w.name || existing.name);
+      const status = structureChanged ? "pending" : (existing == null ? void 0 : existing.status) === "running" ? "running" : (existing == null ? void 0 : existing.status) || "pending";
+      const currentStep = structureChanged ? -1 : (_a2 = existing == null ? void 0 : existing.currentStep) != null ? _a2 : -1;
       return {
         id,
         name: w.name || "Unnamed",
         description: w.description || "",
-        steps: (w.steps || []).map((s, i) => ({
-          id: s.id || generateId(),
-          stepKind: s.stepKind || "task",
-          taskId: s.taskId,
-          transitionMode: s.transitionMode,
-          evaluatePrompt: s.evaluatePrompt,
-          forceContinue: s.forceContinue,
-          delayValue: s.delayValue,
-          delayUnit: s.delayUnit,
-          code: s.code,
-          codeLang: s.codeLang,
-          codeInputVar: s.codeInputVar,
-          codeOutputVar: s.codeOutputVar,
-          transitions: s.transitions,
-          position: s.position || { x: 40 + i * 280, y: 60 }
-        })),
-        status: "pending",
-        currentStep: -1,
-        createdAt: w.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
-        lastRun: w.lastRun,
-        handoffBranch: !!w.handoffBranch,
-        handoffOutput: w.handoffOutput !== false,
+        steps: (w.steps || []).map((s, i) => {
+          const oldStep = existing == null ? void 0 : existing.steps.find((x) => x.id === s.id);
+          return {
+            id: s.id || generateId(),
+            stepKind: s.stepKind || "task",
+            taskId: s.taskId,
+            transitionMode: s.transitionMode,
+            evaluatePrompt: s.evaluatePrompt,
+            forceContinue: s.forceContinue,
+            delayValue: s.delayValue,
+            delayUnit: s.delayUnit,
+            code: s.code,
+            codeLang: s.codeLang,
+            codeInputVar: s.codeInputVar,
+            codeOutputVar: s.codeOutputVar,
+            codeAllowVault: s.codeAllowVault,
+            codeAllowFiles: s.codeAllowFiles,
+            codeAllowTerminal: s.codeAllowTerminal,
+            // Preserve per-step runtime state (lastRun, output, status) so
+            // a user editing a non-running step in the VB does not lose
+            // its captured log/output.
+            status: oldStep == null ? void 0 : oldStep.status,
+            lastRun: oldStep == null ? void 0 : oldStep.lastRun,
+            output: oldStep == null ? void 0 : oldStep.output,
+            transitions: s.transitions,
+            position: s.position || { x: 40 + i * 280, y: 60 }
+          };
+        }),
+        status,
+        currentStep,
+        createdAt: (existing == null ? void 0 : existing.createdAt) || w.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
+        lastRun: existing == null ? void 0 : existing.lastRun,
+        handoffBranch: t_or_undef(w.handoffBranch, (_b = existing == null ? void 0 : existing.handoffBranch) != null ? _b : false),
+        handoffOutput: t_or_undef(w.handoffOutput, (_c = existing == null ? void 0 : existing.handoffOutput) != null ? _c : true) !== false,
         scheduleType: w.scheduleType || "manual",
         scheduleTime: w.scheduleTime || "09:00",
         scheduleDate: w.scheduleDate || "",
-        scheduleDays: w.scheduleDays || [],
-        scheduleMonthDays: w.scheduleMonthDays || [],
-        scheduleIntervalValue: (_a2 = w.scheduleIntervalValue) != null ? _a2 : 10,
-        scheduleIntervalUnit: w.scheduleIntervalUnit || "minutes"
+        scheduleDays: Array.isArray(w.scheduleDays) ? w.scheduleDays : [],
+        scheduleMonthDays: Array.isArray(w.scheduleMonthDays) ? w.scheduleMonthDays : [],
+        scheduleIntervalValue: typeof w.scheduleIntervalValue === "number" ? w.scheduleIntervalValue : (_d = existing == null ? void 0 : existing.scheduleIntervalValue) != null ? _d : 10,
+        scheduleIntervalUnit: w.scheduleIntervalUnit || (existing == null ? void 0 : existing.scheduleIntervalUnit) || "minutes"
       };
     });
     this.plugin.settings.tasks = newTasks;
@@ -5057,6 +5339,94 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
+var EditWorkflowStepModal = class extends import_obsidian.Modal {
+  constructor(app, plugin, workflow, step) {
+    super(app);
+    this.plugin = plugin;
+    this.workflow = workflow;
+    this.step = step;
+    this.draft = { ...step };
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setAutoOCModalSize(this, 760);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", {
+      text: this.step.stepKind === "delay" ? "Edit Delay Step" : "Edit Code Step"
+    });
+    if (this.step.stepKind === "delay") {
+      new import_obsidian.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+        var _a;
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.inputEl.type = "number";
+        text.inputEl.min = "0";
+        text.setValue(String((_a = this.draft.delayValue) != null ? _a : 5)).onChange((v) => {
+          const n = parseInt(v, 10);
+          this.draft.delayValue = isNaN(n) || n < 0 ? 0 : n;
+        });
+      }).addDropdown((dd) => {
+        dd.addOption("seconds", "Seconds");
+        dd.addOption("minutes", "Minutes");
+        dd.addOption("hours", "Hours");
+        dd.setValue(this.draft.delayUnit || "minutes");
+        dd.onChange((v) => this.draft.delayUnit = v);
+      });
+    } else {
+      new import_obsidian.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
+        text.inputEl.addClass("auto-oc-modal-textarea");
+        setupCodeTextarea(text.inputEl);
+        text.inputEl.rows = 12;
+        text.setValue(this.draft.code || "").onChange((v) => this.draft.code = v);
+      });
+      new import_obsidian.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
+      }).addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setPlaceholder("output").setValue(this.draft.codeOutputVar || "output").onChange((v) => this.draft.codeOutputVar = v || "output");
+      });
+      contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
+      new import_obsidian.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+        tog.setValue(!!this.draft.codeAllowVault);
+        tog.onChange((v) => this.draft.codeAllowVault = v);
+      });
+      new import_obsidian.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
+        tog.setValue(!!this.draft.codeAllowFiles);
+        tog.onChange((v) => this.draft.codeAllowFiles = v);
+      });
+      new import_obsidian.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
+        tog.setValue(!!this.draft.codeAllowTerminal);
+        tog.onChange((v) => this.draft.codeAllowTerminal = v);
+      });
+      contentEl.createEl("p", {
+        text: "Code steps run in a VM sandbox. Extra capabilities are only exposed when enabled above: vault, files, and terminal.",
+        cls: "setting-item-description auto-oc-workflow-section-help"
+      });
+    }
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("Save Step").setCta().onClick(async () => {
+        var _a;
+        Object.assign(this.step, this.draft);
+        const wfIdx = this.plugin.settings.workflows.findIndex((w) => w.id === this.workflow.id);
+        if (wfIdx !== -1) {
+          const stepIdx = this.plugin.settings.workflows[wfIdx].steps.findIndex((s) => s.id === this.step.id);
+          if (stepIdx !== -1) {
+            this.plugin.settings.workflows[wfIdx].steps[stepIdx] = { ...this.step };
+          }
+        }
+        await this.plugin.saveSettings();
+        (_a = this.plugin.view) == null ? void 0 : _a.refresh();
+        new import_obsidian.Notice("AutoOC: workflow step saved.");
+        this.close();
+      })
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var CreateWorkflowModal = class extends import_obsidian.Modal {
   constructor(app, plugin, editWorkflow) {
     var _a;
@@ -5064,12 +5434,17 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     this.plugin = plugin;
     this.editWorkflow = editWorkflow;
     this.draft = editWorkflow ? { ...editWorkflow } : { name: "", description: "", handoffBranch: false, handoffOutput: true, scheduleType: "manual", scheduleTime: nowTimeString(), scheduleDate: todayString(), scheduleDays: [], scheduleMonthDays: [], scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes" };
-    this.selectedTaskIds = editWorkflow ? editWorkflow.steps.map((s) => s.taskId || "") : [];
+    this.selectedSteps = editWorkflow ? editWorkflow.steps.map((s, i) => ({
+      ...s,
+      id: s.id || generateId(),
+      stepKind: s.stepKind || "task",
+      transitions: [...s.transitions || []],
+      position: s.position || { x: 60 + i * 280, y: 60 }
+    })) : [];
     this.stepConfigs = {};
     if (editWorkflow) {
       for (const step of editWorkflow.steps) {
-        if (!step.taskId) continue;
-        this.stepConfigs[step.taskId] = {
+        this.stepConfigs[step.id] = {
           transitionMode: (_a = step.transitionMode) != null ? _a : step.forceContinue ? "force" : step.evaluatePrompt !== void 0 ? "eval" : "default",
           evaluatePrompt: step.evaluatePrompt,
           forceContinue: step.forceContinue
@@ -5225,8 +5600,8 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
           new import_obsidian.Notice("Name is required.");
           return;
         }
-        if (this.selectedTaskIds.length < 2) {
-          new import_obsidian.Notice("A workflow needs at least 2 tasks.");
+        if (this.selectedSteps.length < 2) {
+          new import_obsidian.Notice("A workflow needs at least 2 steps.");
           return;
         }
         if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_b = this.draft.scheduleTime) != null ? _b : "")) {
@@ -5241,18 +5616,17 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
           new import_obsidian.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
-        const steps = this.selectedTaskIds.map((tid, idx) => {
-          var _a2, _b2, _c2;
-          const next = steps && steps[idx + 1];
+        const steps = this.selectedSteps.map((src, idx) => {
+          const config = this.stepConfigs[src.id] || {};
           const step = {
-            id: generateId(),
-            stepKind: "task",
-            taskId: tid,
+            ...src,
+            id: src.id || generateId(),
+            stepKind: src.stepKind || "task",
             transitions: [],
             position: { x: 60 + idx * 280, y: 60 },
-            transitionMode: ((_a2 = this.stepConfigs[tid]) == null ? void 0 : _a2.transitionMode) || "default",
-            evaluatePrompt: (_b2 = this.stepConfigs[tid]) == null ? void 0 : _b2.evaluatePrompt,
-            forceContinue: (_c2 = this.stepConfigs[tid]) == null ? void 0 : _c2.forceContinue
+            transitionMode: config.transitionMode || "default",
+            evaluatePrompt: config.evaluatePrompt,
+            forceContinue: config.forceContinue
           };
           return step;
         });
@@ -5314,29 +5688,37 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       })
     );
   }
+  workflowStepLabel(step) {
+    var _a, _b;
+    if (step.stepKind === "code") return "{ } Code";
+    if (step.stepKind === "delay") return `\u23F1 ${(_a = step.delayValue) != null ? _a : 5} ${(_b = step.delayUnit) != null ? _b : "minutes"}`;
+    const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
+    return task ? `\u{1F4CC} ${task.name}` : "\u274C Deleted task";
+  }
   renderStepsList(container) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e;
     container.empty();
-    if (this.selectedTaskIds.length === 0) {
+    if (this.selectedSteps.length === 0) {
       container.createEl("p", {
-        text: "No steps added yet. Use 'Add Task to Chain' below.",
+        text: "No steps added yet. Add a task, code, or delay step below.",
         cls: "auto-oc-empty"
       });
     }
-    for (let i = 0; i < this.selectedTaskIds.length; i++) {
-      const taskId = this.selectedTaskIds[i];
-      const task = this.plugin.settings.tasks.find((t) => t.id === taskId);
-      const config = this.stepConfigs[taskId] || {};
+    for (let i = 0; i < this.selectedSteps.length; i++) {
+      const step = this.selectedSteps[i];
+      if (!step.id) step.id = generateId();
+      const task = step.stepKind === "task" ? this.plugin.settings.tasks.find((t) => t.id === step.taskId) : void 0;
+      const config = this.stepConfigs[step.id] || {};
       const stepEl = container.createDiv("auto-oc-workflow-step-item");
-      const isLast = i === this.selectedTaskIds.length - 1;
+      const isLast = i === this.selectedSteps.length - 1;
       const header = stepEl.createDiv("auto-oc-workflow-step-header");
       header.createEl("span", {
         text: `Step ${i + 1}`,
         cls: "auto-oc-workflow-step-num"
       });
       header.createEl("span", {
-        text: task ? `\u{1F4CC} ${task.name}` : "\u274C Deleted task",
-        cls: task ? "" : "auto-oc-workflow-step-err"
+        text: this.workflowStepLabel(step),
+        cls: step.stepKind === "task" && !task ? "auto-oc-workflow-step-err" : ""
       });
       if (!isLast) {
         header.createEl("span", { text: "\u2192", cls: "auto-oc-workflow-step-arrow" });
@@ -5344,12 +5726,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
           text: `Step ${i + 2}`,
           cls: "auto-oc-workflow-step-num"
         });
-        const nextTask = this.plugin.settings.tasks.find(
-          (t) => t.id === this.selectedTaskIds[i + 1]
-        );
-        if (nextTask) {
-          header.createEl("span", { text: `\u{1F4CC} ${nextTask.name}` });
-        }
+        header.createEl("span", { text: this.workflowStepLabel(this.selectedSteps[i + 1]) });
       }
       const btnRemove = header.createEl("button", {
         text: "\u2716",
@@ -5357,20 +5734,68 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       });
       btnRemove.style.marginLeft = "auto";
       btnRemove.onclick = () => {
-        this.selectedTaskIds.splice(i, 1);
-        delete this.stepConfigs[taskId];
+        this.selectedSteps.splice(i, 1);
+        delete this.stepConfigs[step.id];
         this.renderStepsList(container);
       };
+      if (step.stepKind === "code") {
+        new import_obsidian.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
+          text.inputEl.addClass("auto-oc-modal-textarea");
+          setupCodeTextarea(text.inputEl);
+          text.inputEl.rows = 6;
+          text.setValue(step.code || "").onChange((v) => step.code = v);
+        });
+        new import_obsidian.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.setPlaceholder("input").setValue(step.codeInputVar || "input").onChange((v) => step.codeInputVar = v || "input");
+        }).addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.setPlaceholder("output").setValue(step.codeOutputVar || "output").onChange((v) => step.codeOutputVar = v || "output");
+        });
+        new import_obsidian.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
+          tog.setTooltip("Vault API");
+          tog.setValue(!!step.codeAllowVault);
+          tog.onChange((v) => step.codeAllowVault = v);
+          tog.toggleEl.insertAdjacentHTML("afterend", `<span class="auto-oc-day-label">Vault</span>`);
+        }).addToggle((tog) => {
+          tog.setTooltip("Local files API");
+          tog.setValue(!!step.codeAllowFiles);
+          tog.onChange((v) => step.codeAllowFiles = v);
+          tog.toggleEl.insertAdjacentHTML("afterend", `<span class="auto-oc-day-label">Files</span>`);
+        }).addToggle((tog) => {
+          tog.setTooltip("Terminal API");
+          tog.setValue(!!step.codeAllowTerminal);
+          tog.onChange((v) => step.codeAllowTerminal = v);
+          tog.toggleEl.insertAdjacentHTML("afterend", `<span class="auto-oc-day-label">Terminal</span>`);
+        });
+      } else if (step.stepKind === "delay") {
+        new import_obsidian.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+          var _a2;
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.inputEl.type = "number";
+          text.inputEl.min = "0";
+          text.setValue(String((_a2 = step.delayValue) != null ? _a2 : 5)).onChange((v) => {
+            const n = parseInt(v, 10);
+            step.delayValue = isNaN(n) || n < 0 ? 0 : n;
+          });
+        }).addDropdown((dd) => {
+          dd.addOption("seconds", "Seconds");
+          dd.addOption("minutes", "Minutes");
+          dd.addOption("hours", "Hours");
+          dd.setValue(step.delayUnit || "minutes");
+          dd.onChange((v) => step.delayUnit = v);
+        });
+      }
       if (!isLast) {
         const transConfig = stepEl.createDiv("auto-oc-workflow-transition");
-        const nextTask = this.plugin.settings.tasks.find((t) => t.id === this.selectedTaskIds[i + 1]);
+        const nextStep = this.selectedSteps[i + 1];
         const transitionHeader = transConfig.createDiv("auto-oc-workflow-transition-header");
         transitionHeader.createSpan({
           text: `Transition: Step ${i + 1} \u2192 Step ${i + 2}`,
           cls: "auto-oc-workflow-transition-title"
         });
         transitionHeader.createSpan({
-          text: `After \xAB${(_a = task == null ? void 0 : task.name) != null ? _a : "current task"}\xBB finishes, decide whether \xAB${(_b = nextTask == null ? void 0 : nextTask.name) != null ? _b : "next task"}\xBB starts.`,
+          text: `After \xAB${this.workflowStepLabel(step)}\xBB finishes, decide whether \xAB${this.workflowStepLabel(nextStep)}\xBB starts.`,
           cls: "auto-oc-workflow-transition-help"
         });
         const modeDiv = transConfig.createDiv("auto-oc-workflow-mode");
@@ -5386,30 +5811,30 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
           { val: "eval", label: "AI decides \u2014 evaluate output", desc: "Runs your transition prompt against this step output. YES starts the next task; NO stops the workflow." }
         ];
         const defaultEvalPrompt = "Did the previous task complete successfully? Check the output for errors, failures, or unfinished work. If it is safe to continue, reply YES. Otherwise reply NO.";
-        const currentMode = (_d = config.transitionMode) != null ? _d : ((_c = config.forceContinue) != null ? _c : false) ? "force" : config.evaluatePrompt !== void 0 ? "eval" : "default";
+        const currentMode = (_b = config.transitionMode) != null ? _b : ((_a = config.forceContinue) != null ? _a : false) ? "force" : config.evaluatePrompt !== void 0 ? "eval" : "default";
         for (const m of modes) {
           modeSel.createEl("option", { text: m.label }).value = m.val;
         }
         modeSel.value = currentMode;
         const modeDesc = modeDiv.createSpan({
-          text: (_f = (_e = modes.find((m) => m.val === currentMode)) == null ? void 0 : _e.desc) != null ? _f : "",
+          text: (_d = (_c = modes.find((m) => m.val === currentMode)) == null ? void 0 : _c.desc) != null ? _d : "",
           cls: "auto-oc-workflow-mode-desc"
         });
         modeSel.onchange = () => {
           var _a2;
-          this.stepConfigs[taskId] = this.stepConfigs[taskId] || {};
+          this.stepConfigs[step.id] = this.stepConfigs[step.id] || {};
           if (modeSel.value === "force") {
-            this.stepConfigs[taskId].transitionMode = "force";
-            this.stepConfigs[taskId].forceContinue = true;
-            this.stepConfigs[taskId].evaluatePrompt = void 0;
+            this.stepConfigs[step.id].transitionMode = "force";
+            this.stepConfigs[step.id].forceContinue = true;
+            this.stepConfigs[step.id].evaluatePrompt = void 0;
           } else if (modeSel.value === "eval") {
-            this.stepConfigs[taskId].transitionMode = "eval";
-            this.stepConfigs[taskId].forceContinue = void 0;
-            this.stepConfigs[taskId].evaluatePrompt = (_a2 = this.stepConfigs[taskId].evaluatePrompt) != null ? _a2 : defaultEvalPrompt;
+            this.stepConfigs[step.id].transitionMode = "eval";
+            this.stepConfigs[step.id].forceContinue = void 0;
+            this.stepConfigs[step.id].evaluatePrompt = (_a2 = this.stepConfigs[step.id].evaluatePrompt) != null ? _a2 : defaultEvalPrompt;
           } else {
-            this.stepConfigs[taskId].transitionMode = "default";
-            this.stepConfigs[taskId].forceContinue = void 0;
-            this.stepConfigs[taskId].evaluatePrompt = void 0;
+            this.stepConfigs[step.id].transitionMode = "default";
+            this.stepConfigs[step.id].forceContinue = void 0;
+            this.stepConfigs[step.id].evaluatePrompt = void 0;
           }
           this.renderStepsList(container);
         };
@@ -5421,14 +5846,14 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
             cls: "auto-oc-workflow-ai-prompt-title"
           });
           promptBox.createSpan({
-            text: `Write the condition here. OpenCode will receive this text plus the output of \xAB${(_g = task == null ? void 0 : task.name) != null ? _g : "current task"}\xBB. It must answer YES to start \xAB${(_h = nextTask == null ? void 0 : nextTask.name) != null ? _h : "next task"}\xBB.`,
+            text: `Write the condition here. OpenCode will receive this text plus the output of \xAB${this.workflowStepLabel(step)}\xBB. It must answer YES to start \xAB${this.workflowStepLabel(nextStep)}\xBB.`,
             cls: "auto-oc-workflow-ai-prompt-help"
           });
           const evalTextarea = promptBox.createEl("textarea", {
             cls: "auto-oc-modal-textarea auto-oc-workflow-ai-textarea"
           });
           evalTextarea.rows = 4;
-          evalTextarea.value = (_i = config.evaluatePrompt) != null ? _i : defaultEvalPrompt;
+          evalTextarea.value = (_e = config.evaluatePrompt) != null ? _e : defaultEvalPrompt;
           evalTextarea.placeholder = "Example: Did the previous task complete successfully? Reply YES or NO.";
           const infoBox = evalDiv.createDiv("auto-oc-workflow-eval-info");
           infoBox.createSpan({
@@ -5454,16 +5879,15 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
             btn.style.fontSize = "0.7rem";
             btn.style.padding = "2px 6px";
             btn.onclick = () => {
-              var _a2;
               if (p.prompt) {
                 evalTextarea.value = p.prompt;
-                this.stepConfigs[taskId] = this.stepConfigs[taskId] || {};
-                this.stepConfigs[taskId].evaluatePrompt = p.prompt;
+                this.stepConfigs[step.id] = this.stepConfigs[step.id] || {};
+                this.stepConfigs[step.id].evaluatePrompt = p.prompt;
                 previewCode.textContent = `${p.prompt}
 
-Previous task output:
+Previous step output:
 ---
-[output of \xAB${(_a2 = task == null ? void 0 : task.name) != null ? _a2 : "?"}\xBB appears here]
+[output of \xAB${this.workflowStepLabel(step)}\xBB appears here]
 ---
 
 Reply ONLY with YES or NO.`;
@@ -5485,21 +5909,20 @@ Reply ONLY with YES or NO.`;
           const currentEvalText = config.evaluatePrompt || "(your prompt)";
           previewCode.textContent = `${currentEvalText}
 
-Previous task output:
+Previous step output:
 ---
-[output of \xAB${(_j = task == null ? void 0 : task.name) != null ? _j : "?"}\xBB appears here]
+[output of \xAB${this.workflowStepLabel(step)}\xBB appears here]
 ---
 
 Reply ONLY with YES or NO.`;
           evalTextarea.oninput = () => {
-            var _a2;
-            this.stepConfigs[taskId] = this.stepConfigs[taskId] || {};
-            this.stepConfigs[taskId].evaluatePrompt = evalTextarea.value;
+            this.stepConfigs[step.id] = this.stepConfigs[step.id] || {};
+            this.stepConfigs[step.id].evaluatePrompt = evalTextarea.value;
             previewCode.textContent = `${evalTextarea.value || "(your prompt)"}
 
-Previous task output:
+Previous step output:
 ---
-[output of \xAB${(_a2 = task == null ? void 0 : task.name) != null ? _a2 : "?"}\xBB appears here]
+[output of \xAB${this.workflowStepLabel(step)}\xBB appears here]
 ---
 
 Reply ONLY with YES or NO.`;
@@ -5511,8 +5934,9 @@ Reply ONLY with YES or NO.`;
       }
     }
     const addDiv = container.createDiv("auto-oc-workflow-add-step");
+    const selectedTaskIds = this.selectedSteps.map((s) => s.taskId).filter(Boolean);
     const tasks = this.plugin.settings.tasks.filter(
-      (t) => !this.selectedTaskIds.includes(t.id)
+      (t) => !selectedTaskIds.includes(t.id)
     );
     const btnCreateTask = addDiv.createEl("button", {
       text: "\u2795 Create New Task",
@@ -5528,11 +5952,11 @@ Reply ONLY with YES or NO.`;
         origClose();
         setTimeout(() => {
           const newTasks = this.plugin.settings.tasks.filter(
-            (t) => !prevIds.has(t.id) && !this.selectedTaskIds.includes(t.id)
+            (t) => !prevIds.has(t.id) && !selectedTaskIds.includes(t.id)
           );
           if (newTasks.length > 0) {
             const newest = newTasks[newTasks.length - 1];
-            this.selectedTaskIds.push(newest.id);
+            this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: newest.id, transitions: [], position: { x: 0, y: 0 } });
             new import_obsidian.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
           }
           this.renderStepsList(container);
@@ -5559,11 +5983,45 @@ Reply ONLY with YES or NO.`;
       addBtn.style.marginLeft = "4px";
       addBtn.onclick = () => {
         if (sel.value) {
-          this.selectedTaskIds.push(sel.value);
+          this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: sel.value, transitions: [], position: { x: 0, y: 0 } });
           this.renderStepsList(container);
         }
       };
     }
+    const btnCode = addDiv.createEl("button", {
+      text: "\u2795 Add Code Step",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnCode.title = "Add a JavaScript code step to this workflow";
+    btnCode.onclick = () => {
+      this.selectedSteps.push({
+        id: generateId(),
+        stepKind: "code",
+        code: "// input is the previous step's output\n// Set output to the value passed to the next step\noutput = String(input).toUpperCase();",
+        codeLang: "javascript",
+        codeInputVar: "input",
+        codeOutputVar: "output",
+        transitions: [],
+        position: { x: 0, y: 0 }
+      });
+      this.renderStepsList(container);
+    };
+    const btnDelay = addDiv.createEl("button", {
+      text: "\u2795 Add Delay Step",
+      cls: "auto-oc-btn-secondary"
+    });
+    btnDelay.title = "Add a delay step to this workflow";
+    btnDelay.onclick = () => {
+      this.selectedSteps.push({
+        id: generateId(),
+        stepKind: "delay",
+        delayValue: 5,
+        delayUnit: "minutes",
+        transitions: [],
+        position: { x: 0, y: 0 }
+      });
+      this.renderStepsList(container);
+    };
   }
   onClose() {
     this.contentEl.empty();
@@ -5668,8 +6126,10 @@ var ExportModal = class extends import_obsidian.Modal {
         };
         label.createSpan({ text: ` ${wf.name}` });
         const stepNames = wf.steps.map((s) => {
-          var _a, _b;
-          return (_b = (_a = this.plugin.settings.tasks.find((t) => t.id === s.taskId)) == null ? void 0 : _a.name) != null ? _b : "?";
+          var _a, _b, _c, _d;
+          if (s.stepKind === "code") return "{ } Code";
+          if (s.stepKind === "delay") return `\u23F1 ${(_a = s.delayValue) != null ? _a : 5} ${(_b = s.delayUnit) != null ? _b : "minutes"}`;
+          return (_d = (_c = this.plugin.settings.tasks.find((t) => t.id === s.taskId)) == null ? void 0 : _c.name) != null ? _d : "?";
         }).join(" \u2192 ");
         label.title = wf.description ? `${wf.description}
 ${stepNames}` : stepNames;
@@ -6150,7 +6610,7 @@ var ImportModal = class extends import_obsidian.Modal {
         if (typeof t.prompt !== "string" || !t.prompt.trim()) {
           errors.push(where + ".prompt is missing or empty.");
         }
-        const validSchedules = ["manual", "once", "daily", "weekly", "monthly"];
+        const validSchedules = ["manual", "once", "daily", "weekly", "monthly", "interval"];
         if (t.scheduleType && !validSchedules.includes(t.scheduleType)) {
           errors.push(where + '.scheduleType "' + t.scheduleType + '" is invalid. Expected: ' + validSchedules.join(", "));
         }
@@ -6567,8 +7027,8 @@ var BranchSelectorModal = class extends import_obsidian.Modal {
     this.branches = branches;
   }
   async open() {
-    return new Promise((resolve) => {
-      this.resolveSelection = resolve;
+    return new Promise((resolve2) => {
+      this.resolveSelection = resolve2;
       super.open();
     });
   }
@@ -6594,6 +7054,28 @@ var BranchSelectorModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
     (_a = this.resolveSelection) == null ? void 0 : _a.call(this, this.selectedBranch);
     this.resolveSelection = null;
+  }
+};
+var TextPreviewModal = class extends import_obsidian.Modal {
+  constructor(app, titleText, bodyText) {
+    super(app);
+    this.titleText = titleText;
+    this.bodyText = bodyText;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.createEl("h3", { text: this.titleText });
+    const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
+    pre.textContent = this.bodyText || "(empty)";
+    new import_obsidian.Setting(contentEl).addButton(
+      (btn) => btn.setButtonText("Copy").onClick(() => {
+        navigator.clipboard.writeText(this.bodyText || "");
+        new import_obsidian.Notice("Output copied.");
+      })
+    );
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };
 var CommandPreviewModal = class extends import_obsidian.Modal {

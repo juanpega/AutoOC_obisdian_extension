@@ -547,6 +547,7 @@
 
   // ── State ─────────────────────────────────────────────────────────────────
   const state = { tasks: [], workflows: [] };
+  const meta = { availableAgents: [], availableModels: [] };
   let ui = {
     activeWorkflowId: null,
     selection: { type: null, ref: null }, // { type: "task"|"step"|"edge"|"workflow", ref }
@@ -601,13 +602,15 @@
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   function defaultTask() {
+    const defaultModel = optionValue(meta.availableModels[0]) || "";
+    const defaultAgent = optionValue(meta.availableAgents[0]) || "build";
     return {
-      id: uid(), name: "New task", prompt: "", model: "", agent: "build",
+      id: uid(), name: "New task", prompt: "", model: defaultModel, agent: defaultAgent,
       useRalphLoop: false, scheduleType: "manual", scheduleTime: "09:00",
       scheduleDate: "", scheduleDays: [], scheduleMonthDays: [],
       scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
       status: "pending", lastRun: "", output: "", createdAt: new Date().toISOString(),
-      branch: "", createBranch: false, color: "#4a7dff", icon: "⚡",
+      workingDirectory: "", branch: "", createBranch: false, color: "#4a7dff", icon: "⚡",
     };
   }
   function defaultWorkflow() {
@@ -647,6 +650,20 @@
   const activeWorkflow = () => findWorkflow(ui.activeWorkflowId);
   const stepTask = (s) => s && s.taskId ? findTask(s.taskId) : null;
   const snap = (v) => ui.snap ? Math.round(v / GRID_SIZE) * GRID_SIZE : v;
+  const optionValue = (x) => typeof x === "string" ? x : (x && x.value) || "";
+  const optionLabel = (x) => typeof x === "string" ? x : (x && x.label) || optionValue(x);
+  const uniqueOptions = (primary, fallback, current) => {
+    const seen = new Set();
+    const out = [];
+    [...(primary || []), ...(fallback || []), current].forEach((item) => {
+      const value = optionValue(item);
+      if (!value || seen.has(value)) return;
+      seen.add(value);
+      out.push({ value, label: optionLabel(item) });
+    });
+    return out;
+  };
+  const dataListHtml = (id, options) => '<datalist id="' + id + '">' + options.map(o => '<option value="' + esc(o.value) + '">' + esc(o.label) + '</option>').join("") + '</datalist>';
 
   // ── Toast ────────────────────────────────────────────────────────────────
   let toastTimer;
@@ -667,6 +684,8 @@
         // Replace the state with the extension's state.
         state.tasks = (data.state.tasks || []).map(migrateTask);
         state.workflows = (data.state.workflows || []).map(migrateWorkflow);
+        meta.availableAgents = (data.state.meta && data.state.meta.availableAgents) || [];
+        meta.availableModels = (data.state.meta && data.state.meta.availableModels) || [];
         // Ensure all steps have an id and a position.
         for (const w of state.workflows) {
           for (let i = 0; i < w.steps.length; i++) {
@@ -688,6 +707,12 @@
         renderAll();
         fitToView();
         toast("Loaded from AutoOC", "ok");
+      } else if (data.type === "meta") {
+        meta.availableAgents = (data.meta && data.meta.availableAgents) || [];
+        meta.availableModels = (data.meta && data.meta.availableModels) || [];
+        renderPanel();
+        renderStatus();
+        toast("Model/agent lists updated", "ok");
       } else if (data.type === "request-apply") {
         applyToExtension();
       } else if (data.type === "ping") {
@@ -701,6 +726,12 @@
   function applyToExtension() {
     if (!inExtension) {
       toast("Running standalone — use Export to save as JSON", "warn");
+      return;
+    }
+    const validation = validateAll();
+    const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
+    if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
+      showValidation();
       return;
     }
     // Send back the current state.
@@ -723,6 +754,9 @@
             codeLang: s.codeLang,
             codeInputVar: s.codeInputVar,
             codeOutputVar: s.codeOutputVar,
+            codeAllowVault: s.codeAllowVault,
+            codeAllowFiles: s.codeAllowFiles,
+            codeAllowTerminal: s.codeAllowTerminal,
             transitions: s.transitions,
             position: s.position,
           })),
@@ -1394,12 +1428,16 @@
   }
 
   function editorTaskHtml(t) {
+    const modelOptions = uniqueOptions(meta.availableModels, MODEL_PRESETS, t.model);
+    const agentOptions = uniqueOptions(meta.availableAgents, AGENT_PRESETS, t.agent);
+    const modelHint = meta.availableModels.length ? meta.availableModels.length + " model(s) loaded from AutoOC" : "No discovered models loaded yet";
+    const agentHint = meta.availableAgents.length ? meta.availableAgents.length + " agent(s) loaded from AutoOC" : "No discovered agents loaded yet";
     return `
       <div class="field"><label>Name *</label><input data-f="name" value="${esc(t.name)}" /></div>
       <div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">${esc(t.prompt)}</textarea></div>
       <div class="row-2">
-        <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="${esc(t.model)}" placeholder="opencode/..." /><datalist id="dlModels">${MODEL_PRESETS.map(m => '<option value="' + esc(m) + '"></option>').join("")}</datalist></div>
-        <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="${esc(t.agent)}" /><datalist id="dlAgents">${AGENT_PRESETS.map(a => '<option value="' + esc(a) + '"></option>').join("")}</datalist></div>
+        <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="${esc(t.model)}" placeholder="opencode/..." />${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">🔄 Refresh Models</button></div>
+        <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="${esc(t.agent)}" />${dataListHtml("dlAgents", agentOptions)}<div class="hint-inline">${esc(agentHint)}</div><button type="button" class="tiny btn-refresh-agents">🔄 Refresh Agents</button></div>
       </div>
       <div class="row-2">
         <div class="field"><label>Icon</label><select data-f="icon">${["⚡","✨","🧠","📝","🔍","💡","🛠","📊","📥","📤","🔄","🚀","🤖","📚","🧪","🔔"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
@@ -1419,6 +1457,7 @@
       </div>
       <div class="section">
         <h4>Git</h4>
+        <div class="field"><label>Project path</label><input data-f="workingDirectory" value="${esc(t.workingDirectory || "")}" placeholder="Empty = global setting / vault root" /></div>
         <div class="field"><label>Branch</label><input data-f="branch" value="${esc(t.branch)}" /></div>
         <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="createBranch" ${t.createBranch ? "checked" : ""} /> Create branch if missing</label></div>
       </div>
@@ -1484,6 +1523,11 @@
           <div class="field"><label>Output variable</label><input data-f="codeOutputVar" value="${esc(s.codeOutputVar || "output")}" /></div>
         </div>
         <div class="field"><label>JavaScript code</label><textarea data-f="code" rows="9" style="font-family:ui-monospace,Consolas,monospace;font-size:11.5px" placeholder="// input is the previous step's output as a string&#10;// set output to the value passed to the next step">${esc(s.code || "")}</textarea></div>
+        <div class="section"><h4>Permissions</h4>
+          <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="codeAllowVault" ${s.codeAllowVault ? "checked" : ""} /> Vault API (vault.read/write/list)</label></div>
+          <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="codeAllowFiles" ${s.codeAllowFiles ? "checked" : ""} /> Local files API (files.read/write/list)</label></div>
+          <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="codeAllowTerminal" ${s.codeAllowTerminal ? "checked" : ""} /> Terminal API (terminal.run)</label></div>
+        </div>
         <div class="hint-inline">Available globals: <code>input</code>, <code>outputs</code> (map of stepId → output), <code>JSON</code>, <code>Math</code>, <code>Date</code>. The result of the expression assigned to <code>${esc(s.codeOutputVar || "output")}</code> is passed to the next step.</div>
       `;
     }
@@ -1637,6 +1681,21 @@
         })),
       ]);
     });
+    $$(".btn-refresh-models", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("models")));
+    $$(".btn-refresh-agents", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("agents")));
+  }
+
+  function requestMetaRefresh(kind) {
+    if (!inExtension) {
+      toast("Refresh is available inside AutoOC", "warn");
+      return;
+    }
+    try {
+      window.parent.postMessage({ type: kind === "agents" ? "refresh-agents" : "refresh-models" }, "*");
+      toast("Refreshing " + kind + "…", "ok");
+    } catch (e) {
+      toast("Could not refresh " + kind + ": " + e.message, "error");
+    }
   }
 
   // ── Context menu ────────────────────────────────────────────────────────

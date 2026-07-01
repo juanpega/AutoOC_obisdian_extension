@@ -57,6 +57,16 @@ When loading existing settings, every workflow step is auto-migrated to the new 
 
 ## Fixed
 - Legacy workflow steps without `id` or `stepKind` are normalized on load.
+- Applying changes from the embedded Visual Builder no longer wipes task runtime history (`lastRun`, `output`) or the current running state for unchanged tasks.
+- Existing task fields configured in the classic view, including project path and Git branch options, are preserved when older Visual Builder payloads do not send them.
+- Import validation now accepts `interval` schedules, matching the task/workflow schedule types supported by the UI.
+- The classic workflow card now shows actual v1.4 edge transitions instead of only the old single linear transition mode.
+
+## Visual Builder hardening
+- Added an `Apply` button to save changes without closing the Visual Builder modal.
+- Kept `Apply and close` for quick edits.
+- Added `Project path` to the Visual Builder task editor so task configuration is more consistent with the classic task modal.
+- The Visual Builder warns before applying when validation finds blocking workflow issues and opens the validation report if the user cancels.
 
 ## Installation
 1. Download release asset `auto-oc-v1.4.0.zip`.

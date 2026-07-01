@@ -13,6 +13,7 @@ Thumbs.db
 .vscode/
 
 # Local runtime artifacts
+.opencode/ralph-loop.local.md
 *.pid
 *.ps1
 *.vbs
