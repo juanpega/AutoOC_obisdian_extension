@@ -4160,10 +4160,26 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.expandedTasks = /* @__PURE__ */ new Set();
     this.expandedWorkflows = /* @__PURE__ */ new Set();
     this.dashboardPositions = /* @__PURE__ */ new Map();
+    // Accumulated drift per task, in physical px relative to the map's own
+    // height (NOT a %-of-immediate-parent value) — keeps rise/sink distance
+    // visually consistent whether a task bubble sits loose on the map or is
+    // nested two levels deep inside an area/workflow ring.
     this.dashboardTaskShift = /* @__PURE__ */ new Map();
     this.sinkIntervals = /* @__PURE__ */ new Map();
     this.dashboardLayoutSignature = "";
     this.showDashboardKpis = false;
+    // Watches the map's real rendered size so bubble sizing (task bubbles are
+    // fixed px, capped to fit their parent) gets recomputed when the pane is
+    // resized. Percentage-based left/top/width already reflow for free via
+    // CSS, but nothing else in this view listens for layout size changes, so
+    // without this, shrinking the canvas leaves stale px sizes that overflow
+    // their now-smaller container.
+    this.dashboardResizeObserver = null;
+    // Set right before a resize-triggered render so renderDashboard's settle+fit
+    // pass runs even though the task/workflow structure didn't change (normally
+    // that pass is skipped on unchanged layouts to avoid redoing work every
+    // render — see the guard in renderDashboard).
+    this.forceDashboardFitOnNextRender = false;
     this.plugin = plugin;
   }
   getViewType() {
@@ -4179,6 +4195,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.render();
   }
   async onClose() {
+    var _a;
+    (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
+    this.dashboardResizeObserver = null;
+    this.sinkIntervals.forEach((iv) => clearInterval(iv));
+    this.sinkIntervals.clear();
   }
   refresh() {
     this.render();
@@ -4192,32 +4213,221 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.dashboardTaskShift.delete(taskId);
   }
   nudgeDashboardTask(taskId, direction, amountPct = 1.8, maxShiftPct = 18) {
+    const mapEl = this.containerEl.querySelector(".auto-oc-dashboard-map");
+    const mapHeight = (mapEl == null ? void 0 : mapEl.getBoundingClientRect().height) || 500;
     const sign = direction === "up" ? -1 : 1;
-    const currentShift = this.dashboardTaskShift.get(taskId) || 0;
-    if (Math.abs(currentShift) >= maxShiftPct) return;
-    const nextAmount = Math.min(amountPct, maxShiftPct - Math.abs(currentShift));
-    const deltaY = sign * nextAmount;
-    this.dashboardTaskShift.set(taskId, currentShift + deltaY);
+    const amountPx = amountPct / 100 * mapHeight;
+    const maxShiftPx = maxShiftPct / 100 * mapHeight;
+    const currentShiftPx = this.dashboardTaskShift.get(taskId) || 0;
+    if (Math.abs(currentShiftPx) >= maxShiftPx) return;
+    const nextAmountPx = Math.min(amountPx, maxShiftPx - Math.abs(currentShiftPx));
+    const deltaPx = sign * nextAmountPx;
+    this.dashboardTaskShift.set(taskId, currentShiftPx + deltaPx);
     const matchesTaskKey = (key) => {
       if (!key) return false;
       return key === `task:${taskId}` || key.endsWith(`:task:${taskId}`) || key.includes(`:task:${taskId}:`);
     };
-    const applyShift = (key, x, y, size) => {
-      this.dashboardPositions.set(key, { x, y: Math.max(0, y + deltaY), size });
-    };
+    const fallbackDeltaPct = deltaPx / mapHeight * 100;
     this.dashboardPositions.forEach((position, key) => {
-      if (matchesTaskKey(key)) applyShift(key, position.x, position.y, position.size);
+      if (!matchesTaskKey(key)) return;
+      this.dashboardPositions.set(key, { x: position.x, y: Math.max(0, position.y + fallbackDeltaPct), size: position.size });
     });
     const bubbles = Array.from(this.containerEl.querySelectorAll(".auto-oc-dashboard-task-bubble"));
     bubbles.forEach((bubble) => {
       const key = bubble.getAttribute("data-dashboard-key");
       if (!matchesTaskKey(key)) return;
-      const x = parseFloat(bubble.style.left || "0");
+      const parent = bubble.offsetParent;
+      const parentHeight = (parent == null ? void 0 : parent.getBoundingClientRect().height) || mapHeight;
+      const deltaPct = deltaPx / parentHeight * 100;
       const y = parseFloat(bubble.style.top || "0");
-      const size = parseFloat(bubble.style.width || "0") || void 0;
-      const nextY = Math.max(0, y + deltaY);
-      bubble.style.top = `${nextY}%`;
-      if (key) this.dashboardPositions.set(key, { x, y: nextY, size });
+      bubble.style.top = `${y + deltaPct}%`;
+      this.clampDashboardBubbleToParent(bubble);
+      const x = parseFloat(bubble.style.left || "0");
+      const finalY = parseFloat(bubble.style.top || "0");
+      const size = this.parseBubbleSizeForSave(bubble);
+      if (key) this.dashboardPositions.set(key, { x, y: finalY, size });
+      this.resolveDashboardSiblingCollisions(bubble);
+      if (parent) this.settleDashboardBubbleCollisions(parent, 24);
+    });
+  }
+  // Mirrors the class-selector check used inside renderDashboard's drag/collision
+  // closures, so drift-driven nudges (heartbeat rise, gradual sink) can reuse the
+  // same sibling-push behavior as manual dragging without needing access to
+  // renderDashboard's local scope.
+  isDashboardBubbleEl(el) {
+    return el instanceof HTMLElement && (el.classList.contains("auto-oc-dashboard-area-bubble") || el.classList.contains("auto-oc-dashboard-workflow-bubble") || el.classList.contains("auto-oc-dashboard-task-bubble"));
+  }
+  // Task bubbles render at a fixed physical px diameter (see TASK_BUBBLE_PX
+  // in renderDashboard), not a %, so their width never means "this task's
+  // saved size" — persisting it would just re-inject a stray px number where
+  // a % is expected next render (area/workflow top-level layout reuses
+  // saved.size as a %). Only area/workflow bubbles have a meaningful size to
+  // remember across renders/drags.
+  parseBubbleSizeForSave(bubble) {
+    if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return void 0;
+    return parseFloat(bubble.style.width || "0") || void 0;
+  }
+  clampDashboardBubbleToParent(bubble) {
+    const parent = bubble.offsetParent;
+    if (!parent) return;
+    const bounds = parent.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const rect = bubble.getBoundingClientRect();
+    const widthPct = rect.width / bounds.width * 100;
+    const heightPct = rect.height / bounds.height * 100;
+    let leftPct = (rect.left - bounds.left) / bounds.width * 100;
+    let topPct = (rect.top - bounds.top) / bounds.height * 100;
+    if (this.isDashboardBubbleEl(parent)) {
+      const parentRadius = Math.min(bounds.width, bounds.height) / 2;
+      const bubbleRadius = rect.width / 2;
+      const parentCenterX = bounds.left + bounds.width / 2;
+      const parentCenterY = bounds.top + bounds.height / 2;
+      const bubbleCenterX = rect.left + rect.width / 2;
+      const bubbleCenterY = rect.top + rect.height / 2;
+      let dx = bubbleCenterX - parentCenterX;
+      let dy = bubbleCenterY - parentCenterY;
+      let distance = Math.hypot(dx, dy);
+      const maxDistance = Math.max(0, parentRadius - bubbleRadius * 0.88);
+      if (distance > maxDistance) {
+        if (distance < 0.01) {
+          dx = 1;
+          dy = 0;
+          distance = 1;
+        }
+        const nextCenterX = parentCenterX + dx / distance * maxDistance;
+        const nextCenterY = parentCenterY + dy / distance * maxDistance;
+        leftPct = (nextCenterX - bubbleRadius - bounds.left) / bounds.width * 100;
+        topPct = (nextCenterY - bubbleRadius - bounds.top) / bounds.height * 100;
+      }
+    }
+    bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, leftPct))}%`;
+    bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, topPct))}%`;
+  }
+  // Same "push siblings out of the way" behavior used while dragging a bubble
+  // (attachBubbleDrag's resolveSiblingCollisions), but callable from outside
+  // renderDashboard's scope so drift ticks can trigger it too.
+  resolveDashboardSiblingCollisions(el) {
+    const parent = el.offsetParent;
+    if (!parent) return;
+    const bounds = parent.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const bubbles = Array.from(parent.children).filter((child) => this.isDashboardBubbleEl(child));
+    let frontier = /* @__PURE__ */ new Set([el]);
+    for (let pass = 0; pass < 5 && frontier.size > 0; pass++) {
+      const nextFrontier = /* @__PURE__ */ new Set();
+      for (const a of frontier) {
+        for (const b of bubbles) {
+          if (a === b) continue;
+          const aRect = a.getBoundingClientRect();
+          const bRect = b.getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const aCenterX = aRect.left + aRadius;
+          const aCenterY = aRect.top + aRect.height / 2;
+          const bCenterX = bRect.left + bRadius;
+          const bCenterY = bRect.top + bRect.height / 2;
+          let dx = bCenterX - aCenterX;
+          let dy = bCenterY - aCenterY;
+          let distance = Math.hypot(dx, dy);
+          const minDistance = (aRadius + bRadius) * 0.97;
+          if (distance >= minDistance) continue;
+          if (distance < 0.01) {
+            const angle = (bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            distance = 1;
+          }
+          const push = (minDistance - distance) * 0.85;
+          const moveBubble = (bubble, rect, amount) => {
+            if (amount === 0) return;
+            const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
+            const nextTopPx = rect.top - bounds.top + dy / distance * amount;
+            const nextLeftPct = nextLeftPx / bounds.width * 100;
+            const nextTopPct = nextTopPx / bounds.height * 100;
+            const widthPct = rect.width / bounds.width * 100;
+            const heightPct = rect.height / bounds.height * 100;
+            bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+            bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+          };
+          moveBubble(b, bRect, push);
+          this.clampDashboardBubbleToParent(b);
+          nextFrontier.add(b);
+        }
+      }
+      frontier = nextFrontier;
+    }
+    bubbles.forEach((bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!key) return;
+      this.dashboardPositions.set(key, {
+        x: parseFloat(bubble.style.left || "0"),
+        y: parseFloat(bubble.style.top || "0"),
+        size: this.parseBubbleSizeForSave(bubble)
+      });
+    });
+  }
+  // Same all-pairs, multi-pass settle used when a manual drag is released
+  // (renderDashboard's settleBubbleCollisions), ported so drift ticks can
+  // call it too. The chained push above only resolves collisions along the
+  // path from the moved bubble; this catches any remaining overlap between
+  // siblings that weren't directly touched — e.g. two tasks that each drifted
+  // independently (both running) and happened to end up on top of each other.
+  settleDashboardBubbleCollisions(parent, passes = 10) {
+    const bubbles = Array.from(parent.children).filter((child) => this.isDashboardBubbleEl(child));
+    const bounds = parent.getBoundingClientRect();
+    if (bubbles.length < 2 || bounds.width === 0 || bounds.height === 0) return;
+    for (let pass = 0; pass < passes; pass++) {
+      let movedAny = false;
+      for (let i = 0; i < bubbles.length; i++) {
+        for (let j = i + 1; j < bubbles.length; j++) {
+          const a = bubbles[i];
+          const b = bubbles[j];
+          const aRect = a.getBoundingClientRect();
+          const bRect = b.getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const aCenterX = aRect.left + aRadius;
+          const aCenterY = aRect.top + aRect.height / 2;
+          const bCenterX = bRect.left + bRadius;
+          const bCenterY = bRect.top + bRect.height / 2;
+          let dx = bCenterX - aCenterX;
+          let dy = bCenterY - aCenterY;
+          let distance = Math.hypot(dx, dy);
+          const minDistance = aRadius + bRadius + 2;
+          if (distance >= minDistance) continue;
+          if (distance < 0.01) {
+            const angle = (i + j + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            distance = 1;
+          }
+          const push = (minDistance - distance) * 0.75;
+          const moveBubble = (bubble, rect, amount) => {
+            const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
+            const nextTopPx = rect.top - bounds.top + dy / distance * amount;
+            const nextLeftPct = nextLeftPx / bounds.width * 100;
+            const nextTopPct = nextTopPx / bounds.height * 100;
+            const widthPct = rect.width / bounds.width * 100;
+            const heightPct = rect.height / bounds.height * 100;
+            bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+            bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+            this.clampDashboardBubbleToParent(bubble);
+          };
+          moveBubble(a, aRect, -push);
+          moveBubble(b, bRect, push);
+          movedAny = true;
+        }
+      }
+      if (!movedAny) break;
+    }
+    bubbles.forEach((bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!key) return;
+      this.dashboardPositions.set(key, {
+        x: parseFloat(bubble.style.left || "0"),
+        y: parseFloat(bubble.style.top || "0"),
+        size: this.parseBubbleSizeForSave(bubble)
+      });
     });
   }
   startGradualSink(taskId, stepPct = 1.8, maxPct = 18) {
@@ -4227,8 +4437,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.sinkIntervals.delete(taskId);
     }
     const tick = () => {
-      const currentShift = this.dashboardTaskShift.get(taskId) || 0;
-      if (currentShift >= maxPct) {
+      const mapEl = this.containerEl.querySelector(".auto-oc-dashboard-map");
+      const mapHeight = (mapEl == null ? void 0 : mapEl.getBoundingClientRect().height) || 500;
+      const maxShiftPx = maxPct / 100 * mapHeight;
+      const currentShiftPx = this.dashboardTaskShift.get(taskId) || 0;
+      if (currentShiftPx >= maxShiftPx) {
         clearInterval(iv);
         this.sinkIntervals.delete(taskId);
         return;
@@ -4238,6 +4451,91 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const iv = setInterval(tick, 3e3);
     this.sinkIntervals.set(taskId, iv);
     tick();
+  }
+  // Re-renders the dashboard whenever the map's real pixel size changes
+  // (e.g. the user resizes the sidebar/pane). Bubble positions/widths that
+  // are %-based reflow for free via CSS, but task bubbles are deliberately
+  // fixed px (capped to fit their parent — see taskBubbleSizeForParent), so
+  // without this, shrinking the canvas leaves stale sizes that no longer
+  // fit their now-smaller area/workflow ring. Debounced and gated on an
+  // actual size delta to avoid feedback loops (this same re-render recreates
+  // the map and re-attaches a fresh observer every time).
+  watchDashboardMapResize(map) {
+    var _a;
+    (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
+    const initialRect = map.getBoundingClientRect();
+    let lastWidth = initialRect.width;
+    let lastHeight = initialRect.height;
+    let debounceHandle = null;
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+      if (Math.abs(width - lastWidth) < 2 && Math.abs(height - lastHeight) < 2) return;
+      lastWidth = width;
+      lastHeight = height;
+      if (debounceHandle) clearTimeout(debounceHandle);
+      debounceHandle = setTimeout(() => {
+        if (this.currentTab !== "dashboard") return;
+        this.forceDashboardFitOnNextRender = true;
+        this.render();
+      }, 150);
+    });
+    observer.observe(map);
+    this.dashboardResizeObserver = observer;
+  }
+  // Purely decorative "aquarium" ambience behind the bubbles: soft caustic
+  // light rays, small rising bubbles, and drifting dust motes. Everything is
+  // pointer-events:none and lives in its own layer (z-index 0, below the
+  // area/workflow/task bubbles at 1/4/8/9), so it never affects drag,
+  // collision, or positioning logic. Positions/timings are derived from a
+  // deterministic hash (not Math.random()) so the layer doesn't reshuffle
+  // itself on every re-render.
+  createDashboardAmbientLayer(map) {
+    const ambient = map.createDiv("auto-oc-dashboard-ambient");
+    const seededRandom = (seed) => {
+      let hash = 0;
+      for (let i = 0; i < seed.length; i++) hash = (hash << 5) - hash + seed.charCodeAt(i) | 0;
+      return Math.abs(hash) % 1e3 / 1e3;
+    };
+    for (let i = 0; i < 2; i++) {
+      const ray = ambient.createDiv(`auto-oc-dashboard-ambient-ray${i === 1 ? " auto-oc-dashboard-ambient-ray-alt" : ""}`);
+      ray.style.top = `${-20 + seededRandom(`ray-top-${i}`) * 28}%`;
+    }
+    const bubbleCount = 10;
+    for (let i = 0; i < bubbleCount; i++) {
+      const seed = `ambient-bubble-${i}`;
+      const size = 3 + seededRandom(`${seed}-size`) * 7;
+      const left = seededRandom(`${seed}-left`) * 96;
+      const duration = 14 + seededRandom(`${seed}-dur`) * 12;
+      const delay2 = -(seededRandom(`${seed}-delay`) * duration);
+      const opacity = 0.05 + seededRandom(`${seed}-op`) * 0.13;
+      const bubble = ambient.createDiv("auto-oc-dashboard-ambient-bubble");
+      bubble.style.left = `${left}%`;
+      bubble.style.width = `${size}px`;
+      bubble.style.height = `${size}px`;
+      bubble.style.opacity = `${opacity}`;
+      bubble.style.animationDuration = `${duration}s`;
+      bubble.style.animationDelay = `${delay2}s`;
+    }
+    const dustCount = 8;
+    for (let i = 0; i < dustCount; i++) {
+      const seed = `ambient-dust-${i}`;
+      const size = 1 + seededRandom(`${seed}-size`);
+      const left = seededRandom(`${seed}-left`) * 96;
+      const top = seededRandom(`${seed}-top`) * 90;
+      const duration = 20 + seededRandom(`${seed}-dur`) * 10;
+      const delay2 = -(seededRandom(`${seed}-delay`) * duration);
+      const opacity = 0.04 + seededRandom(`${seed}-op`) * 0.04;
+      const dust = ambient.createDiv("auto-oc-dashboard-ambient-dust");
+      dust.style.left = `${left}%`;
+      dust.style.top = `${top}%`;
+      dust.style.width = `${size}px`;
+      dust.style.height = `${size}px`;
+      dust.style.opacity = `${opacity}`;
+      dust.style.animationDuration = `${duration}s`;
+      dust.style.animationDelay = `${delay2}s`;
+    }
   }
   openCli() {
     new OpenCodeCliModal(this.app, this.plugin).open();
@@ -4441,6 +4739,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
     addKpi("Most used", mostUsed && mostUsed.count > 0 ? `${mostUsed.name} (${mostUsed.count})` : "None");
     addKpi("Unused tasks", unusedTasks);
     const map = dashboard.createDiv("auto-oc-dashboard-map");
+    this.createDashboardAmbientLayer(map);
+    this.watchDashboardMapResize(map);
     const btnToggleKpis = map.createEl("button", {
       text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
       cls: "auto-oc-dashboard-kpi-toggle"
@@ -4465,16 +4765,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
       ...tasks.map((task) => areaName(task.area))
     ])).sort((a, b) => a.localeCompare(b));
     const taskById = new Map(tasks.map((task) => [task.id, task]));
-    const rankedTasks = [...tasks].sort((a, b) => {
-      const usageDiff = (taskUsage.get(b.id) || 0) - (taskUsage.get(a.id) || 0);
-      return usageDiff || a.name.localeCompare(b.name);
-    });
-    const taskSizeRank = /* @__PURE__ */ new Map();
-    rankedTasks.forEach((task, index) => {
-      const bucket = Math.floor(index * 4 / Math.max(rankedTasks.length, 1));
-      taskSizeRank.set(task.id, bucket === 0 ? "xl" : bucket === 1 ? "lg" : bucket === 2 ? "md" : "sm");
-    });
-    const sizeMultiplier = { xl: 1.35, lg: 1.15, md: 1, sm: 0.84 };
+    const TASK_BUBBLE_PX = 30;
+    const TASK_BUBBLE_MIN_PX = 12;
+    const TASK_BUBBLE_MAX_PARENT_FRACTION = 0.4;
+    const taskBubbleSizeForParent = (parent) => {
+      const rect = parent.getBoundingClientRect();
+      const parentDiameter = rect.height || rect.width || 0;
+      if (parentDiameter <= 0) return { px: TASK_BUBBLE_PX, pct: 12 };
+      const maxAllowedPx = parentDiameter * TASK_BUBBLE_MAX_PARENT_FRACTION;
+      const px = Math.max(TASK_BUBBLE_MIN_PX, Math.min(TASK_BUBBLE_PX, maxAllowedPx));
+      return { px, pct: px / parentDiameter * 100 };
+    };
     const setBubbleRect = (el, x, y, size) => {
       el.style.left = `${x}%`;
       el.style.top = `${y}%`;
@@ -4487,7 +4788,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.dashboardPositions.set(key, {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
-        size: parseFloat(bubble.style.width || "0") || void 0
+        size: this.parseBubbleSizeForSave(bubble)
       });
     };
     const saveBubbleTreePositions = (parent) => {
@@ -4817,22 +5118,23 @@ var AutoOCView = class extends import_obsidian.ItemView {
     };
     const createTaskBubble = (parent, task, x, y, size, extraCls = "", positionKey = `task:${task.id}`) => {
       var _a, _b;
-      const sizeRank = taskSizeRank.get(task.id) || "sm";
-      const rankedSize = size * sizeMultiplier[sizeRank];
-      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${sizeRank} ${extraCls}`.trim());
+      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
       const saved = this.dashboardPositions.get(positionKey);
-      let posX = (_a = saved == null ? void 0 : saved.x) != null ? _a : x - (rankedSize - size) / 2;
-      let posY = (_b = saved == null ? void 0 : saved.y) != null ? _b : y - (rankedSize - size) / 2;
+      let posX = (_a = saved == null ? void 0 : saved.x) != null ? _a : x;
+      let posY = (_b = saved == null ? void 0 : saved.y) != null ? _b : y;
       if (!saved) {
         const usage = taskUsage.get(task.id) || 0;
         const fails = taskFailCounts.get(task.id) || 0;
         const usageLift = Math.min(usage * 1.2, 14);
         const failDrop = Math.min(fails * 1.5, 12);
-        posY = Math.max(0, Math.min(100 - rankedSize, posY - usageLift + failDrop));
+        posY = Math.max(0, Math.min(100 - size, posY - usageLift + failDrop));
       }
-      setBubbleRect(taskBubble, posX, posY, rankedSize);
+      setBubbleRect(taskBubble, posX, posY, size);
+      const finalPx = taskBubbleSizeForParent(parent).px;
+      taskBubble.style.width = `${finalPx}px`;
+      taskBubble.style.height = `${finalPx}px`;
       const usageCount = taskUsage.get(task.id) || 0;
       addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
       attachBubbleDrag(taskBubble, () => this.openTaskInList(task));
@@ -4854,7 +5156,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
       topLevelItems.push({ key: `workflow:${workflow.id}`, size: Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9)) });
     });
-    noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: 10 * sizeMultiplier[taskSizeRank.get(task.id) || "sm"] }));
+    noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
     const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
     configuredAreaNames.forEach((name) => {
       const areaLayout = topLevelLayout.get(`area:${name}`);
@@ -4904,7 +5206,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           const task = taskById.get(step.taskId);
           if (!task) return;
           const taskAngle = -Math.PI / 2 + stepIndex * Math.PI * 2 / taskCount;
-          const taskSize = Math.max(16, Math.min(24, 25 - taskSteps.length));
+          const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
           const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
           const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
           const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
@@ -4914,7 +5216,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const looseCount = Math.max(looseTasks.length, 1);
       looseTasks.forEach((task, taskIndex) => {
         const angle = -Math.PI / 2 + taskIndex * Math.PI * 2 / looseCount;
-        const taskSize = looseCount === 1 && areaWorkflows.length === 0 ? 34 : 13;
+        const taskSize = taskBubbleSizeForParent(areaBubble).pct;
         const radius = looseCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
         const taskX = 50 + Math.cos(angle) * radius - taskSize / 2;
         const taskY = 50 + Math.sin(angle) * radius - taskSize / 2;
@@ -4945,7 +5247,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const task = taskById.get(step.taskId);
         if (!task) return;
         const taskAngle = -Math.PI / 2 + stepIndex * Math.PI * 2 / taskCount;
-        const taskSize = Math.max(16, Math.min(24, 25 - taskSteps.length));
+        const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
         const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
         const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
         const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
@@ -4955,12 +5257,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
     noAreaLooseTasks.forEach((task) => {
       const taskLayout = topLevelLayout.get(`task:${task.id}`);
       if (!taskLayout) return;
-      const taskSize = 10;
-      const sizeRank = taskSizeRank.get(task.id) || "sm";
-      const rankedSize = taskSize * sizeMultiplier[sizeRank];
-      createTaskBubble(map, task, taskLayout.x + (rankedSize - taskSize) / 2, taskLayout.y + (rankedSize - taskSize) / 2, taskSize, "auto-oc-dashboard-task-loose");
+      const taskSize = taskBubbleSizeForParent(map).pct;
+      createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
     });
-    if (!layoutChanged && this.dashboardPositions.size > 0) return;
+    const shouldSkipFit = !layoutChanged && !this.forceDashboardFitOnNextRender && this.dashboardPositions.size > 0;
+    this.forceDashboardFitOnNextRender = false;
+    if (shouldSkipFit) return;
     window.setTimeout(() => {
       const workflowContainers = Array.from(map.querySelectorAll(".auto-oc-dashboard-workflow-bubble"));
       workflowContainers.forEach((container) => {
