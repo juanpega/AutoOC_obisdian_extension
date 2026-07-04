@@ -4735,19 +4735,10 @@ class VisualBuilderModal extends Modal {
     const newTasks: ScheduledTask[] = state.tasks.map((t: any) => {
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = (existing ? t.id : t.id || generateId());
-      // Only reset the runtime state when the user actually changes the
-      // task's content (prompt, model, schedule) or creates a brand-new one.
-      const contentChanged = !existing
-        || existing.prompt !== (t.prompt || "")
-        || existing.model !== (t.model || existing.model)
-        || existing.agent !== (t.agent || existing.agent)
-        || existing.scheduleType !== (t.scheduleType || existing.scheduleType)
-        || existing.name !== (t.name || existing.name);
-      // Reuse the existing output/log metadata even when the editable content
-      // changed. The last run is historical evidence; applying a VB edit should
-      // not erase it. If the content changed, move non-running tasks back to
-      // pending so the user can run the updated definition deliberately.
-      const status = existing?.status === "running" ? "running" : (contentChanged ? "pending" : (existing?.status || "pending"));
+      // Editing should never launch a task by making an already-completed
+      // one-shot item pending again. Preserve runtime state; Play or the next
+      // real schedule tick is responsible for execution.
+      const status = existing?.status || "pending";
       const lastRun = existing?.lastRun || "";
       const output = existing?.output || "";
       return {
@@ -4779,13 +4770,10 @@ class VisualBuilderModal extends Modal {
     const newWorkflows: Workflow[] = state.workflows.map((w: any) => {
       const existing = oldWorkflows.find((x) => x.id === w.id);
       const id = (existing ? w.id : w.id || generateId());
-      // Keep the workflow's runtime state untouched unless the user
-      // structurally changed it (number of steps, transitions, name).
-      const structureChanged = !existing
-        || existing.steps.length !== (w.steps || []).length
-        || existing.name !== (w.name || existing.name);
-      const status = structureChanged ? "pending" : (existing?.status === "running" ? "running" : (existing?.status || "pending"));
-      const currentStep = structureChanged ? -1 : (existing?.currentStep ?? -1);
+      // Editing should not make a completed one-shot workflow pending again.
+      // Preserve runtime state; Play or the next real schedule tick launches it.
+      const status = existing?.status || "pending";
+      const currentStep = existing?.currentStep ?? -1;
       return {
         id,
         name: w.name || "Unnamed",
@@ -5207,11 +5195,13 @@ class CreateTaskModal extends Modal {
               (t) => t.id === this.editTask!.id
             );
             if (idx !== -1) {
-              const wasRunning = this.editTask.status === "running";
+              const existing = this.plugin.settings.tasks[idx];
               this.plugin.settings.tasks[idx] = {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
-                status: wasRunning ? "running" : "pending",
+                status: existing.status,
+                lastRun: existing.lastRun,
+                output: existing.output,
               };
             }
           } else {
@@ -5687,7 +5677,7 @@ class CreateWorkflowModal extends Modal {
               (w) => w.id === this.editWorkflow!.id
             );
             if (idx !== -1) {
-              const wasRunning = this.editWorkflow.status === "running";
+              const existing = this.plugin.settings.workflows[idx];
               this.plugin.settings.workflows[idx] = {
                 ...this.editWorkflow,
                 name: this.draft.name!,
@@ -5696,7 +5686,9 @@ class CreateWorkflowModal extends Modal {
                 steps,
                 handoffBranch: this.draft.handoffBranch ?? false,
                 handoffOutput: this.draft.handoffOutput ?? false,
-                status: wasRunning ? "running" : "pending",
+                status: existing.status,
+                currentStep: existing.currentStep,
+                lastRun: existing.lastRun,
                 scheduleType: this.draft.scheduleType ?? "manual",
                 scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
                 scheduleDate: this.draft.scheduleDate ?? "",

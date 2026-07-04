@@ -6096,8 +6096,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       var _a2, _b, _c, _d;
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = existing ? t.id : t.id || generateId();
-      const contentChanged = !existing || existing.prompt !== (t.prompt || "") || existing.model !== (t.model || existing.model) || existing.agent !== (t.agent || existing.agent) || existing.scheduleType !== (t.scheduleType || existing.scheduleType) || existing.name !== (t.name || existing.name);
-      const status = (existing == null ? void 0 : existing.status) === "running" ? "running" : contentChanged ? "pending" : (existing == null ? void 0 : existing.status) || "pending";
+      const status = (existing == null ? void 0 : existing.status) || "pending";
       const lastRun = (existing == null ? void 0 : existing.lastRun) || "";
       const output = (existing == null ? void 0 : existing.output) || "";
       return {
@@ -6130,9 +6129,8 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       var _a2, _b, _c, _d;
       const existing = oldWorkflows.find((x) => x.id === w.id);
       const id = existing ? w.id : w.id || generateId();
-      const structureChanged = !existing || existing.steps.length !== (w.steps || []).length || existing.name !== (w.name || existing.name);
-      const status = structureChanged ? "pending" : (existing == null ? void 0 : existing.status) === "running" ? "running" : (existing == null ? void 0 : existing.status) || "pending";
-      const currentStep = structureChanged ? -1 : (_a2 = existing == null ? void 0 : existing.currentStep) != null ? _a2 : -1;
+      const status = (existing == null ? void 0 : existing.status) || "pending";
+      const currentStep = (_a2 = existing == null ? void 0 : existing.currentStep) != null ? _a2 : -1;
       return {
         id,
         name: w.name || "Unnamed",
@@ -6449,11 +6447,13 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             (t) => t.id === this.editTask.id
           );
           if (idx !== -1) {
-            const wasRunning = this.editTask.status === "running";
+            const existing = this.plugin.settings.tasks[idx];
             this.plugin.settings.tasks[idx] = {
               ...this.editTask,
               ...this.draft,
-              status: wasRunning ? "running" : "pending"
+              status: existing.status,
+              lastRun: existing.lastRun,
+              output: existing.output
             };
           }
         } else {
@@ -6804,7 +6804,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
             (w) => w.id === this.editWorkflow.id
           );
           if (idx !== -1) {
-            const wasRunning = this.editWorkflow.status === "running";
+            const existing = this.plugin.settings.workflows[idx];
             this.plugin.settings.workflows[idx] = {
               ...this.editWorkflow,
               name: this.draft.name,
@@ -6813,7 +6813,9 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
               steps,
               handoffBranch: (_f = this.draft.handoffBranch) != null ? _f : false,
               handoffOutput: (_g = this.draft.handoffOutput) != null ? _g : false,
-              status: wasRunning ? "running" : "pending",
+              status: existing.status,
+              currentStep: existing.currentStep,
+              lastRun: existing.lastRun,
               scheduleType: (_h = this.draft.scheduleType) != null ? _h : "manual",
               scheduleTime: (_i = this.draft.scheduleTime) != null ? _i : nowTimeString(),
               scheduleDate: (_j = this.draft.scheduleDate) != null ? _j : "",
