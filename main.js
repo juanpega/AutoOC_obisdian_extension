@@ -2167,7 +2167,8 @@ var DEFAULT_SETTINGS = {
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
-  libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library"
+  libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
+  dashboardPositions: {}
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -3018,6 +3019,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     if (!this.settings.libraryUrl) {
       this.settings.libraryUrl = DEFAULT_SETTINGS.libraryUrl;
+      changed = true;
+    }
+    if (!this.settings.dashboardPositions || typeof this.settings.dashboardPositions !== "object") {
+      this.settings.dashboardPositions = {};
       changed = true;
     }
     if (changed) {
@@ -4182,7 +4187,6 @@ var AutoOCView = class extends import_obsidian.ItemView {
     // render — see the guard in renderDashboard).
     this.forceDashboardFitOnNextRender = false;
     this.plugin = plugin;
-    this.loadDashboardPositions();
   }
   loadDashboardPositions() {
     this.dashboardPositions.clear();
@@ -4193,13 +4197,13 @@ var AutoOCView = class extends import_obsidian.ItemView {
       }
     }
   }
-  persistDashboardPositions() {
+  async persistDashboardPositions() {
     const obj = {};
     this.dashboardPositions.forEach((pos, key) => {
       obj[key] = pos;
     });
     this.plugin.settings.dashboardPositions = obj;
-    this.plugin.saveSettings(false);
+    await this.plugin.saveSettings(false);
   }
   getViewType() {
     return VIEW_TYPE;
@@ -4211,11 +4215,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
     return "workflow";
   }
   async onOpen() {
+    this.loadDashboardPositions();
     this.render();
   }
   async onClose() {
     var _a;
-    this.persistDashboardPositions();
+    await this.persistDashboardPositions();
     (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
     this.dashboardResizeObserver = null;
     this.sinkIntervals.forEach((iv) => clearInterval(iv));
@@ -4860,14 +4865,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     ])).sort((a, b) => a.localeCompare(b));
     const taskById = new Map(tasks.map((task) => [task.id, task]));
     const TASK_BUBBLE_PX = 30;
-    const TASK_BUBBLE_MIN_PX = 12;
-    const TASK_BUBBLE_MAX_PARENT_FRACTION = 0.4;
     const taskBubbleSizeForParent = (parent) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
       if (parentDiameter <= 0) return { px: TASK_BUBBLE_PX, pct: 12 };
-      const maxAllowedPx = parentDiameter * TASK_BUBBLE_MAX_PARENT_FRACTION;
-      const px = Math.max(TASK_BUBBLE_MIN_PX, Math.min(TASK_BUBBLE_PX, maxAllowedPx));
+      const px = TASK_BUBBLE_PX;
       return { px, pct: px / parentDiameter * 100 };
     };
     const setBubbleRect = (el, x, y, size) => {
@@ -4978,7 +4980,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           clampBubbleToParent(child);
         });
         saveBubbleTreePositions(parent);
-        this.persistDashboardPositions();
+        void this.persistDashboardPositions();
       });
     };
     const settleBubbleCollisions = (parent, passes = 10) => {
@@ -5031,7 +5033,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           if (!movedAny) break;
         }
         saveBubbleTreePositions(parent);
-        this.persistDashboardPositions();
+        void this.persistDashboardPositions();
       });
     };
     const hasBubbleOverlap = (parent) => {
@@ -5197,7 +5199,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const size = Math.min(item.size, cellWidth, cellHeight);
         const saved = this.dashboardPositions.get(item.key);
         if (saved) {
-          const savedSize = saved.size ? Math.min(saved.size, cellWidth, cellHeight) : size;
+          const savedSize = saved.size ? Math.max(1, Math.min(96, saved.size)) : size;
           return {
             ...item,
             size: savedSize,
@@ -5374,21 +5376,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
       createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
     });
     this.syncDashboardTaskDrift(tasks);
-    const shouldSkipFit = !layoutChanged && !this.forceDashboardFitOnNextRender && this.dashboardPositions.size > 0;
+    const shouldSkipFit = this.dashboardPositions.size > 0;
     this.forceDashboardFitOnNextRender = false;
     if (shouldSkipFit) {
-      window.setTimeout(() => {
-        const containers = [
-          ...Array.from(map.querySelectorAll(".auto-oc-dashboard-workflow-bubble")),
-          ...Array.from(map.querySelectorAll(".auto-oc-dashboard-area-bubble")),
-          map
-        ];
-        containers.forEach((container) => {
-          if (hasBubbleOverlap(container)) settleBubbleCollisions(container, 10);
-        });
-        saveBubbleTreePositions(map);
-        this.persistDashboardPositions();
-      }, 0);
       return;
     }
     window.setTimeout(() => {
@@ -5404,7 +5394,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
       settleBubbleCollisions(map, 14);
       saveBubbleTreePositions(map);
-      this.persistDashboardPositions();
+      void this.persistDashboardPositions();
     }, 0);
   }
   renderTasks(containerEl) {

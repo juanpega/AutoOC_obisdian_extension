@@ -414,6 +414,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   maxLogsPerTask: 50,
   logRetentionDays: 30,
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
+  dashboardPositions: {},
 };
 
 export const VIEW_TYPE = "auto-oc-view";
@@ -1308,6 +1309,10 @@ export default class AutoOCPlugin extends Plugin {
     }
     if (!this.settings.libraryUrl) {
       this.settings.libraryUrl = DEFAULT_SETTINGS.libraryUrl;
+      changed = true;
+    }
+    if (!this.settings.dashboardPositions || typeof this.settings.dashboardPositions !== "object") {
+      this.settings.dashboardPositions = {};
       changed = true;
     }
     if (changed) {
@@ -2590,7 +2595,6 @@ class AutoOCView extends ItemView {
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
     this.plugin = plugin;
-    this.loadDashboardPositions();
   }
 
   private loadDashboardPositions() {
@@ -2603,20 +2607,23 @@ class AutoOCView extends ItemView {
     }
   }
 
-  private persistDashboardPositions() {
+  private async persistDashboardPositions() {
     const obj: Record<string, { x: number; y: number; size?: number }> = {};
     this.dashboardPositions.forEach((pos, key) => { obj[key] = pos; });
     this.plugin.settings.dashboardPositions = obj;
-    this.plugin.saveSettings(false);
+    await this.plugin.saveSettings(false);
   }
 
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC Scheduler"; }
   getIcon() { return "workflow"; }
 
-  async onOpen() { this.render(); }
+  async onOpen() {
+    this.loadDashboardPositions();
+    this.render();
+  }
   async onClose() {
-    this.persistDashboardPositions();
+    await this.persistDashboardPositions();
     this.dashboardResizeObserver?.disconnect();
     this.dashboardResizeObserver = null;
     this.sinkIntervals.forEach((iv) => clearInterval(iv));
@@ -3343,24 +3350,15 @@ class AutoOCView extends ItemView {
       ...tasks.map((task) => areaName(task.area)),
     ])).sort((a, b) => a.localeCompare(b));
     const taskById = new Map(tasks.map((task) => [task.id, task]));
-    // Every task bubble renders at this exact physical diameter, regardless of
-    // nesting depth (loose on the map vs. nested inside a workflow inside an
-    // area) — % of parent varies wildly with nesting, so size is set in real
-    // px instead of inheriting whatever % that nesting level implies.
-    // BUT it's capped to a fraction of the immediate parent's own rendered
-    // diameter: a small single-step workflow can be smaller than the target
-    // px, and a task bigger than its own parent ring would visually overflow
-    // past its border — looking like it belongs to a neighboring bubble
-    // instead of the one it's actually nested in.
+    // Every task/step bubble renders at the same physical diameter,
+    // regardless of usage, status, or nesting depth. Containers must adapt
+    // around tasks; tasks should not shrink based on the current container.
     const TASK_BUBBLE_PX = 30;
-    const TASK_BUBBLE_MIN_PX = 12;
-    const TASK_BUBBLE_MAX_PARENT_FRACTION = 0.4;
     const taskBubbleSizeForParent = (parent: HTMLElement) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
       if (parentDiameter <= 0) return { px: TASK_BUBBLE_PX, pct: 12 };
-      const maxAllowedPx = parentDiameter * TASK_BUBBLE_MAX_PARENT_FRACTION;
-      const px = Math.max(TASK_BUBBLE_MIN_PX, Math.min(TASK_BUBBLE_PX, maxAllowedPx));
+      const px = TASK_BUBBLE_PX;
       return { px, pct: (px / parentDiameter) * 100 };
     };
     const setBubbleRect = (el: HTMLElement, x: number, y: number, size: number) => {
@@ -3477,7 +3475,7 @@ class AutoOCView extends ItemView {
         clampBubbleToParent(child);
       });
       saveBubbleTreePositions(parent);
-      this.persistDashboardPositions();
+      void this.persistDashboardPositions();
       });
     };
     const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
@@ -3531,7 +3529,7 @@ class AutoOCView extends ItemView {
         if (!movedAny) break;
       }
       saveBubbleTreePositions(parent);
-      this.persistDashboardPositions();
+      void this.persistDashboardPositions();
       });
     };
     const hasBubbleOverlap = (parent: HTMLElement) => {
@@ -3699,7 +3697,7 @@ class AutoOCView extends ItemView {
         const size = Math.min(item.size, cellWidth, cellHeight);
         const saved = this.dashboardPositions.get(item.key);
         if (saved) {
-          const savedSize = saved.size ? Math.min(saved.size, cellWidth, cellHeight) : size;
+          const savedSize = saved.size ? Math.max(1, Math.min(96, saved.size)) : size;
           return {
             ...item,
             size: savedSize,
@@ -3878,31 +3876,13 @@ class AutoOCView extends ItemView {
 
     this.syncDashboardTaskDrift(tasks);
 
-    // The settle+fit pass below (which grows workflow/area rings to snugly
-    // wrap their children) normally only runs on first layout or when the
-    // task/workflow structure changes — re-running it on every render would
-    // be wasteful since %-based positions/sizes already reflow for free via
-    // CSS. But task bubbles are capped to a fixed px (see
-    // taskBubbleSizeForParent), so after a canvas resize their target size
-    // changes without any corresponding ring resize; forceDashboardFitOnNextRender
-    // (set by watchDashboardMapResize) makes sure this pass still runs then,
-    // instead of requiring the user to nudge a bubble with the mouse to
-    // trigger the same fit as a side effect of dragging.
-    const shouldSkipFit = !layoutChanged && !this.forceDashboardFitOnNextRender && this.dashboardPositions.size > 0;
+    // If positions were restored from settings, treat them as authoritative.
+    // A fresh view starts with an empty dashboardLayoutSignature, so using
+    // layoutChanged here would incorrectly re-fit/re-settle after every
+    // Obsidian restart and destroy the saved bubble placement/sizes.
+    const shouldSkipFit = this.dashboardPositions.size > 0;
     this.forceDashboardFitOnNextRender = false;
     if (shouldSkipFit) {
-      window.setTimeout(() => {
-        const containers = [
-          ...Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-workflow-bubble")),
-          ...Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble")),
-          map,
-        ];
-        containers.forEach((container) => {
-          if (hasBubbleOverlap(container)) settleBubbleCollisions(container, 10);
-        });
-        saveBubbleTreePositions(map);
-        this.persistDashboardPositions();
-      }, 0);
       return;
     }
 
@@ -3919,7 +3899,7 @@ class AutoOCView extends ItemView {
       });
       settleBubbleCollisions(map, 14);
       saveBubbleTreePositions(map);
-      this.persistDashboardPositions();
+      void this.persistDashboardPositions();
     }, 0);
   }
 
