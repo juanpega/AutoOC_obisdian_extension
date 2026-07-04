@@ -762,16 +762,18 @@ var init_visualBuilderHtml_generated = __esm({
     try { window.parent.postMessage({ type: "ready" }, "*"); } catch (e) {}
   }
 
-  function applyToExtension() {
+  function applyToExtension(skipValidation = false) {
     if (!inExtension) {
       toast("Running standalone \u2014 use Export to save as JSON", "warn");
       return;
     }
-    const validation = validateAll();
-    const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
-    if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
-      showValidation();
-      return;
+    if (!skipValidation) {
+      const validation = validateAll();
+      const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
+      if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
+        showValidation();
+        return;
+      }
     }
     // Send back the current state.
     const payload = {
@@ -1782,8 +1784,18 @@ var init_visualBuilderHtml_generated = __esm({
     setActiveWorkflow(w.id);
   }
   function closeWorkflow(id) {
-    if (state.workflows.length > 1) {
-      if (!confirm("Delete this workflow?")) return;
+    const wf = findWorkflow(id);
+    if (!confirm("Delete this workflow?")) return;
+    if (wf) {
+      const taskIds = [...new Set((wf.steps || []).map(s => s.taskId).filter(Boolean))];
+      const taskIdsOnlyUsedHere = taskIds.filter(taskId => !state.workflows.some(other => other.id !== id && (other.steps || []).some(step => step.taskId === taskId)));
+      if (taskIdsOnlyUsedHere.length > 0) {
+        const sharedCount = taskIds.length - taskIdsOnlyUsedHere.length;
+        const sharedNote = sharedCount > 0 ? "\\n\\n" + sharedCount + " task(s) are also used by other workflows and will be kept." : "";
+        if (confirm("Also delete " + taskIdsOnlyUsedHere.length + " task(s) used only by this workflow?" + sharedNote)) {
+          state.tasks = state.tasks.filter(t => !taskIdsOnlyUsedHere.includes(t.id));
+        }
+      }
     }
     const idx = state.workflows.findIndex(x => x.id === id);
     state.workflows.splice(idx, 1);
@@ -1792,7 +1804,9 @@ var init_visualBuilderHtml_generated = __esm({
       ui.activeWorkflowId = newActive ? newActive.id : null;
       ui.selection = newActive ? { type: "workflow", ref: newActive.id } : { type: null, ref: null };
     }
+    isDirty = true;
     renderAll();
+    if (inExtension) applyToExtension(true);
   }
   function duplicateStep(wfId, idx) {
     const wf = findWorkflow(wfId);
@@ -2810,6 +2824,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
+    this.visualBuilders = /* @__PURE__ */ new Set();
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
     this.dueCheckInProgress = false;
@@ -2954,6 +2969,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   // user can edit visually and apply changes back to the settings.
   openVisualBuilder() {
     new VisualBuilderModal(this.app, this).open();
+  }
+  registerVisualBuilder(modal) {
+    this.visualBuilders.add(modal);
+  }
+  unregisterVisualBuilder(modal) {
+    this.visualBuilders.delete(modal);
+  }
+  syncVisualBuilders() {
+    for (const modal of this.visualBuilders) modal.sendState();
   }
   async loadSettings() {
     var _a, _b;
@@ -3510,6 +3534,7 @@ DONE:" + $exitCode + "
   async deleteTask(id) {
     this.settings.tasks = this.settings.tasks.filter((t) => t.id !== id);
     await this.saveSettings();
+    this.syncVisualBuilders();
   }
   async duplicateTask(task) {
     const copy = {
@@ -3535,9 +3560,25 @@ DONE:" + $exitCode + "
     clearAllLogs(vaultBasePath);
     new import_obsidian.Notice("All logs cleared.");
   }
-  async deleteWorkflow(id) {
+  workflowTaskIds(workflow) {
+    return Array.from(new Set(workflow.steps.map((step) => step.taskId).filter(Boolean)));
+  }
+  workflowTaskIdsUsedOnlyBy(workflowId) {
+    const workflow = this.settings.workflows.find((w) => w.id === workflowId);
+    if (!workflow) return [];
+    const taskIds = this.workflowTaskIds(workflow);
+    return taskIds.filter((taskId) => !this.settings.workflows.some(
+      (other) => other.id !== workflowId && other.steps.some((step) => step.taskId === taskId)
+    ));
+  }
+  async deleteWorkflow(id, deleteWorkflowTasks = false) {
+    const taskIdsToDelete = deleteWorkflowTasks ? this.workflowTaskIdsUsedOnlyBy(id) : [];
+    if (taskIdsToDelete.length > 0) {
+      this.settings.tasks = this.settings.tasks.filter((task) => !taskIdsToDelete.includes(task.id));
+    }
     this.settings.workflows = this.settings.workflows.filter((w) => w.id !== id);
     await this.saveSettings();
+    this.syncVisualBuilders();
   }
   async duplicateWorkflow(workflow) {
     const copy = {
@@ -5934,9 +5975,20 @@ var AutoOCView = class extends import_obsidian.ItemView {
     btnDelete.title = "Delete workflow";
     btnDelete.onclick = async (e) => {
       e.stopPropagation();
-      if (confirm(`Delete workflow "${workflow.name}"?`)) {
-        await this.plugin.deleteWorkflow(workflow.id);
+      if (!confirm(`Delete workflow "${workflow.name}"?`)) return;
+      const workflowTaskIds = this.plugin.workflowTaskIds(workflow);
+      const taskIdsOnlyUsedHere = this.plugin.workflowTaskIdsUsedOnlyBy(workflow.id);
+      let deleteWorkflowTasks = false;
+      if (workflowTaskIds.length > 0) {
+        const sharedCount = workflowTaskIds.length - taskIdsOnlyUsedHere.length;
+        const sharedNote = sharedCount > 0 ? `
+
+${sharedCount} task(s) are also used by other workflows and will be kept.` : "";
+        deleteWorkflowTasks = taskIdsOnlyUsedHere.length > 0 && confirm(
+          `Also delete ${taskIdsOnlyUsedHere.length} task(s) used only by this workflow?${sharedNote}`
+        );
       }
+      await this.plugin.deleteWorkflow(workflow.id, deleteWorkflowTasks);
     };
     summary.onclick = () => {
       const isHidden = details.style.display === "none";
@@ -5963,6 +6015,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
   }
   onOpen() {
     const { contentEl, modalEl, titleEl } = this;
+    this.plugin.registerVisualBuilder(this);
     contentEl.empty();
     if (titleEl && titleEl.style) {
       titleEl.style.display = "none";
@@ -6028,6 +6081,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
   }
   onClose() {
     var _a;
+    this.plugin.unregisterVisualBuilder(this);
     if (this.messageHandler) {
       window.removeEventListener("message", this.messageHandler);
       this.messageHandler = void 0;

@@ -1090,6 +1090,7 @@ export default class AutoOCPlugin extends Plugin {
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
+  private visualBuilders = new Set<VisualBuilderModal>();
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
   private dueCheckInProgress = false;
@@ -1260,6 +1261,18 @@ export default class AutoOCPlugin extends Plugin {
   // user can edit visually and apply changes back to the settings.
   openVisualBuilder(): void {
     new VisualBuilderModal(this.app, this).open();
+  }
+
+  registerVisualBuilder(modal: VisualBuilderModal): void {
+    this.visualBuilders.add(modal);
+  }
+
+  unregisterVisualBuilder(modal: VisualBuilderModal): void {
+    this.visualBuilders.delete(modal);
+  }
+
+  syncVisualBuilders(): void {
+    for (const modal of this.visualBuilders) modal.sendState();
   }
 
   async loadSettings() {
@@ -1828,6 +1841,7 @@ export default class AutoOCPlugin extends Plugin {
   async deleteTask(id: string) {
     this.settings.tasks = this.settings.tasks.filter((t) => t.id !== id);
     await this.saveSettings();
+    this.syncVisualBuilders();
   }
 
   async duplicateTask(task: ScheduledTask) {
@@ -1857,9 +1871,27 @@ export default class AutoOCPlugin extends Plugin {
     new Notice("All logs cleared.");
   }
 
-  async deleteWorkflow(id: string) {
+  workflowTaskIds(workflow: Workflow): string[] {
+    return Array.from(new Set(workflow.steps.map((step) => step.taskId).filter(Boolean) as string[]));
+  }
+
+  workflowTaskIdsUsedOnlyBy(workflowId: string): string[] {
+    const workflow = this.settings.workflows.find((w) => w.id === workflowId);
+    if (!workflow) return [];
+    const taskIds = this.workflowTaskIds(workflow);
+    return taskIds.filter((taskId) => !this.settings.workflows.some(
+      (other) => other.id !== workflowId && other.steps.some((step) => step.taskId === taskId)
+    ));
+  }
+
+  async deleteWorkflow(id: string, deleteWorkflowTasks = false) {
+    const taskIdsToDelete = deleteWorkflowTasks ? this.workflowTaskIdsUsedOnlyBy(id) : [];
+    if (taskIdsToDelete.length > 0) {
+      this.settings.tasks = this.settings.tasks.filter((task) => !taskIdsToDelete.includes(task.id));
+    }
     this.settings.workflows = this.settings.workflows.filter((w) => w.id !== id);
     await this.saveSettings();
+    this.syncVisualBuilders();
   }
 
   async duplicateWorkflow(workflow: Workflow) {
@@ -4530,9 +4562,20 @@ class AutoOCView extends ItemView {
     btnDelete.title = "Delete workflow";
     btnDelete.onclick = async (e) => {
       e.stopPropagation();
-      if (confirm(`Delete workflow "${workflow.name}"?`)) {
-        await this.plugin.deleteWorkflow(workflow.id);
+      if (!confirm(`Delete workflow "${workflow.name}"?`)) return;
+      const workflowTaskIds = this.plugin.workflowTaskIds(workflow);
+      const taskIdsOnlyUsedHere = this.plugin.workflowTaskIdsUsedOnlyBy(workflow.id);
+      let deleteWorkflowTasks = false;
+      if (workflowTaskIds.length > 0) {
+        const sharedCount = workflowTaskIds.length - taskIdsOnlyUsedHere.length;
+        const sharedNote = sharedCount > 0
+          ? `\n\n${sharedCount} task(s) are also used by other workflows and will be kept.`
+          : "";
+        deleteWorkflowTasks = taskIdsOnlyUsedHere.length > 0 && confirm(
+          `Also delete ${taskIdsOnlyUsedHere.length} task(s) used only by this workflow?${sharedNote}`
+        );
       }
+      await this.plugin.deleteWorkflow(workflow.id, deleteWorkflowTasks);
     };
 
     summary.onclick = () => {
@@ -4577,6 +4620,7 @@ class VisualBuilderModal extends Modal {
 
   onOpen() {
     const { contentEl, modalEl, titleEl } = this;
+    this.plugin.registerVisualBuilder(this);
     contentEl.empty();
     // Hide the default Obsidian modal title — we render our own
     // toolbar at the top of the content area instead. Hiding the title
@@ -4662,6 +4706,7 @@ class VisualBuilderModal extends Modal {
   private messageHandler?: (ev: MessageEvent) => void;
 
   onClose() {
+    this.plugin.unregisterVisualBuilder(this);
     if (this.messageHandler) {
       window.removeEventListener("message", this.messageHandler);
       this.messageHandler = undefined;
