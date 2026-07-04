@@ -437,25 +437,23 @@
 }
 
 @keyframes auto-oc-dashboard-float-area {
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  50% { transform: translate3d(0, -4px, 0); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.96; }
 }
 
 @keyframes auto-oc-dashboard-float {
-  0%, 100% { transform: translate3d(0, 0, 0); }
-  30% { transform: translate3d(2px, -5px, 0); }
-  65% { transform: translate3d(-2px, 3px, 0); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.97; }
 }
 
 @keyframes auto-oc-dashboard-rise {
-  0% { transform: translate3d(-1px, 3px, 0); }
-  45% { transform: translate3d(2px, -5px, 0); }
-  100% { transform: translate3d(-2px, -12px, 0); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.95; }
 }
 
 @keyframes auto-oc-dashboard-sink {
-  0%, 100% { transform: translate3d(0, 5px, 0); }
-  50% { transform: translate3d(1px, 8px, 0); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.92; }
 }
 
 @keyframes auto-oc-dashboard-running-glow {

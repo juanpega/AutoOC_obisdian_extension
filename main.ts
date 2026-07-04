@@ -229,6 +229,7 @@ interface AutoOCSettings {
   maxLogsPerTask: number;
   logRetentionDays: number;
   libraryUrl: string;
+  dashboardPositions?: Record<string, { x: number; y: number; size?: number }>;
 }
 
 // Portable representation for import / export.
@@ -2570,6 +2571,7 @@ class AutoOCView extends ItemView {
   // nested two levels deep inside an area/workflow ring.
   private dashboardTaskShift: Map<string, number> = new Map();
   private sinkIntervals: Map<string, ReturnType<typeof setInterval>> = new Map();
+  private dashboardTaskDriftDirection: Map<string, "up" | "down"> = new Map();
   private dashboardLayoutSignature: string = "";
   private showDashboardKpis: boolean = false;
   // Watches the map's real rendered size so bubble sizing (task bubbles are
@@ -2588,6 +2590,24 @@ class AutoOCView extends ItemView {
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
     this.plugin = plugin;
+    this.loadDashboardPositions();
+  }
+
+  private loadDashboardPositions() {
+    this.dashboardPositions.clear();
+    const saved = this.plugin.settings.dashboardPositions;
+    if (saved) {
+      for (const [key, pos] of Object.entries(saved)) {
+        this.dashboardPositions.set(key, pos);
+      }
+    }
+  }
+
+  private persistDashboardPositions() {
+    const obj: Record<string, { x: number; y: number; size?: number }> = {};
+    this.dashboardPositions.forEach((pos, key) => { obj[key] = pos; });
+    this.plugin.settings.dashboardPositions = obj;
+    this.plugin.saveSettings(false);
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -2596,16 +2616,19 @@ class AutoOCView extends ItemView {
 
   async onOpen() { this.render(); }
   async onClose() {
+    this.persistDashboardPositions();
     this.dashboardResizeObserver?.disconnect();
     this.dashboardResizeObserver = null;
     this.sinkIntervals.forEach((iv) => clearInterval(iv));
     this.sinkIntervals.clear();
+    this.dashboardTaskDriftDirection.clear();
   }
   refresh() { this.render(); }
 
   resetDashboardTaskShift(taskId: string) {
     const existing = this.sinkIntervals.get(taskId);
     if (existing) { clearInterval(existing); this.sinkIntervals.delete(taskId); }
+    this.dashboardTaskDriftDirection.delete(taskId);
     this.dashboardTaskShift.delete(taskId);
   }
 
@@ -2667,15 +2690,47 @@ class AutoOCView extends ItemView {
       const size = this.parseBubbleSizeForSave(bubble);
       if (key) this.dashboardPositions.set(key, { x, y: finalY, size });
 
-      // Just like a manual drag, pushing this bubble should displace any
-      // sibling bubbles it now overlaps within the same parent (area or
-      // workflow ring) instead of stacking on top of them. The chained push
-      // handles the immediate collision, then the full all-pairs settle
-      // (same one used when a manual drag is released) mops up any residual
-      // overlaps between siblings that weren't directly in this bubble's path
-      // — e.g. two independently-running tasks that drift into each other.
+      // Just like pointermove while dragging, the moving bubble should push
+      // only the collision chain it touches. A full all-pairs settle on every
+      // drift tick repeatedly reorders the whole group and can compact idle
+      // siblings around the running/failed task.
       this.resolveDashboardSiblingCollisions(bubble);
-      if (parent) this.settleDashboardBubbleCollisions(parent, 24);
+
+      // Propagate displacement to parent when the bubble is clamped at its
+      // parent's edge in the drift direction (up → top edge, down → bottom
+      // edge). This makes a running task push its containing workflow/area
+      // ring upward, which then collides with siblings at that level.
+      if (parent && this.isDashboardBubbleEl(parent)) {
+        const intendedY = y + deltaPct;
+        const actualY = parseFloat(bubble.style.top || "0");
+        const clampedPct = intendedY - actualY;
+        const widthPct = (bubble.getBoundingClientRect().width / parent.getBoundingClientRect().width) * 100;
+        const atEdge = direction === "up" ? actualY <= 1 : actualY >= (100 - widthPct - 1);
+        let propagatePct = 0;
+        if (direction === "up" && clampedPct <= -0.5) propagatePct = clampedPct;
+        else if (direction === "down" && clampedPct >= 0.5) propagatePct = clampedPct;
+        else if (atEdge) propagatePct = deltaPct;
+        if (propagatePct !== 0) {
+          const grandParent = parent.offsetParent as HTMLElement | null;
+          const grandParentH = grandParent?.getBoundingClientRect().height || mapHeight;
+          const parentH = parent.getBoundingClientRect().height || parentHeight;
+          const parentDeltaPct = (propagatePct * 2 * parentH) / grandParentH;
+          parent.style.top = `${parseFloat(parent.style.top || "0") + parentDeltaPct}%`;
+          this.clampDashboardBubbleToParent(parent);
+          const pKey = parent.getAttribute("data-dashboard-key");
+          if (pKey) {
+            this.dashboardPositions.set(pKey, {
+              x: parseFloat(parent.style.left || "0"),
+              y: parseFloat(parent.style.top || "0"),
+              size: this.parseBubbleSizeForSave(parent),
+            });
+          }
+          if (grandParent) {
+            this.resolveDashboardSiblingCollisions(parent);
+            this.settleDashboardBubbleCollisions(grandParent, 16);
+          }
+        }
+      }
     });
   }
 
@@ -2764,7 +2819,7 @@ class AutoOCView extends ItemView {
           let dx = bCenterX - aCenterX;
           let dy = bCenterY - aCenterY;
           let distance = Math.hypot(dx, dy);
-          const minDistance = (aRadius + bRadius) * 0.97;
+          const minDistance = aRadius + bRadius + 4;
           if (distance >= minDistance) continue;
           if (distance < 0.01) {
             const angle = ((bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
@@ -2772,7 +2827,7 @@ class AutoOCView extends ItemView {
             dy = Math.sin(angle);
             distance = 1;
           }
-          const push = (minDistance - distance) * 0.85;
+          const push = (minDistance - distance) * 1.05;
           const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
             if (amount === 0) return;
             const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
@@ -2786,6 +2841,18 @@ class AutoOCView extends ItemView {
           };
           moveBubble(b, bRect, push);
           this.clampDashboardBubbleToParent(b);
+          const nextARect = a.getBoundingClientRect();
+          const nextBRect = b.getBoundingClientRect();
+          const nextARadius = nextARect.width / 2;
+          const nextBRadius = nextBRect.width / 2;
+          const nextDx = nextBRect.left + nextBRadius - (nextARect.left + nextARadius);
+          const nextDy = nextBRect.top + nextBRect.height / 2 - (nextARect.top + nextARect.height / 2);
+          const nextDistance = Math.max(Math.hypot(nextDx, nextDy), 1);
+          const residual = minDistance - nextDistance;
+          if (residual > 0.5) {
+            moveBubble(a, nextARect, -residual * 0.55);
+            this.clampDashboardBubbleToParent(a);
+          }
           nextFrontier.add(b);
         }
       }
@@ -2870,9 +2937,12 @@ class AutoOCView extends ItemView {
     });
   }
 
-  startGradualSink(taskId: string, stepPct = 1.8, maxPct = 18) {
+  private startDashboardTaskDrift(taskId: string, direction: "up" | "down", stepPct = 6, maxPct = 50) {
     const existing = this.sinkIntervals.get(taskId);
+    if (existing && this.dashboardTaskDriftDirection.get(taskId) === direction) return;
     if (existing) { clearInterval(existing); this.sinkIntervals.delete(taskId); }
+    if (this.dashboardTaskDriftDirection.get(taskId) !== direction) this.dashboardTaskShift.set(taskId, 0);
+    this.dashboardTaskDriftDirection.set(taskId, direction);
     // dashboardTaskShift tracks accumulated drift in physical px (relative to
     // the map height) rather than %, so the cap check here has to be
     // expressed in the same units as what nudgeDashboardTask actually stores.
@@ -2881,17 +2951,46 @@ class AutoOCView extends ItemView {
       const mapHeight = mapEl?.getBoundingClientRect().height || 500;
       const maxShiftPx = (maxPct / 100) * mapHeight;
       const currentShiftPx = this.dashboardTaskShift.get(taskId) || 0;
-      if (currentShiftPx >= maxShiftPx) {
+      if ((direction === "down" && currentShiftPx >= maxShiftPx) || (direction === "up" && currentShiftPx <= -maxShiftPx)) {
         clearInterval(iv);
         this.sinkIntervals.delete(taskId);
+        this.dashboardTaskDriftDirection.delete(taskId);
         return;
       }
-      this.nudgeDashboardTask(taskId, "down", stepPct, maxPct);
+      this.nudgeDashboardTask(taskId, direction, stepPct, maxPct);
     };
-    const iv = setInterval(tick, 3000);
+    const iv = setInterval(tick, 350);
     this.sinkIntervals.set(taskId, iv);
     // fire immediately for the first tick so it starts moving right away
     tick();
+  }
+
+  startGradualSink(taskId: string, stepPct = 6, maxPct = 50) {
+    this.startDashboardTaskDrift(taskId, "down", stepPct, maxPct);
+  }
+
+  private syncDashboardTaskDrift(tasks: ScheduledTask[]) {
+    const activeTaskIds = new Set(tasks.map((task) => task.id));
+    tasks.forEach((task) => {
+      if (task.status === "running") {
+        this.startDashboardTaskDrift(task.id, "up");
+      } else if (task.status === "failed") {
+        this.startDashboardTaskDrift(task.id, "down");
+      } else {
+        const existing = this.sinkIntervals.get(task.id);
+        if (existing) clearInterval(existing);
+        this.sinkIntervals.delete(task.id);
+        this.dashboardTaskDriftDirection.delete(task.id);
+      }
+    });
+    Array.from(this.sinkIntervals.keys()).forEach((taskId) => {
+      if (activeTaskIds.has(taskId)) return;
+      const existing = this.sinkIntervals.get(taskId);
+      if (existing) clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+      this.dashboardTaskDriftDirection.delete(taskId);
+      this.dashboardTaskShift.delete(taskId);
+    });
   }
 
   // Re-renders the dashboard whenever the map's real pixel size changes
@@ -3378,6 +3477,7 @@ class AutoOCView extends ItemView {
         clampBubbleToParent(child);
       });
       saveBubbleTreePositions(parent);
+      this.persistDashboardPositions();
       });
     };
     const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
@@ -3431,7 +3531,25 @@ class AutoOCView extends ItemView {
         if (!movedAny) break;
       }
       saveBubbleTreePositions(parent);
+      this.persistDashboardPositions();
       });
+    };
+    const hasBubbleOverlap = (parent: HTMLElement) => {
+      const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
+      for (let i = 0; i < bubbles.length; i++) {
+        for (let j = i + 1; j < bubbles.length; j++) {
+          const aRect = bubbles[i].getBoundingClientRect();
+          const bRect = bubbles[j].getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const distance = Math.hypot(
+            bRect.left + bRadius - (aRect.left + aRadius),
+            bRect.top + bRect.height / 2 - (aRect.top + aRect.height / 2),
+          );
+          if (distance < aRadius + bRadius + 2) return true;
+        }
+      }
+      return false;
     };
     const attachBubbleDrag = (el: HTMLElement, onClick?: () => void) => {
       let startX = 0;
@@ -3467,7 +3585,7 @@ class AutoOCView extends ItemView {
               let dx = bCenterX - aCenterX;
               let dy = bCenterY - aCenterY;
               let distance = Math.hypot(dx, dy);
-              const minDistance = (aRadius + bRadius) * 0.97;
+              const minDistance = aRadius + bRadius + 4;
               if (distance >= minDistance) continue;
               if (distance < 0.01) {
                 const angle = ((bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
@@ -3476,7 +3594,7 @@ class AutoOCView extends ItemView {
                 distance = 1;
               }
 
-              const push = (minDistance - distance) * 0.85;
+              const push = (minDistance - distance) * 1.05;
               const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
                 if (amount === 0) return;
                 const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
@@ -3758,6 +3876,8 @@ class AutoOCView extends ItemView {
       createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
     });
 
+    this.syncDashboardTaskDrift(tasks);
+
     // The settle+fit pass below (which grows workflow/area rings to snugly
     // wrap their children) normally only runs on first layout or when the
     // task/workflow structure changes — re-running it on every render would
@@ -3770,7 +3890,21 @@ class AutoOCView extends ItemView {
     // trigger the same fit as a side effect of dragging.
     const shouldSkipFit = !layoutChanged && !this.forceDashboardFitOnNextRender && this.dashboardPositions.size > 0;
     this.forceDashboardFitOnNextRender = false;
-    if (shouldSkipFit) return;
+    if (shouldSkipFit) {
+      window.setTimeout(() => {
+        const containers = [
+          ...Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-workflow-bubble")),
+          ...Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble")),
+          map,
+        ];
+        containers.forEach((container) => {
+          if (hasBubbleOverlap(container)) settleBubbleCollisions(container, 10);
+        });
+        saveBubbleTreePositions(map);
+        this.persistDashboardPositions();
+      }, 0);
+      return;
+    }
 
     window.setTimeout(() => {
       const workflowContainers = Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-workflow-bubble"));
@@ -3785,6 +3919,7 @@ class AutoOCView extends ItemView {
       });
       settleBubbleCollisions(map, 14);
       saveBubbleTreePositions(map);
+      this.persistDashboardPositions();
     }, 0);
   }
 

@@ -4166,6 +4166,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     // nested two levels deep inside an area/workflow ring.
     this.dashboardTaskShift = /* @__PURE__ */ new Map();
     this.sinkIntervals = /* @__PURE__ */ new Map();
+    this.dashboardTaskDriftDirection = /* @__PURE__ */ new Map();
     this.dashboardLayoutSignature = "";
     this.showDashboardKpis = false;
     // Watches the map's real rendered size so bubble sizing (task bubbles are
@@ -4181,6 +4182,24 @@ var AutoOCView = class extends import_obsidian.ItemView {
     // render — see the guard in renderDashboard).
     this.forceDashboardFitOnNextRender = false;
     this.plugin = plugin;
+    this.loadDashboardPositions();
+  }
+  loadDashboardPositions() {
+    this.dashboardPositions.clear();
+    const saved = this.plugin.settings.dashboardPositions;
+    if (saved) {
+      for (const [key, pos] of Object.entries(saved)) {
+        this.dashboardPositions.set(key, pos);
+      }
+    }
+  }
+  persistDashboardPositions() {
+    const obj = {};
+    this.dashboardPositions.forEach((pos, key) => {
+      obj[key] = pos;
+    });
+    this.plugin.settings.dashboardPositions = obj;
+    this.plugin.saveSettings(false);
   }
   getViewType() {
     return VIEW_TYPE;
@@ -4196,10 +4215,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
   }
   async onClose() {
     var _a;
+    this.persistDashboardPositions();
     (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
     this.dashboardResizeObserver = null;
     this.sinkIntervals.forEach((iv) => clearInterval(iv));
     this.sinkIntervals.clear();
+    this.dashboardTaskDriftDirection.clear();
   }
   refresh() {
     this.render();
@@ -4210,6 +4231,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       clearInterval(existing);
       this.sinkIntervals.delete(taskId);
     }
+    this.dashboardTaskDriftDirection.delete(taskId);
     this.dashboardTaskShift.delete(taskId);
   }
   nudgeDashboardTask(taskId, direction, amountPct = 1.8, maxShiftPct = 18) {
@@ -4247,7 +4269,37 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const size = this.parseBubbleSizeForSave(bubble);
       if (key) this.dashboardPositions.set(key, { x, y: finalY, size });
       this.resolveDashboardSiblingCollisions(bubble);
-      if (parent) this.settleDashboardBubbleCollisions(parent, 24);
+      if (parent && this.isDashboardBubbleEl(parent)) {
+        const intendedY = y + deltaPct;
+        const actualY = parseFloat(bubble.style.top || "0");
+        const clampedPct = intendedY - actualY;
+        const widthPct = bubble.getBoundingClientRect().width / parent.getBoundingClientRect().width * 100;
+        const atEdge = direction === "up" ? actualY <= 1 : actualY >= 100 - widthPct - 1;
+        let propagatePct = 0;
+        if (direction === "up" && clampedPct <= -0.5) propagatePct = clampedPct;
+        else if (direction === "down" && clampedPct >= 0.5) propagatePct = clampedPct;
+        else if (atEdge) propagatePct = deltaPct;
+        if (propagatePct !== 0) {
+          const grandParent = parent.offsetParent;
+          const grandParentH = (grandParent == null ? void 0 : grandParent.getBoundingClientRect().height) || mapHeight;
+          const parentH = parent.getBoundingClientRect().height || parentHeight;
+          const parentDeltaPct = propagatePct * 2 * parentH / grandParentH;
+          parent.style.top = `${parseFloat(parent.style.top || "0") + parentDeltaPct}%`;
+          this.clampDashboardBubbleToParent(parent);
+          const pKey = parent.getAttribute("data-dashboard-key");
+          if (pKey) {
+            this.dashboardPositions.set(pKey, {
+              x: parseFloat(parent.style.left || "0"),
+              y: parseFloat(parent.style.top || "0"),
+              size: this.parseBubbleSizeForSave(parent)
+            });
+          }
+          if (grandParent) {
+            this.resolveDashboardSiblingCollisions(parent);
+            this.settleDashboardBubbleCollisions(grandParent, 16);
+          }
+        }
+      }
     });
   }
   // Mirrors the class-selector check used inside renderDashboard's drag/collision
@@ -4329,7 +4381,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           let dx = bCenterX - aCenterX;
           let dy = bCenterY - aCenterY;
           let distance = Math.hypot(dx, dy);
-          const minDistance = (aRadius + bRadius) * 0.97;
+          const minDistance = aRadius + bRadius + 4;
           if (distance >= minDistance) continue;
           if (distance < 0.01) {
             const angle = (bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
@@ -4337,7 +4389,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
             dy = Math.sin(angle);
             distance = 1;
           }
-          const push = (minDistance - distance) * 0.85;
+          const push = (minDistance - distance) * 1.05;
           const moveBubble = (bubble, rect, amount) => {
             if (amount === 0) return;
             const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
@@ -4351,6 +4403,18 @@ var AutoOCView = class extends import_obsidian.ItemView {
           };
           moveBubble(b, bRect, push);
           this.clampDashboardBubbleToParent(b);
+          const nextARect = a.getBoundingClientRect();
+          const nextBRect = b.getBoundingClientRect();
+          const nextARadius = nextARect.width / 2;
+          const nextBRadius = nextBRect.width / 2;
+          const nextDx = nextBRect.left + nextBRadius - (nextARect.left + nextARadius);
+          const nextDy = nextBRect.top + nextBRect.height / 2 - (nextARect.top + nextARect.height / 2);
+          const nextDistance = Math.max(Math.hypot(nextDx, nextDy), 1);
+          const residual = minDistance - nextDistance;
+          if (residual > 0.5) {
+            moveBubble(a, nextARect, -residual * 0.55);
+            this.clampDashboardBubbleToParent(a);
+          }
           nextFrontier.add(b);
         }
       }
@@ -4430,27 +4494,57 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
     });
   }
-  startGradualSink(taskId, stepPct = 1.8, maxPct = 18) {
+  startDashboardTaskDrift(taskId, direction, stepPct = 6, maxPct = 50) {
     const existing = this.sinkIntervals.get(taskId);
+    if (existing && this.dashboardTaskDriftDirection.get(taskId) === direction) return;
     if (existing) {
       clearInterval(existing);
       this.sinkIntervals.delete(taskId);
     }
+    if (this.dashboardTaskDriftDirection.get(taskId) !== direction) this.dashboardTaskShift.set(taskId, 0);
+    this.dashboardTaskDriftDirection.set(taskId, direction);
     const tick = () => {
       const mapEl = this.containerEl.querySelector(".auto-oc-dashboard-map");
       const mapHeight = (mapEl == null ? void 0 : mapEl.getBoundingClientRect().height) || 500;
       const maxShiftPx = maxPct / 100 * mapHeight;
       const currentShiftPx = this.dashboardTaskShift.get(taskId) || 0;
-      if (currentShiftPx >= maxShiftPx) {
+      if (direction === "down" && currentShiftPx >= maxShiftPx || direction === "up" && currentShiftPx <= -maxShiftPx) {
         clearInterval(iv);
         this.sinkIntervals.delete(taskId);
+        this.dashboardTaskDriftDirection.delete(taskId);
         return;
       }
-      this.nudgeDashboardTask(taskId, "down", stepPct, maxPct);
+      this.nudgeDashboardTask(taskId, direction, stepPct, maxPct);
     };
-    const iv = setInterval(tick, 3e3);
+    const iv = setInterval(tick, 350);
     this.sinkIntervals.set(taskId, iv);
     tick();
+  }
+  startGradualSink(taskId, stepPct = 6, maxPct = 50) {
+    this.startDashboardTaskDrift(taskId, "down", stepPct, maxPct);
+  }
+  syncDashboardTaskDrift(tasks) {
+    const activeTaskIds = new Set(tasks.map((task) => task.id));
+    tasks.forEach((task) => {
+      if (task.status === "running") {
+        this.startDashboardTaskDrift(task.id, "up");
+      } else if (task.status === "failed") {
+        this.startDashboardTaskDrift(task.id, "down");
+      } else {
+        const existing = this.sinkIntervals.get(task.id);
+        if (existing) clearInterval(existing);
+        this.sinkIntervals.delete(task.id);
+        this.dashboardTaskDriftDirection.delete(task.id);
+      }
+    });
+    Array.from(this.sinkIntervals.keys()).forEach((taskId) => {
+      if (activeTaskIds.has(taskId)) return;
+      const existing = this.sinkIntervals.get(taskId);
+      if (existing) clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+      this.dashboardTaskDriftDirection.delete(taskId);
+      this.dashboardTaskShift.delete(taskId);
+    });
   }
   // Re-renders the dashboard whenever the map's real pixel size changes
   // (e.g. the user resizes the sidebar/pane). Bubble positions/widths that
@@ -4884,6 +4978,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           clampBubbleToParent(child);
         });
         saveBubbleTreePositions(parent);
+        this.persistDashboardPositions();
       });
     };
     const settleBubbleCollisions = (parent, passes = 10) => {
@@ -4936,7 +5031,25 @@ var AutoOCView = class extends import_obsidian.ItemView {
           if (!movedAny) break;
         }
         saveBubbleTreePositions(parent);
+        this.persistDashboardPositions();
       });
+    };
+    const hasBubbleOverlap = (parent) => {
+      const bubbles = Array.from(parent.children).filter((child) => child instanceof HTMLElement && isDashboardBubble(child));
+      for (let i = 0; i < bubbles.length; i++) {
+        for (let j = i + 1; j < bubbles.length; j++) {
+          const aRect = bubbles[i].getBoundingClientRect();
+          const bRect = bubbles[j].getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const distance = Math.hypot(
+            bRect.left + bRadius - (aRect.left + aRadius),
+            bRect.top + bRect.height / 2 - (aRect.top + aRect.height / 2)
+          );
+          if (distance < aRadius + bRadius + 2) return true;
+        }
+      }
+      return false;
     };
     const attachBubbleDrag = (el, onClick) => {
       let startX = 0;
@@ -4970,7 +5083,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
               let dx = bCenterX - aCenterX;
               let dy = bCenterY - aCenterY;
               let distance = Math.hypot(dx, dy);
-              const minDistance = (aRadius + bRadius) * 0.97;
+              const minDistance = aRadius + bRadius + 4;
               if (distance >= minDistance) continue;
               if (distance < 0.01) {
                 const angle = (bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
@@ -4978,7 +5091,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
                 dy = Math.sin(angle);
                 distance = 1;
               }
-              const push = (minDistance - distance) * 0.85;
+              const push = (minDistance - distance) * 1.05;
               const moveBubble = (bubble, rect, amount) => {
                 if (amount === 0) return;
                 const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
@@ -5260,9 +5373,24 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const taskSize = taskBubbleSizeForParent(map).pct;
       createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
     });
+    this.syncDashboardTaskDrift(tasks);
     const shouldSkipFit = !layoutChanged && !this.forceDashboardFitOnNextRender && this.dashboardPositions.size > 0;
     this.forceDashboardFitOnNextRender = false;
-    if (shouldSkipFit) return;
+    if (shouldSkipFit) {
+      window.setTimeout(() => {
+        const containers = [
+          ...Array.from(map.querySelectorAll(".auto-oc-dashboard-workflow-bubble")),
+          ...Array.from(map.querySelectorAll(".auto-oc-dashboard-area-bubble")),
+          map
+        ];
+        containers.forEach((container) => {
+          if (hasBubbleOverlap(container)) settleBubbleCollisions(container, 10);
+        });
+        saveBubbleTreePositions(map);
+        this.persistDashboardPositions();
+      }, 0);
+      return;
+    }
     window.setTimeout(() => {
       const workflowContainers = Array.from(map.querySelectorAll(".auto-oc-dashboard-workflow-bubble"));
       workflowContainers.forEach((container) => {
@@ -5276,6 +5404,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
       settleBubbleCollisions(map, 14);
       saveBubbleTreePositions(map);
+      this.persistDashboardPositions();
     }, 0);
   }
   renderTasks(containerEl) {
