@@ -723,16 +723,18 @@
     try { window.parent.postMessage({ type: "ready" }, "*"); } catch (e) {}
   }
 
-  function applyToExtension() {
+  function applyToExtension(skipValidation = false) {
     if (!inExtension) {
       toast("Running standalone — use Export to save as JSON", "warn");
       return;
     }
-    const validation = validateAll();
-    const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
-    if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
-      showValidation();
-      return;
+    if (!skipValidation) {
+      const validation = validateAll();
+      const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
+      if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
+        showValidation();
+        return;
+      }
     }
     // Send back the current state.
     const payload = {
@@ -1743,8 +1745,18 @@
     setActiveWorkflow(w.id);
   }
   function closeWorkflow(id) {
-    if (state.workflows.length > 1) {
-      if (!confirm("Delete this workflow?")) return;
+    const wf = findWorkflow(id);
+    if (!confirm("Delete this workflow?")) return;
+    if (wf) {
+      const taskIds = [...new Set((wf.steps || []).map(s => s.taskId).filter(Boolean))];
+      const taskIdsOnlyUsedHere = taskIds.filter(taskId => !state.workflows.some(other => other.id !== id && (other.steps || []).some(step => step.taskId === taskId)));
+      if (taskIdsOnlyUsedHere.length > 0) {
+        const sharedCount = taskIds.length - taskIdsOnlyUsedHere.length;
+        const sharedNote = sharedCount > 0 ? "\n\n" + sharedCount + " task(s) are also used by other workflows and will be kept." : "";
+        if (confirm("Also delete " + taskIdsOnlyUsedHere.length + " task(s) used only by this workflow?" + sharedNote)) {
+          state.tasks = state.tasks.filter(t => !taskIdsOnlyUsedHere.includes(t.id));
+        }
+      }
     }
     const idx = state.workflows.findIndex(x => x.id === id);
     state.workflows.splice(idx, 1);
@@ -1753,7 +1765,9 @@
       ui.activeWorkflowId = newActive ? newActive.id : null;
       ui.selection = newActive ? { type: "workflow", ref: newActive.id } : { type: null, ref: null };
     }
+    isDirty = true;
     renderAll();
+    if (inExtension) applyToExtension(true);
   }
   function duplicateStep(wfId, idx) {
     const wf = findWorkflow(wfId);
@@ -1934,7 +1948,7 @@
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.4.0",
+        pluginVersion: "1.5.0",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
