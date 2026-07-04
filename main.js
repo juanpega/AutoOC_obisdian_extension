@@ -4966,7 +4966,6 @@ var AutoOCView = class extends import_obsidian.ItemView {
     };
     const addLabel = (el, name, ariaLabel = name) => {
       el.tabIndex = 0;
-      el.title = ariaLabel;
       el.setAttr("aria-label", ariaLabel);
       el.createDiv("auto-oc-dashboard-hover-label").setText(name);
     };
@@ -5294,7 +5293,6 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
       areaBubble.setAttr("data-dashboard-key", `area:${name}`);
       setBubbleRect(areaBubble, x, y, size);
-      areaBubble.title = `Area: ${name}`;
       areaBubble.setAttr("aria-label", `Area: ${name}`);
       areaBubble.tabIndex = 0;
       const areaLabel = areaBubble.createDiv("auto-oc-dashboard-area-label");

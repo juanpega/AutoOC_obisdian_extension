@@ -3456,7 +3456,6 @@ class AutoOCView extends ItemView {
     };
     const addLabel = (el: HTMLElement, name: string, ariaLabel = name) => {
       el.tabIndex = 0;
-      el.title = ariaLabel;
       el.setAttr("aria-label", ariaLabel);
       el.createDiv("auto-oc-dashboard-hover-label").setText(name);
     };
@@ -3793,7 +3792,6 @@ class AutoOCView extends ItemView {
       const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
       areaBubble.setAttr("data-dashboard-key", `area:${name}`);
       setBubbleRect(areaBubble, x, y, size);
-      areaBubble.title = `Area: ${name}`;
       areaBubble.setAttr("aria-label", `Area: ${name}`);
       areaBubble.tabIndex = 0;
 
