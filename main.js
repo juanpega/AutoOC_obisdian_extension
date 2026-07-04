@@ -2102,6 +2102,38 @@ function setupCodeTextarea(textarea) {
     textarea.dispatchEvent(new Event("input"));
   });
 }
+function getConfiguredAreaNames(settings) {
+  var _a, _b;
+  const names = /* @__PURE__ */ new Set();
+  for (const task of settings.tasks) {
+    const area = (_a = task.area) == null ? void 0 : _a.trim();
+    if (area) names.add(area);
+  }
+  for (const workflow of settings.workflows) {
+    const area = (_b = workflow.area) == null ? void 0 : _b.trim();
+    if (area) names.add(area);
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+function renderAreaSuggestions(container, areaInput, areaNames, onSelect) {
+  const wrapper = container.createDiv("auto-oc-area-suggestions");
+  wrapper.createDiv("auto-oc-area-suggestions-title").setText(
+    areaNames.length > 0 ? "Existing areas: click one, or type a new area above." : "No areas yet. Type a name above to create a new area."
+  );
+  if (areaNames.length === 0) return;
+  const chips = wrapper.createDiv("auto-oc-area-suggestion-chips");
+  for (const area of areaNames) {
+    const chip = chips.createEl("button", {
+      text: area,
+      cls: "auto-oc-area-suggestion-chip"
+    });
+    chip.type = "button";
+    chip.onclick = () => {
+      areaInput.value = area;
+      onSelect(area);
+    };
+  }
+}
 var FALLBACK_MODELS = [];
 var FALLBACK_AGENTS = [
   { value: "build", label: "build" },
@@ -6196,6 +6228,9 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => this.draft.area = v.trim());
+      renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
+        this.draft.area = area;
+      });
     });
     new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Text to send to OpenCode").addTextArea((ta) => {
       var _a;
@@ -6601,6 +6636,9 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => this.draft.area = v.trim());
+      renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
+        this.draft.area = area;
+      });
     });
     new import_obsidian.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
       var _a;

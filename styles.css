@@ -57,6 +57,38 @@
   background: var(--background-modifier-hover);
 }
 
+.auto-oc-area-suggestions {
+  margin: -4px 0 10px 0;
+  padding-left: 0;
+}
+
+.auto-oc-area-suggestions-title {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  margin-bottom: 6px;
+}
+
+.auto-oc-area-suggestion-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.auto-oc-area-suggestion-chip {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  cursor: pointer;
+  font-size: 0.75rem;
+  padding: 3px 9px;
+}
+
+.auto-oc-area-suggestion-chip:hover {
+  background: var(--background-modifier-hover);
+  border-color: var(--interactive-accent);
+}
+
 /* Stats bar */
 .auto-oc-stats {
   display: flex;

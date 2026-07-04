@@ -232,6 +232,48 @@ interface AutoOCSettings {
   dashboardPositions?: Record<string, { x: number; y: number; size?: number }>;
 }
 
+function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workflows">): string[] {
+  const names = new Set<string>();
+  for (const task of settings.tasks) {
+    const area = task.area?.trim();
+    if (area) names.add(area);
+  }
+  for (const workflow of settings.workflows) {
+    const area = workflow.area?.trim();
+    if (area) names.add(area);
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+
+function renderAreaSuggestions(
+  container: HTMLElement,
+  areaInput: HTMLInputElement,
+  areaNames: string[],
+  onSelect: (area: string) => void
+): void {
+  const wrapper = container.createDiv("auto-oc-area-suggestions");
+  wrapper.createDiv("auto-oc-area-suggestions-title").setText(
+    areaNames.length > 0
+      ? "Existing areas: click one, or type a new area above."
+      : "No areas yet. Type a name above to create a new area."
+  );
+
+  if (areaNames.length === 0) return;
+
+  const chips = wrapper.createDiv("auto-oc-area-suggestion-chips");
+  for (const area of areaNames) {
+    const chip = chips.createEl("button", {
+      text: area,
+      cls: "auto-oc-area-suggestion-chip",
+    });
+    chip.type = "button";
+    chip.onclick = () => {
+      areaInput.value = area;
+      onSelect(area);
+    };
+  }
+}
+
 // Portable representation for import / export.
 // Intentionally excludes machine/runtime-specific fields:
 //   - internal id, status, lastRun, output, createdAt
@@ -4862,6 +4904,9 @@ class CreateTaskModal extends Modal {
           .setPlaceholder("No area")
           .setValue(this.draft.area ?? "")
           .onChange((v) => (this.draft.area = v.trim()));
+        renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
+          this.draft.area = area;
+        });
       });
 
     new Setting(contentEl)
@@ -5415,6 +5460,9 @@ class CreateWorkflowModal extends Modal {
           .setPlaceholder("No area")
           .setValue(this.draft.area ?? "")
           .onChange((v) => (this.draft.area = v.trim()));
+        renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
+          this.draft.area = area;
+        });
       });
 
     new Setting(contentEl)
