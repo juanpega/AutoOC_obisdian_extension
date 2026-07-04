@@ -1987,7 +1987,7 @@ var init_visualBuilderHtml_generated = __esm({
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.4.0",
+        pluginVersion: "1.5.0",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
