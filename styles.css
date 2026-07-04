@@ -66,12 +66,356 @@
 .auto-oc-stat-running { color: #f59e0b; }
 .auto-oc-stat-failed  { color: #ef4444; }
 
+/* Dashboard */
+.auto-oc-dashboard {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.auto-oc-dashboard-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(92px, 1fr));
+  gap: 6px;
+  min-width: 0;
+}
+
+.auto-oc-dashboard-tools {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.auto-oc-dashboard-kpi-toggle {
+  padding: 2px 7px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 999px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.auto-oc-dashboard-kpi-toggle:hover {
+  color: var(--text-normal);
+  background: var(--background-modifier-hover);
+}
+
+.auto-oc-dashboard-kpis-hidden {
+  display: none;
+}
+
+.auto-oc-dashboard-kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+  font-size: 0.72rem;
+  min-width: 0;
+}
+
+.auto-oc-dashboard-kpi-label {
+  color: var(--text-muted);
+}
+
+.auto-oc-dashboard-kpi strong {
+  color: var(--text-normal);
+  font-size: 0.82rem;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auto-oc-dashboard-kpi strong.auto-oc-stat-running { color: #f59e0b; }
+.auto-oc-dashboard-kpi strong.auto-oc-stat-failed  { color: #ef4444; }
+
+.auto-oc-dashboard-map {
+  position: relative;
+  min-height: 320px;
+  height: min(68vh, 560px);
+  max-height: 620px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 14px;
+  background:
+    radial-gradient(circle at 50% 45%, rgba(59, 130, 246, 0.14), transparent 32%),
+    radial-gradient(circle at 22% 20%, rgba(250, 204, 21, 0.08), transparent 24%),
+    linear-gradient(145deg, #07111f, #0b1020 58%, #111827);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
+  color-scheme: dark;
+}
+
+.auto-oc-dashboard-area-bubble,
+.auto-oc-dashboard-workflow-bubble,
+.auto-oc-dashboard-task-bubble {
+  position: absolute;
+  aspect-ratio: 1 / 1;
+  border-radius: 999px;
+  box-sizing: border-box;
+  cursor: grab;
+  touch-action: none;
+  transform: translateZ(0);
+  transition: left 0.14s ease-out, top 0.14s ease-out;
+  user-select: none;
+}
+
+.auto-oc-dashboard-area-bubble {
+  z-index: 1;
+  border: 2px solid rgba(250, 204, 21, 0.85);
+  background: rgba(250, 204, 21, 0.035);
+  box-shadow: 0 0 38px rgba(250, 204, 21, 0.08), inset 0 0 26px rgba(250, 204, 21, 0.04);
+}
+
+.auto-oc-dashboard-area-label {
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 5px);
+  max-width: 150px;
+  color: rgba(250, 204, 21, 0.95);
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  line-height: 1.1;
+  overflow: hidden;
+  pointer-events: none;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.auto-oc-dashboard-workflow-bubble {
+  z-index: 4;
+  border: 2px solid rgba(139, 92, 246, 0.9);
+  background: rgba(99, 102, 241, 0.12);
+  box-shadow: 0 0 24px rgba(99, 102, 241, 0.13), inset 0 0 20px rgba(99, 102, 241, 0.07);
+}
+
+.auto-oc-dashboard-workflow-pending { background: rgba(59, 130, 246, 0.10); }
+.auto-oc-dashboard-workflow-running {
+  background: rgba(20, 184, 166, 0.12);
+  animation: auto-oc-dashboard-running-glow 2s ease-in-out infinite;
+}
+.auto-oc-dashboard-workflow-completed { background: rgba(16, 185, 129, 0.10); }
+.auto-oc-dashboard-workflow-failed {
+  background: rgba(239, 68, 68, 0.10);
+  animation: auto-oc-dashboard-failed-weight 2.6s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-area-bubble.auto-oc-dashboard-has-running,
+.auto-oc-dashboard-area-bubble.auto-oc-dashboard-has-failed,
+.auto-oc-dashboard-workflow-bubble.auto-oc-dashboard-has-running,
+.auto-oc-dashboard-workflow-bubble.auto-oc-dashboard-has-failed {
+  animation: none;
+}
+
+.auto-oc-dashboard-task-bubble {
+  z-index: 8;
+  border: 2px solid rgba(45, 212, 191, 0.92);
+  box-shadow: 0 0 18px rgba(45, 212, 191, 0.16), inset 0 0 12px rgba(255, 255, 255, 0.05);
+}
+
+.auto-oc-dashboard-task-pending { background: rgba(37, 99, 235, 0.82); }
+.auto-oc-dashboard-task-completed { background: rgba(16, 185, 129, 0.84); }
+.auto-oc-dashboard-task-failed {
+  background: rgba(220, 38, 38, 0.86);
+  animation: auto-oc-dashboard-failed-weight 2.6s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-task-running {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.92), rgba(20, 184, 166, 0.92));
+  animation: auto-oc-dashboard-running-glow 1.8s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-task-running::before,
+.auto-oc-dashboard-task-running::after {
+  content: "";
+  position: absolute;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.48);
+  pointer-events: none;
+}
+
+.auto-oc-dashboard-task-running::before {
+  left: 24%;
+  top: 54%;
+  width: 16%;
+  height: 16%;
+  animation: auto-oc-dashboard-inner-bubble 2.1s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-task-running::after {
+  left: 58%;
+  top: 64%;
+  width: 11%;
+  height: 11%;
+  animation: auto-oc-dashboard-inner-bubble 2.6s ease-in-out infinite 0.35s;
+}
+
+.auto-oc-dashboard-task-xl { border-width: 3px; }
+.auto-oc-dashboard-task-lg { border-width: 2px; }
+.auto-oc-dashboard-task-md { border-width: 2px; }
+.auto-oc-dashboard-task-sm { border-width: 1px; opacity: 0.9; }
+
+.auto-oc-dashboard-task-loose {
+  z-index: 9;
+}
+
+.auto-oc-dashboard-dragging {
+  animation: none !important;
+  cursor: grabbing;
+  opacity: 0.96;
+  transition: none !important;
+}
+
+.auto-oc-dashboard-colliding .auto-oc-dashboard-area-bubble,
+.auto-oc-dashboard-colliding .auto-oc-dashboard-workflow-bubble,
+.auto-oc-dashboard-colliding .auto-oc-dashboard-task-bubble {
+  transition: none !important;
+}
+
+.auto-oc-dashboard-measuring .auto-oc-dashboard-area-bubble,
+.auto-oc-dashboard-measuring .auto-oc-dashboard-workflow-bubble,
+.auto-oc-dashboard-measuring .auto-oc-dashboard-task-bubble {
+  animation: none !important;
+  transform: none !important;
+}
+
+.auto-oc-dashboard-hover-label {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  z-index: 12;
+  max-width: 180px;
+  padding: 3px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.95);
+  color: #e5e7eb;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+  text-overflow: ellipsis;
+  transform: translateX(-50%) translateY(2px);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  white-space: nowrap;
+}
+
+.auto-oc-dashboard-area-bubble:hover > .auto-oc-dashboard-hover-label,
+.auto-oc-dashboard-area-bubble:focus > .auto-oc-dashboard-hover-label,
+.auto-oc-dashboard-workflow-bubble:hover > .auto-oc-dashboard-hover-label,
+.auto-oc-dashboard-workflow-bubble:focus > .auto-oc-dashboard-hover-label,
+.auto-oc-dashboard-task-bubble:hover > .auto-oc-dashboard-hover-label,
+.auto-oc-dashboard-task-bubble:focus > .auto-oc-dashboard-hover-label {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+.auto-oc-dashboard-area-bubble:focus,
+.auto-oc-dashboard-workflow-bubble:focus,
+.auto-oc-dashboard-task-bubble:focus {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+@keyframes auto-oc-dashboard-float-area {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(0, -4px, 0); }
+}
+
+@keyframes auto-oc-dashboard-float {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  30% { transform: translate3d(2px, -5px, 0); }
+  65% { transform: translate3d(-2px, 3px, 0); }
+}
+
+@keyframes auto-oc-dashboard-rise {
+  0% { transform: translate3d(0, 2px, 0); }
+  100% { transform: translate3d(0, -11px, 0); }
+}
+
+@keyframes auto-oc-dashboard-sink {
+  0%, 100% { transform: translate3d(0, 5px, 0); }
+  50% { transform: translate3d(1px, 8px, 0); }
+}
+
+@keyframes auto-oc-dashboard-running-glow {
+  0%, 100% { filter: brightness(1); box-shadow: 0 0 18px rgba(45, 212, 191, 0.18), inset 0 0 12px rgba(255, 255, 255, 0.08); }
+  50% { filter: brightness(1.22); box-shadow: 0 0 28px rgba(245, 158, 11, 0.36), inset 0 0 18px rgba(255, 255, 255, 0.18); }
+}
+
+@keyframes auto-oc-dashboard-failed-weight {
+  0%, 100% { filter: brightness(0.96); box-shadow: 0 3px 12px rgba(127, 29, 29, 0.26), inset 0 -8px 16px rgba(127, 29, 29, 0.18); }
+  50% { filter: brightness(0.88); box-shadow: 0 5px 10px rgba(127, 29, 29, 0.34), inset 0 -12px 20px rgba(127, 29, 29, 0.24); }
+}
+
+@keyframes auto-oc-dashboard-inner-bubble {
+  0% { opacity: 0; transform: translateY(0) scale(0.7); }
+  30% { opacity: 0.85; }
+  100% { opacity: 0; transform: translateY(-160%) scale(1.15); }
+}
+
+@media (max-width: 420px) {
+  .auto-oc-dashboard-kpis {
+    grid-template-columns: repeat(auto-fit, minmax(78px, 1fr));
+  }
+
+  .auto-oc-dashboard-kpi {
+    padding: 6px 7px;
+    font-size: 0.68rem;
+  }
+
+  .auto-oc-dashboard-kpi strong {
+    font-size: 0.76rem;
+  }
+
+  .auto-oc-dashboard-map {
+    min-height: 280px;
+    height: min(58vh, 420px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .auto-oc-dashboard-area-bubble,
+  .auto-oc-dashboard-workflow-bubble,
+  .auto-oc-dashboard-task-bubble,
+  .auto-oc-dashboard-task-running::before,
+  .auto-oc-dashboard-task-running::after {
+    animation: none !important;
+  }
+
+  .auto-oc-dashboard-hover-label {
+    transition: none;
+  }
+}
+
 /* Empty state */
 .auto-oc-empty {
   color: var(--text-muted);
   text-align: center;
   margin-top: 40px;
   font-size: 0.85rem;
+}
+
+.auto-oc-dashboard-empty {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  background: var(--background-secondary);
+  padding: 28px 16px;
+}
+
+.auto-oc-dashboard-empty-title {
+  color: var(--text-normal);
+  font-size: 1rem;
+  font-weight: 600;
+  margin-bottom: 6px;
 }
 
 /* Filter bar */

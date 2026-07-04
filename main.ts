@@ -172,6 +172,7 @@ interface WorkflowStep {
 interface ScheduledTask {
   id: string;
   name: string;
+  area?: string;
   prompt: string;
   model: string;
   agent: string;
@@ -197,6 +198,7 @@ type WorkflowStatus = "pending" | "running" | "completed" | "failed";
 interface Workflow {
   id: string;
   name: string;
+  area?: string;
   description?: string;
   steps: WorkflowStep[];
   status: WorkflowStatus;
@@ -237,6 +239,7 @@ interface AutoOCSettings {
 interface ExportTask {
   exportId: string;
   name: string;
+  area?: string;
   prompt: string;
   scheduleType: ScheduleType;
   scheduleTime: string;
@@ -288,6 +291,7 @@ interface ExportWorkflowStep {
 interface ExportWorkflow {
   exportId: string;
   name: string;
+  area?: string;
   description?: string;
   scheduleType: ScheduleType;
   scheduleTime: string;
@@ -577,6 +581,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
   return {
     exportId,
     name: task.name,
+    area: task.area,
     prompt: task.prompt,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
@@ -600,6 +605,7 @@ function toExportWorkflow(
   return {
     exportId,
     name: workflow.name,
+    area: workflow.area,
     description: workflow.description,
     scheduleType: workflow.scheduleType,
     scheduleTime: workflow.scheduleTime,
@@ -1958,6 +1964,7 @@ export default class AutoOCPlugin extends Plugin {
       const task: ScheduledTask = {
         id: generateId(),
         name: this.ensureUniqueTaskName(et.name),
+        area: et.area ?? "",
         prompt: et.prompt,
         model: this.getEffectiveDefaultModel(),
         agent: this.getEffectiveAgent(et.agent),
@@ -2061,6 +2068,7 @@ export default class AutoOCPlugin extends Plugin {
       const workflow: Workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
+        area: ew.area ?? "",
         description: ew.description ?? "",
         steps,
         status: "pending",
@@ -2549,9 +2557,12 @@ class AutoOCView extends ItemView {
   private plugin: AutoOCPlugin;
   private filterText: string = "";
   private filterStatus: string = "all";
-  private currentTab: string = "tasks";
+  private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
+  private dashboardPositions: Map<string, { x: number; y: number; size?: number }> = new Map();
+  private dashboardLayoutSignature: string = "";
+  private showDashboardKpis: boolean = true;
 
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
@@ -2570,6 +2581,26 @@ class AutoOCView extends ItemView {
     new OpenCodeCliModal(this.app, this.plugin).open();
   }
 
+  private openTaskInList(task: ScheduledTask) {
+    this.currentTab = "tasks";
+    this.filterText = "";
+    this.filterStatus = "all";
+    this.expandedTasks.add(task.id);
+    this.render();
+    window.setTimeout(() => {
+      this.containerEl.querySelector<HTMLElement>(`[data-auto-oc-task-id="${task.id}"]`)?.scrollIntoView({ block: "center" });
+    }, 0);
+  }
+
+  private openWorkflowInList(workflow: Workflow) {
+    this.currentTab = "workflows";
+    this.expandedWorkflows.add(workflow.id);
+    this.render();
+    window.setTimeout(() => {
+      this.containerEl.querySelector<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`)?.scrollIntoView({ block: "center" });
+    }, 0);
+  }
+
   render() {
     const { containerEl } = this;
     containerEl.empty();
@@ -2580,8 +2611,8 @@ class AutoOCView extends ItemView {
 
     // ── Tab bar ──
     // The tab bar is split into multiple rows:
-    //   Row 1 (left-aligned): the navigation tabs (Tasks / WorkFlows /
-    //                         Visual Builder / OpenCode CLI)
+    //   Row 1 (left-aligned): the navigation tabs (Dashboard / Tasks /
+    //                         WorkFlows / Visual Builder / OpenCode CLI)
     //   Row 2: creation button on the left, Export/Import on the right.
     //          The creation button is contextual to the active tab:
     //          "+ New Task" for Tasks, "+ New Workflow" for WorkFlows.
@@ -2589,6 +2620,12 @@ class AutoOCView extends ItemView {
 
     // Row 1: navigation tabs
     const navRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-nav");
+    const btnDashboard = navRow.createEl("button", {
+      text: "Dashboard",
+      cls: "auto-oc-tab-btn",
+    });
+    btnDashboard.onclick = () => { this.currentTab = "dashboard"; this.render(); };
+
     const btnTasks = navRow.createEl("button", {
       text: "📋 Tasks",
       cls: "auto-oc-tab-btn",
@@ -2647,11 +2684,14 @@ class AutoOCView extends ItemView {
     btnImport.onclick = () => new ImportModal(this.app, this.plugin).open();
 
     // Highlight active tab
-    if (this.currentTab === "tasks") btnTasks.addClass("active");
+    if (this.currentTab === "dashboard") btnDashboard.addClass("active");
+    else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
 
     // ── Content ──
-    if (this.currentTab === "workflows") {
+    if (this.currentTab === "dashboard") {
+      this.renderDashboard(containerEl);
+    } else if (this.currentTab === "workflows") {
       this.renderWorkflows(containerEl);
     } else {
       this.renderTasks(containerEl);
@@ -2709,6 +2749,579 @@ class AutoOCView extends ItemView {
         title: this.plugin.updateCheckError,
       });
     }
+  }
+
+  private renderDashboard(containerEl: HTMLElement) {
+    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed"];
+    const tasks = this.plugin.settings.tasks;
+    const workflows = this.plugin.settings.workflows;
+
+    if (tasks.length === 0 && workflows.length === 0) {
+      const empty = containerEl.createDiv("auto-oc-empty auto-oc-dashboard-empty");
+      empty.createEl("div", { text: "No activity yet", cls: "auto-oc-dashboard-empty-title" });
+      empty.createEl("div", { text: "Create tasks and workflows to see scheduler KPIs here." });
+      return;
+    }
+
+    const taskCounts = Object.fromEntries(statuses.map((status) => [status, tasks.filter((task) => task.status === status).length])) as Record<TaskStatus, number>;
+    const workflowCounts = Object.fromEntries(statuses.map((status) => [status, workflows.filter((workflow) => workflow.status === status).length])) as Record<WorkflowStatus, number>;
+    const taskUsage = new Map<string, number>();
+    workflows.forEach((workflow) => {
+      workflow.steps.forEach((step) => {
+        if (step.taskId) taskUsage.set(step.taskId, (taskUsage.get(step.taskId) || 0) + 1);
+      });
+    });
+    const totalReferences = Array.from(taskUsage.values()).reduce((sum, count) => sum + count, 0);
+    const mostUsed = tasks.reduce<{ name: string; count: number } | null>((best, task) => {
+      const count = taskUsage.get(task.id) || 0;
+      if (!best || count > best.count) return { name: task.name, count };
+      return best;
+    }, null);
+    const unusedTasks = tasks.filter((task) => !taskUsage.has(task.id)).length;
+
+    const dashboard = containerEl.createDiv("auto-oc-dashboard");
+    const dashboardTools = dashboard.createDiv("auto-oc-dashboard-tools");
+    const btnToggleKpis = dashboardTools.createEl("button", {
+      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
+      cls: "auto-oc-dashboard-kpi-toggle",
+    });
+    btnToggleKpis.onclick = () => {
+      this.showDashboardKpis = !this.showDashboardKpis;
+      this.render();
+    };
+    const kpis = dashboard.createDiv(this.showDashboardKpis ? "auto-oc-dashboard-kpis" : "auto-oc-dashboard-kpis auto-oc-dashboard-kpis-hidden");
+    const addKpi = (label: string, value: string | number, cls?: string) => {
+      const kpi = kpis.createDiv("auto-oc-dashboard-kpi");
+      kpi.createEl("span", { text: label, cls: "auto-oc-dashboard-kpi-label" });
+      kpi.createEl("strong", { text: String(value), cls });
+    };
+
+    addKpi("Tasks", tasks.length);
+    statuses.forEach((status) => addKpi(`Tasks ${status}`, taskCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : undefined));
+    addKpi("Workflows", workflows.length);
+    statuses.forEach((status) => addKpi(`Workflows ${status}`, workflowCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : undefined));
+    addKpi("Task refs", totalReferences);
+    addKpi("Most used", mostUsed && mostUsed.count > 0 ? `${mostUsed.name} (${mostUsed.count})` : "None");
+    addKpi("Unused tasks", unusedTasks);
+
+    const map = dashboard.createDiv("auto-oc-dashboard-map");
+    const areaName = (value?: string) => value?.trim() || "No area";
+    const layoutSignature = JSON.stringify({
+      tasks: tasks.map((task) => ({ id: task.id, area: areaName(task.area) })).sort((a, b) => a.id.localeCompare(b.id)),
+      workflows: workflows.map((workflow) => ({
+        id: workflow.id,
+        area: areaName(workflow.area),
+        steps: workflow.steps.map((step) => step.taskId || step.id),
+      })).sort((a, b) => a.id.localeCompare(b.id)),
+    });
+    const layoutChanged = layoutSignature !== this.dashboardLayoutSignature;
+    if (layoutChanged) this.dashboardLayoutSignature = layoutSignature;
+    const areaNames = Array.from(new Set([
+      ...workflows.map((workflow) => areaName(workflow.area)),
+      ...tasks.map((task) => areaName(task.area)),
+    ])).sort((a, b) => a.localeCompare(b));
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const rankedTasks = [...tasks].sort((a, b) => {
+      const usageDiff = (taskUsage.get(b.id) || 0) - (taskUsage.get(a.id) || 0);
+      return usageDiff || a.name.localeCompare(b.name);
+    });
+    const taskSizeRank = new Map<string, "xl" | "lg" | "md" | "sm">();
+    rankedTasks.forEach((task, index) => {
+      const bucket = Math.floor((index * 4) / Math.max(rankedTasks.length, 1));
+      taskSizeRank.set(task.id, bucket === 0 ? "xl" : bucket === 1 ? "lg" : bucket === 2 ? "md" : "sm");
+    });
+    const sizeMultiplier = { xl: 1.35, lg: 1.15, md: 1, sm: 0.84 };
+    const setBubbleRect = (el: HTMLElement, x: number, y: number, size: number) => {
+      el.style.left = `${x}%`;
+      el.style.top = `${y}%`;
+      el.style.width = `${size}%`;
+      el.style.height = "";
+    };
+    const saveBubblePosition = (bubble: HTMLElement) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!key) return;
+      this.dashboardPositions.set(key, {
+        x: parseFloat(bubble.style.left || "0"),
+        y: parseFloat(bubble.style.top || "0"),
+        size: parseFloat(bubble.style.width || "0") || undefined,
+      });
+    };
+    const saveBubbleTreePositions = (parent: HTMLElement) => {
+      const bubbles = Array.from(parent.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble, .auto-oc-dashboard-workflow-bubble, .auto-oc-dashboard-task-bubble"));
+      bubbles.forEach(saveBubblePosition);
+    };
+    const addLabel = (el: HTMLElement, name: string, ariaLabel = name) => {
+      el.tabIndex = 0;
+      el.title = ariaLabel;
+      el.setAttr("aria-label", ariaLabel);
+      el.createDiv("auto-oc-dashboard-hover-label").setText(name);
+    };
+    const isDashboardBubble = (el: HTMLElement) => {
+      return el.classList.contains("auto-oc-dashboard-area-bubble")
+        || el.classList.contains("auto-oc-dashboard-workflow-bubble")
+        || el.classList.contains("auto-oc-dashboard-task-bubble");
+    };
+    const withDashboardMeasuring = <T>(fn: () => T): T => {
+      map.addClass("auto-oc-dashboard-measuring");
+      try {
+        return fn();
+      } finally {
+        map.removeClass("auto-oc-dashboard-measuring");
+      }
+    };
+    const clampBubbleToParent = (bubble: HTMLElement) => {
+      const parent = bubble.offsetParent as HTMLElement | null;
+      if (!parent) return;
+      const bounds = parent.getBoundingClientRect();
+      const rect = bubble.getBoundingClientRect();
+      const widthPct = (rect.width / bounds.width) * 100;
+      const heightPct = (rect.height / bounds.height) * 100;
+      let leftPct = ((rect.left - bounds.left) / bounds.width) * 100;
+      let topPct = ((rect.top - bounds.top) / bounds.height) * 100;
+
+      if (isDashboardBubble(parent)) {
+        const parentRadius = Math.min(bounds.width, bounds.height) / 2;
+        const bubbleRadius = rect.width / 2;
+        const parentCenterX = bounds.left + bounds.width / 2;
+        const parentCenterY = bounds.top + bounds.height / 2;
+        const bubbleCenterX = rect.left + rect.width / 2;
+        const bubbleCenterY = rect.top + rect.height / 2;
+        let dx = bubbleCenterX - parentCenterX;
+        let dy = bubbleCenterY - parentCenterY;
+        let distance = Math.hypot(dx, dy);
+        const maxDistance = Math.max(0, parentRadius - bubbleRadius * 0.88);
+        if (distance > maxDistance) {
+          if (distance < 0.01) {
+            dx = 1;
+            dy = 0;
+            distance = 1;
+          }
+          const nextCenterX = parentCenterX + (dx / distance) * maxDistance;
+          const nextCenterY = parentCenterY + (dy / distance) * maxDistance;
+          leftPct = ((nextCenterX - bubbleRadius - bounds.left) / bounds.width) * 100;
+          topPct = ((nextCenterY - bubbleRadius - bounds.top) / bounds.height) * 100;
+        }
+      }
+
+      bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, leftPct))}%`;
+      bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, topPct))}%`;
+    };
+    const fitContainerToChildren = (container: HTMLElement) => {
+      return withDashboardMeasuring(() => {
+      if (!isDashboardBubble(container)) return;
+      const parent = container.offsetParent as HTMLElement | null;
+      if (!parent) return;
+      const children = Array.from(container.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
+      if (children.length === 0) return;
+
+      const parentRect = parent.getBoundingClientRect();
+      const childRects = children.map((child) => ({ child, rect: child.getBoundingClientRect() }));
+      const padding = 12;
+      const minX = Math.min(...childRects.map(({ rect }) => rect.left)) - padding;
+      const maxX = Math.max(...childRects.map(({ rect }) => rect.right)) + padding;
+      const minY = Math.min(...childRects.map(({ rect }) => rect.top)) - padding;
+      const maxY = Math.max(...childRects.map(({ rect }) => rect.bottom)) + padding;
+      const diameterPx = Math.max(maxX - minX, maxY - minY, ...childRects.map(({ rect }) => rect.width + padding * 2));
+      const oldCenters = childRects.map(({ child, rect }) => ({
+        child,
+        centerX: rect.left + rect.width / 2,
+        centerY: rect.top + rect.height / 2,
+        width: rect.width,
+        height: rect.height,
+      }));
+      const centerX = (minX + maxX) / 2;
+      const centerY = (minY + maxY) / 2;
+      const sizePct = Math.min(96, Math.max(10, (diameterPx / parentRect.width) * 100));
+      const sizePx = (sizePct / 100) * parentRect.width;
+      container.style.width = `${sizePct}%`;
+      container.style.left = `${((centerX - sizePx / 2 - parentRect.left) / parentRect.width) * 100}%`;
+      container.style.top = `${((centerY - sizePx / 2 - parentRect.top) / parentRect.height) * 100}%`;
+      clampBubbleToParent(container);
+
+      const nextRect = container.getBoundingClientRect();
+      oldCenters.forEach(({ child, centerX: childCenterX, centerY: childCenterY, width, height }) => {
+        child.style.left = `${((childCenterX - width / 2 - nextRect.left) / nextRect.width) * 100}%`;
+        child.style.top = `${((childCenterY - height / 2 - nextRect.top) / nextRect.height) * 100}%`;
+        clampBubbleToParent(child);
+      });
+      saveBubbleTreePositions(parent);
+      });
+    };
+    const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
+      return withDashboardMeasuring(() => {
+      const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
+      const bounds = parent.getBoundingClientRect();
+      if (bubbles.length < 2 || bounds.width === 0 || bounds.height === 0) return;
+
+      for (let pass = 0; pass < passes; pass++) {
+        let movedAny = false;
+        for (let i = 0; i < bubbles.length; i++) {
+          for (let j = i + 1; j < bubbles.length; j++) {
+            const a = bubbles[i];
+            const b = bubbles[j];
+            const aRect = a.getBoundingClientRect();
+            const bRect = b.getBoundingClientRect();
+            const aRadius = aRect.width / 2;
+            const bRadius = bRect.width / 2;
+            const aCenterX = aRect.left + aRadius;
+            const aCenterY = aRect.top + aRect.height / 2;
+            const bCenterX = bRect.left + bRadius;
+            const bCenterY = bRect.top + bRect.height / 2;
+            let dx = bCenterX - aCenterX;
+            let dy = bCenterY - aCenterY;
+            let distance = Math.hypot(dx, dy);
+            const minDistance = aRadius + bRadius + 2;
+            if (distance >= minDistance) continue;
+            if (distance < 0.01) {
+              const angle = ((i + j + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
+              dx = Math.cos(angle);
+              dy = Math.sin(angle);
+              distance = 1;
+            }
+            const push = (minDistance - distance) * 0.75;
+            const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
+              const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
+              const nextTopPx = rect.top - bounds.top + (dy / distance) * amount;
+              const nextLeftPct = (nextLeftPx / bounds.width) * 100;
+              const nextTopPct = (nextTopPx / bounds.height) * 100;
+              const widthPct = (rect.width / bounds.width) * 100;
+              const heightPct = (rect.height / bounds.height) * 100;
+              bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+              bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+              clampBubbleToParent(bubble);
+            };
+            moveBubble(a, aRect, -push);
+            moveBubble(b, bRect, push);
+            movedAny = true;
+          }
+        }
+        if (!movedAny) break;
+      }
+      saveBubbleTreePositions(parent);
+      });
+    };
+    const attachBubbleDrag = (el: HTMLElement, onClick?: () => void) => {
+      let startX = 0;
+      let startY = 0;
+      let startLeft = 0;
+      let startTop = 0;
+      let moved = false;
+      let parentRect: DOMRect | null = null;
+      let pointerId: number | null = null;
+
+      const resolveSiblingCollisions = () => {
+        const parent = el.offsetParent as HTMLElement | null;
+        if (!parent) return;
+        const bounds = parent.getBoundingClientRect();
+        const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => {
+          return child instanceof HTMLElement && isDashboardBubble(child);
+        });
+        let frontier = new Set<HTMLElement>([el]);
+
+        for (let pass = 0; pass < 5 && frontier.size > 0; pass++) {
+          const nextFrontier = new Set<HTMLElement>();
+          for (const a of frontier) {
+            for (const b of bubbles) {
+              if (a === b) continue;
+              const aRect = a.getBoundingClientRect();
+              const bRect = b.getBoundingClientRect();
+              const aRadius = aRect.width / 2;
+              const bRadius = bRect.width / 2;
+              const aCenterX = aRect.left + aRadius;
+              const aCenterY = aRect.top + aRect.height / 2;
+              const bCenterX = bRect.left + bRadius;
+              const bCenterY = bRect.top + bRect.height / 2;
+              let dx = bCenterX - aCenterX;
+              let dy = bCenterY - aCenterY;
+              let distance = Math.hypot(dx, dy);
+              const minDistance = (aRadius + bRadius) * 0.97;
+              if (distance >= minDistance) continue;
+              if (distance < 0.01) {
+                const angle = ((bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
+                dx = Math.cos(angle);
+                dy = Math.sin(angle);
+                distance = 1;
+              }
+
+              const push = (minDistance - distance) * 0.85;
+              const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
+                if (amount === 0) return;
+                const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
+                const nextTopPx = rect.top - bounds.top + (dy / distance) * amount;
+                const nextLeftPct = (nextLeftPx / bounds.width) * 100;
+                const nextTopPct = (nextTopPx / bounds.height) * 100;
+                const widthPct = (rect.width / bounds.width) * 100;
+                const heightPct = (rect.height / bounds.height) * 100;
+                bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+                bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+              };
+              moveBubble(b, bRect, push);
+              clampBubbleToParent(b);
+              nextFrontier.add(b);
+            }
+          }
+          frontier = nextFrontier;
+        }
+      };
+
+      el.onpointerdown = (event: PointerEvent) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pointerId = event.pointerId;
+        startX = event.clientX;
+        startY = event.clientY;
+        startLeft = parseFloat(el.style.left || "0");
+        startTop = parseFloat(el.style.top || "0");
+        parentRect = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect() || null;
+        moved = false;
+        el.addClass("auto-oc-dashboard-dragging");
+        (el.offsetParent as HTMLElement | null)?.addClass("auto-oc-dashboard-colliding");
+        el.style.zIndex = "30";
+        el.setPointerCapture(event.pointerId);
+      };
+      el.onpointermove = (event: PointerEvent) => {
+        if (pointerId !== event.pointerId || !parentRect) return;
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        const bubbleRect = el.getBoundingClientRect();
+        const widthPct = (bubbleRect.width / parentRect.width) * 100;
+        const heightPct = (bubbleRect.height / parentRect.height) * 100;
+        const nextLeft = startLeft + (dx / parentRect.width) * 100;
+        const nextTop = startTop + (dy / parentRect.height) * 100;
+        el.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeft))}%`;
+        el.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTop))}%`;
+        resolveSiblingCollisions();
+      };
+      el.onpointerup = (event: PointerEvent) => {
+        if (pointerId !== event.pointerId) return;
+        const parent = el.offsetParent as HTMLElement | null;
+        event.preventDefault();
+        event.stopPropagation();
+        el.releasePointerCapture(event.pointerId);
+        el.removeClass("auto-oc-dashboard-dragging");
+        parent?.removeClass("auto-oc-dashboard-colliding");
+        el.style.zIndex = "";
+        pointerId = null;
+        parentRect = null;
+        if (parent) {
+          settleBubbleCollisions(parent, 24);
+          if (isDashboardBubble(parent)) {
+            fitContainerToChildren(parent);
+            const grandParent = parent.offsetParent as HTMLElement | null;
+            if (grandParent && isDashboardBubble(grandParent)) fitContainerToChildren(grandParent);
+          }
+        }
+        if (!moved && onClick) onClick();
+      };
+      el.onpointercancel = (event: PointerEvent) => {
+        if (pointerId !== event.pointerId) return;
+        el.removeClass("auto-oc-dashboard-dragging");
+        (el.offsetParent as HTMLElement | null)?.removeClass("auto-oc-dashboard-colliding");
+        el.style.zIndex = "";
+        pointerId = null;
+        parentRect = null;
+      };
+      el.onkeydown = (event: KeyboardEvent) => {
+        if (event.key !== "Enter" || !onClick) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      };
+    };
+    const layoutTopLevel = (items: { key: string; size: number }[]) => {
+      const jitterForKey = (key: string, axis: number) => {
+        let hash = 0;
+        for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i) + axis * 131) | 0;
+        return ((Math.abs(hash) % 1000) / 1000 - 0.5) * 10;
+      };
+      const count = Math.max(items.length, 1);
+      const cols = count <= 1 ? 1 : count <= 4 ? 2 : Math.ceil(Math.sqrt(count));
+      const rows = Math.ceil(count / cols);
+      const gap = 4;
+      const cellWidth = (100 - gap * (cols + 1)) / cols;
+      const cellHeight = (100 - gap * (rows + 1)) / rows;
+      return items.map((item, index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const size = Math.min(item.size, cellWidth, cellHeight);
+        const saved = this.dashboardPositions.get(item.key);
+        if (saved) {
+          const savedSize = saved.size ? Math.min(saved.size, cellWidth, cellHeight) : size;
+          return {
+            ...item,
+            size: savedSize,
+            x: Math.max(0, Math.min(100 - savedSize, saved.x)),
+            y: Math.max(0, Math.min(100 - savedSize, saved.y)),
+          };
+        }
+        const jitterX = Math.max(-cellWidth * 0.18, Math.min(cellWidth * 0.18, jitterForKey(item.key, 0)));
+        const jitterY = Math.max(-cellHeight * 0.18, Math.min(cellHeight * 0.18, jitterForKey(item.key, 1)));
+        return {
+          ...item,
+          size,
+          x: Math.max(0, Math.min(100 - size, gap + col * (cellWidth + gap) + (cellWidth - size) / 2 + jitterX)),
+          y: Math.max(0, Math.min(100 - size, gap + row * (cellHeight + gap) + (cellHeight - size) / 2 + jitterY)),
+        };
+      });
+    };
+    const createAreaBubble = (name: string, x: number, y: number, size: number) => {
+      const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
+      areaBubble.setAttr("data-dashboard-key", `area:${name}`);
+      setBubbleRect(areaBubble, x, y, size);
+      areaBubble.title = `Area: ${name}`;
+      areaBubble.setAttr("aria-label", `Area: ${name}`);
+      areaBubble.tabIndex = 0;
+
+      const areaLabel = areaBubble.createDiv("auto-oc-dashboard-area-label");
+      areaLabel.setText(name);
+      areaBubble.createDiv("auto-oc-dashboard-hover-label").setText(name);
+      attachBubbleDrag(areaBubble);
+      clampBubbleToParent(areaBubble);
+      return areaBubble;
+    };
+
+    const createTaskBubble = (parent: HTMLElement, task: ScheduledTask, x: number, y: number, size: number, extraCls = "", positionKey = `task:${task.id}`) => {
+      const sizeRank = taskSizeRank.get(task.id) || "sm";
+      const rankedSize = size * sizeMultiplier[sizeRank];
+      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${sizeRank} ${extraCls}`.trim());
+      taskBubble.setAttr("data-dashboard-key", positionKey);
+      taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
+      const saved = this.dashboardPositions.get(positionKey);
+      setBubbleRect(taskBubble, saved?.x ?? x - (rankedSize - size) / 2, saved?.y ?? y - (rankedSize - size) / 2, rankedSize);
+      const usageCount = taskUsage.get(task.id) || 0;
+      addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
+      attachBubbleDrag(taskBubble, () => this.openTaskInList(task));
+      clampBubbleToParent(taskBubble);
+    };
+
+    const configuredAreaNames = areaNames.filter((name) => name !== "No area");
+    const topLevelItems: { key: string; size: number }[] = [];
+    configuredAreaNames.forEach((name) => {
+      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
+      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
+        return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
+      }, 0);
+      topLevelItems.push({ key: `area:${name}`, size: Math.max(12, 9 + Math.sqrt(Math.max(contentWeight, 1)) * 7) });
+    });
+    const noAreaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === "No area");
+    const noAreaLooseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === "No area");
+    noAreaWorkflows.forEach((workflow) => {
+      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
+      topLevelItems.push({ key: `workflow:${workflow.id}`, size: Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9)) });
+    });
+    noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: 10 * sizeMultiplier[taskSizeRank.get(task.id) || "sm"] }));
+    const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
+
+    configuredAreaNames.forEach((name) => {
+      const areaLayout = topLevelLayout.get(`area:${name}`);
+      if (!areaLayout) return;
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size);
+      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
+      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "running"))) {
+        areaBubble.addClass("auto-oc-dashboard-has-running");
+      }
+      if (looseTasks.some((task) => task.status === "failed") || areaWorkflows.some((workflow) => workflow.status === "failed" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "failed"))) {
+        areaBubble.addClass("auto-oc-dashboard-has-failed");
+      }
+      const areaWorkflowCount = Math.max(areaWorkflows.length, 1);
+      areaWorkflows.forEach((workflow, workflowIndex) => {
+        const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
+        const angle = -Math.PI / 2 + (workflowIndex * Math.PI * 2) / areaWorkflowCount;
+        const workflowSize = Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9));
+        const workflowRadius = areaWorkflowCount === 1 ? 0 : Math.max(0, 46 - workflowSize / 2);
+        const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
+        const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
+        const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+        if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
+        if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
+        const workflowKey = `area:${name}:workflow:${workflow.id}`;
+        workflowBubble.setAttr("data-dashboard-key", workflowKey);
+        const savedWorkflow = this.dashboardPositions.get(workflowKey);
+        setBubbleRect(workflowBubble, savedWorkflow?.x ?? workflowX, savedWorkflow?.y ?? workflowY, savedWorkflow?.size ?? workflowSize);
+        addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+        attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
+        clampBubbleToParent(workflowBubble);
+
+        const taskCount = Math.max(taskSteps.length, 1);
+        taskSteps.forEach((step, stepIndex) => {
+          const task = taskById.get(step.taskId!);
+          if (!task) return;
+          const taskAngle = -Math.PI / 2 + (stepIndex * Math.PI * 2) / taskCount;
+          const taskSize = Math.max(16, Math.min(24, 25 - taskSteps.length));
+          const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
+          const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
+          const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
+          createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `${workflowKey}:task:${task.id}:${stepIndex}`);
+        });
+      });
+
+      const looseCount = Math.max(looseTasks.length, 1);
+      looseTasks.forEach((task, taskIndex) => {
+        const angle = -Math.PI / 2 + (taskIndex * Math.PI * 2) / looseCount;
+        const taskSize = looseCount === 1 && areaWorkflows.length === 0 ? 34 : 13;
+        const radius = looseCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
+        const taskX = 50 + Math.cos(angle) * radius - taskSize / 2;
+        const taskY = 50 + Math.sin(angle) * radius - taskSize / 2;
+        createTaskBubble(areaBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-loose", `area:${name}:task:${task.id}`);
+      });
+    });
+
+    noAreaWorkflows.forEach((workflow) => {
+      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
+      const workflowSize = Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9));
+      const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
+      if (!workflowLayout) return;
+      const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+      if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
+      if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
+      workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
+      setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowLayout.size);
+      addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+      attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
+      clampBubbleToParent(workflowBubble);
+
+      const taskCount = Math.max(taskSteps.length, 1);
+      taskSteps.forEach((step, stepIndex) => {
+        const task = taskById.get(step.taskId!);
+        if (!task) return;
+        const taskAngle = -Math.PI / 2 + (stepIndex * Math.PI * 2) / taskCount;
+        const taskSize = Math.max(16, Math.min(24, 25 - taskSteps.length));
+        const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
+        const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
+        const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
+        createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `workflow:${workflow.id}:task:${task.id}:${stepIndex}`);
+      });
+    });
+
+    noAreaLooseTasks.forEach((task) => {
+      const taskLayout = topLevelLayout.get(`task:${task.id}`);
+      if (!taskLayout) return;
+      const taskSize = 10;
+      const sizeRank = taskSizeRank.get(task.id) || "sm";
+      const rankedSize = taskSize * sizeMultiplier[sizeRank];
+      createTaskBubble(map, task, taskLayout.x + (rankedSize - taskSize) / 2, taskLayout.y + (rankedSize - taskSize) / 2, taskSize, "auto-oc-dashboard-task-loose");
+    });
+
+    if (!layoutChanged && this.dashboardPositions.size > 0) return;
+
+    window.setTimeout(() => {
+      const workflowContainers = Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-workflow-bubble"));
+      workflowContainers.forEach((container) => {
+        settleBubbleCollisions(container, 12);
+        fitContainerToChildren(container);
+      });
+      const areaContainers = Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble"));
+      areaContainers.forEach((container) => {
+        settleBubbleCollisions(container, 12);
+        fitContainerToChildren(container);
+      });
+      settleBubbleCollisions(map, 14);
+      saveBubbleTreePositions(map);
+    }, 0);
   }
 
   private renderTasks(containerEl: HTMLElement) {
@@ -2783,6 +3396,7 @@ class AutoOCView extends ItemView {
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
+    card.setAttr("data-auto-oc-task-id", task.id);
     
     // Summary Bar (Always Visible)
     const summary = card.createDiv("auto-oc-card-summary");
@@ -2811,6 +3425,7 @@ class AutoOCView extends ItemView {
 
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
+    meta.createEl("span", { text: `🗂 ${task.area?.trim() || "No area"}` });
     meta.createEl("span", { text: `🤖 ${modelLabel}` });
     meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
 
@@ -2994,6 +3609,7 @@ class AutoOCView extends ItemView {
 
   private renderWorkflowCard(parent: HTMLElement, workflow: Workflow) {
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
+    card.setAttr("data-auto-oc-workflow-id", workflow.id);
     const summary = card.createDiv("auto-oc-card-summary");
 
     const nameEl = summary.createEl("span", {
@@ -3020,6 +3636,9 @@ class AutoOCView extends ItemView {
     const details = card.createDiv("auto-oc-card-details");
     const isExpandedWf = this.expandedWorkflows.has(workflow.id);
     details.style.display = isExpandedWf ? "block" : "none";
+
+    const areaMeta = details.createDiv("auto-oc-card-meta");
+    areaMeta.createEl("span", { text: `🗂 ${workflow.area?.trim() || "No area"}` });
 
     // Description
     if (workflow.description) {
@@ -3513,6 +4132,7 @@ class VisualBuilderModal extends Modal {
       return {
         id,
         name: t.name || "Unnamed",
+        area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
         prompt: t.prompt || "",
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
@@ -3548,6 +4168,7 @@ class VisualBuilderModal extends Modal {
       return {
         id,
         name: w.name || "Unnamed",
+        area: w.area !== undefined ? (w.area || "") : (existing?.area || ""),
         description: w.description || "",
         steps: (w.steps || []).map((s: any, i: number) => {
           const oldStep = existing?.steps.find((x) => x.id === s.id);
@@ -3651,6 +4272,17 @@ class CreateTaskModal extends Modal {
           .setValue(this.draft.name ?? "")
           .onChange((v) => (this.draft.name = v));
         window.setTimeout(() => text.inputEl.focus(), 50);
+      });
+
+    new Setting(contentEl)
+      .setName("Area")
+      .setDesc("Optional dashboard grouping area")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder("No area")
+          .setValue(this.draft.area ?? "")
+          .onChange((v) => (this.draft.area = v.trim()));
       });
 
     new Setting(contentEl)
@@ -3964,6 +4596,7 @@ class CreateTaskModal extends Modal {
               name: this.draft.name!,
               prompt: this.draft.prompt!,
               model: this.draft.model!,
+              area: this.draft.area ?? "",
               agent: this.plugin.getEffectiveAgent(this.draft.agent),
               useRalphLoop: this.draft.useRalphLoop ?? false,
               scheduleType: this.draft.scheduleType ?? "manual",
@@ -4195,6 +4828,17 @@ class CreateWorkflowModal extends Modal {
       });
 
     new Setting(contentEl)
+      .setName("Area")
+      .setDesc("Optional dashboard grouping area")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder("No area")
+          .setValue(this.draft.area ?? "")
+          .onChange((v) => (this.draft.area = v.trim()));
+      });
+
+    new Setting(contentEl)
       .setName("Description")
       .setDesc("Optional description")
       .addText((text) => {
@@ -4420,6 +5064,7 @@ class CreateWorkflowModal extends Modal {
               this.plugin.settings.workflows[idx] = {
                 ...this.editWorkflow,
                 name: this.draft.name!,
+                area: this.draft.area ?? "",
                 description: this.draft.description,
                 steps,
                 handoffBranch: this.draft.handoffBranch ?? false,
@@ -4438,6 +5083,7 @@ class CreateWorkflowModal extends Modal {
             const workflow: Workflow = {
               id: generateId(),
               name: this.draft.name!,
+              area: this.draft.area ?? "",
               description: this.draft.description ?? "",
               steps,
               status: "pending",
