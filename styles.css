@@ -3,6 +3,10 @@
 .auto-oc-view {
   padding: 12px;
   overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  box-sizing: border-box;
 }
 
 /* Header */
@@ -72,6 +76,8 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  flex: 1;
+  min-height: 0;
 }
 
 .auto-oc-dashboard-kpis {
@@ -140,9 +146,8 @@
 
 .auto-oc-dashboard-map {
   position: relative;
+  flex: 1;
   min-height: 320px;
-  height: min(68vh, 560px);
-  max-height: 620px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 14px;
@@ -393,7 +398,6 @@
 
   .auto-oc-dashboard-map {
     min-height: 280px;
-    height: min(58vh, 420px);
   }
 }
 

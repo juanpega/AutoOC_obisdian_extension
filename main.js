@@ -3380,7 +3380,7 @@ DONE:" + $exitCode + "
         t.status = "failed";
         t.output += `
 [exit code: ${exitCode}]`;
-        (_b2 = this.view) == null ? void 0 : _b2.nudgeDashboardTask(task.id, "down", 18, 18);
+        (_b2 = this.view) == null ? void 0 : _b2.startGradualSink(task.id);
         new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
@@ -4161,8 +4161,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.expandedWorkflows = /* @__PURE__ */ new Set();
     this.dashboardPositions = /* @__PURE__ */ new Map();
     this.dashboardTaskShift = /* @__PURE__ */ new Map();
+    this.sinkIntervals = /* @__PURE__ */ new Map();
     this.dashboardLayoutSignature = "";
-    this.showDashboardKpis = true;
+    this.showDashboardKpis = false;
     this.plugin = plugin;
   }
   getViewType() {
@@ -4183,6 +4184,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.render();
   }
   resetDashboardTaskShift(taskId) {
+    const existing = this.sinkIntervals.get(taskId);
+    if (existing) {
+      clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+    }
     this.dashboardTaskShift.delete(taskId);
   }
   nudgeDashboardTask(taskId, direction, amountPct = 1.8, maxShiftPct = 18) {
@@ -4213,6 +4219,25 @@ var AutoOCView = class extends import_obsidian.ItemView {
       bubble.style.top = `${nextY}%`;
       if (key) this.dashboardPositions.set(key, { x, y: nextY, size });
     });
+  }
+  startGradualSink(taskId, stepPct = 1.8, maxPct = 18) {
+    const existing = this.sinkIntervals.get(taskId);
+    if (existing) {
+      clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+    }
+    const tick = () => {
+      const currentShift = this.dashboardTaskShift.get(taskId) || 0;
+      if (currentShift >= maxPct) {
+        clearInterval(iv);
+        this.sinkIntervals.delete(taskId);
+        return;
+      }
+      this.nudgeDashboardTask(taskId, "down", stepPct, maxPct);
+    };
+    const iv = setInterval(tick, 3e3);
+    this.sinkIntervals.set(taskId, iv);
+    tick();
   }
   openCli() {
     new OpenCodeCliModal(this.app, this.plugin).open();

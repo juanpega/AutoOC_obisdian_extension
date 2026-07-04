@@ -1678,7 +1678,7 @@ export default class AutoOCPlugin extends Plugin {
       if (exitCode !== 0) {
         t.status = "failed";
         t.output += `\n[exit code: ${exitCode}]`;
-        this.view?.nudgeDashboardTask(task.id, "down", 18, 18);
+        this.view?.startGradualSink(task.id);
         new Notice(`AutoOC: ❌ "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
@@ -2565,8 +2565,9 @@ class AutoOCView extends ItemView {
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number }> = new Map();
   private dashboardTaskShift: Map<string, number> = new Map();
+  private sinkIntervals: Map<string, ReturnType<typeof setInterval>> = new Map();
   private dashboardLayoutSignature: string = "";
-  private showDashboardKpis: boolean = true;
+  private showDashboardKpis: boolean = false;
 
   constructor(leaf: WorkspaceLeaf, plugin: AutoOCPlugin) {
     super(leaf);
@@ -2582,6 +2583,8 @@ class AutoOCView extends ItemView {
   refresh() { this.render(); }
 
   resetDashboardTaskShift(taskId: string) {
+    const existing = this.sinkIntervals.get(taskId);
+    if (existing) { clearInterval(existing); this.sinkIntervals.delete(taskId); }
     this.dashboardTaskShift.delete(taskId);
   }
 
@@ -2616,6 +2619,24 @@ class AutoOCView extends ItemView {
       bubble.style.top = `${nextY}%`;
       if (key) this.dashboardPositions.set(key, { x, y: nextY, size });
     });
+  }
+
+  startGradualSink(taskId: string, stepPct = 1.8, maxPct = 18) {
+    const existing = this.sinkIntervals.get(taskId);
+    if (existing) { clearInterval(existing); this.sinkIntervals.delete(taskId); }
+    const tick = () => {
+      const currentShift = this.dashboardTaskShift.get(taskId) || 0;
+      if (currentShift >= maxPct) {
+        clearInterval(iv);
+        this.sinkIntervals.delete(taskId);
+        return;
+      }
+      this.nudgeDashboardTask(taskId, "down", stepPct, maxPct);
+    };
+    const iv = setInterval(tick, 3000);
+    this.sinkIntervals.set(taskId, iv);
+    // fire immediately for the first tick so it starts moving right away
+    tick();
   }
 
   private openCli() {
