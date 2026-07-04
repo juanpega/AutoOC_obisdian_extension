@@ -1354,9 +1354,9 @@ export default class AutoOCPlugin extends Plugin {
     return { changed: true, configPath };
   }
 
-  async saveSettings() {
+  async saveSettings(refreshView = true) {
     await this.saveData(this.settings);
-    this.view?.refresh();
+    if (refreshView) this.view?.refresh();
   }
 
   // ── Version / update helpers ────────────────────────────────────────────────
@@ -1558,6 +1558,7 @@ export default class AutoOCPlugin extends Plugin {
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = new Date().toISOString();
     this.settings.tasks[idx].output = "[starting detached process…]\n";
+    this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
 
     new Notice(`AutoOC: running "${task.name}"…`);
@@ -1645,14 +1646,15 @@ export default class AutoOCPlugin extends Plugin {
       if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
         timeoutWarned = true;
         t.output += `\n[⏱ timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
-        await this.saveSettings();
+        await this.saveSettings(false);
         new Notice(`AutoOC: ⏱ "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
 
       if (!fs.existsSync(doneFile)) {
         // Still running — heartbeat dot
         t.output += ".";
-        await this.saveSettings();
+        this.view?.nudgeDashboardTask(task.id, "up");
+        await this.saveSettings(false);
         return;
       }
 
@@ -1676,6 +1678,7 @@ export default class AutoOCPlugin extends Plugin {
       if (exitCode !== 0) {
         t.status = "failed";
         t.output += `\n[exit code: ${exitCode}]`;
+        this.view?.nudgeDashboardTask(task.id, "down", 18, 18);
         new Notice(`AutoOC: ❌ "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
@@ -2561,6 +2564,7 @@ class AutoOCView extends ItemView {
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number }> = new Map();
+  private dashboardTaskShift: Map<string, number> = new Map();
   private dashboardLayoutSignature: string = "";
   private showDashboardKpis: boolean = true;
 
@@ -2576,6 +2580,43 @@ class AutoOCView extends ItemView {
   async onOpen() { this.render(); }
   async onClose() {}
   refresh() { this.render(); }
+
+  resetDashboardTaskShift(taskId: string) {
+    this.dashboardTaskShift.delete(taskId);
+  }
+
+  nudgeDashboardTask(taskId: string, direction: "up" | "down", amountPct = 1.8, maxShiftPct = 18) {
+    const sign = direction === "up" ? -1 : 1;
+    const currentShift = this.dashboardTaskShift.get(taskId) || 0;
+    if (Math.abs(currentShift) >= maxShiftPct) return;
+    const nextAmount = Math.min(amountPct, maxShiftPct - Math.abs(currentShift));
+    const deltaY = sign * nextAmount;
+    this.dashboardTaskShift.set(taskId, currentShift + deltaY);
+
+    const matchesTaskKey = (key: string | null) => {
+      if (!key) return false;
+      return key === `task:${taskId}` || key.endsWith(`:task:${taskId}`) || key.includes(`:task:${taskId}:`);
+    };
+    const applyShift = (key: string, x: number, y: number, size?: number) => {
+      this.dashboardPositions.set(key, { x, y: Math.max(0, y + deltaY), size });
+    };
+
+    this.dashboardPositions.forEach((position, key) => {
+      if (matchesTaskKey(key)) applyShift(key, position.x, position.y, position.size);
+    });
+
+    const bubbles = Array.from(this.containerEl.querySelectorAll<HTMLElement>(".auto-oc-dashboard-task-bubble"));
+    bubbles.forEach((bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!matchesTaskKey(key)) return;
+      const x = parseFloat(bubble.style.left || "0");
+      const y = parseFloat(bubble.style.top || "0");
+      const size = parseFloat(bubble.style.width || "0") || undefined;
+      const nextY = Math.max(0, y + deltaY);
+      bubble.style.top = `${nextY}%`;
+      if (key) this.dashboardPositions.set(key, { x, y: nextY, size });
+    });
+  }
 
   private openCli() {
     new OpenCodeCliModal(this.app, this.plugin).open();
@@ -2779,16 +2820,17 @@ class AutoOCView extends ItemView {
     }, null);
     const unusedTasks = tasks.filter((task) => !taskUsage.has(task.id)).length;
 
-    const dashboard = containerEl.createDiv("auto-oc-dashboard");
-    const dashboardTools = dashboard.createDiv("auto-oc-dashboard-tools");
-    const btnToggleKpis = dashboardTools.createEl("button", {
-      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
-      cls: "auto-oc-dashboard-kpi-toggle",
+    const taskFailCounts = new Map<string, number>();
+    tasks.forEach((task) => {
+      let fails = 0;
+      const out = task.output || "";
+      const exitMatch = out.match(/\[exit code:\s*(-?\d+)\]/g);
+      if (exitMatch) fails = exitMatch.length;
+      if (task.status === "failed") fails = Math.max(fails, 1);
+      if (fails > 0) taskFailCounts.set(task.id, fails);
     });
-    btnToggleKpis.onclick = () => {
-      this.showDashboardKpis = !this.showDashboardKpis;
-      this.render();
-    };
+
+    const dashboard = containerEl.createDiv("auto-oc-dashboard");
     const kpis = dashboard.createDiv(this.showDashboardKpis ? "auto-oc-dashboard-kpis" : "auto-oc-dashboard-kpis auto-oc-dashboard-kpis-hidden");
     const addKpi = (label: string, value: string | number, cls?: string) => {
       const kpi = kpis.createDiv("auto-oc-dashboard-kpi");
@@ -2805,6 +2847,14 @@ class AutoOCView extends ItemView {
     addKpi("Unused tasks", unusedTasks);
 
     const map = dashboard.createDiv("auto-oc-dashboard-map");
+    const btnToggleKpis = map.createEl("button", {
+      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
+      cls: "auto-oc-dashboard-kpi-toggle",
+    });
+    btnToggleKpis.onclick = () => {
+      this.showDashboardKpis = !this.showDashboardKpis;
+      this.render();
+    };
     const areaName = (value?: string) => value?.trim() || "No area";
     const layoutSignature = JSON.stringify({
       tasks: tasks.map((task) => ({ id: task.id, area: areaName(task.area) })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -3189,7 +3239,16 @@ class AutoOCView extends ItemView {
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
       const saved = this.dashboardPositions.get(positionKey);
-      setBubbleRect(taskBubble, saved?.x ?? x - (rankedSize - size) / 2, saved?.y ?? y - (rankedSize - size) / 2, rankedSize);
+      let posX = saved?.x ?? x - (rankedSize - size) / 2;
+      let posY = saved?.y ?? y - (rankedSize - size) / 2;
+      if (!saved) {
+        const usage = taskUsage.get(task.id) || 0;
+        const fails = taskFailCounts.get(task.id) || 0;
+        const usageLift = Math.min(usage * 1.2, 14);
+        const failDrop = Math.min(fails * 1.5, 12);
+        posY = Math.max(0, Math.min(100 - rankedSize, posY - usageLift + failDrop));
+      }
+      setBubbleRect(taskBubble, posX, posY, rankedSize);
       const usageCount = taskUsage.get(task.id) || 0;
       addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
       attachBubbleDrag(taskBubble, () => this.openTaskInList(task));

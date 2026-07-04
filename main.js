@@ -3060,10 +3060,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 `, "utf8");
     return { changed: true, configPath };
   }
-  async saveSettings() {
+  async saveSettings(refreshView = true) {
     var _a;
     await this.saveData(this.settings);
-    (_a = this.view) == null ? void 0 : _a.refresh();
+    if (refreshView) (_a = this.view) == null ? void 0 : _a.refresh();
   }
   // ── Version / update helpers ────────────────────────────────────────────────
   async checkForUpdates(silent = false) {
@@ -3226,7 +3226,7 @@ DONE:" + $exitCode + "
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   async runTask(task, onComplete, overrides = {}) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
@@ -3252,6 +3252,7 @@ DONE:" + $exitCode + "
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
+    (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -3322,12 +3323,13 @@ DONE:" + $exitCode + "
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
-    const timeoutSeconds = (_c = this.settings.taskTimeoutSeconds) != null ? _c : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_d = this.settings.taskTimeoutSeconds) != null ? _d : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
     let timeoutWarned = false;
     const pollHandle = setInterval(async () => {
+      var _a2, _b2;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         clearInterval(pollHandle);
@@ -3337,12 +3339,13 @@ DONE:" + $exitCode + "
         timeoutWarned = true;
         t.output += `
 [\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
-        await this.saveSettings();
+        await this.saveSettings(false);
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (!fs2.existsSync(doneFile)) {
         t.output += ".";
-        await this.saveSettings();
+        (_a2 = this.view) == null ? void 0 : _a2.nudgeDashboardTask(task.id, "up");
+        await this.saveSettings(false);
         return;
       }
       clearInterval(pollHandle);
@@ -3377,6 +3380,7 @@ DONE:" + $exitCode + "
         t.status = "failed";
         t.output += `
 [exit code: ${exitCode}]`;
+        (_b2 = this.view) == null ? void 0 : _b2.nudgeDashboardTask(task.id, "down", 18, 18);
         new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
@@ -4156,6 +4160,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.expandedTasks = /* @__PURE__ */ new Set();
     this.expandedWorkflows = /* @__PURE__ */ new Set();
     this.dashboardPositions = /* @__PURE__ */ new Map();
+    this.dashboardTaskShift = /* @__PURE__ */ new Map();
     this.dashboardLayoutSignature = "";
     this.showDashboardKpis = true;
     this.plugin = plugin;
@@ -4176,6 +4181,38 @@ var AutoOCView = class extends import_obsidian.ItemView {
   }
   refresh() {
     this.render();
+  }
+  resetDashboardTaskShift(taskId) {
+    this.dashboardTaskShift.delete(taskId);
+  }
+  nudgeDashboardTask(taskId, direction, amountPct = 1.8, maxShiftPct = 18) {
+    const sign = direction === "up" ? -1 : 1;
+    const currentShift = this.dashboardTaskShift.get(taskId) || 0;
+    if (Math.abs(currentShift) >= maxShiftPct) return;
+    const nextAmount = Math.min(amountPct, maxShiftPct - Math.abs(currentShift));
+    const deltaY = sign * nextAmount;
+    this.dashboardTaskShift.set(taskId, currentShift + deltaY);
+    const matchesTaskKey = (key) => {
+      if (!key) return false;
+      return key === `task:${taskId}` || key.endsWith(`:task:${taskId}`) || key.includes(`:task:${taskId}:`);
+    };
+    const applyShift = (key, x, y, size) => {
+      this.dashboardPositions.set(key, { x, y: Math.max(0, y + deltaY), size });
+    };
+    this.dashboardPositions.forEach((position, key) => {
+      if (matchesTaskKey(key)) applyShift(key, position.x, position.y, position.size);
+    });
+    const bubbles = Array.from(this.containerEl.querySelectorAll(".auto-oc-dashboard-task-bubble"));
+    bubbles.forEach((bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!matchesTaskKey(key)) return;
+      const x = parseFloat(bubble.style.left || "0");
+      const y = parseFloat(bubble.style.top || "0");
+      const size = parseFloat(bubble.style.width || "0") || void 0;
+      const nextY = Math.max(0, y + deltaY);
+      bubble.style.top = `${nextY}%`;
+      if (key) this.dashboardPositions.set(key, { x, y: nextY, size });
+    });
   }
   openCli() {
     new OpenCodeCliModal(this.app, this.plugin).open();
@@ -4355,16 +4392,16 @@ var AutoOCView = class extends import_obsidian.ItemView {
       return best;
     }, null);
     const unusedTasks = tasks.filter((task) => !taskUsage.has(task.id)).length;
-    const dashboard = containerEl.createDiv("auto-oc-dashboard");
-    const dashboardTools = dashboard.createDiv("auto-oc-dashboard-tools");
-    const btnToggleKpis = dashboardTools.createEl("button", {
-      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
-      cls: "auto-oc-dashboard-kpi-toggle"
+    const taskFailCounts = /* @__PURE__ */ new Map();
+    tasks.forEach((task) => {
+      let fails = 0;
+      const out = task.output || "";
+      const exitMatch = out.match(/\[exit code:\s*(-?\d+)\]/g);
+      if (exitMatch) fails = exitMatch.length;
+      if (task.status === "failed") fails = Math.max(fails, 1);
+      if (fails > 0) taskFailCounts.set(task.id, fails);
     });
-    btnToggleKpis.onclick = () => {
-      this.showDashboardKpis = !this.showDashboardKpis;
-      this.render();
-    };
+    const dashboard = containerEl.createDiv("auto-oc-dashboard");
     const kpis = dashboard.createDiv(this.showDashboardKpis ? "auto-oc-dashboard-kpis" : "auto-oc-dashboard-kpis auto-oc-dashboard-kpis-hidden");
     const addKpi = (label, value, cls) => {
       const kpi = kpis.createDiv("auto-oc-dashboard-kpi");
@@ -4379,6 +4416,14 @@ var AutoOCView = class extends import_obsidian.ItemView {
     addKpi("Most used", mostUsed && mostUsed.count > 0 ? `${mostUsed.name} (${mostUsed.count})` : "None");
     addKpi("Unused tasks", unusedTasks);
     const map = dashboard.createDiv("auto-oc-dashboard-map");
+    const btnToggleKpis = map.createEl("button", {
+      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
+      cls: "auto-oc-dashboard-kpi-toggle"
+    });
+    btnToggleKpis.onclick = () => {
+      this.showDashboardKpis = !this.showDashboardKpis;
+      this.render();
+    };
     const areaName = (value) => (value == null ? void 0 : value.trim()) || "No area";
     const layoutSignature = JSON.stringify({
       tasks: tasks.map((task) => ({ id: task.id, area: areaName(task.area) })).sort((a, b) => a.id.localeCompare(b.id)),
@@ -4753,7 +4798,16 @@ var AutoOCView = class extends import_obsidian.ItemView {
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
       const saved = this.dashboardPositions.get(positionKey);
-      setBubbleRect(taskBubble, (_a = saved == null ? void 0 : saved.x) != null ? _a : x - (rankedSize - size) / 2, (_b = saved == null ? void 0 : saved.y) != null ? _b : y - (rankedSize - size) / 2, rankedSize);
+      let posX = (_a = saved == null ? void 0 : saved.x) != null ? _a : x - (rankedSize - size) / 2;
+      let posY = (_b = saved == null ? void 0 : saved.y) != null ? _b : y - (rankedSize - size) / 2;
+      if (!saved) {
+        const usage = taskUsage.get(task.id) || 0;
+        const fails = taskFailCounts.get(task.id) || 0;
+        const usageLift = Math.min(usage * 1.2, 14);
+        const failDrop = Math.min(fails * 1.5, 12);
+        posY = Math.max(0, Math.min(100 - rankedSize, posY - usageLift + failDrop));
+      }
+      setBubbleRect(taskBubble, posX, posY, rankedSize);
       const usageCount = taskUsage.get(task.id) || 0;
       addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
       attachBubbleDrag(taskBubble, () => this.openTaskInList(task));

@@ -87,18 +87,23 @@
 }
 
 .auto-oc-dashboard-kpi-toggle {
-  padding: 2px 7px;
-  border: 1px solid var(--background-modifier-border);
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 10;
+  padding: 3px 8px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
   border-radius: 999px;
-  background: var(--background-secondary);
-  color: var(--text-muted);
+  background: rgba(15, 23, 42, 0.85);
+  color: #94a3b8;
   cursor: pointer;
   font-size: 0.68rem;
+  backdrop-filter: blur(4px);
 }
 
 .auto-oc-dashboard-kpi-toggle:hover {
-  color: var(--text-normal);
-  background: var(--background-modifier-hover);
+  color: #e5e7eb;
+  background: rgba(30, 41, 59, 0.92);
 }
 
 .auto-oc-dashboard-kpis-hidden {
@@ -168,6 +173,7 @@
   border: 2px solid rgba(250, 204, 21, 0.85);
   background: rgba(250, 204, 21, 0.035);
   box-shadow: 0 0 38px rgba(250, 204, 21, 0.08), inset 0 0 26px rgba(250, 204, 21, 0.04);
+  animation: auto-oc-dashboard-float-area 5.8s ease-in-out infinite;
 }
 
 .auto-oc-dashboard-area-label {
@@ -194,12 +200,15 @@
   border: 2px solid rgba(139, 92, 246, 0.9);
   background: rgba(99, 102, 241, 0.12);
   box-shadow: 0 0 24px rgba(99, 102, 241, 0.13), inset 0 0 20px rgba(99, 102, 241, 0.07);
+  animation: auto-oc-dashboard-float 4.9s ease-in-out infinite;
 }
 
 .auto-oc-dashboard-workflow-pending { background: rgba(59, 130, 246, 0.10); }
 .auto-oc-dashboard-workflow-running {
   background: rgba(20, 184, 166, 0.12);
-  animation: auto-oc-dashboard-running-glow 2s ease-in-out infinite;
+  animation:
+    auto-oc-dashboard-running-glow 2s ease-in-out infinite,
+    auto-oc-dashboard-float 4.2s ease-in-out infinite;
 }
 .auto-oc-dashboard-workflow-completed { background: rgba(16, 185, 129, 0.10); }
 .auto-oc-dashboard-workflow-failed {
@@ -211,25 +220,30 @@
 .auto-oc-dashboard-area-bubble.auto-oc-dashboard-has-failed,
 .auto-oc-dashboard-workflow-bubble.auto-oc-dashboard-has-running,
 .auto-oc-dashboard-workflow-bubble.auto-oc-dashboard-has-failed {
-  animation: none;
+  animation: auto-oc-dashboard-float 4.4s ease-in-out infinite;
 }
 
 .auto-oc-dashboard-task-bubble {
   z-index: 8;
   border: 2px solid rgba(45, 212, 191, 0.92);
   box-shadow: 0 0 18px rgba(45, 212, 191, 0.16), inset 0 0 12px rgba(255, 255, 255, 0.05);
+  animation: auto-oc-dashboard-float 4.3s ease-in-out infinite;
 }
 
 .auto-oc-dashboard-task-pending { background: rgba(37, 99, 235, 0.82); }
 .auto-oc-dashboard-task-completed { background: rgba(16, 185, 129, 0.84); }
 .auto-oc-dashboard-task-failed {
   background: rgba(220, 38, 38, 0.86);
-  animation: auto-oc-dashboard-failed-weight 2.6s ease-in-out infinite;
+  animation:
+    auto-oc-dashboard-failed-weight 2.6s ease-in-out infinite,
+    auto-oc-dashboard-sink 3.8s ease-in-out infinite;
 }
 
 .auto-oc-dashboard-task-running {
   background: linear-gradient(135deg, rgba(245, 158, 11, 0.92), rgba(20, 184, 166, 0.92));
-  animation: auto-oc-dashboard-running-glow 1.8s ease-in-out infinite;
+  animation:
+    auto-oc-dashboard-running-glow 1.8s ease-in-out infinite,
+    auto-oc-dashboard-rise 2.4s ease-in-out infinite alternate;
 }
 
 .auto-oc-dashboard-task-running::before,
@@ -337,8 +351,9 @@
 }
 
 @keyframes auto-oc-dashboard-rise {
-  0% { transform: translate3d(0, 2px, 0); }
-  100% { transform: translate3d(0, -11px, 0); }
+  0% { transform: translate3d(-1px, 3px, 0); }
+  45% { transform: translate3d(2px, -5px, 0); }
+  100% { transform: translate3d(-2px, -12px, 0); }
 }
 
 @keyframes auto-oc-dashboard-sink {
