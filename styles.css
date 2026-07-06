@@ -179,7 +179,7 @@
 .auto-oc-dashboard-map {
   position: relative;
   flex: 1;
-  min-height: 320px;
+  min-height: 460px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 14px;
@@ -584,7 +584,7 @@
   }
 
   .auto-oc-dashboard-map {
-    min-height: 280px;
+    min-height: 360px;
   }
 }
 

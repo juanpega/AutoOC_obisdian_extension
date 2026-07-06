@@ -4331,6 +4331,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return void 0;
     return parseFloat(bubble.style.width || "0") || void 0;
   }
+  parseBubbleSizePxForSave(bubble) {
+    if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return void 0;
+    const width = bubble.getBoundingClientRect().width;
+    return Number.isFinite(width) && width > 0 ? Math.round(width * 100) / 100 : void 0;
+  }
   clampDashboardBubbleToParent(bubble) {
     const parent = bubble.offsetParent;
     if (!parent) return;
@@ -4438,7 +4443,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.dashboardPositions.set(key, {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
-        size: this.parseBubbleSizeForSave(bubble)
+        size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble)
       });
     });
   }
@@ -4502,7 +4508,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.dashboardPositions.set(key, {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
-        size: this.parseBubbleSizeForSave(bubble)
+        size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble)
       });
     });
   }
@@ -4832,14 +4839,14 @@ var AutoOCView = class extends import_obsidian.ItemView {
     };
     const areaSizeForContent = (contentWeight) => {
       const px = Math.min(260, Math.max(120, 92 + Math.sqrt(Math.max(contentWeight, 1)) * 42));
-      return { px, pct: pctFromPx(px, mapWidthPx, 6, 36) };
+      return { px, pct: pctFromPx(px, mapWidthPx, 1, 36) };
     };
     const workflowSizePxForTasks = (taskCount) => {
       return Math.min(190, Math.max(92, 72 + Math.sqrt(Math.max(taskCount, 1)) * 34));
     };
     const workflowSizePctForParent = (taskCount, parent) => {
       const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
-      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 10, 78);
+      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
     };
     const TASK_BUBBLE_PX = 30;
     const taskBubbleSizeForParent = (parent) => {
@@ -4861,7 +4868,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.dashboardPositions.set(key, {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
-        size: this.parseBubbleSizeForSave(bubble)
+        size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble)
       });
     };
     const saveBubbleTreePositions = (parent) => {
@@ -4946,11 +4954,10 @@ var AutoOCView = class extends import_obsidian.ItemView {
         }));
         const centerX = (minX + maxX) / 2;
         const centerY = (minY + maxY) / 2;
-        const sizePct = Math.min(96, Math.max(10, diameterPx / parentRect.width * 100));
-        const sizePx = sizePct / 100 * parentRect.width;
-        container.style.width = `${sizePct}%`;
+        const sizePx = Math.min(parentRect.width * 0.96, Math.max(44, diameterPx));
         container.style.left = `${(centerX - sizePx / 2 - parentRect.left) / parentRect.width * 100}%`;
         container.style.top = `${(centerY - sizePx / 2 - parentRect.top) / parentRect.height * 100}%`;
+        container.style.width = `${sizePx}px`;
         clampBubbleToParent(container);
         const nextRect = container.getBoundingClientRect();
         oldCenters.forEach(({ child, centerX: childCenterX, centerY: childCenterY, width, height }) => {
@@ -5196,10 +5203,13 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
     };
     const createAreaBubble = (name, x, y, size, maxPx) => {
+      var _a;
       const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
       areaBubble.setAttr("data-dashboard-key", `area:${name}`);
       setBubbleRect(areaBubble, x, y, size);
-      if (maxPx) areaBubble.style.maxWidth = `${maxPx}px`;
+      const saved = this.dashboardPositions.get(`area:${name}`);
+      const widthPx = (_a = saved == null ? void 0 : saved.sizePx) != null ? _a : maxPx;
+      if (widthPx) areaBubble.style.width = `${widthPx}px`;
       addBubbleVisual(areaBubble);
       areaBubble.setAttr("aria-label", `Area: ${name}`);
       areaBubble.tabIndex = 0;
@@ -5251,7 +5261,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     noAreaWorkflows.forEach((workflow) => {
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
       const workflowPx = workflowSizePxForTasks(taskSteps.length);
-      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 6, 30), maxPx: workflowPx });
+      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 1, 30), maxPx: workflowPx });
     });
     noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
     const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
@@ -5275,7 +5285,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       }
       const areaWorkflowCount = Math.max(areaWorkflows.length, 1);
       areaWorkflows.forEach((workflow, workflowIndex) => {
-        var _a, _b;
+        var _a, _b, _c;
         const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
         const angle = -Math.PI / 2 + workflowIndex * Math.PI * 2 / areaWorkflowCount;
         const workflowSize = workflowSizePctForParent(taskSteps.length, areaBubble);
@@ -5296,7 +5306,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         workflowBubble.setAttr("data-dashboard-key", workflowKey);
         const savedWorkflow = this.dashboardPositions.get(workflowKey);
         setBubbleRect(workflowBubble, (_a = savedWorkflow == null ? void 0 : savedWorkflow.x) != null ? _a : workflowX, (_b = savedWorkflow == null ? void 0 : savedWorkflow.y) != null ? _b : workflowY, workflowSize);
-        workflowBubble.style.maxWidth = `${workflowSizePxForTasks(taskSteps.length)}px`;
+        workflowBubble.style.width = `${(_c = savedWorkflow == null ? void 0 : savedWorkflow.sizePx) != null ? _c : workflowSizePxForTasks(taskSteps.length)}px`;
         addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
         attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
         clampBubbleToParent(workflowBubble);
@@ -5323,23 +5333,25 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
     });
     noAreaWorkflows.forEach((workflow) => {
+      var _a, _b;
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 6, 30);
+      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 1, 30);
       const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
       if (!workflowLayout) return;
       const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
       addBubbleVisual(workflowBubble);
       if (taskSteps.some((step) => {
-        var _a;
-        return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "running";
+        var _a2;
+        return ((_a2 = taskById.get(step.taskId || "")) == null ? void 0 : _a2.status) === "running";
       })) workflowBubble.addClass("auto-oc-dashboard-has-running");
       if (taskSteps.some((step) => {
-        var _a;
-        return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "failed";
+        var _a2;
+        return ((_a2 = taskById.get(step.taskId || "")) == null ? void 0 : _a2.status) === "failed";
       })) workflowBubble.addClass("auto-oc-dashboard-has-failed");
       workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
+      const savedWorkflow = this.dashboardPositions.get(`workflow:${workflow.id}`);
       setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowSize);
-      if (workflowLayout.maxPx) workflowBubble.style.maxWidth = `${workflowLayout.maxPx}px`;
+      workflowBubble.style.width = `${(_b = (_a = savedWorkflow == null ? void 0 : savedWorkflow.sizePx) != null ? _a : workflowLayout.maxPx) != null ? _b : workflowSizePxForTasks(taskSteps.length)}px`;
       addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
       attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
       clampBubbleToParent(workflowBubble);

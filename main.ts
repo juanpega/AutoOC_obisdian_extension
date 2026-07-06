@@ -229,7 +229,7 @@ interface AutoOCSettings {
   maxLogsPerTask: number;
   logRetentionDays: number;
   libraryUrl: string;
-  dashboardPositions?: Record<string, { x: number; y: number; size?: number }>;
+  dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
 }
 
 function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workflows">): string[] {
@@ -2643,7 +2643,7 @@ class AutoOCView extends ItemView {
   private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
-  private dashboardPositions: Map<string, { x: number; y: number; size?: number }> = new Map();
+  private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
   // Accumulated drift per task, in physical px relative to the map's own
   // height (NOT a %-of-immediate-parent value) — keeps rise/sink distance
   // visually consistent whether a task bubble sits loose on the map or is
@@ -2682,7 +2682,7 @@ class AutoOCView extends ItemView {
   }
 
   private async persistDashboardPositions() {
-    const obj: Record<string, { x: number; y: number; size?: number }> = {};
+    const obj: Record<string, { x: number; y: number; size?: number; sizePx?: number }> = {};
     this.dashboardPositions.forEach((pos, key) => { obj[key] = pos; });
     this.plugin.settings.dashboardPositions = obj;
     await this.plugin.saveSettings(false);
@@ -2744,6 +2744,12 @@ class AutoOCView extends ItemView {
   private parseBubbleSizeForSave(bubble: HTMLElement): number | undefined {
     if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return undefined;
     return parseFloat(bubble.style.width || "0") || undefined;
+  }
+
+  private parseBubbleSizePxForSave(bubble: HTMLElement): number | undefined {
+    if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return undefined;
+    const width = bubble.getBoundingClientRect().width;
+    return Number.isFinite(width) && width > 0 ? Math.round(width * 100) / 100 : undefined;
   }
 
   private clampDashboardBubbleToParent(bubble: HTMLElement) {
@@ -2855,6 +2861,7 @@ class AutoOCView extends ItemView {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
         size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble),
       });
     });
   }
@@ -2922,6 +2929,7 @@ class AutoOCView extends ItemView {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
         size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble),
       });
     });
   }
@@ -3294,14 +3302,14 @@ class AutoOCView extends ItemView {
     };
     const areaSizeForContent = (contentWeight: number) => {
       const px = Math.min(260, Math.max(120, 92 + Math.sqrt(Math.max(contentWeight, 1)) * 42));
-      return { px, pct: pctFromPx(px, mapWidthPx, 6, 36) };
+      return { px, pct: pctFromPx(px, mapWidthPx, 1, 36) };
     };
     const workflowSizePxForTasks = (taskCount: number) => {
       return Math.min(190, Math.max(92, 72 + Math.sqrt(Math.max(taskCount, 1)) * 34));
     };
     const workflowSizePctForParent = (taskCount: number, parent: HTMLElement) => {
       const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
-      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 10, 78);
+      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
     };
     // Every task/step bubble renders at the same physical diameter,
     // regardless of usage, status, or nesting depth. Containers must adapt
@@ -3327,6 +3335,7 @@ class AutoOCView extends ItemView {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
         size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble),
       });
     };
     const saveBubbleTreePositions = (parent: HTMLElement) => {
@@ -3416,11 +3425,10 @@ class AutoOCView extends ItemView {
       }));
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
-      const sizePct = Math.min(96, Math.max(10, (diameterPx / parentRect.width) * 100));
-      const sizePx = (sizePct / 100) * parentRect.width;
-      container.style.width = `${sizePct}%`;
+      const sizePx = Math.min(parentRect.width * 0.96, Math.max(44, diameterPx));
       container.style.left = `${((centerX - sizePx / 2 - parentRect.left) / parentRect.width) * 100}%`;
       container.style.top = `${((centerY - sizePx / 2 - parentRect.top) / parentRect.height) * 100}%`;
+      container.style.width = `${sizePx}px`;
       clampBubbleToParent(container);
 
       const nextRect = container.getBoundingClientRect();
@@ -3673,7 +3681,9 @@ class AutoOCView extends ItemView {
       const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
       areaBubble.setAttr("data-dashboard-key", `area:${name}`);
       setBubbleRect(areaBubble, x, y, size);
-      if (maxPx) areaBubble.style.maxWidth = `${maxPx}px`;
+      const saved = this.dashboardPositions.get(`area:${name}`);
+      const widthPx = saved?.sizePx ?? maxPx;
+      if (widthPx) areaBubble.style.width = `${widthPx}px`;
       addBubbleVisual(areaBubble);
       areaBubble.setAttr("aria-label", `Area: ${name}`);
       areaBubble.tabIndex = 0;
@@ -3738,7 +3748,7 @@ class AutoOCView extends ItemView {
     noAreaWorkflows.forEach((workflow) => {
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
       const workflowPx = workflowSizePxForTasks(taskSteps.length);
-      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 6, 30), maxPx: workflowPx });
+      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 1, 30), maxPx: workflowPx });
     });
     noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
     const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
@@ -3771,7 +3781,7 @@ class AutoOCView extends ItemView {
         workflowBubble.setAttr("data-dashboard-key", workflowKey);
         const savedWorkflow = this.dashboardPositions.get(workflowKey);
         setBubbleRect(workflowBubble, savedWorkflow?.x ?? workflowX, savedWorkflow?.y ?? workflowY, workflowSize);
-        workflowBubble.style.maxWidth = `${workflowSizePxForTasks(taskSteps.length)}px`;
+        workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowSizePxForTasks(taskSteps.length)}px`;
         addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
         attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
         clampBubbleToParent(workflowBubble);
@@ -3802,7 +3812,7 @@ class AutoOCView extends ItemView {
 
     noAreaWorkflows.forEach((workflow) => {
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 6, 30);
+      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 1, 30);
       const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
       if (!workflowLayout) return;
       const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
@@ -3810,8 +3820,9 @@ class AutoOCView extends ItemView {
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
       workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
+      const savedWorkflow = this.dashboardPositions.get(`workflow:${workflow.id}`);
       setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowSize);
-      if (workflowLayout.maxPx) workflowBubble.style.maxWidth = `${workflowLayout.maxPx}px`;
+      workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowLayout.maxPx ?? workflowSizePxForTasks(taskSteps.length)}px`;
       addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
       attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
       clampBubbleToParent(workflowBubble);
