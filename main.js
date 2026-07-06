@@ -762,16 +762,18 @@ var init_visualBuilderHtml_generated = __esm({
     try { window.parent.postMessage({ type: "ready" }, "*"); } catch (e) {}
   }
 
-  function applyToExtension() {
+  function applyToExtension(skipValidation = false) {
     if (!inExtension) {
       toast("Running standalone \u2014 use Export to save as JSON", "warn");
       return;
     }
-    const validation = validateAll();
-    const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
-    if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
-      showValidation();
-      return;
+    if (!skipValidation) {
+      const validation = validateAll();
+      const errorCount = validation.reduce((count, group) => count + group.issues.filter(i => i.kind === "err").length, 0);
+      if (errorCount > 0 && !confirm("Visual Builder found " + errorCount + " blocking issue(s). Apply anyway?")) {
+        showValidation();
+        return;
+      }
     }
     // Send back the current state.
     const payload = {
@@ -1782,8 +1784,18 @@ var init_visualBuilderHtml_generated = __esm({
     setActiveWorkflow(w.id);
   }
   function closeWorkflow(id) {
-    if (state.workflows.length > 1) {
-      if (!confirm("Delete this workflow?")) return;
+    const wf = findWorkflow(id);
+    if (!confirm("Delete this workflow?")) return;
+    if (wf) {
+      const taskIds = [...new Set((wf.steps || []).map(s => s.taskId).filter(Boolean))];
+      const taskIdsOnlyUsedHere = taskIds.filter(taskId => !state.workflows.some(other => other.id !== id && (other.steps || []).some(step => step.taskId === taskId)));
+      if (taskIdsOnlyUsedHere.length > 0) {
+        const sharedCount = taskIds.length - taskIdsOnlyUsedHere.length;
+        const sharedNote = sharedCount > 0 ? "\\n\\n" + sharedCount + " task(s) are also used by other workflows and will be kept." : "";
+        if (confirm("Also delete " + taskIdsOnlyUsedHere.length + " task(s) used only by this workflow?" + sharedNote)) {
+          state.tasks = state.tasks.filter(t => !taskIdsOnlyUsedHere.includes(t.id));
+        }
+      }
     }
     const idx = state.workflows.findIndex(x => x.id === id);
     state.workflows.splice(idx, 1);
@@ -1792,7 +1804,9 @@ var init_visualBuilderHtml_generated = __esm({
       ui.activeWorkflowId = newActive ? newActive.id : null;
       ui.selection = newActive ? { type: "workflow", ref: newActive.id } : { type: null, ref: null };
     }
+    isDirty = true;
     renderAll();
+    if (inExtension) applyToExtension(true);
   }
   function duplicateStep(wfId, idx) {
     const wf = findWorkflow(wfId);
@@ -2102,6 +2116,38 @@ function setupCodeTextarea(textarea) {
     textarea.dispatchEvent(new Event("input"));
   });
 }
+function getConfiguredAreaNames(settings) {
+  var _a, _b;
+  const names = /* @__PURE__ */ new Set();
+  for (const task of settings.tasks) {
+    const area = (_a = task.area) == null ? void 0 : _a.trim();
+    if (area) names.add(area);
+  }
+  for (const workflow of settings.workflows) {
+    const area = (_b = workflow.area) == null ? void 0 : _b.trim();
+    if (area) names.add(area);
+  }
+  return Array.from(names).sort((a, b) => a.localeCompare(b));
+}
+function renderAreaSuggestions(container, areaInput, areaNames, onSelect) {
+  const wrapper = container.createDiv("auto-oc-area-suggestions");
+  wrapper.createDiv("auto-oc-area-suggestions-title").setText(
+    areaNames.length > 0 ? "Existing areas: click one, or type a new area above." : "No areas yet. Type a name above to create a new area."
+  );
+  if (areaNames.length === 0) return;
+  const chips = wrapper.createDiv("auto-oc-area-suggestion-chips");
+  for (const area of areaNames) {
+    const chip = chips.createEl("button", {
+      text: area,
+      cls: "auto-oc-area-suggestion-chip"
+    });
+    chip.type = "button";
+    chip.onclick = () => {
+      areaInput.value = area;
+      onSelect(area);
+    };
+  }
+}
 var FALLBACK_MODELS = [];
 var FALLBACK_AGENTS = [
   { value: "build", label: "build" },
@@ -2167,7 +2213,8 @@ var DEFAULT_SETTINGS = {
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
-  libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library"
+  libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
+  dashboardPositions: {}
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -2301,6 +2348,7 @@ function toExportTask(task, exportId) {
   return {
     exportId,
     name: task.name,
+    area: task.area,
     prompt: task.prompt,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
@@ -2320,6 +2368,7 @@ function toExportWorkflow(workflow, exportId, taskExportIdMap) {
   return {
     exportId,
     name: workflow.name,
+    area: workflow.area,
     description: workflow.description,
     scheduleType: workflow.scheduleType,
     scheduleTime: workflow.scheduleTime,
@@ -2775,6 +2824,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
+    this.visualBuilders = /* @__PURE__ */ new Set();
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
     this.dueCheckInProgress = false;
@@ -2920,6 +2970,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   openVisualBuilder() {
     new VisualBuilderModal(this.app, this).open();
   }
+  registerVisualBuilder(modal) {
+    this.visualBuilders.add(modal);
+  }
+  unregisterVisualBuilder(modal) {
+    this.visualBuilders.delete(modal);
+  }
+  syncVisualBuilders() {
+    for (const modal of this.visualBuilders) modal.sendState();
+  }
   async loadSettings() {
     var _a, _b;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
@@ -3018,6 +3077,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.settings.libraryUrl = DEFAULT_SETTINGS.libraryUrl;
       changed = true;
     }
+    if (!this.settings.dashboardPositions || typeof this.settings.dashboardPositions !== "object") {
+      this.settings.dashboardPositions = {};
+      changed = true;
+    }
     if (changed) {
       await this.saveData(this.settings);
     }
@@ -3058,10 +3121,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 `, "utf8");
     return { changed: true, configPath };
   }
-  async saveSettings() {
+  async saveSettings(refreshView = true) {
     var _a;
     await this.saveData(this.settings);
-    (_a = this.view) == null ? void 0 : _a.refresh();
+    if (refreshView) (_a = this.view) == null ? void 0 : _a.refresh();
   }
   // ── Version / update helpers ────────────────────────────────────────────────
   async checkForUpdates(silent = false) {
@@ -3224,7 +3287,7 @@ DONE:" + $exitCode + "
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   async runTask(task, onComplete, overrides = {}) {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
@@ -3250,6 +3313,7 @@ DONE:" + $exitCode + "
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
+    (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -3320,12 +3384,13 @@ DONE:" + $exitCode + "
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
-    const timeoutSeconds = (_c = this.settings.taskTimeoutSeconds) != null ? _c : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_d = this.settings.taskTimeoutSeconds) != null ? _d : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
     let timeoutWarned = false;
     const pollHandle = setInterval(async () => {
+      var _a2, _b2;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         clearInterval(pollHandle);
@@ -3335,12 +3400,13 @@ DONE:" + $exitCode + "
         timeoutWarned = true;
         t.output += `
 [\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
-        await this.saveSettings();
+        await this.saveSettings(false);
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (!fs2.existsSync(doneFile)) {
         t.output += ".";
-        await this.saveSettings();
+        (_a2 = this.view) == null ? void 0 : _a2.nudgeDashboardTask(task.id, "up");
+        await this.saveSettings(false);
         return;
       }
       clearInterval(pollHandle);
@@ -3375,6 +3441,7 @@ DONE:" + $exitCode + "
         t.status = "failed";
         t.output += `
 [exit code: ${exitCode}]`;
+        (_b2 = this.view) == null ? void 0 : _b2.startGradualSink(task.id);
         new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
@@ -3467,6 +3534,7 @@ DONE:" + $exitCode + "
   async deleteTask(id) {
     this.settings.tasks = this.settings.tasks.filter((t) => t.id !== id);
     await this.saveSettings();
+    this.syncVisualBuilders();
   }
   async duplicateTask(task) {
     const copy = {
@@ -3492,9 +3560,25 @@ DONE:" + $exitCode + "
     clearAllLogs(vaultBasePath);
     new import_obsidian.Notice("All logs cleared.");
   }
-  async deleteWorkflow(id) {
+  workflowTaskIds(workflow) {
+    return Array.from(new Set(workflow.steps.map((step) => step.taskId).filter(Boolean)));
+  }
+  workflowTaskIdsUsedOnlyBy(workflowId) {
+    const workflow = this.settings.workflows.find((w) => w.id === workflowId);
+    if (!workflow) return [];
+    const taskIds = this.workflowTaskIds(workflow);
+    return taskIds.filter((taskId) => !this.settings.workflows.some(
+      (other) => other.id !== workflowId && other.steps.some((step) => step.taskId === taskId)
+    ));
+  }
+  async deleteWorkflow(id, deleteWorkflowTasks = false) {
+    const taskIdsToDelete = deleteWorkflowTasks ? this.workflowTaskIdsUsedOnlyBy(id) : [];
+    if (taskIdsToDelete.length > 0) {
+      this.settings.tasks = this.settings.tasks.filter((task) => !taskIdsToDelete.includes(task.id));
+    }
     this.settings.workflows = this.settings.workflows.filter((w) => w.id !== id);
     await this.saveSettings();
+    this.syncVisualBuilders();
   }
   async duplicateWorkflow(workflow) {
     const copy = {
@@ -3596,7 +3680,7 @@ DONE:" + $exitCode + "
     return this.importFromData(data);
   }
   async importFromData(data) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
@@ -3610,17 +3694,18 @@ DONE:" + $exitCode + "
       const task = {
         id: generateId(),
         name: this.ensureUniqueTaskName(et.name),
+        area: (_a = et.area) != null ? _a : "",
         prompt: et.prompt,
         model: this.getEffectiveDefaultModel(),
         agent: this.getEffectiveAgent(et.agent),
-        useRalphLoop: (_a = et.useRalphLoop) != null ? _a : false,
-        scheduleType: (_b = et.scheduleType) != null ? _b : "manual",
-        scheduleTime: (_c = et.scheduleTime) != null ? _c : nowTimeString(),
-        scheduleDate: (_d = et.scheduleDate) != null ? _d : "",
-        scheduleDays: (_e = et.scheduleDays) != null ? _e : [],
-        scheduleMonthDays: (_f = et.scheduleMonthDays) != null ? _f : [],
-        scheduleIntervalValue: (_g = et.scheduleIntervalValue) != null ? _g : 10,
-        scheduleIntervalUnit: (_h = et.scheduleIntervalUnit) != null ? _h : "minutes",
+        useRalphLoop: (_b = et.useRalphLoop) != null ? _b : false,
+        scheduleType: (_c = et.scheduleType) != null ? _c : "manual",
+        scheduleTime: (_d = et.scheduleTime) != null ? _d : nowTimeString(),
+        scheduleDate: (_e = et.scheduleDate) != null ? _e : "",
+        scheduleDays: (_f = et.scheduleDays) != null ? _f : [],
+        scheduleMonthDays: (_g = et.scheduleMonthDays) != null ? _g : [],
+        scheduleIntervalValue: (_h = et.scheduleIntervalValue) != null ? _h : 10,
+        scheduleIntervalUnit: (_i = et.scheduleIntervalUnit) != null ? _i : "minutes",
         status: "pending",
         lastRun: "",
         output: "",
@@ -3696,20 +3781,21 @@ DONE:" + $exitCode + "
       const workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
-        description: (_i = ew.description) != null ? _i : "",
+        area: (_j = ew.area) != null ? _j : "",
+        description: (_k = ew.description) != null ? _k : "",
         steps,
         status: "pending",
         currentStep: -1,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        handoffBranch: (_j = ew.handoffBranch) != null ? _j : false,
-        handoffOutput: (_k = ew.handoffOutput) != null ? _k : true,
-        scheduleType: (_l = ew.scheduleType) != null ? _l : "manual",
-        scheduleTime: (_m = ew.scheduleTime) != null ? _m : nowTimeString(),
-        scheduleDate: (_n = ew.scheduleDate) != null ? _n : "",
-        scheduleDays: (_o = ew.scheduleDays) != null ? _o : [],
-        scheduleMonthDays: (_p = ew.scheduleMonthDays) != null ? _p : [],
-        scheduleIntervalValue: (_q = ew.scheduleIntervalValue) != null ? _q : 10,
-        scheduleIntervalUnit: (_r = ew.scheduleIntervalUnit) != null ? _r : "minutes"
+        handoffBranch: (_l = ew.handoffBranch) != null ? _l : false,
+        handoffOutput: (_m = ew.handoffOutput) != null ? _m : true,
+        scheduleType: (_n = ew.scheduleType) != null ? _n : "manual",
+        scheduleTime: (_o = ew.scheduleTime) != null ? _o : nowTimeString(),
+        scheduleDate: (_p = ew.scheduleDate) != null ? _p : "",
+        scheduleDays: (_q = ew.scheduleDays) != null ? _q : [],
+        scheduleMonthDays: (_r = ew.scheduleMonthDays) != null ? _r : [],
+        scheduleIntervalValue: (_s = ew.scheduleIntervalValue) != null ? _s : 10,
+        scheduleIntervalUnit: (_t = ew.scheduleIntervalUnit) != null ? _t : "minutes"
       };
       this.settings.workflows.push(workflow);
       workflowsImported++;
@@ -4148,10 +4234,49 @@ var AutoOCView = class extends import_obsidian.ItemView {
     super(leaf);
     this.filterText = "";
     this.filterStatus = "all";
-    this.currentTab = "tasks";
+    this.currentTab = "dashboard";
     this.expandedTasks = /* @__PURE__ */ new Set();
     this.expandedWorkflows = /* @__PURE__ */ new Set();
+    this.dashboardPositions = /* @__PURE__ */ new Map();
+    // Accumulated drift per task, in physical px relative to the map's own
+    // height (NOT a %-of-immediate-parent value) — keeps rise/sink distance
+    // visually consistent whether a task bubble sits loose on the map or is
+    // nested two levels deep inside an area/workflow ring.
+    this.dashboardTaskShift = /* @__PURE__ */ new Map();
+    this.sinkIntervals = /* @__PURE__ */ new Map();
+    this.dashboardTaskDriftDirection = /* @__PURE__ */ new Map();
+    this.dashboardLayoutSignature = "";
+    this.showDashboardKpis = false;
+    // Watches the map's real rendered size so bubble sizing (task bubbles are
+    // fixed px, capped to fit their parent) gets recomputed when the pane is
+    // resized. Percentage-based left/top/width already reflow for free via
+    // CSS, but nothing else in this view listens for layout size changes, so
+    // without this, shrinking the canvas leaves stale px sizes that overflow
+    // their now-smaller container.
+    this.dashboardResizeObserver = null;
+    // Set right before a resize-triggered render so renderDashboard's settle+fit
+    // pass runs even though the task/workflow structure didn't change (normally
+    // that pass is skipped on unchanged layouts to avoid redoing work every
+    // render — see the guard in renderDashboard).
+    this.forceDashboardFitOnNextRender = false;
     this.plugin = plugin;
+  }
+  loadDashboardPositions() {
+    this.dashboardPositions.clear();
+    const saved = this.plugin.settings.dashboardPositions;
+    if (saved) {
+      for (const [key, pos] of Object.entries(saved)) {
+        this.dashboardPositions.set(key, pos);
+      }
+    }
+  }
+  async persistDashboardPositions() {
+    const obj = {};
+    this.dashboardPositions.forEach((pos, key) => {
+      obj[key] = pos;
+    });
+    this.plugin.settings.dashboardPositions = obj;
+    await this.plugin.saveSettings(false);
   }
   getViewType() {
     return VIEW_TYPE;
@@ -4163,15 +4288,336 @@ var AutoOCView = class extends import_obsidian.ItemView {
     return "workflow";
   }
   async onOpen() {
+    this.loadDashboardPositions();
     this.render();
   }
   async onClose() {
+    var _a;
+    await this.persistDashboardPositions();
+    (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
+    this.dashboardResizeObserver = null;
+    this.sinkIntervals.forEach((iv) => clearInterval(iv));
+    this.sinkIntervals.clear();
+    this.dashboardTaskDriftDirection.clear();
   }
   refresh() {
     this.render();
   }
+  resetDashboardTaskShift(taskId) {
+    const existing = this.sinkIntervals.get(taskId);
+    if (existing) {
+      clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+    }
+    this.dashboardTaskDriftDirection.delete(taskId);
+    this.dashboardTaskShift.delete(taskId);
+  }
+  nudgeDashboardTask(taskId, direction, amountPct = 1.8, maxShiftPct = 18) {
+  }
+  // Mirrors the class-selector check used inside renderDashboard's drag/collision
+  // closures, so drift-driven nudges (heartbeat rise, gradual sink) can reuse the
+  // same sibling-push behavior as manual dragging without needing access to
+  // renderDashboard's local scope.
+  isDashboardBubbleEl(el) {
+    return el instanceof HTMLElement && (el.classList.contains("auto-oc-dashboard-area-bubble") || el.classList.contains("auto-oc-dashboard-workflow-bubble") || el.classList.contains("auto-oc-dashboard-task-bubble"));
+  }
+  // Task bubbles render at a fixed physical px diameter (see TASK_BUBBLE_PX
+  // in renderDashboard), not a %, so their width never means "this task's
+  // saved size" — persisting it would just re-inject a stray px number where
+  // a % is expected next render (area/workflow top-level layout reuses
+  // saved.size as a %). Only area/workflow bubbles have a meaningful size to
+  // remember across renders/drags.
+  parseBubbleSizeForSave(bubble) {
+    if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return void 0;
+    return parseFloat(bubble.style.width || "0") || void 0;
+  }
+  clampDashboardBubbleToParent(bubble) {
+    const parent = bubble.offsetParent;
+    if (!parent) return;
+    const bounds = parent.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const rect = bubble.getBoundingClientRect();
+    const widthPct = rect.width / bounds.width * 100;
+    const heightPct = rect.height / bounds.height * 100;
+    let leftPct = (rect.left - bounds.left) / bounds.width * 100;
+    let topPct = (rect.top - bounds.top) / bounds.height * 100;
+    if (this.isDashboardBubbleEl(parent)) {
+      const parentRadius = Math.min(bounds.width, bounds.height) / 2;
+      const bubbleRadius = rect.width / 2;
+      const parentCenterX = bounds.left + bounds.width / 2;
+      const parentCenterY = bounds.top + bounds.height / 2;
+      const bubbleCenterX = rect.left + rect.width / 2;
+      const bubbleCenterY = rect.top + rect.height / 2;
+      let dx = bubbleCenterX - parentCenterX;
+      let dy = bubbleCenterY - parentCenterY;
+      let distance = Math.hypot(dx, dy);
+      const maxDistance = Math.max(0, parentRadius - bubbleRadius * 0.88);
+      if (distance > maxDistance) {
+        if (distance < 0.01) {
+          dx = 1;
+          dy = 0;
+          distance = 1;
+        }
+        const nextCenterX = parentCenterX + dx / distance * maxDistance;
+        const nextCenterY = parentCenterY + dy / distance * maxDistance;
+        leftPct = (nextCenterX - bubbleRadius - bounds.left) / bounds.width * 100;
+        topPct = (nextCenterY - bubbleRadius - bounds.top) / bounds.height * 100;
+      }
+    }
+    bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, leftPct))}%`;
+    bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, topPct))}%`;
+  }
+  // Same "push siblings out of the way" behavior used while dragging a bubble
+  // (attachBubbleDrag's resolveSiblingCollisions), but callable from outside
+  // renderDashboard's scope so drift ticks can trigger it too.
+  resolveDashboardSiblingCollisions(el) {
+    const parent = el.offsetParent;
+    if (!parent) return;
+    const bounds = parent.getBoundingClientRect();
+    if (bounds.width === 0 || bounds.height === 0) return;
+    const bubbles = Array.from(parent.children).filter((child) => this.isDashboardBubbleEl(child));
+    let frontier = /* @__PURE__ */ new Set([el]);
+    for (let pass = 0; pass < 5 && frontier.size > 0; pass++) {
+      const nextFrontier = /* @__PURE__ */ new Set();
+      for (const a of frontier) {
+        for (const b of bubbles) {
+          if (a === b) continue;
+          const aRect = a.getBoundingClientRect();
+          const bRect = b.getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const aCenterX = aRect.left + aRadius;
+          const aCenterY = aRect.top + aRect.height / 2;
+          const bCenterX = bRect.left + bRadius;
+          const bCenterY = bRect.top + bRect.height / 2;
+          let dx = bCenterX - aCenterX;
+          let dy = bCenterY - aCenterY;
+          let distance = Math.hypot(dx, dy);
+          const minDistance = aRadius + bRadius + 4;
+          if (distance >= minDistance) continue;
+          if (distance < 0.01) {
+            const angle = (bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            distance = 1;
+          }
+          const push = (minDistance - distance) * 1.05;
+          const moveBubble = (bubble, rect, amount) => {
+            if (amount === 0) return;
+            const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
+            const nextTopPx = rect.top - bounds.top + dy / distance * amount;
+            const nextLeftPct = nextLeftPx / bounds.width * 100;
+            const nextTopPct = nextTopPx / bounds.height * 100;
+            const widthPct = rect.width / bounds.width * 100;
+            const heightPct = rect.height / bounds.height * 100;
+            bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+            bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+          };
+          moveBubble(b, bRect, push);
+          this.clampDashboardBubbleToParent(b);
+          const nextARect = a.getBoundingClientRect();
+          const nextBRect = b.getBoundingClientRect();
+          const nextARadius = nextARect.width / 2;
+          const nextBRadius = nextBRect.width / 2;
+          const nextDx = nextBRect.left + nextBRadius - (nextARect.left + nextARadius);
+          const nextDy = nextBRect.top + nextBRect.height / 2 - (nextARect.top + nextARect.height / 2);
+          const nextDistance = Math.max(Math.hypot(nextDx, nextDy), 1);
+          const residual = minDistance - nextDistance;
+          if (residual > 0.5) {
+            moveBubble(a, nextARect, -residual * 0.55);
+            this.clampDashboardBubbleToParent(a);
+          }
+          nextFrontier.add(b);
+        }
+      }
+      frontier = nextFrontier;
+    }
+    bubbles.forEach((bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!key) return;
+      this.dashboardPositions.set(key, {
+        x: parseFloat(bubble.style.left || "0"),
+        y: parseFloat(bubble.style.top || "0"),
+        size: this.parseBubbleSizeForSave(bubble)
+      });
+    });
+  }
+  // Same all-pairs, multi-pass settle used when a manual drag is released
+  // (renderDashboard's settleBubbleCollisions), ported so drift ticks can
+  // call it too. The chained push above only resolves collisions along the
+  // path from the moved bubble; this catches any remaining overlap between
+  // siblings that weren't directly touched — e.g. two tasks that each drifted
+  // independently (both running) and happened to end up on top of each other.
+  settleDashboardBubbleCollisions(parent, passes = 10) {
+    const bubbles = Array.from(parent.children).filter((child) => this.isDashboardBubbleEl(child));
+    const bounds = parent.getBoundingClientRect();
+    if (bubbles.length < 2 || bounds.width === 0 || bounds.height === 0) return;
+    for (let pass = 0; pass < passes; pass++) {
+      let movedAny = false;
+      for (let i = 0; i < bubbles.length; i++) {
+        for (let j = i + 1; j < bubbles.length; j++) {
+          const a = bubbles[i];
+          const b = bubbles[j];
+          const aRect = a.getBoundingClientRect();
+          const bRect = b.getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const aCenterX = aRect.left + aRadius;
+          const aCenterY = aRect.top + aRect.height / 2;
+          const bCenterX = bRect.left + bRadius;
+          const bCenterY = bRect.top + bRect.height / 2;
+          let dx = bCenterX - aCenterX;
+          let dy = bCenterY - aCenterY;
+          let distance = Math.hypot(dx, dy);
+          const minDistance = aRadius + bRadius + 2;
+          if (distance >= minDistance) continue;
+          if (distance < 0.01) {
+            const angle = (i + j + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
+            dx = Math.cos(angle);
+            dy = Math.sin(angle);
+            distance = 1;
+          }
+          const push = (minDistance - distance) * 0.75;
+          const moveBubble = (bubble, rect, amount) => {
+            const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
+            const nextTopPx = rect.top - bounds.top + dy / distance * amount;
+            const nextLeftPct = nextLeftPx / bounds.width * 100;
+            const nextTopPct = nextTopPx / bounds.height * 100;
+            const widthPct = rect.width / bounds.width * 100;
+            const heightPct = rect.height / bounds.height * 100;
+            bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+            bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+            this.clampDashboardBubbleToParent(bubble);
+          };
+          moveBubble(a, aRect, -push);
+          moveBubble(b, bRect, push);
+          movedAny = true;
+        }
+      }
+      if (!movedAny) break;
+    }
+    bubbles.forEach((bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!key) return;
+      this.dashboardPositions.set(key, {
+        x: parseFloat(bubble.style.left || "0"),
+        y: parseFloat(bubble.style.top || "0"),
+        size: this.parseBubbleSizeForSave(bubble)
+      });
+    });
+  }
+  startDashboardTaskDrift(taskId, direction, stepPct = 6, maxPct = 50) {
+    const existing = this.sinkIntervals.get(taskId);
+    if (existing) {
+      clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+    }
+    this.dashboardTaskDriftDirection.delete(taskId);
+    this.dashboardTaskShift.delete(taskId);
+  }
+  startGradualSink(taskId, stepPct = 6, maxPct = 50) {
+    this.resetDashboardTaskShift(taskId);
+  }
+  syncDashboardTaskDrift(tasks) {
+    const activeTaskIds = new Set(tasks.map((task) => task.id));
+    tasks.forEach((task) => this.resetDashboardTaskShift(task.id));
+    Array.from(this.sinkIntervals.keys()).forEach((taskId) => {
+      if (activeTaskIds.has(taskId)) return;
+      const existing = this.sinkIntervals.get(taskId);
+      if (existing) clearInterval(existing);
+      this.sinkIntervals.delete(taskId);
+      this.dashboardTaskDriftDirection.delete(taskId);
+      this.dashboardTaskShift.delete(taskId);
+    });
+  }
+  // Re-renders the dashboard whenever the map's real pixel size changes
+  // (e.g. the user resizes the sidebar/pane). Bubble positions/widths that
+  // are %-based reflow for free via CSS, but task bubbles are deliberately
+  // fixed px (capped to fit their parent — see taskBubbleSizeForParent), so
+  // without this, shrinking the canvas leaves stale sizes that no longer
+  // fit their now-smaller area/workflow ring. Debounced and gated on an
+  // actual size delta to avoid feedback loops (this same re-render recreates
+  // the map and re-attaches a fresh observer every time).
+  watchDashboardMapResize(map) {
+    var _a;
+    (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
+    this.dashboardResizeObserver = null;
+  }
+  // Purely decorative "aquarium" ambience behind the bubbles: soft caustic
+  // light rays, small rising bubbles, and drifting dust motes. Everything is
+  // pointer-events:none and lives in its own layer (z-index 0, below the
+  // area/workflow/task bubbles at 1/4/8/9), so it never affects drag,
+  // collision, or positioning logic. Positions/timings are derived from a
+  // deterministic hash (not Math.random()) so the layer doesn't reshuffle
+  // itself on every re-render.
+  createDashboardAmbientLayer(map) {
+    const ambient = map.createDiv("auto-oc-dashboard-ambient");
+    const seededRandom = (seed) => {
+      let hash = 0;
+      for (let i = 0; i < seed.length; i++) hash = (hash << 5) - hash + seed.charCodeAt(i) | 0;
+      return Math.abs(hash) % 1e3 / 1e3;
+    };
+    for (let i = 0; i < 2; i++) {
+      const ray = ambient.createDiv(`auto-oc-dashboard-ambient-ray${i === 1 ? " auto-oc-dashboard-ambient-ray-alt" : ""}`);
+      ray.style.top = `${-20 + seededRandom(`ray-top-${i}`) * 28}%`;
+    }
+    const bubbleCount = 10;
+    for (let i = 0; i < bubbleCount; i++) {
+      const seed = `ambient-bubble-${i}`;
+      const size = 3 + seededRandom(`${seed}-size`) * 7;
+      const left = seededRandom(`${seed}-left`) * 96;
+      const duration = 14 + seededRandom(`${seed}-dur`) * 12;
+      const delay2 = -(seededRandom(`${seed}-delay`) * duration);
+      const opacity = 0.05 + seededRandom(`${seed}-op`) * 0.13;
+      const bubble = ambient.createDiv("auto-oc-dashboard-ambient-bubble");
+      bubble.style.left = `${left}%`;
+      bubble.style.width = `${size}px`;
+      bubble.style.height = `${size}px`;
+      bubble.style.opacity = `${opacity}`;
+      bubble.style.animationDuration = `${duration}s`;
+      bubble.style.animationDelay = `${delay2}s`;
+    }
+    const dustCount = 8;
+    for (let i = 0; i < dustCount; i++) {
+      const seed = `ambient-dust-${i}`;
+      const size = 1 + seededRandom(`${seed}-size`);
+      const left = seededRandom(`${seed}-left`) * 96;
+      const top = seededRandom(`${seed}-top`) * 90;
+      const duration = 20 + seededRandom(`${seed}-dur`) * 10;
+      const delay2 = -(seededRandom(`${seed}-delay`) * duration);
+      const opacity = 0.04 + seededRandom(`${seed}-op`) * 0.04;
+      const dust = ambient.createDiv("auto-oc-dashboard-ambient-dust");
+      dust.style.left = `${left}%`;
+      dust.style.top = `${top}%`;
+      dust.style.width = `${size}px`;
+      dust.style.height = `${size}px`;
+      dust.style.opacity = `${opacity}`;
+      dust.style.animationDuration = `${duration}s`;
+      dust.style.animationDelay = `${delay2}s`;
+    }
+  }
   openCli() {
     new OpenCodeCliModal(this.app, this.plugin).open();
+  }
+  openTaskInList(task) {
+    this.currentTab = "tasks";
+    this.filterText = "";
+    this.filterStatus = "all";
+    this.expandedTasks.add(task.id);
+    this.render();
+    window.setTimeout(() => {
+      var _a;
+      (_a = this.containerEl.querySelector(`[data-auto-oc-task-id="${task.id}"]`)) == null ? void 0 : _a.scrollIntoView({ block: "center" });
+    }, 0);
+  }
+  openWorkflowInList(workflow) {
+    this.currentTab = "workflows";
+    this.expandedWorkflows.add(workflow.id);
+    this.render();
+    window.setTimeout(() => {
+      var _a;
+      (_a = this.containerEl.querySelector(`[data-auto-oc-workflow-id="${workflow.id}"]`)) == null ? void 0 : _a.scrollIntoView({ block: "center" });
+    }, 0);
   }
   render() {
     const { containerEl } = this;
@@ -4180,6 +4626,14 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.renderHeader(containerEl);
     const tabBar = containerEl.createDiv("auto-oc-tab-bar");
     const navRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-nav");
+    const btnDashboard = navRow.createEl("button", {
+      text: "Dashboard",
+      cls: "auto-oc-tab-btn"
+    });
+    btnDashboard.onclick = () => {
+      this.currentTab = "dashboard";
+      this.render();
+    };
     const btnTasks = navRow.createEl("button", {
       text: "\u{1F4CB} Tasks",
       cls: "auto-oc-tab-btn"
@@ -4235,9 +4689,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
     });
     btnImport.title = "Import tasks and workflows from JSON";
     btnImport.onclick = () => new ImportModal(this.app, this.plugin).open();
-    if (this.currentTab === "tasks") btnTasks.addClass("active");
+    if (this.currentTab === "dashboard") btnDashboard.addClass("active");
+    else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
-    if (this.currentTab === "workflows") {
+    if (this.currentTab === "dashboard") {
+      this.renderDashboard(containerEl);
+    } else if (this.currentTab === "workflows") {
       this.renderWorkflows(containerEl);
     } else {
       this.renderTasks(containerEl);
@@ -4291,6 +4748,594 @@ var AutoOCView = class extends import_obsidian.ItemView {
         title: this.plugin.updateCheckError
       });
     }
+  }
+  renderDashboard(containerEl) {
+    const statuses = ["pending", "running", "completed", "failed"];
+    const tasks = this.plugin.settings.tasks;
+    const workflows = this.plugin.settings.workflows;
+    if (tasks.length === 0 && workflows.length === 0) {
+      const empty = containerEl.createDiv("auto-oc-empty auto-oc-dashboard-empty");
+      empty.createEl("div", { text: "No activity yet", cls: "auto-oc-dashboard-empty-title" });
+      empty.createEl("div", { text: "Create tasks and workflows to see scheduler KPIs here." });
+      return;
+    }
+    const taskCounts = Object.fromEntries(statuses.map((status) => [status, tasks.filter((task) => task.status === status).length]));
+    const workflowCounts = Object.fromEntries(statuses.map((status) => [status, workflows.filter((workflow) => workflow.status === status).length]));
+    const taskUsage = /* @__PURE__ */ new Map();
+    workflows.forEach((workflow) => {
+      workflow.steps.forEach((step) => {
+        if (step.taskId) taskUsage.set(step.taskId, (taskUsage.get(step.taskId) || 0) + 1);
+      });
+    });
+    const totalReferences = Array.from(taskUsage.values()).reduce((sum, count) => sum + count, 0);
+    const mostUsed = tasks.reduce((best, task) => {
+      const count = taskUsage.get(task.id) || 0;
+      if (!best || count > best.count) return { name: task.name, count };
+      return best;
+    }, null);
+    const unusedTasks = tasks.filter((task) => !taskUsage.has(task.id)).length;
+    const taskFailCounts = /* @__PURE__ */ new Map();
+    tasks.forEach((task) => {
+      let fails = 0;
+      const out = task.output || "";
+      const exitMatch = out.match(/\[exit code:\s*(-?\d+)\]/g);
+      if (exitMatch) fails = exitMatch.length;
+      if (task.status === "failed") fails = Math.max(fails, 1);
+      if (fails > 0) taskFailCounts.set(task.id, fails);
+    });
+    const dashboard = containerEl.createDiv("auto-oc-dashboard");
+    const kpis = dashboard.createDiv(this.showDashboardKpis ? "auto-oc-dashboard-kpis" : "auto-oc-dashboard-kpis auto-oc-dashboard-kpis-hidden");
+    const addKpi = (label, value, cls) => {
+      const kpi = kpis.createDiv("auto-oc-dashboard-kpi");
+      kpi.createEl("span", { text: label, cls: "auto-oc-dashboard-kpi-label" });
+      kpi.createEl("strong", { text: String(value), cls });
+    };
+    addKpi("Tasks", tasks.length);
+    statuses.forEach((status) => addKpi(`Tasks ${status}`, taskCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : void 0));
+    addKpi("Workflows", workflows.length);
+    statuses.forEach((status) => addKpi(`Workflows ${status}`, workflowCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : void 0));
+    addKpi("Task refs", totalReferences);
+    addKpi("Most used", mostUsed && mostUsed.count > 0 ? `${mostUsed.name} (${mostUsed.count})` : "None");
+    addKpi("Unused tasks", unusedTasks);
+    const map = dashboard.createDiv("auto-oc-dashboard-map");
+    this.createDashboardAmbientLayer(map);
+    this.watchDashboardMapResize(map);
+    const btnToggleKpis = map.createEl("button", {
+      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
+      cls: "auto-oc-dashboard-kpi-toggle"
+    });
+    btnToggleKpis.onclick = () => {
+      this.showDashboardKpis = !this.showDashboardKpis;
+      this.render();
+    };
+    const areaName = (value) => (value == null ? void 0 : value.trim()) || "No area";
+    const layoutSignature = JSON.stringify({
+      tasks: tasks.map((task) => ({ id: task.id, area: areaName(task.area) })).sort((a, b) => a.id.localeCompare(b.id)),
+      workflows: workflows.map((workflow) => ({
+        id: workflow.id,
+        area: areaName(workflow.area),
+        steps: workflow.steps.map((step) => step.taskId || step.id)
+      })).sort((a, b) => a.id.localeCompare(b.id))
+    });
+    const layoutChanged = layoutSignature !== this.dashboardLayoutSignature;
+    if (layoutChanged) this.dashboardLayoutSignature = layoutSignature;
+    const areaNames = Array.from(/* @__PURE__ */ new Set([
+      ...workflows.map((workflow) => areaName(workflow.area)),
+      ...tasks.map((task) => areaName(task.area))
+    ])).sort((a, b) => a.localeCompare(b));
+    const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const TASK_BUBBLE_PX = 30;
+    const taskBubbleSizeForParent = (parent) => {
+      const rect = parent.getBoundingClientRect();
+      const parentDiameter = rect.height || rect.width || 0;
+      if (parentDiameter <= 0) return { px: TASK_BUBBLE_PX, pct: 12 };
+      const px = TASK_BUBBLE_PX;
+      return { px, pct: px / parentDiameter * 100 };
+    };
+    const setBubbleRect = (el, x, y, size) => {
+      el.style.left = `${x}%`;
+      el.style.top = `${y}%`;
+      el.style.width = `${size}%`;
+      el.style.height = "";
+    };
+    const saveBubblePosition = (bubble) => {
+      const key = bubble.getAttribute("data-dashboard-key");
+      if (!key) return;
+      this.dashboardPositions.set(key, {
+        x: parseFloat(bubble.style.left || "0"),
+        y: parseFloat(bubble.style.top || "0"),
+        size: this.parseBubbleSizeForSave(bubble)
+      });
+    };
+    const saveBubbleTreePositions = (parent) => {
+      const bubbles = Array.from(parent.querySelectorAll(".auto-oc-dashboard-area-bubble, .auto-oc-dashboard-workflow-bubble, .auto-oc-dashboard-task-bubble"));
+      bubbles.forEach(saveBubblePosition);
+    };
+    const addLabel = (el, name, ariaLabel = name) => {
+      el.tabIndex = 0;
+      el.setAttr("aria-label", ariaLabel);
+      el.createDiv("auto-oc-dashboard-hover-label").setText(name);
+    };
+    const isDashboardBubble = (el) => {
+      return el.classList.contains("auto-oc-dashboard-area-bubble") || el.classList.contains("auto-oc-dashboard-workflow-bubble") || el.classList.contains("auto-oc-dashboard-task-bubble");
+    };
+    const withDashboardMeasuring = (fn) => {
+      map.addClass("auto-oc-dashboard-measuring");
+      try {
+        return fn();
+      } finally {
+        map.removeClass("auto-oc-dashboard-measuring");
+      }
+    };
+    const clampBubbleToParent = (bubble) => {
+      const parent = bubble.offsetParent;
+      if (!parent) return;
+      const bounds = parent.getBoundingClientRect();
+      const rect = bubble.getBoundingClientRect();
+      const widthPct = rect.width / bounds.width * 100;
+      const heightPct = rect.height / bounds.height * 100;
+      let leftPct = (rect.left - bounds.left) / bounds.width * 100;
+      let topPct = (rect.top - bounds.top) / bounds.height * 100;
+      if (isDashboardBubble(parent)) {
+        const parentRadius = Math.min(bounds.width, bounds.height) / 2;
+        const bubbleRadius = rect.width / 2;
+        const parentCenterX = bounds.left + bounds.width / 2;
+        const parentCenterY = bounds.top + bounds.height / 2;
+        const bubbleCenterX = rect.left + rect.width / 2;
+        const bubbleCenterY = rect.top + rect.height / 2;
+        let dx = bubbleCenterX - parentCenterX;
+        let dy = bubbleCenterY - parentCenterY;
+        let distance = Math.hypot(dx, dy);
+        const maxDistance = Math.max(0, parentRadius - bubbleRadius * 0.88);
+        if (distance > maxDistance) {
+          if (distance < 0.01) {
+            dx = 1;
+            dy = 0;
+            distance = 1;
+          }
+          const nextCenterX = parentCenterX + dx / distance * maxDistance;
+          const nextCenterY = parentCenterY + dy / distance * maxDistance;
+          leftPct = (nextCenterX - bubbleRadius - bounds.left) / bounds.width * 100;
+          topPct = (nextCenterY - bubbleRadius - bounds.top) / bounds.height * 100;
+        }
+      }
+      bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, leftPct))}%`;
+      bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, topPct))}%`;
+    };
+    const fitContainerToChildren = (container) => {
+      return withDashboardMeasuring(() => {
+        if (!isDashboardBubble(container)) return;
+        const parent = container.offsetParent;
+        if (!parent) return;
+        const children = Array.from(container.children).filter((child) => child instanceof HTMLElement && isDashboardBubble(child));
+        if (children.length === 0) return;
+        const parentRect = parent.getBoundingClientRect();
+        const childRects = children.map((child) => ({ child, rect: child.getBoundingClientRect() }));
+        const padding = 12;
+        const minX = Math.min(...childRects.map(({ rect }) => rect.left)) - padding;
+        const maxX = Math.max(...childRects.map(({ rect }) => rect.right)) + padding;
+        const minY = Math.min(...childRects.map(({ rect }) => rect.top)) - padding;
+        const maxY = Math.max(...childRects.map(({ rect }) => rect.bottom)) + padding;
+        const diameterPx = Math.max(maxX - minX, maxY - minY, ...childRects.map(({ rect }) => rect.width + padding * 2));
+        const oldCenters = childRects.map(({ child, rect }) => ({
+          child,
+          centerX: rect.left + rect.width / 2,
+          centerY: rect.top + rect.height / 2,
+          width: rect.width,
+          height: rect.height
+        }));
+        const centerX = (minX + maxX) / 2;
+        const centerY = (minY + maxY) / 2;
+        const sizePct = Math.min(96, Math.max(10, diameterPx / parentRect.width * 100));
+        const sizePx = sizePct / 100 * parentRect.width;
+        container.style.width = `${sizePct}%`;
+        container.style.left = `${(centerX - sizePx / 2 - parentRect.left) / parentRect.width * 100}%`;
+        container.style.top = `${(centerY - sizePx / 2 - parentRect.top) / parentRect.height * 100}%`;
+        clampBubbleToParent(container);
+        const nextRect = container.getBoundingClientRect();
+        oldCenters.forEach(({ child, centerX: childCenterX, centerY: childCenterY, width, height }) => {
+          child.style.left = `${(childCenterX - width / 2 - nextRect.left) / nextRect.width * 100}%`;
+          child.style.top = `${(childCenterY - height / 2 - nextRect.top) / nextRect.height * 100}%`;
+          clampBubbleToParent(child);
+        });
+        saveBubbleTreePositions(parent);
+        void this.persistDashboardPositions();
+      });
+    };
+    const settleBubbleCollisions = (parent, passes = 10) => {
+      return withDashboardMeasuring(() => {
+        const bubbles = Array.from(parent.children).filter((child) => child instanceof HTMLElement && isDashboardBubble(child));
+        const bounds = parent.getBoundingClientRect();
+        if (bubbles.length < 2 || bounds.width === 0 || bounds.height === 0) return;
+        for (let pass = 0; pass < passes; pass++) {
+          let movedAny = false;
+          for (let i = 0; i < bubbles.length; i++) {
+            for (let j = i + 1; j < bubbles.length; j++) {
+              const a = bubbles[i];
+              const b = bubbles[j];
+              const aRect = a.getBoundingClientRect();
+              const bRect = b.getBoundingClientRect();
+              const aRadius = aRect.width / 2;
+              const bRadius = bRect.width / 2;
+              const aCenterX = aRect.left + aRadius;
+              const aCenterY = aRect.top + aRect.height / 2;
+              const bCenterX = bRect.left + bRadius;
+              const bCenterY = bRect.top + bRect.height / 2;
+              let dx = bCenterX - aCenterX;
+              let dy = bCenterY - aCenterY;
+              let distance = Math.hypot(dx, dy);
+              const minDistance = aRadius + bRadius + 2;
+              if (distance >= minDistance) continue;
+              if (distance < 0.01) {
+                const angle = (i + j + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
+                dx = Math.cos(angle);
+                dy = Math.sin(angle);
+                distance = 1;
+              }
+              const push = (minDistance - distance) * 0.75;
+              const moveBubble = (bubble, rect, amount) => {
+                const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
+                const nextTopPx = rect.top - bounds.top + dy / distance * amount;
+                const nextLeftPct = nextLeftPx / bounds.width * 100;
+                const nextTopPct = nextTopPx / bounds.height * 100;
+                const widthPct = rect.width / bounds.width * 100;
+                const heightPct = rect.height / bounds.height * 100;
+                bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+                bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+                clampBubbleToParent(bubble);
+              };
+              moveBubble(a, aRect, -push);
+              moveBubble(b, bRect, push);
+              movedAny = true;
+            }
+          }
+          if (!movedAny) break;
+        }
+        saveBubbleTreePositions(parent);
+        void this.persistDashboardPositions();
+      });
+    };
+    const hasBubbleOverlap = (parent) => {
+      const bubbles = Array.from(parent.children).filter((child) => child instanceof HTMLElement && isDashboardBubble(child));
+      for (let i = 0; i < bubbles.length; i++) {
+        for (let j = i + 1; j < bubbles.length; j++) {
+          const aRect = bubbles[i].getBoundingClientRect();
+          const bRect = bubbles[j].getBoundingClientRect();
+          const aRadius = aRect.width / 2;
+          const bRadius = bRect.width / 2;
+          const distance = Math.hypot(
+            bRect.left + bRadius - (aRect.left + aRadius),
+            bRect.top + bRect.height / 2 - (aRect.top + aRect.height / 2)
+          );
+          if (distance < aRadius + bRadius + 2) return true;
+        }
+      }
+      return false;
+    };
+    const attachBubbleDrag = (el, onClick) => {
+      let startX = 0;
+      let startY = 0;
+      let startLeft = 0;
+      let startTop = 0;
+      let moved = false;
+      let parentRect = null;
+      let pointerId = null;
+      const resolveSiblingCollisions = () => {
+        const parent = el.offsetParent;
+        if (!parent) return;
+        const bounds = parent.getBoundingClientRect();
+        const bubbles = Array.from(parent.children).filter((child) => {
+          return child instanceof HTMLElement && isDashboardBubble(child);
+        });
+        let frontier = /* @__PURE__ */ new Set([el]);
+        for (let pass = 0; pass < 5 && frontier.size > 0; pass++) {
+          const nextFrontier = /* @__PURE__ */ new Set();
+          for (const a of frontier) {
+            for (const b of bubbles) {
+              if (a === b) continue;
+              const aRect = a.getBoundingClientRect();
+              const bRect = b.getBoundingClientRect();
+              const aRadius = aRect.width / 2;
+              const bRadius = bRect.width / 2;
+              const aCenterX = aRect.left + aRadius;
+              const aCenterY = aRect.top + aRect.height / 2;
+              const bCenterX = bRect.left + bRadius;
+              const bCenterY = bRect.top + bRect.height / 2;
+              let dx = bCenterX - aCenterX;
+              let dy = bCenterY - aCenterY;
+              let distance = Math.hypot(dx, dy);
+              const minDistance = aRadius + bRadius + 4;
+              if (distance >= minDistance) continue;
+              if (distance < 0.01) {
+                const angle = (bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1) * Math.PI * 2;
+                dx = Math.cos(angle);
+                dy = Math.sin(angle);
+                distance = 1;
+              }
+              const push = (minDistance - distance) * 1.05;
+              const moveBubble = (bubble, rect, amount) => {
+                if (amount === 0) return;
+                const nextLeftPx = rect.left - bounds.left + dx / distance * amount;
+                const nextTopPx = rect.top - bounds.top + dy / distance * amount;
+                const nextLeftPct = nextLeftPx / bounds.width * 100;
+                const nextTopPct = nextTopPx / bounds.height * 100;
+                const widthPct = rect.width / bounds.width * 100;
+                const heightPct = rect.height / bounds.height * 100;
+                bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
+                bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
+              };
+              moveBubble(b, bRect, push);
+              clampBubbleToParent(b);
+              nextFrontier.add(b);
+            }
+          }
+          frontier = nextFrontier;
+        }
+      };
+      el.onpointerdown = (event) => {
+        var _a, _b;
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        pointerId = event.pointerId;
+        startX = event.clientX;
+        startY = event.clientY;
+        startLeft = parseFloat(el.style.left || "0");
+        startTop = parseFloat(el.style.top || "0");
+        parentRect = ((_a = el.offsetParent) == null ? void 0 : _a.getBoundingClientRect()) || null;
+        moved = false;
+        el.addClass("auto-oc-dashboard-dragging");
+        (_b = el.offsetParent) == null ? void 0 : _b.addClass("auto-oc-dashboard-colliding");
+        el.style.zIndex = "30";
+        el.setPointerCapture(event.pointerId);
+      };
+      el.onpointermove = (event) => {
+        if (pointerId !== event.pointerId || !parentRect) return;
+        const dx = event.clientX - startX;
+        const dy = event.clientY - startY;
+        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+        const bubbleRect = el.getBoundingClientRect();
+        const widthPct = bubbleRect.width / parentRect.width * 100;
+        const heightPct = bubbleRect.height / parentRect.height * 100;
+        const nextLeft = startLeft + dx / parentRect.width * 100;
+        const nextTop = startTop + dy / parentRect.height * 100;
+        el.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeft))}%`;
+        el.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTop))}%`;
+        resolveSiblingCollisions();
+      };
+      el.onpointerup = (event) => {
+        if (pointerId !== event.pointerId) return;
+        const parent = el.offsetParent;
+        event.preventDefault();
+        event.stopPropagation();
+        el.releasePointerCapture(event.pointerId);
+        el.removeClass("auto-oc-dashboard-dragging");
+        parent == null ? void 0 : parent.removeClass("auto-oc-dashboard-colliding");
+        el.style.zIndex = "";
+        pointerId = null;
+        parentRect = null;
+        if (parent) {
+          settleBubbleCollisions(parent, 24);
+          if (isDashboardBubble(parent)) {
+            fitContainerToChildren(parent);
+            const grandParent = parent.offsetParent;
+            if (grandParent && isDashboardBubble(grandParent)) fitContainerToChildren(grandParent);
+          }
+        }
+        if (!moved && onClick) onClick();
+      };
+      el.onpointercancel = (event) => {
+        var _a;
+        if (pointerId !== event.pointerId) return;
+        el.removeClass("auto-oc-dashboard-dragging");
+        (_a = el.offsetParent) == null ? void 0 : _a.removeClass("auto-oc-dashboard-colliding");
+        el.style.zIndex = "";
+        pointerId = null;
+        parentRect = null;
+      };
+      el.onkeydown = (event) => {
+        if (event.key !== "Enter" || !onClick) return;
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      };
+    };
+    const layoutTopLevel = (items) => {
+      const jitterForKey = (key, axis) => {
+        let hash = 0;
+        for (let i = 0; i < key.length; i++) hash = (hash << 5) - hash + key.charCodeAt(i) + axis * 131 | 0;
+        return (Math.abs(hash) % 1e3 / 1e3 - 0.5) * 10;
+      };
+      const count = Math.max(items.length, 1);
+      const cols = count <= 1 ? 1 : count <= 4 ? 2 : Math.ceil(Math.sqrt(count));
+      const rows = Math.ceil(count / cols);
+      const gap = 4;
+      const cellWidth = (100 - gap * (cols + 1)) / cols;
+      const cellHeight = (100 - gap * (rows + 1)) / rows;
+      return items.map((item, index) => {
+        const col = index % cols;
+        const row = Math.floor(index / cols);
+        const size = Math.min(item.size, cellWidth, cellHeight);
+        const saved = this.dashboardPositions.get(item.key);
+        if (saved) {
+          const savedSize = saved.size ? Math.max(1, Math.min(96, saved.size)) : size;
+          return {
+            ...item,
+            size: savedSize,
+            x: Math.max(0, Math.min(100 - savedSize, saved.x)),
+            y: Math.max(0, Math.min(100 - savedSize, saved.y))
+          };
+        }
+        const jitterX = Math.max(-cellWidth * 0.18, Math.min(cellWidth * 0.18, jitterForKey(item.key, 0)));
+        const jitterY = Math.max(-cellHeight * 0.18, Math.min(cellHeight * 0.18, jitterForKey(item.key, 1)));
+        return {
+          ...item,
+          size,
+          x: Math.max(0, Math.min(100 - size, gap + col * (cellWidth + gap) + (cellWidth - size) / 2 + jitterX)),
+          y: Math.max(0, Math.min(100 - size, gap + row * (cellHeight + gap) + (cellHeight - size) / 2 + jitterY))
+        };
+      });
+    };
+    const createAreaBubble = (name, x, y, size) => {
+      const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
+      areaBubble.setAttr("data-dashboard-key", `area:${name}`);
+      setBubbleRect(areaBubble, x, y, size);
+      areaBubble.setAttr("aria-label", `Area: ${name}`);
+      areaBubble.tabIndex = 0;
+      const areaLabel = areaBubble.createDiv("auto-oc-dashboard-area-label");
+      areaLabel.setText(name);
+      areaBubble.createDiv("auto-oc-dashboard-hover-label").setText(name);
+      attachBubbleDrag(areaBubble);
+      clampBubbleToParent(areaBubble);
+      return areaBubble;
+    };
+    const createTaskBubble = (parent, task, x, y, size, extraCls = "", positionKey = `task:${task.id}`) => {
+      var _a, _b;
+      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      taskBubble.setAttr("data-dashboard-key", positionKey);
+      taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
+      const saved = this.dashboardPositions.get(positionKey);
+      let posX = (_a = saved == null ? void 0 : saved.x) != null ? _a : x;
+      let posY = (_b = saved == null ? void 0 : saved.y) != null ? _b : y;
+      if (!saved) {
+        const usage = taskUsage.get(task.id) || 0;
+        const fails = taskFailCounts.get(task.id) || 0;
+        const usageLift = Math.min(usage * 1.2, 14);
+        const failDrop = Math.min(fails * 1.5, 12);
+        posY = Math.max(0, Math.min(100 - size, posY - usageLift + failDrop));
+      }
+      setBubbleRect(taskBubble, posX, posY, size);
+      const finalPx = taskBubbleSizeForParent(parent).px;
+      taskBubble.style.width = `${finalPx}px`;
+      taskBubble.style.height = `${finalPx}px`;
+      const usageCount = taskUsage.get(task.id) || 0;
+      addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
+      attachBubbleDrag(taskBubble, () => this.openTaskInList(task));
+      clampBubbleToParent(taskBubble);
+    };
+    const configuredAreaNames = areaNames.filter((name) => name !== "No area");
+    const topLevelItems = [];
+    configuredAreaNames.forEach((name) => {
+      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
+      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
+        return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
+      }, 0);
+      topLevelItems.push({ key: `area:${name}`, size: Math.max(12, 9 + Math.sqrt(Math.max(contentWeight, 1)) * 7) });
+    });
+    const noAreaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === "No area");
+    const noAreaLooseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === "No area");
+    noAreaWorkflows.forEach((workflow) => {
+      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
+      topLevelItems.push({ key: `workflow:${workflow.id}`, size: Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9)) });
+    });
+    noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
+    const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
+    configuredAreaNames.forEach((name) => {
+      const areaLayout = topLevelLayout.get(`area:${name}`);
+      if (!areaLayout) return;
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size);
+      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
+      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => {
+        var _a;
+        return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "running";
+      }))) {
+        areaBubble.addClass("auto-oc-dashboard-has-running");
+      }
+      if (looseTasks.some((task) => task.status === "failed") || areaWorkflows.some((workflow) => workflow.status === "failed" || workflow.steps.some((step) => {
+        var _a;
+        return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "failed";
+      }))) {
+        areaBubble.addClass("auto-oc-dashboard-has-failed");
+      }
+      const areaWorkflowCount = Math.max(areaWorkflows.length, 1);
+      areaWorkflows.forEach((workflow, workflowIndex) => {
+        var _a, _b, _c;
+        const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
+        const angle = -Math.PI / 2 + workflowIndex * Math.PI * 2 / areaWorkflowCount;
+        const workflowSize = Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9));
+        const workflowRadius = areaWorkflowCount === 1 ? 0 : Math.max(0, 46 - workflowSize / 2);
+        const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
+        const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
+        const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+        if (taskSteps.some((step) => {
+          var _a2;
+          return ((_a2 = taskById.get(step.taskId || "")) == null ? void 0 : _a2.status) === "running";
+        })) workflowBubble.addClass("auto-oc-dashboard-has-running");
+        if (taskSteps.some((step) => {
+          var _a2;
+          return ((_a2 = taskById.get(step.taskId || "")) == null ? void 0 : _a2.status) === "failed";
+        })) workflowBubble.addClass("auto-oc-dashboard-has-failed");
+        const workflowKey = `area:${name}:workflow:${workflow.id}`;
+        workflowBubble.setAttr("data-dashboard-key", workflowKey);
+        const savedWorkflow = this.dashboardPositions.get(workflowKey);
+        setBubbleRect(workflowBubble, (_a = savedWorkflow == null ? void 0 : savedWorkflow.x) != null ? _a : workflowX, (_b = savedWorkflow == null ? void 0 : savedWorkflow.y) != null ? _b : workflowY, (_c = savedWorkflow == null ? void 0 : savedWorkflow.size) != null ? _c : workflowSize);
+        addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+        attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
+        clampBubbleToParent(workflowBubble);
+        const taskCount = Math.max(taskSteps.length, 1);
+        taskSteps.forEach((step, stepIndex) => {
+          const task = taskById.get(step.taskId);
+          if (!task) return;
+          const taskAngle = -Math.PI / 2 + stepIndex * Math.PI * 2 / taskCount;
+          const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
+          const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
+          const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
+          const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
+          createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `${workflowKey}:task:${task.id}:${stepIndex}`);
+        });
+      });
+      const looseCount = Math.max(looseTasks.length, 1);
+      looseTasks.forEach((task, taskIndex) => {
+        const angle = -Math.PI / 2 + taskIndex * Math.PI * 2 / looseCount;
+        const taskSize = taskBubbleSizeForParent(areaBubble).pct;
+        const radius = looseCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
+        const taskX = 50 + Math.cos(angle) * radius - taskSize / 2;
+        const taskY = 50 + Math.sin(angle) * radius - taskSize / 2;
+        createTaskBubble(areaBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-loose", `area:${name}:task:${task.id}`);
+      });
+    });
+    noAreaWorkflows.forEach((workflow) => {
+      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
+      const workflowSize = Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9));
+      const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
+      if (!workflowLayout) return;
+      const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+      if (taskSteps.some((step) => {
+        var _a;
+        return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "running";
+      })) workflowBubble.addClass("auto-oc-dashboard-has-running");
+      if (taskSteps.some((step) => {
+        var _a;
+        return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "failed";
+      })) workflowBubble.addClass("auto-oc-dashboard-has-failed");
+      workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
+      setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowLayout.size);
+      addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+      attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
+      clampBubbleToParent(workflowBubble);
+      const taskCount = Math.max(taskSteps.length, 1);
+      taskSteps.forEach((step, stepIndex) => {
+        const task = taskById.get(step.taskId);
+        if (!task) return;
+        const taskAngle = -Math.PI / 2 + stepIndex * Math.PI * 2 / taskCount;
+        const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
+        const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
+        const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
+        const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
+        createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `workflow:${workflow.id}:task:${task.id}:${stepIndex}`);
+      });
+    });
+    noAreaLooseTasks.forEach((task) => {
+      const taskLayout = topLevelLayout.get(`task:${task.id}`);
+      if (!taskLayout) return;
+      const taskSize = taskBubbleSizeForParent(map).pct;
+      createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
+    });
+    this.syncDashboardTaskDrift(tasks);
+    this.forceDashboardFitOnNextRender = false;
+    return;
   }
   renderTasks(containerEl) {
     const filterBar = containerEl.createDiv("auto-oc-filter-bar");
@@ -4346,8 +5391,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
     }
   }
   renderTaskCard(parent, task) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
+    card.setAttr("data-auto-oc-task-id", task.id);
     const summary = card.createDiv("auto-oc-card-summary");
     const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
     const badge = summary.createEl("span", {
@@ -4370,6 +5416,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = (_b = (_a = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model;
+    meta.createEl("span", { text: `\u{1F5C2} ${((_c = task.area) == null ? void 0 : _c.trim()) || "No area"}` });
     meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
     meta.createEl("span", { text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
     let scheduleText = "";
@@ -4383,8 +5430,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     } else if (task.scheduleType === "interval") {
-      const value = (_c = task.scheduleIntervalValue) != null ? _c : 10;
-      const unit = (_d = task.scheduleIntervalUnit) != null ? _d : "minutes";
+      const value = (_d = task.scheduleIntervalValue) != null ? _d : 10;
+      const unit = (_e = task.scheduleIntervalUnit) != null ? _e : "minutes";
       scheduleText = `\u{1F501} Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
@@ -4526,8 +5573,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
     }
   }
   renderWorkflowCard(parent, workflow) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
+    card.setAttr("data-auto-oc-workflow-id", workflow.id);
     const summary = card.createDiv("auto-oc-card-summary");
     const nameEl = summary.createEl("span", {
       text: workflow.name,
@@ -4551,6 +5599,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const details = card.createDiv("auto-oc-card-details");
     const isExpandedWf = this.expandedWorkflows.has(workflow.id);
     details.style.display = isExpandedWf ? "block" : "none";
+    const areaMeta = details.createDiv("auto-oc-card-meta");
+    areaMeta.createEl("span", { text: `\u{1F5C2} ${((_a = workflow.area) == null ? void 0 : _a.trim()) || "No area"}` });
     if (workflow.description) {
       const desc = details.createDiv("auto-oc-prompt-preview");
       desc.createEl("span", { text: workflow.description.slice(0, 200) });
@@ -4631,7 +5681,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           };
         } else if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-          stepMeta.createSpan({ text: `Pauses for ${(_a = step.delayValue) != null ? _a : 5} ${(_b = step.delayUnit) != null ? _b : "minutes"}` });
+          stepMeta.createSpan({ text: `Pauses for ${(_b = step.delayValue) != null ? _b : 5} ${(_c = step.delayUnit) != null ? _c : "minutes"}` });
           const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
           const btnDelayLog = stepActions.createEl("button", {
             text: "\u{1F4C4} Log",
@@ -4654,7 +5704,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         continue;
       }
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-      const modelLabel = (_d = (_c = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _c.label) != null ? _d : task.model;
+      const modelLabel = (_e = (_d = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _d.label) != null ? _e : task.model;
       taskMeta.createSpan({ text: `\u{1F916} ${modelLabel || "(no model)"}` });
       taskMeta.createSpan({ text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
       if (task.branch) taskMeta.createSpan({ text: `\u{1F33F} ${task.branch}${task.createBranch ? " (create)" : ""}` });
@@ -4740,8 +5790,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const days = wfScheduleMonthDays.join(", ");
         schedMeta.createEl("span", { text: `\u{1F501} Day ${days || "no days"} of each month at ${wfScheduleTime}` });
       } else if (wfScheduleType === "interval") {
-        const value = (_e = workflow.scheduleIntervalValue) != null ? _e : 10;
-        const unit = (_f = workflow.scheduleIntervalUnit) != null ? _f : "minutes";
+        const value = (_f = workflow.scheduleIntervalValue) != null ? _f : 10;
+        const unit = (_g = workflow.scheduleIntervalUnit) != null ? _g : "minutes";
         schedMeta.createEl("span", { text: `\u{1F501} Every ${value} ${unit}` });
       }
     }
@@ -4792,9 +5842,20 @@ var AutoOCView = class extends import_obsidian.ItemView {
     btnDelete.title = "Delete workflow";
     btnDelete.onclick = async (e) => {
       e.stopPropagation();
-      if (confirm(`Delete workflow "${workflow.name}"?`)) {
-        await this.plugin.deleteWorkflow(workflow.id);
+      if (!confirm(`Delete workflow "${workflow.name}"?`)) return;
+      const workflowTaskIds = this.plugin.workflowTaskIds(workflow);
+      const taskIdsOnlyUsedHere = this.plugin.workflowTaskIdsUsedOnlyBy(workflow.id);
+      let deleteWorkflowTasks = false;
+      if (workflowTaskIds.length > 0) {
+        const sharedCount = workflowTaskIds.length - taskIdsOnlyUsedHere.length;
+        const sharedNote = sharedCount > 0 ? `
+
+${sharedCount} task(s) are also used by other workflows and will be kept.` : "";
+        deleteWorkflowTasks = taskIdsOnlyUsedHere.length > 0 && confirm(
+          `Also delete ${taskIdsOnlyUsedHere.length} task(s) used only by this workflow?${sharedNote}`
+        );
       }
+      await this.plugin.deleteWorkflow(workflow.id, deleteWorkflowTasks);
     };
     summary.onclick = () => {
       const isHidden = details.style.display === "none";
@@ -4821,6 +5882,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
   }
   onOpen() {
     const { contentEl, modalEl, titleEl } = this;
+    this.plugin.registerVisualBuilder(this);
     contentEl.empty();
     if (titleEl && titleEl.style) {
       titleEl.style.display = "none";
@@ -4886,6 +5948,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
   }
   onClose() {
     var _a;
+    this.plugin.unregisterVisualBuilder(this);
     if (this.messageHandler) {
       window.removeEventListener("message", this.messageHandler);
       this.messageHandler = void 0;
@@ -4954,13 +6017,13 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       var _a2, _b, _c, _d;
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = existing ? t.id : t.id || generateId();
-      const contentChanged = !existing || existing.prompt !== (t.prompt || "") || existing.model !== (t.model || existing.model) || existing.agent !== (t.agent || existing.agent) || existing.scheduleType !== (t.scheduleType || existing.scheduleType) || existing.name !== (t.name || existing.name);
-      const status = (existing == null ? void 0 : existing.status) === "running" ? "running" : contentChanged ? "pending" : (existing == null ? void 0 : existing.status) || "pending";
+      const status = (existing == null ? void 0 : existing.status) || "pending";
       const lastRun = (existing == null ? void 0 : existing.lastRun) || "";
       const output = (existing == null ? void 0 : existing.output) || "";
       return {
         id,
         name: t.name || "Unnamed",
+        area: t.area !== void 0 ? t.area || "" : (existing == null ? void 0 : existing.area) || "",
         prompt: t.prompt || "",
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
@@ -4987,12 +6050,12 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       var _a2, _b, _c, _d;
       const existing = oldWorkflows.find((x) => x.id === w.id);
       const id = existing ? w.id : w.id || generateId();
-      const structureChanged = !existing || existing.steps.length !== (w.steps || []).length || existing.name !== (w.name || existing.name);
-      const status = structureChanged ? "pending" : (existing == null ? void 0 : existing.status) === "running" ? "running" : (existing == null ? void 0 : existing.status) || "pending";
-      const currentStep = structureChanged ? -1 : (_a2 = existing == null ? void 0 : existing.currentStep) != null ? _a2 : -1;
+      const status = (existing == null ? void 0 : existing.status) || "pending";
+      const currentStep = (_a2 = existing == null ? void 0 : existing.currentStep) != null ? _a2 : -1;
       return {
         id,
         name: w.name || "Unnamed",
+        area: w.area !== void 0 ? w.area || "" : (existing == null ? void 0 : existing.area) || "",
         description: w.description || "",
         steps: (w.steps || []).map((s, i) => {
           const oldStep = existing == null ? void 0 : existing.steps.find((x) => x.id === s.id);
@@ -5079,6 +6142,14 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
       window.setTimeout(() => text.inputEl.focus(), 50);
+    });
+    new import_obsidian.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+      var _a;
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => this.draft.area = v.trim());
+      renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
+        this.draft.area = area;
+      });
     });
     new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Text to send to OpenCode").addTextArea((ta) => {
       var _a;
@@ -5267,7 +6338,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     }
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -5297,11 +6368,13 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             (t) => t.id === this.editTask.id
           );
           if (idx !== -1) {
-            const wasRunning = this.editTask.status === "running";
+            const existing = this.plugin.settings.tasks[idx];
             this.plugin.settings.tasks[idx] = {
               ...this.editTask,
               ...this.draft,
-              status: wasRunning ? "running" : "pending"
+              status: existing.status,
+              lastRun: existing.lastRun,
+              output: existing.output
             };
           }
         } else {
@@ -5310,15 +6383,16 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             name: this.draft.name,
             prompt: this.draft.prompt,
             model: this.draft.model,
+            area: (_g = this.draft.area) != null ? _g : "",
             agent: this.plugin.getEffectiveAgent(this.draft.agent),
-            useRalphLoop: (_g = this.draft.useRalphLoop) != null ? _g : false,
-            scheduleType: (_h = this.draft.scheduleType) != null ? _h : "manual",
-            scheduleTime: (_i = this.draft.scheduleTime) != null ? _i : nowTimeString(),
-            scheduleDate: (_j = this.draft.scheduleDate) != null ? _j : "",
-            scheduleDays: (_k = this.draft.scheduleDays) != null ? _k : [],
-            scheduleMonthDays: (_l = this.draft.scheduleMonthDays) != null ? _l : [],
-            scheduleIntervalValue: (_m = this.draft.scheduleIntervalValue) != null ? _m : 10,
-            scheduleIntervalUnit: (_n = this.draft.scheduleIntervalUnit) != null ? _n : "minutes",
+            useRalphLoop: (_h = this.draft.useRalphLoop) != null ? _h : false,
+            scheduleType: (_i = this.draft.scheduleType) != null ? _i : "manual",
+            scheduleTime: (_j = this.draft.scheduleTime) != null ? _j : nowTimeString(),
+            scheduleDate: (_k = this.draft.scheduleDate) != null ? _k : "",
+            scheduleDays: (_l = this.draft.scheduleDays) != null ? _l : [],
+            scheduleMonthDays: (_m = this.draft.scheduleMonthDays) != null ? _m : [],
+            scheduleIntervalValue: (_n = this.draft.scheduleIntervalValue) != null ? _n : 10,
+            scheduleIntervalUnit: (_o = this.draft.scheduleIntervalUnit) != null ? _o : "minutes",
             status: "pending",
             lastRun: "",
             output: "",
@@ -5479,6 +6553,14 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
       text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
       window.setTimeout(() => text.inputEl.focus(), 50);
     });
+    new import_obsidian.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+      var _a;
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => this.draft.area = v.trim());
+      renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
+        this.draft.area = area;
+      });
+    });
     new import_obsidian.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
@@ -5595,7 +6677,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     this.renderStepsList(stepsContainer);
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -5643,42 +6725,46 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
             (w) => w.id === this.editWorkflow.id
           );
           if (idx !== -1) {
-            const wasRunning = this.editWorkflow.status === "running";
+            const existing = this.plugin.settings.workflows[idx];
             this.plugin.settings.workflows[idx] = {
               ...this.editWorkflow,
               name: this.draft.name,
+              area: (_e = this.draft.area) != null ? _e : "",
               description: this.draft.description,
               steps,
-              handoffBranch: (_e = this.draft.handoffBranch) != null ? _e : false,
-              handoffOutput: (_f = this.draft.handoffOutput) != null ? _f : false,
-              status: wasRunning ? "running" : "pending",
-              scheduleType: (_g = this.draft.scheduleType) != null ? _g : "manual",
-              scheduleTime: (_h = this.draft.scheduleTime) != null ? _h : nowTimeString(),
-              scheduleDate: (_i = this.draft.scheduleDate) != null ? _i : "",
-              scheduleDays: (_j = this.draft.scheduleDays) != null ? _j : [],
-              scheduleMonthDays: (_k = this.draft.scheduleMonthDays) != null ? _k : [],
-              scheduleIntervalValue: (_l = this.draft.scheduleIntervalValue) != null ? _l : 10,
-              scheduleIntervalUnit: (_m = this.draft.scheduleIntervalUnit) != null ? _m : "minutes"
+              handoffBranch: (_f = this.draft.handoffBranch) != null ? _f : false,
+              handoffOutput: (_g = this.draft.handoffOutput) != null ? _g : false,
+              status: existing.status,
+              currentStep: existing.currentStep,
+              lastRun: existing.lastRun,
+              scheduleType: (_h = this.draft.scheduleType) != null ? _h : "manual",
+              scheduleTime: (_i = this.draft.scheduleTime) != null ? _i : nowTimeString(),
+              scheduleDate: (_j = this.draft.scheduleDate) != null ? _j : "",
+              scheduleDays: (_k = this.draft.scheduleDays) != null ? _k : [],
+              scheduleMonthDays: (_l = this.draft.scheduleMonthDays) != null ? _l : [],
+              scheduleIntervalValue: (_m = this.draft.scheduleIntervalValue) != null ? _m : 10,
+              scheduleIntervalUnit: (_n = this.draft.scheduleIntervalUnit) != null ? _n : "minutes"
             };
           }
         } else {
           const workflow = {
             id: generateId(),
             name: this.draft.name,
-            description: (_n = this.draft.description) != null ? _n : "",
+            area: (_o = this.draft.area) != null ? _o : "",
+            description: (_p = this.draft.description) != null ? _p : "",
             steps,
             status: "pending",
             currentStep: -1,
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-            handoffBranch: (_o = this.draft.handoffBranch) != null ? _o : false,
-            handoffOutput: (_p = this.draft.handoffOutput) != null ? _p : false,
-            scheduleType: (_q = this.draft.scheduleType) != null ? _q : "manual",
-            scheduleTime: (_r = this.draft.scheduleTime) != null ? _r : nowTimeString(),
-            scheduleDate: (_s = this.draft.scheduleDate) != null ? _s : todayString(),
-            scheduleDays: (_t = this.draft.scheduleDays) != null ? _t : [],
-            scheduleMonthDays: (_u = this.draft.scheduleMonthDays) != null ? _u : [],
-            scheduleIntervalValue: (_v = this.draft.scheduleIntervalValue) != null ? _v : 10,
-            scheduleIntervalUnit: (_w = this.draft.scheduleIntervalUnit) != null ? _w : "minutes"
+            handoffBranch: (_q = this.draft.handoffBranch) != null ? _q : false,
+            handoffOutput: (_r = this.draft.handoffOutput) != null ? _r : false,
+            scheduleType: (_s = this.draft.scheduleType) != null ? _s : "manual",
+            scheduleTime: (_t = this.draft.scheduleTime) != null ? _t : nowTimeString(),
+            scheduleDate: (_u = this.draft.scheduleDate) != null ? _u : todayString(),
+            scheduleDays: (_v = this.draft.scheduleDays) != null ? _v : [],
+            scheduleMonthDays: (_w = this.draft.scheduleMonthDays) != null ? _w : [],
+            scheduleIntervalValue: (_x = this.draft.scheduleIntervalValue) != null ? _x : 10,
+            scheduleIntervalUnit: (_y = this.draft.scheduleIntervalUnit) != null ? _y : "minutes"
           };
           this.plugin.settings.workflows.push(workflow);
         }
