@@ -229,7 +229,7 @@ interface AutoOCSettings {
   maxLogsPerTask: number;
   logRetentionDays: number;
   libraryUrl: string;
-  dashboardPositions?: Record<string, { x: number; y: number; size?: number }>;
+  dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
 }
 
 function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workflows">): string[] {
@@ -2643,7 +2643,7 @@ class AutoOCView extends ItemView {
   private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
-  private dashboardPositions: Map<string, { x: number; y: number; size?: number }> = new Map();
+  private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
   // Accumulated drift per task, in physical px relative to the map's own
   // height (NOT a %-of-immediate-parent value) — keeps rise/sink distance
   // visually consistent whether a task bubble sits loose on the map or is
@@ -2682,7 +2682,7 @@ class AutoOCView extends ItemView {
   }
 
   private async persistDashboardPositions() {
-    const obj: Record<string, { x: number; y: number; size?: number }> = {};
+    const obj: Record<string, { x: number; y: number; size?: number; sizePx?: number }> = {};
     this.dashboardPositions.forEach((pos, key) => { obj[key] = pos; });
     this.plugin.settings.dashboardPositions = obj;
     await this.plugin.saveSettings(false);
@@ -2714,105 +2714,13 @@ class AutoOCView extends ItemView {
   }
 
   nudgeDashboardTask(taskId: string, direction: "up" | "down", amountPct = 1.8, maxShiftPct = 18) {
-    // Drift amounts are expressed as % of the whole map ("the tank"), not of
-    // whatever the bubble's immediate parent happens to be. Without this, a
-    // task nested inside a workflow ring would only move 1.8% of that tiny
-    // ring's own height per tick — a couple of px, easily swallowed by
-    // collision resolution with no visible net progress. Converting to a
-    // physical px amount (relative to the full tank) and then re-expressing
-    // it per-bubble against its own real parent height keeps the "reach the
-    // top/bottom of the tank" feel consistent regardless of nesting depth.
-    const mapEl = this.containerEl.querySelector<HTMLElement>(".auto-oc-dashboard-map");
-    const mapHeight = mapEl?.getBoundingClientRect().height || 500;
-
-    const sign = direction === "up" ? -1 : 1;
-    const amountPx = (amountPct / 100) * mapHeight;
-    const maxShiftPx = (maxShiftPct / 100) * mapHeight;
-
-    const currentShiftPx = this.dashboardTaskShift.get(taskId) || 0;
-    if (Math.abs(currentShiftPx) >= maxShiftPx) return;
-    const nextAmountPx = Math.min(amountPx, maxShiftPx - Math.abs(currentShiftPx));
-    const deltaPx = sign * nextAmountPx;
-    this.dashboardTaskShift.set(taskId, currentShiftPx + deltaPx);
-
-    const matchesTaskKey = (key: string | null) => {
-      if (!key) return false;
-      return key === `task:${taskId}` || key.endsWith(`:task:${taskId}`) || key.includes(`:task:${taskId}:`);
-    };
-
-    // Best-effort bookkeeping for task-bubble instances not currently in the
-    // DOM (e.g. the Dashboard tab isn't the active one). Approximates using
-    // the map height as the reference frame since there's no rendered parent
-    // to measure; gets overwritten with a real measurement below for any key
-    // that IS currently on screen.
-    const fallbackDeltaPct = (deltaPx / mapHeight) * 100;
-    this.dashboardPositions.forEach((position, key) => {
-      if (!matchesTaskKey(key)) return;
-      this.dashboardPositions.set(key, { x: position.x, y: Math.max(0, position.y + fallbackDeltaPct), size: position.size });
-    });
-
-    const bubbles = Array.from(this.containerEl.querySelectorAll<HTMLElement>(".auto-oc-dashboard-task-bubble"));
-    bubbles.forEach((bubble) => {
-      const key = bubble.getAttribute("data-dashboard-key");
-      if (!matchesTaskKey(key)) return;
-      const parent = bubble.offsetParent as HTMLElement | null;
-      const parentHeight = parent?.getBoundingClientRect().height || mapHeight;
-      const deltaPct = (deltaPx / parentHeight) * 100;
-      const y = parseFloat(bubble.style.top || "0");
-      bubble.style.top = `${y + deltaPct}%`;
-      // Clamp the bubble itself — not just siblings pushed away from it — to
-      // stay within its parent's bounds/circle. This is what stops a rising
-      // or sinking task from visually poking out through its workflow/area
-      // ring instead of stopping right at the edge of its own "tank".
-      this.clampDashboardBubbleToParent(bubble);
-
-      const x = parseFloat(bubble.style.left || "0");
-      const finalY = parseFloat(bubble.style.top || "0");
-      const size = this.parseBubbleSizeForSave(bubble);
-      if (key) this.dashboardPositions.set(key, { x, y: finalY, size });
-
-      // Just like pointermove while dragging, the moving bubble should push
-      // only the collision chain it touches. A full all-pairs settle on every
-      // drift tick repeatedly reorders the whole group and can compact idle
-      // siblings around the running/failed task.
-      this.resolveDashboardSiblingCollisions(bubble);
-
-      // Propagate displacement to parent when the bubble is clamped at its
-      // parent's edge in the drift direction (up → top edge, down → bottom
-      // edge). This makes a running task push its containing workflow/area
-      // ring upward, which then collides with siblings at that level.
-      if (parent && this.isDashboardBubbleEl(parent)) {
-        const intendedY = y + deltaPct;
-        const actualY = parseFloat(bubble.style.top || "0");
-        const clampedPct = intendedY - actualY;
-        const widthPct = (bubble.getBoundingClientRect().width / parent.getBoundingClientRect().width) * 100;
-        const atEdge = direction === "up" ? actualY <= 1 : actualY >= (100 - widthPct - 1);
-        let propagatePct = 0;
-        if (direction === "up" && clampedPct <= -0.5) propagatePct = clampedPct;
-        else if (direction === "down" && clampedPct >= 0.5) propagatePct = clampedPct;
-        else if (atEdge) propagatePct = deltaPct;
-        if (propagatePct !== 0) {
-          const grandParent = parent.offsetParent as HTMLElement | null;
-          const grandParentH = grandParent?.getBoundingClientRect().height || mapHeight;
-          const parentH = parent.getBoundingClientRect().height || parentHeight;
-          const parentDeltaPct = (propagatePct * 2 * parentH) / grandParentH;
-          parent.style.top = `${parseFloat(parent.style.top || "0") + parentDeltaPct}%`;
-          this.clampDashboardBubbleToParent(parent);
-          const pKey = parent.getAttribute("data-dashboard-key");
-          if (pKey) {
-            this.dashboardPositions.set(pKey, {
-              x: parseFloat(parent.style.left || "0"),
-              y: parseFloat(parent.style.top || "0"),
-              size: this.parseBubbleSizeForSave(parent),
-            });
-          }
-          if (grandParent) {
-            this.resolveDashboardSiblingCollisions(parent);
-            this.settleDashboardBubbleCollisions(grandParent, 16);
-          }
-        }
-      }
-    });
+    void taskId;
+    void direction;
+    void amountPct;
+    void maxShiftPct;
+    // Do not move persisted/dashboard positions automatically. Status-driven
+    // drift fights pointer drag and the collision solver when tasks remain
+    // running/failed, producing the visible micro-loop and center collapse.
   }
 
   // Mirrors the class-selector check used inside renderDashboard's drag/collision
@@ -2836,6 +2744,12 @@ class AutoOCView extends ItemView {
   private parseBubbleSizeForSave(bubble: HTMLElement): number | undefined {
     if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return undefined;
     return parseFloat(bubble.style.width || "0") || undefined;
+  }
+
+  private parseBubbleSizePxForSave(bubble: HTMLElement): number | undefined {
+    if (bubble.classList.contains("auto-oc-dashboard-task-bubble")) return undefined;
+    const width = bubble.getBoundingClientRect().width;
+    return Number.isFinite(width) && width > 0 ? Math.round(width * 100) / 100 : undefined;
   }
 
   private clampDashboardBubbleToParent(bubble: HTMLElement) {
@@ -2947,6 +2861,7 @@ class AutoOCView extends ItemView {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
         size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble),
       });
     });
   }
@@ -3014,56 +2929,30 @@ class AutoOCView extends ItemView {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
         size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble),
       });
     });
   }
 
   private startDashboardTaskDrift(taskId: string, direction: "up" | "down", stepPct = 6, maxPct = 50) {
     const existing = this.sinkIntervals.get(taskId);
-    if (existing && this.dashboardTaskDriftDirection.get(taskId) === direction) return;
     if (existing) { clearInterval(existing); this.sinkIntervals.delete(taskId); }
-    if (this.dashboardTaskDriftDirection.get(taskId) !== direction) this.dashboardTaskShift.set(taskId, 0);
-    this.dashboardTaskDriftDirection.set(taskId, direction);
-    // dashboardTaskShift tracks accumulated drift in physical px (relative to
-    // the map height) rather than %, so the cap check here has to be
-    // expressed in the same units as what nudgeDashboardTask actually stores.
-    const tick = () => {
-      const mapEl = this.containerEl.querySelector<HTMLElement>(".auto-oc-dashboard-map");
-      const mapHeight = mapEl?.getBoundingClientRect().height || 500;
-      const maxShiftPx = (maxPct / 100) * mapHeight;
-      const currentShiftPx = this.dashboardTaskShift.get(taskId) || 0;
-      if ((direction === "down" && currentShiftPx >= maxShiftPx) || (direction === "up" && currentShiftPx <= -maxShiftPx)) {
-        clearInterval(iv);
-        this.sinkIntervals.delete(taskId);
-        this.dashboardTaskDriftDirection.delete(taskId);
-        return;
-      }
-      this.nudgeDashboardTask(taskId, direction, stepPct, maxPct);
-    };
-    const iv = setInterval(tick, 350);
-    this.sinkIntervals.set(taskId, iv);
-    // fire immediately for the first tick so it starts moving right away
-    tick();
+    this.dashboardTaskDriftDirection.delete(taskId);
+    this.dashboardTaskShift.delete(taskId);
+    void direction;
+    void stepPct;
+    void maxPct;
   }
 
   startGradualSink(taskId: string, stepPct = 6, maxPct = 50) {
-    this.startDashboardTaskDrift(taskId, "down", stepPct, maxPct);
+    void stepPct;
+    void maxPct;
+    this.resetDashboardTaskShift(taskId);
   }
 
   private syncDashboardTaskDrift(tasks: ScheduledTask[]) {
     const activeTaskIds = new Set(tasks.map((task) => task.id));
-    tasks.forEach((task) => {
-      if (task.status === "running") {
-        this.startDashboardTaskDrift(task.id, "up");
-      } else if (task.status === "failed") {
-        this.startDashboardTaskDrift(task.id, "down");
-      } else {
-        const existing = this.sinkIntervals.get(task.id);
-        if (existing) clearInterval(existing);
-        this.sinkIntervals.delete(task.id);
-        this.dashboardTaskDriftDirection.delete(task.id);
-      }
-    });
+    tasks.forEach((task) => this.resetDashboardTaskShift(task.id));
     Array.from(this.sinkIntervals.keys()).forEach((taskId) => {
       if (activeTaskIds.has(taskId)) return;
       const existing = this.sinkIntervals.get(taskId);
@@ -3084,27 +2973,8 @@ class AutoOCView extends ItemView {
   // the map and re-attaches a fresh observer every time).
   private watchDashboardMapResize(map: HTMLElement) {
     this.dashboardResizeObserver?.disconnect();
-    const initialRect = map.getBoundingClientRect();
-    let lastWidth = initialRect.width;
-    let lastHeight = initialRect.height;
-    let debounceHandle: ReturnType<typeof setTimeout> | null = null;
-
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (!entry) return;
-      const { width, height } = entry.contentRect;
-      if (Math.abs(width - lastWidth) < 2 && Math.abs(height - lastHeight) < 2) return;
-      lastWidth = width;
-      lastHeight = height;
-      if (debounceHandle) clearTimeout(debounceHandle);
-      debounceHandle = setTimeout(() => {
-        if (this.currentTab !== "dashboard") return;
-        this.forceDashboardFitOnNextRender = true;
-        this.render();
-      }, 150);
-    });
-    observer.observe(map);
-    this.dashboardResizeObserver = observer;
+    this.dashboardResizeObserver = null;
+    void map;
   }
 
   // Purely decorative "aquarium" ambience behind the bubbles: soft caustic
@@ -3424,6 +3294,23 @@ class AutoOCView extends ItemView {
       ...tasks.map((task) => areaName(task.area)),
     ])).sort((a, b) => a.localeCompare(b));
     const taskById = new Map(tasks.map((task) => [task.id, task]));
+    const mapRect = map.getBoundingClientRect();
+    const mapWidthPx = Math.max(mapRect.width || 0, 520);
+    const pctFromPx = (px: number, parentPx: number, minPct: number, maxPct: number) => {
+      const pct = (px / Math.max(parentPx, 1)) * 100;
+      return Math.max(minPct, Math.min(maxPct, pct));
+    };
+    const areaSizeForContent = (contentWeight: number) => {
+      const px = Math.min(260, Math.max(120, 92 + Math.sqrt(Math.max(contentWeight, 1)) * 42));
+      return { px, pct: pctFromPx(px, mapWidthPx, 1, 36) };
+    };
+    const workflowSizePxForTasks = (taskCount: number) => {
+      return Math.min(190, Math.max(92, 72 + Math.sqrt(Math.max(taskCount, 1)) * 34));
+    };
+    const workflowSizePctForParent = (taskCount: number, parent: HTMLElement) => {
+      const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
+      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
+    };
     // Every task/step bubble renders at the same physical diameter,
     // regardless of usage, status, or nesting depth. Containers must adapt
     // around tasks; tasks should not shrink based on the current container.
@@ -3448,6 +3335,7 @@ class AutoOCView extends ItemView {
         x: parseFloat(bubble.style.left || "0"),
         y: parseFloat(bubble.style.top || "0"),
         size: this.parseBubbleSizeForSave(bubble),
+        sizePx: this.parseBubbleSizePxForSave(bubble),
       });
     };
     const saveBubbleTreePositions = (parent: HTMLElement) => {
@@ -3458,6 +3346,9 @@ class AutoOCView extends ItemView {
       el.tabIndex = 0;
       el.setAttr("aria-label", ariaLabel);
       el.createDiv("auto-oc-dashboard-hover-label").setText(name);
+    };
+    const addBubbleVisual = (el: HTMLElement) => {
+      el.createDiv("auto-oc-dashboard-bubble-visual");
     };
     const isDashboardBubble = (el: HTMLElement) => {
       return el.classList.contains("auto-oc-dashboard-area-bubble")
@@ -3534,11 +3425,10 @@ class AutoOCView extends ItemView {
       }));
       const centerX = (minX + maxX) / 2;
       const centerY = (minY + maxY) / 2;
-      const sizePct = Math.min(96, Math.max(10, (diameterPx / parentRect.width) * 100));
-      const sizePx = (sizePct / 100) * parentRect.width;
-      container.style.width = `${sizePct}%`;
+      const sizePx = Math.min(parentRect.width * 0.96, Math.max(44, diameterPx));
       container.style.left = `${((centerX - sizePx / 2 - parentRect.left) / parentRect.width) * 100}%`;
       container.style.top = `${((centerY - sizePx / 2 - parentRect.top) / parentRect.height) * 100}%`;
+      container.style.width = `${sizePx}px`;
       clampBubbleToParent(container);
 
       const nextRect = container.getBoundingClientRect();
@@ -3752,7 +3642,7 @@ class AutoOCView extends ItemView {
         onClick();
       };
     };
-    const layoutTopLevel = (items: { key: string; size: number }[]) => {
+    const layoutTopLevel = (items: { key: string; size: number; maxPx?: number }[]) => {
       const jitterForKey = (key: string, axis: number) => {
         let hash = 0;
         for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i) + axis * 131) | 0;
@@ -3770,12 +3660,11 @@ class AutoOCView extends ItemView {
         const size = Math.min(item.size, cellWidth, cellHeight);
         const saved = this.dashboardPositions.get(item.key);
         if (saved) {
-          const savedSize = saved.size ? Math.max(1, Math.min(96, saved.size)) : size;
           return {
             ...item,
-            size: savedSize,
-            x: Math.max(0, Math.min(100 - savedSize, saved.x)),
-            y: Math.max(0, Math.min(100 - savedSize, saved.y)),
+            size,
+            x: Math.max(0, Math.min(100 - size, saved.x)),
+            y: Math.max(0, Math.min(100 - size, saved.y)),
           };
         }
         const jitterX = Math.max(-cellWidth * 0.18, Math.min(cellWidth * 0.18, jitterForKey(item.key, 0)));
@@ -3788,10 +3677,14 @@ class AutoOCView extends ItemView {
         };
       });
     };
-    const createAreaBubble = (name: string, x: number, y: number, size: number) => {
+    const createAreaBubble = (name: string, x: number, y: number, size: number, maxPx?: number) => {
       const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
       areaBubble.setAttr("data-dashboard-key", `area:${name}`);
       setBubbleRect(areaBubble, x, y, size);
+      const saved = this.dashboardPositions.get(`area:${name}`);
+      const widthPx = saved?.sizePx ?? maxPx;
+      if (widthPx) areaBubble.style.width = `${widthPx}px`;
+      addBubbleVisual(areaBubble);
       areaBubble.setAttr("aria-label", `Area: ${name}`);
       areaBubble.tabIndex = 0;
 
@@ -3809,6 +3702,7 @@ class AutoOCView extends ItemView {
       const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
+      addBubbleVisual(taskBubble);
       const saved = this.dashboardPositions.get(positionKey);
       let posX = saved?.x ?? x;
       let posY = saved?.y ?? y;
@@ -3839,20 +3733,22 @@ class AutoOCView extends ItemView {
     };
 
     const configuredAreaNames = areaNames.filter((name) => name !== "No area");
-    const topLevelItems: { key: string; size: number }[] = [];
+    const topLevelItems: { key: string; size: number; maxPx?: number }[] = [];
     configuredAreaNames.forEach((name) => {
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
       const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
         return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
       }, 0);
-      topLevelItems.push({ key: `area:${name}`, size: Math.max(12, 9 + Math.sqrt(Math.max(contentWeight, 1)) * 7) });
+      const areaSize = areaSizeForContent(contentWeight);
+      topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
     });
     const noAreaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === "No area");
     const noAreaLooseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === "No area");
     noAreaWorkflows.forEach((workflow) => {
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      topLevelItems.push({ key: `workflow:${workflow.id}`, size: Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9)) });
+      const workflowPx = workflowSizePxForTasks(taskSteps.length);
+      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 1, 30), maxPx: workflowPx });
     });
     noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
     const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
@@ -3860,7 +3756,7 @@ class AutoOCView extends ItemView {
     configuredAreaNames.forEach((name) => {
       const areaLayout = topLevelLayout.get(`area:${name}`);
       if (!areaLayout) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size);
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
       if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "running"))) {
@@ -3873,17 +3769,19 @@ class AutoOCView extends ItemView {
       areaWorkflows.forEach((workflow, workflowIndex) => {
         const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
         const angle = -Math.PI / 2 + (workflowIndex * Math.PI * 2) / areaWorkflowCount;
-        const workflowSize = Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9));
+        const workflowSize = workflowSizePctForParent(taskSteps.length, areaBubble);
         const workflowRadius = areaWorkflowCount === 1 ? 0 : Math.max(0, 46 - workflowSize / 2);
         const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
         const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
         const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+        addBubbleVisual(workflowBubble);
         if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
         if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
         const workflowKey = `area:${name}:workflow:${workflow.id}`;
         workflowBubble.setAttr("data-dashboard-key", workflowKey);
         const savedWorkflow = this.dashboardPositions.get(workflowKey);
-        setBubbleRect(workflowBubble, savedWorkflow?.x ?? workflowX, savedWorkflow?.y ?? workflowY, savedWorkflow?.size ?? workflowSize);
+        setBubbleRect(workflowBubble, savedWorkflow?.x ?? workflowX, savedWorkflow?.y ?? workflowY, workflowSize);
+        workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowSizePxForTasks(taskSteps.length)}px`;
         addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
         attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
         clampBubbleToParent(workflowBubble);
@@ -3914,14 +3812,17 @@ class AutoOCView extends ItemView {
 
     noAreaWorkflows.forEach((workflow) => {
       const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowSize = Math.max(26, Math.min(42, 20 + Math.sqrt(Math.max(taskSteps.length, 1)) * 9));
+      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 1, 30);
       const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
       if (!workflowLayout) return;
       const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+      addBubbleVisual(workflowBubble);
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
       workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
-      setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowLayout.size);
+      const savedWorkflow = this.dashboardPositions.get(`workflow:${workflow.id}`);
+      setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowSize);
+      workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowLayout.maxPx ?? workflowSizePxForTasks(taskSteps.length)}px`;
       addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
       attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
       clampBubbleToParent(workflowBubble);
@@ -3948,31 +3849,8 @@ class AutoOCView extends ItemView {
 
     this.syncDashboardTaskDrift(tasks);
 
-    // If positions were restored from settings, treat them as authoritative.
-    // A fresh view starts with an empty dashboardLayoutSignature, so using
-    // layoutChanged here would incorrectly re-fit/re-settle after every
-    // Obsidian restart and destroy the saved bubble placement/sizes.
-    const shouldSkipFit = this.dashboardPositions.size > 0;
     this.forceDashboardFitOnNextRender = false;
-    if (shouldSkipFit) {
-      return;
-    }
-
-    window.setTimeout(() => {
-      const workflowContainers = Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-workflow-bubble"));
-      workflowContainers.forEach((container) => {
-        settleBubbleCollisions(container, 12);
-        fitContainerToChildren(container);
-      });
-      const areaContainers = Array.from(map.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble"));
-      areaContainers.forEach((container) => {
-        settleBubbleCollisions(container, 12);
-        fitContainerToChildren(container);
-      });
-      settleBubbleCollisions(map, 14);
-      saveBubbleTreePositions(map);
-      void this.persistDashboardPositions();
-    }, 0);
+    return;
   }
 
   private renderTasks(containerEl: HTMLElement) {

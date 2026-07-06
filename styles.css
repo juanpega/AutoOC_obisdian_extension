@@ -179,7 +179,7 @@
 .auto-oc-dashboard-map {
   position: relative;
   flex: 1;
-  min-height: 320px;
+  min-height: 460px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 14px;
@@ -269,6 +269,44 @@
   user-select: none;
 }
 
+.auto-oc-dashboard-bubble-visual {
+  position: absolute;
+  inset: 18%;
+  z-index: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.55;
+  transform: translate3d(0, 0, 0);
+  will-change: transform, opacity;
+}
+
+.auto-oc-dashboard-area-bubble > .auto-oc-dashboard-bubble-visual {
+  background: radial-gradient(ellipse 55% 40% at 34% 24%, rgba(255, 255, 255, 0.22), rgba(250, 204, 21, 0.08) 42%, transparent 68%);
+  animation: auto-oc-dashboard-visual-float-area 5.8s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-workflow-bubble > .auto-oc-dashboard-bubble-visual {
+  background: radial-gradient(ellipse 58% 42% at 34% 24%, rgba(255, 255, 255, 0.26), rgba(139, 92, 246, 0.10) 44%, transparent 70%);
+  animation: auto-oc-dashboard-visual-float 4.9s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-task-bubble > .auto-oc-dashboard-bubble-visual {
+  background: radial-gradient(ellipse 58% 42% at 34% 24%, rgba(255, 255, 255, 0.32), rgba(45, 212, 191, 0.14) 42%, transparent 70%);
+  animation: auto-oc-dashboard-visual-float 4.3s ease-in-out infinite;
+}
+
+.auto-oc-dashboard-task-running > .auto-oc-dashboard-bubble-visual,
+.auto-oc-dashboard-workflow-running > .auto-oc-dashboard-bubble-visual,
+.auto-oc-dashboard-has-running > .auto-oc-dashboard-bubble-visual {
+  animation: auto-oc-dashboard-visual-rise 2.4s ease-in-out infinite alternate;
+}
+
+.auto-oc-dashboard-task-failed > .auto-oc-dashboard-bubble-visual,
+.auto-oc-dashboard-workflow-failed > .auto-oc-dashboard-bubble-visual,
+.auto-oc-dashboard-has-failed > .auto-oc-dashboard-bubble-visual {
+  animation: auto-oc-dashboard-visual-sink 3.8s ease-in-out infinite;
+}
+
 .auto-oc-dashboard-area-bubble {
   z-index: 1;
   border: 2px solid rgba(250, 204, 21, 0.85);
@@ -281,6 +319,7 @@
 
 .auto-oc-dashboard-area-label {
   position: absolute;
+  z-index: 2;
   left: 50%;
   top: calc(100% + 5px);
   max-width: 150px;
@@ -382,6 +421,7 @@
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.48);
   pointer-events: none;
+  z-index: 2;
 }
 
 .auto-oc-dashboard-task-running::before {
@@ -414,6 +454,11 @@
   cursor: grabbing;
   opacity: 0.96;
   transition: none !important;
+}
+
+.auto-oc-dashboard-dragging > .auto-oc-dashboard-bubble-visual {
+  animation: none !important;
+  transform: none !important;
 }
 
 .auto-oc-dashboard-colliding .auto-oc-dashboard-area-bubble,
@@ -498,6 +543,26 @@
   50% { filter: brightness(0.88); box-shadow: 0 5px 10px rgba(127, 29, 29, 0.34), inset 0 -12px 20px rgba(127, 29, 29, 0.24); }
 }
 
+@keyframes auto-oc-dashboard-visual-float-area {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, -5px, 0) scale(1.04); }
+}
+
+@keyframes auto-oc-dashboard-visual-float {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, -5px, 0) scale(1.05); }
+}
+
+@keyframes auto-oc-dashboard-visual-rise {
+  0% { transform: translate3d(0, 3px, 0) scale(1); }
+  100% { transform: translate3d(0, -8px, 0) scale(1.06); }
+}
+
+@keyframes auto-oc-dashboard-visual-sink {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(0, 7px, 0) scale(0.97); }
+}
+
 @keyframes auto-oc-dashboard-inner-bubble {
   0% { opacity: 0; transform: translateY(0) scale(0.7); }
   30% { opacity: 0.85; }
@@ -519,7 +584,7 @@
   }
 
   .auto-oc-dashboard-map {
-    min-height: 280px;
+    min-height: 360px;
   }
 }
 
@@ -527,6 +592,7 @@
   .auto-oc-dashboard-area-bubble,
   .auto-oc-dashboard-workflow-bubble,
   .auto-oc-dashboard-task-bubble,
+  .auto-oc-dashboard-bubble-visual,
   .auto-oc-dashboard-task-running::before,
   .auto-oc-dashboard-task-running::after {
     animation: none !important;
