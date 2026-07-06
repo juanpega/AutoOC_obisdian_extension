@@ -4234,6 +4234,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     super(leaf);
     this.filterText = "";
     this.filterStatus = "all";
+    this.filterArea = "all";
     this.currentTab = "dashboard";
     this.expandedTasks = /* @__PURE__ */ new Set();
     this.expandedWorkflows = /* @__PURE__ */ new Set();
@@ -5378,6 +5379,37 @@ var AutoOCView = class extends import_obsidian.ItemView {
     return;
   }
   renderTasks(containerEl) {
+    const tasks = this.plugin.settings.tasks;
+    const renderTaskResults = (root) => {
+      root.empty();
+      const stats = root.createDiv("auto-oc-stats");
+      const running = tasks.filter((t) => t.status === "running").length;
+      const completed = tasks.filter((t) => t.status === "completed").length;
+      const failed = tasks.filter((t) => t.status === "failed").length;
+      stats.createEl("span", { text: `${tasks.length} tasks` });
+      if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} running`, cls: "auto-oc-stat-running" });
+      if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} failed`, cls: "auto-oc-stat-failed" });
+      if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completed` });
+      const filteredTasks = tasks.filter((t) => {
+        var _a;
+        const area = ((_a = t.area) == null ? void 0 : _a.trim()) || "No area";
+        const matchesText = t.name.toLowerCase().includes(this.filterText) || t.prompt.toLowerCase().includes(this.filterText) || area.toLowerCase().includes(this.filterText);
+        const matchesStatus = this.filterStatus === "all" || t.status === this.filterStatus;
+        const matchesArea = this.filterArea === "all" || area === this.filterArea;
+        return matchesText && matchesStatus && matchesArea;
+      });
+      if (filteredTasks.length === 0) {
+        root.createEl("p", {
+          text: this.filterText || this.filterStatus !== "all" || this.filterArea !== "all" ? "No tasks match your filters." : 'No tasks scheduled. Create one with "+New Task".',
+          cls: "auto-oc-empty"
+        });
+        return;
+      }
+      const list = root.createDiv("auto-oc-list");
+      for (const task of [...filteredTasks].reverse()) {
+        this.renderTaskCard(list, task);
+      }
+    };
     const filterBar = containerEl.createDiv("auto-oc-filter-bar");
     const searchInput = filterBar.createEl("input", {
       type: "text",
@@ -5387,7 +5419,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     searchInput.value = this.filterText;
     searchInput.oninput = () => {
       this.filterText = searchInput.value.toLowerCase();
-      this.render();
+      renderTaskResults(resultsRoot);
     };
     const statusSelect = filterBar.createEl("select", {
       cls: "auto-oc-status-select"
@@ -5401,34 +5433,25 @@ var AutoOCView = class extends import_obsidian.ItemView {
     statusSelect.value = this.filterStatus;
     statusSelect.onchange = () => {
       this.filterStatus = statusSelect.value;
-      this.render();
+      renderTaskResults(resultsRoot);
     };
-    const tasks = this.plugin.settings.tasks;
-    const stats = containerEl.createDiv("auto-oc-stats");
-    const pending = tasks.filter((t) => t.status === "pending").length;
-    const running = tasks.filter((t) => t.status === "running").length;
-    const completed = tasks.filter((t) => t.status === "completed").length;
-    const failed = tasks.filter((t) => t.status === "failed").length;
-    stats.createEl("span", { text: `${tasks.length} tasks` });
-    if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} running`, cls: "auto-oc-stat-running" });
-    if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} failed`, cls: "auto-oc-stat-failed" });
-    if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completed` });
-    const filteredTasks = tasks.filter((t) => {
-      const matchesText = t.name.toLowerCase().includes(this.filterText) || t.prompt.toLowerCase().includes(this.filterText);
-      const matchesStatus = this.filterStatus === "all" || t.status === this.filterStatus;
-      return matchesText && matchesStatus;
+    const areaSelect = filterBar.createEl("select", {
+      cls: "auto-oc-status-select"
     });
-    if (filteredTasks.length === 0) {
-      containerEl.createEl("p", {
-        text: this.filterText || this.filterStatus !== "all" ? "No tasks match your filters." : 'No tasks scheduled. Create one with "+New Task".',
-        cls: "auto-oc-empty"
-      });
-      return;
-    }
-    const list = containerEl.createDiv("auto-oc-list");
-    for (const task of [...filteredTasks].reverse()) {
-      this.renderTaskCard(list, task);
-    }
+    const areaOptions = ["all", ...getConfiguredAreaNames(this.plugin.settings), "No area"];
+    Array.from(new Set(areaOptions)).forEach((area) => {
+      const opt = areaSelect.createEl("option");
+      opt.value = area;
+      opt.text = area === "all" ? "All areas" : area;
+    });
+    areaSelect.value = areaOptions.includes(this.filterArea) ? this.filterArea : "all";
+    this.filterArea = areaSelect.value;
+    areaSelect.onchange = () => {
+      this.filterArea = areaSelect.value;
+      renderTaskResults(resultsRoot);
+    };
+    const resultsRoot = containerEl.createDiv("auto-oc-filter-results");
+    renderTaskResults(resultsRoot);
   }
   renderTaskCard(parent, task) {
     var _a, _b, _c, _d, _e;
@@ -5592,25 +5615,86 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: "Workflows run tasks in order using their own schedule. Per-step transitions decide whether the next task starts: success, force, or AI decides."
     });
     const workflows = this.plugin.settings.workflows;
-    const stats = containerEl.createDiv("auto-oc-stats");
-    const completed = workflows.filter((w) => w.status === "completed").length;
-    const running = workflows.filter((w) => w.status === "running").length;
-    const failed = workflows.filter((w) => w.status === "failed").length;
-    stats.createEl("span", { text: `${workflows.length} workflows` });
-    if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} running`, cls: "auto-oc-stat-running" });
-    if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} failed`, cls: "auto-oc-stat-failed" });
-    if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completed` });
-    if (workflows.length === 0) {
-      containerEl.createEl("p", {
-        text: 'No workflows yet. Chain tasks together with "+ New Workflow".',
-        cls: "auto-oc-empty"
+    const renderWorkflowResults = (root) => {
+      root.empty();
+      const stats = root.createDiv("auto-oc-stats");
+      const completed = workflows.filter((w) => w.status === "completed").length;
+      const running = workflows.filter((w) => w.status === "running").length;
+      const failed = workflows.filter((w) => w.status === "failed").length;
+      stats.createEl("span", { text: `${workflows.length} workflows` });
+      if (running > 0) stats.createEl("span", { text: `\u{1F7E1} ${running} running`, cls: "auto-oc-stat-running" });
+      if (failed > 0) stats.createEl("span", { text: `\u{1F534} ${failed} failed`, cls: "auto-oc-stat-failed" });
+      if (completed > 0) stats.createEl("span", { text: `\u{1F7E2} ${completed} completed` });
+      const filteredWorkflows = workflows.filter((workflow) => {
+        var _a;
+        const area = ((_a = workflow.area) == null ? void 0 : _a.trim()) || "No area";
+        const stepText = workflow.steps.map((step) => {
+          var _a2, _b;
+          if (step.stepKind === "code") return step.code || "code";
+          if (step.stepKind === "delay") return `${(_a2 = step.delayValue) != null ? _a2 : 5} ${(_b = step.delayUnit) != null ? _b : "minutes"}`;
+          const task = this.plugin.settings.tasks.find((candidate) => candidate.id === step.taskId);
+          return task ? `${task.name} ${task.prompt} ${task.area || ""}` : "";
+        }).join(" ");
+        const haystack = `${workflow.name} ${workflow.description || ""} ${area} ${stepText}`.toLowerCase();
+        const matchesText = haystack.includes(this.filterText);
+        const matchesStatus = this.filterStatus === "all" || workflow.status === this.filterStatus;
+        const matchesArea = this.filterArea === "all" || area === this.filterArea;
+        return matchesText && matchesStatus && matchesArea;
       });
-      return;
-    }
-    const list = containerEl.createDiv("auto-oc-list");
-    for (const wf of [...workflows].reverse()) {
-      this.renderWorkflowCard(list, wf);
-    }
+      if (filteredWorkflows.length === 0) {
+        root.createEl("p", {
+          text: this.filterText || this.filterStatus !== "all" || this.filterArea !== "all" ? "No workflows match your filters." : 'No workflows yet. Chain tasks together with "+ New Workflow".',
+          cls: "auto-oc-empty"
+        });
+        return;
+      }
+      const list = root.createDiv("auto-oc-list");
+      for (const wf of [...filteredWorkflows].reverse()) {
+        this.renderWorkflowCard(list, wf);
+      }
+    };
+    const filterBar = containerEl.createDiv("auto-oc-filter-bar");
+    const searchInput = filterBar.createEl("input", {
+      type: "text",
+      placeholder: "\u{1F50D} Search workflows...",
+      cls: "auto-oc-search-input"
+    });
+    searchInput.value = this.filterText;
+    searchInput.oninput = () => {
+      this.filterText = searchInput.value.toLowerCase();
+      renderWorkflowResults(resultsRoot);
+    };
+    const statusSelect = filterBar.createEl("select", {
+      cls: "auto-oc-status-select"
+    });
+    const statuses = ["all", "pending", "running", "completed", "failed"];
+    statuses.forEach((s) => {
+      const opt = statusSelect.createEl("option");
+      opt.value = s;
+      opt.text = s.charAt(0).toUpperCase() + s.slice(1);
+    });
+    statusSelect.value = this.filterStatus;
+    statusSelect.onchange = () => {
+      this.filterStatus = statusSelect.value;
+      renderWorkflowResults(resultsRoot);
+    };
+    const areaSelect = filterBar.createEl("select", {
+      cls: "auto-oc-status-select"
+    });
+    const areaOptions = ["all", ...getConfiguredAreaNames(this.plugin.settings), "No area"];
+    Array.from(new Set(areaOptions)).forEach((area) => {
+      const opt = areaSelect.createEl("option");
+      opt.value = area;
+      opt.text = area === "all" ? "All areas" : area;
+    });
+    areaSelect.value = areaOptions.includes(this.filterArea) ? this.filterArea : "all";
+    this.filterArea = areaSelect.value;
+    areaSelect.onchange = () => {
+      this.filterArea = areaSelect.value;
+      renderWorkflowResults(resultsRoot);
+    };
+    const resultsRoot = containerEl.createDiv("auto-oc-filter-results");
+    renderWorkflowResults(resultsRoot);
   }
   renderWorkflowCard(parent, workflow) {
     var _a, _b, _c, _d, _e, _f, _g;
