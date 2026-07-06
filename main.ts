@@ -116,11 +116,357 @@ function setupCodeTextarea(textarea: HTMLTextAreaElement): void {
   });
 }
 
+function renderCodePreview(parent: HTMLElement, code: string, maxChars = 600): void {
+  const pre = parent.createEl("pre", { cls: "auto-oc-code-preview" });
+  const codeEl = pre.createEl("code");
+  const src = (code || "// empty code").slice(0, maxChars);
+  const pattern = /(\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b(?:const|let|var|return|if|else|for|while|await|async|function|new|try|catch|throw|true|false|null|undefined)\b|\b\d+(?:\.\d+)?\b)/g;
+  let last = 0;
+  for (const match of src.matchAll(pattern)) {
+    const text = match[0];
+    const index = match.index ?? 0;
+    if (index > last) codeEl.appendChild(document.createTextNode(src.slice(last, index)));
+    const span = codeEl.createSpan();
+    span.setText(text);
+    if (text.startsWith("//") || text.startsWith("/*")) span.addClass("auto-oc-code-token-comment");
+    else if (text.startsWith("'") || text.startsWith('"') || text.startsWith("`")) span.addClass("auto-oc-code-token-string");
+    else if (/^\d/.test(text)) span.addClass("auto-oc-code-token-number");
+    else span.addClass("auto-oc-code-token-keyword");
+    last = index + text.length;
+  }
+  if (last < src.length) codeEl.appendChild(document.createTextNode(src.slice(last)));
+  if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
+}
+
+const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode CLI tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+
+Always output only one valid JSON object. Do not write explanations outside the final JSON.
+
+Required root format:
+{
+  "autoOCExport": {
+    "schemaVersion": "1.4.0",
+    "exportedAt": "ISO timestamp",
+    "pluginVersion": "1.5.2",
+    "name": "Package name",
+    "description": "Short description"
+  },
+  "tasks": [],
+  "workflows": []
+}
+
+Available modules:
+AutoOC supports DAG workflows with three step kinds:
+1. task: runs an OpenCode task prompt.
+2. code: runs JavaScript in a sandbox.
+3. delay: pauses the workflow.
+
+Tasks:
+A task is reusable and can be referenced by workflows.
+
+Task fields:
+- exportId: unique within the JSON, for example "task-0".
+- taskKind: "opencode" by default, or "code" for a reusable JavaScript task.
+- name: short name, preferably snake_case or kebab-case.
+- area: optional grouping area.
+- prompt: complete direct instruction for OpenCode. For code tasks, mirror the code here for compatibility.
+- code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
+- scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
+- scheduleTime: "HH:MM", use "09:00" if not relevant.
+- scheduleDate: "YYYY-MM-DD" or "".
+- scheduleDays: array 0-6, Sunday=0.
+- scheduleMonthDays: array 1-31.
+- scheduleIntervalValue: number, usually 10.
+- scheduleIntervalUnit: "seconds" | "minutes" | "hours", usually "minutes".
+- useRalphLoop: true only when the task may need iterations until completion.
+- agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
+- branch: optional git branch, usually "".
+- createBranch: true/false.
+
+Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
+
+Code steps and code tasks:
+Code runs with vm.runInContext and must always assign output.
+
+Use code for:
+- filtering outputs before calling AI
+- keyword checks
+- JSON transformations
+- deciding whether it is worth continuing
+- reading/writing the Obsidian vault when permission is enabled
+- saving tokens by avoiding large AI inputs
+
+Code fields:
+- stepKind: "code" for workflow steps.
+- taskKind: "code" for reusable code tasks.
+- name: optional display name.
+- area: optional grouping area; use the workflow area when applicable.
+- code: JavaScript source.
+- codeLang: "javascript".
+- codeInputVar: usually "input".
+- codeOutputVar: usually "output".
+- codeAllowVault: true/false.
+- codeAllowFiles: true/false.
+- codeAllowTerminal: true/false.
+- transitions: array of transitions for workflow steps.
+
+Always available in code:
+- input: string output from the previous step.
+- outputs: map of stepId to output.
+- JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp.
+- console.log, but do not use it as the main output.
+
+Code timeout is 10 seconds.
+
+Important code rule:
+Do not recursively scan an entire vault unless necessary. Large vaults can timeout. Prefer direct likely paths and bounded searches.
+
+For daily notes, try direct paths first:
+- Daily_notes/DD-MM-YYYY.md
+- Daily Notes/DD-MM-YYYY.md
+- Daily/DD-MM-YYYY.md
+- Diario/DD-MM-YYYY.md
+- Journal/DD-MM-YYYY.md
+- DD-MM-YYYY.md
+
+Optional Code APIs:
+
+Vault API, enabled with codeAllowVault: true:
+- vault.read("Daily_notes/01-07-2026.md")
+- vault.write("path.md", "content")
+- vault.append("path.md", "content")
+- vault.exists("path.md")
+- vault.list("folder")
+
+The vault API is confined to the Obsidian vault.
+
+Local Files API, enabled with codeAllowFiles: true:
+- files.read("path")
+- files.write("path", "content")
+- files.append("path", "content")
+- files.exists("path")
+- files.list("path")
+
+Use files only if the user explicitly needs access outside the vault.
+
+Terminal API, enabled with codeAllowTerminal: true:
+- terminal.run("command", { cwd: "optional", timeoutMs: 30000 })
+
+Use terminal only if it adds clear value and the user allows it.
+
+Delay steps:
+{
+  "id": "wait-5-min",
+  "stepKind": "delay",
+  "name": "Wait 5 minutes",
+  "area": "Optional area",
+  "delayValue": 5,
+  "delayUnit": "minutes",
+  "transitions": []
+}
+
+Workflows:
+A workflow chains steps in order or with branching.
+
+Workflow fields:
+- exportId: for example "wf-0".
+- name.
+- area.
+- description.
+- scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
+- scheduleTime.
+- scheduleDate.
+- scheduleDays.
+- scheduleMonthDays.
+- scheduleIntervalValue.
+- scheduleIntervalUnit.
+- handoffBranch: true if all steps should share a git branch.
+- handoffOutput: normally true.
+- steps: array of steps.
+
+Task step example:
+{
+  "id": "step-ai",
+  "stepKind": "task",
+  "name": "AI analysis",
+  "area": "Optional area",
+  "taskExportId": "task-0",
+  "transitions": []
+}
+
+taskExportId must match an existing task exportId.
+
+Transitions:
+Each step can have outgoing transitions.
+
+Fields:
+- toStepId
+- mode: "default" | "force" | "eval" | "conditional"
+- evaluatePrompt: only for eval
+- condition: only for conditional
+- conditionLang: "javascript" when using condition
+
+default: continue only if previous step succeeded.
+force: always continue.
+eval: ask the model to answer YES/NO.
+conditional: evaluate JavaScript against input, outputs, JSON, Math, Date.
+
+Conditional rule:
+The condition must be a JavaScript expression without return.
+Correct: JSON.parse(input).FOUND === "YES"
+Incorrect: return JSON.parse(input).FOUND === "YES";
+
+Design rules:
+1. Decide whether the user needs one task or a workflow.
+2. Use a workflow when there are multiple phases such as search -> filter -> AI -> write result.
+3. Use code steps before AI to save tokens.
+4. Do not send large files to AI when code can cheaply detect whether AI is needed.
+5. Task prompts must be complete and direct.
+6. If useRalphLoop is true, include clear completion criteria.
+7. Every task referenced by a workflow must exist in tasks.
+8. Every toStepId must exist in steps.
+9. Every non-terminal step must have at least one transition.
+10. Terminal steps must have "transitions": [].
+11. For daily notes or large vaults, avoid full recursive searches.
+12. If code needs to read or write the vault, set codeAllowVault: true.
+13. If code needs terminal, set codeAllowTerminal: true.
+14. If code needs files outside the vault, set codeAllowFiles: true.
+
+Recommended pattern: detect a cheap condition before AI.
+1. Code step: find keyword or condition.
+2. Conditional transition: FOUND=YES -> AI task; FOUND!=YES -> noop terminal code step.
+3. AI task: runs only when needed.
+4. Code step: writes or summarizes result if needed.
+
+Final output requirements:
+- Output only valid JSON.
+- No Markdown.
+- No explanations.
+- No comments.
+- No trailing commas.
+
+Minimal valid workflow example:
+{
+  "autoOCExport": {
+    "schemaVersion": "1.4.0",
+    "exportedAt": "2026-07-06T00:00:00.000Z",
+    "pluginVersion": "1.5.2",
+    "name": "Example package",
+    "description": "Example AutoOC import"
+  },
+  "tasks": [
+    {
+      "exportId": "task-0",
+      "taskKind": "opencode",
+      "name": "ai_followup",
+      "area": "Automation",
+      "prompt": "Complete the requested follow-up using the previous step output as context. Finish only when the result is written or clearly reported.",
+      "scheduleType": "manual",
+      "scheduleTime": "09:00",
+      "scheduleDate": "",
+      "scheduleDays": [],
+      "scheduleMonthDays": [],
+      "scheduleIntervalValue": 10,
+      "scheduleIntervalUnit": "minutes",
+      "useRalphLoop": false,
+      "agent": "build",
+      "branch": "",
+      "createBranch": false
+    }
+  ],
+  "workflows": [
+    {
+      "exportId": "wf-0",
+      "name": "conditional_workflow",
+      "area": "Automation",
+      "description": "Detects a keyword and only runs AI when needed.",
+      "scheduleType": "manual",
+      "scheduleTime": "09:00",
+      "scheduleDate": "",
+      "scheduleDays": [],
+      "scheduleMonthDays": [],
+      "scheduleIntervalValue": 10,
+      "scheduleIntervalUnit": "minutes",
+      "handoffBranch": false,
+      "handoffOutput": true,
+      "steps": [
+        {
+          "id": "step-0",
+          "stepKind": "code",
+          "name": "Detect keyword",
+          "area": "Automation",
+          "code": "output = JSON.stringify({ FOUND: input.includes('keyword') ? 'YES' : 'NO' });",
+          "codeLang": "javascript",
+          "codeInputVar": "input",
+          "codeOutputVar": "output",
+          "codeAllowVault": false,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": [
+            {
+              "toStepId": "step-1",
+              "mode": "conditional",
+              "condition": "JSON.parse(input).FOUND === \"YES\"",
+              "conditionLang": "javascript"
+            },
+            {
+              "toStepId": "step-noop",
+              "mode": "conditional",
+              "condition": "JSON.parse(input).FOUND !== \"YES\"",
+              "conditionLang": "javascript"
+            }
+          ]
+        },
+        {
+          "id": "step-1",
+          "stepKind": "task",
+          "name": "Run AI follow-up",
+          "area": "Automation",
+          "taskExportId": "task-0",
+          "transitions": []
+        },
+        {
+          "id": "step-noop",
+          "stepKind": "code",
+          "name": "No changes needed",
+          "area": "Automation",
+          "code": "output = input;",
+          "codeLang": "javascript",
+          "codeInputVar": "input",
+          "codeOutputVar": "output",
+          "codeAllowVault": false,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": []
+        }
+      ]
+    }
+  ]
+}
+
+Now write the objective for the AutoOC workflow or task you want to generate:`;
+
+async function copyTextToClipboard(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 type IntervalUnit = "seconds" | "minutes" | "hours";
+type TaskKind = "opencode" | "code";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
 // Workflows are no longer strictly linear — each step declares its outgoing
@@ -143,6 +489,8 @@ interface WorkflowTransition {
 interface WorkflowStep {
   id: string;
   stepKind: StepKind;
+  name?: string;
+  area?: string;
   // task-specific
   taskId?: string;
   // legacy fields (used when transitions[] is missing) — kept for back-compat
@@ -171,6 +519,7 @@ interface WorkflowStep {
 
 interface ScheduledTask {
   id: string;
+  taskKind?: TaskKind;
   name: string;
   area?: string;
   prompt: string;
@@ -191,6 +540,13 @@ interface ScheduledTask {
   workingDirectory?: string; // Optional path override
   branch?: string;           // Git branch name
   createBranch?: boolean;    // Create branch if it doesn't exist
+  code?: string;
+  codeLang?: "javascript";
+  codeInputVar?: string;
+  codeOutputVar?: string;
+  codeAllowVault?: boolean;
+  codeAllowFiles?: boolean;
+  codeAllowTerminal?: boolean;
 }
 
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
@@ -241,6 +597,10 @@ function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workfl
   for (const workflow of settings.workflows) {
     const area = workflow.area?.trim();
     if (area) names.add(area);
+    for (const step of workflow.steps || []) {
+      const stepArea = step.area?.trim();
+      if (stepArea) names.add(stepArea);
+    }
   }
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 }
@@ -281,9 +641,17 @@ function renderAreaSuggestions(
 //   - workingDirectory (taken from the importer's settings / vault)
 interface ExportTask {
   exportId: string;
+  taskKind?: TaskKind;
   name: string;
   area?: string;
   prompt: string;
+  code?: string;
+  codeLang?: "javascript";
+  codeInputVar?: string;
+  codeOutputVar?: string;
+  codeAllowVault?: boolean;
+  codeAllowFiles?: boolean;
+  codeAllowTerminal?: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;
   scheduleDate: string;
@@ -309,6 +677,8 @@ interface ExportWorkflowTransition {
 interface ExportWorkflowStep {
   id: string;
   stepKind: StepKind;
+  name?: string;
+  area?: string;
   // task
   taskExportId?: string;
   transitionMode?: "default" | "force" | "eval";
@@ -624,9 +994,17 @@ function t_or_undef<T>(incoming: T | undefined, fallback: T): T {
 function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
   return {
     exportId,
+    taskKind: task.taskKind,
     name: task.name,
     area: task.area,
     prompt: task.prompt,
+    code: task.code,
+    codeLang: task.codeLang,
+    codeInputVar: task.codeInputVar,
+    codeOutputVar: task.codeOutputVar,
+    codeAllowVault: task.codeAllowVault,
+    codeAllowFiles: task.codeAllowFiles,
+    codeAllowTerminal: task.codeAllowTerminal,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -663,6 +1041,8 @@ function toExportWorkflow(
     steps: workflow.steps.map((step) => ({
       id: step.id,
       stepKind: step.stepKind || "task",
+      name: step.name,
+      area: step.area,
       taskExportId: step.taskId ? (taskExportIdMap.get(step.taskId) ?? "") : undefined,
       transitionMode: step.transitionMode,
       evaluatePrompt: step.evaluatePrompt,
@@ -1594,6 +1974,11 @@ export default class AutoOCPlugin extends Plugin {
     if (idx === -1) return;
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
 
+    if ((effectiveTask.taskKind || "opencode") === "code") {
+      await this.runCodeTask(effectiveTask, onComplete);
+      return;
+    }
+
     if (!effectiveTask.prompt?.trim()) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = new Date().toISOString();
@@ -1756,6 +2141,123 @@ export default class AutoOCPlugin extends Plugin {
         await onComplete(t, exitCode);
       }
     }, 3000);
+  }
+
+  async runCodeTask(
+    task: ScheduledTask,
+    onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+  ) {
+    const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
+    if (idx === -1) return;
+    const current = this.settings.tasks[idx];
+    const code = current.code || current.prompt || "";
+    if (!code.trim()) {
+      current.status = "failed";
+      current.lastRun = new Date().toISOString();
+      current.output = "[AutoOC] Code task not launched: code is empty.";
+      await this.saveSettings();
+      new Notice(`AutoOC: "${current.name}" has empty code.`);
+      if (onComplete) await onComplete(current, -1);
+      return;
+    }
+
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    current.status = "running";
+    current.lastRun = new Date().toISOString();
+    current.output = "[running code task...]\n";
+    this.view?.resetDashboardTaskShift(current.id);
+    await this.saveSettings();
+    new Notice(`AutoOC: running code task "${current.name}"...`);
+
+    try {
+      const vm = require("vm");
+      const inputVar = current.codeInputVar || "input";
+      const outputVar = current.codeOutputVar || "output";
+      const defaultCwd = current.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+      const resolveInVault = (p: string) => {
+        const resolved = path.resolve(vaultBasePath, p || ".");
+        const root = path.resolve(vaultBasePath);
+        if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+          throw new Error(`Path escapes vault: ${p}`);
+        }
+        return resolved;
+      };
+      const readText = (p: string) => fs.readFileSync(p, "utf8");
+      const writeText = (p: string, content: any) => {
+        fs.mkdirSync(path.dirname(p), { recursive: true });
+        fs.writeFileSync(p, String(content), "utf8");
+        return p;
+      };
+      const sandbox: Record<string, any> = {
+        input: "",
+        outputs: {},
+        JSON,
+        Math,
+        Date,
+        String,
+        Number,
+        Boolean,
+        Array,
+        Object,
+        RegExp,
+        console: { log: (...args: any[]) => { current.output += args.map(String).join(" ") + "\n"; } },
+      };
+      if (current.codeAllowVault) {
+        sandbox.vault = {
+          read: (p: string) => readText(resolveInVault(p)),
+          write: (p: string, content: any) => writeText(resolveInVault(p), content),
+          append: (p: string, content: any) => { const f = resolveInVault(p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, String(content), "utf8"); return f; },
+          exists: (p: string) => fs.existsSync(resolveInVault(p)),
+          list: (p = ".") => fs.readdirSync(resolveInVault(p)),
+        };
+      }
+      if (current.codeAllowFiles) {
+        sandbox.files = {
+          read: (p: string) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
+          write: (p: string, content: any) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
+          append: (p: string, content: any) => { const f = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, String(content), "utf8"); return f; },
+          exists: (p: string) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
+          list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
+        };
+      }
+      if (current.codeAllowTerminal) {
+        const { execSync } = require("child_process");
+        sandbox.terminal = {
+          run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
+            cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
+            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 120_000),
+            encoding: "utf8",
+          }),
+        };
+      }
+
+      const context = vm.createContext(sandbox);
+      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 10_000 });
+      const out = String(result == null ? "" : result);
+      current.output = (current.output || "") + out;
+      current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
+      new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
+      if (this.settings.logsEnabled) {
+        saveLogToFile(vaultBasePath, current.id, current.output || "(no output)");
+        cleanupOldLogs(vaultBasePath, current.id, this.settings.maxLogsPerTask);
+        cleanupLogsByAge(vaultBasePath, current.id, this.settings.logRetentionDays);
+      }
+      await this.saveSettings();
+      if (onComplete) await onComplete(current, 0);
+    } catch (err) {
+      current.status = "failed";
+      current.output = (current.output || "") + `[code error: ${String(err)}]`;
+      this.view?.startGradualSink(current.id);
+      if (this.settings.logsEnabled) {
+        saveLogToFile(vaultBasePath, current.id, current.output);
+        cleanupOldLogs(vaultBasePath, current.id, this.settings.maxLogsPerTask);
+        cleanupLogsByAge(vaultBasePath, current.id, this.settings.logRetentionDays);
+      }
+      await this.saveSettings();
+      new Notice(`AutoOC: ❌ code task "${current.name}" failed.`);
+      if (onComplete) await onComplete(current, -1);
+    }
   }
 
   async killTask(id: string) {
@@ -2044,14 +2546,16 @@ export default class AutoOCPlugin extends Plugin {
     let tasksImported = 0;
 
     for (const et of data.tasks || []) {
+      const importedTaskKind = et.taskKind || "opencode";
       const task: ScheduledTask = {
         id: generateId(),
+        taskKind: importedTaskKind,
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
-        prompt: et.prompt,
-        model: this.getEffectiveDefaultModel(),
-        agent: this.getEffectiveAgent(et.agent),
-        useRalphLoop: et.useRalphLoop ?? false,
+        prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
+        model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
+        agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
+        useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
         scheduleType: et.scheduleType ?? "manual",
         scheduleTime: et.scheduleTime ?? nowTimeString(),
         scheduleDate: et.scheduleDate ?? "",
@@ -2063,8 +2567,15 @@ export default class AutoOCPlugin extends Plugin {
         lastRun: "",
         output: "",
         createdAt: new Date().toISOString(),
-        branch: et.branch,
-        createBranch: et.createBranch,
+        branch: importedTaskKind === "code" ? "" : et.branch,
+        createBranch: importedTaskKind === "code" ? false : et.createBranch,
+        code: et.code,
+        codeLang: et.codeLang,
+        codeInputVar: et.codeInputVar,
+        codeOutputVar: et.codeOutputVar,
+        codeAllowVault: et.codeAllowVault,
+        codeAllowFiles: et.codeAllowFiles,
+        codeAllowTerminal: et.codeAllowTerminal,
       };
       this.settings.tasks.push(task);
       exportIdToTaskId.set(et.exportId, task.id);
@@ -2085,6 +2596,8 @@ export default class AutoOCPlugin extends Plugin {
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
+          name: (s as any).name,
+          area: (s as any).area || ew.area || "",
           taskId: (s as any).taskExportId ? exportIdToTaskId.get((s as any).taskExportId) : undefined,
           transitionMode: (s as any).transitionMode,
           evaluatePrompt: (s as any).evaluatePrompt,
@@ -3108,6 +3621,20 @@ class AutoOCView extends ItemView {
     btnVisualBuilder.title = "Open the n8n-style visual workflow builder (loads and saves to this extension)";
     btnVisualBuilder.onclick = () => this.plugin.openVisualBuilder();
 
+    const btnPrompt = navRow.createEl("button", {
+      text: "WF Builder Prompt",
+      cls: "auto-oc-tab-btn",
+    });
+    btnPrompt.title = "Copy this prompt to create your workflow";
+    btnPrompt.onclick = async () => {
+      try {
+        await copyTextToClipboard(AUTOOC_WORKFLOW_PROMPT);
+        new Notice("AutoOC: workflow creation prompt copied to clipboard.");
+      } catch (err) {
+        new Notice(`AutoOC: could not copy prompt — ${String(err)}`);
+      }
+    };
+
     const btnCli = navRow.createEl("button", {
       text: "OpenCode CLI",
       cls: "auto-oc-tab-btn",
@@ -3981,8 +4508,12 @@ class AutoOCView extends ItemView {
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🗂 ${task.area?.trim() || "No area"}` });
-    meta.createEl("span", { text: `🤖 ${modelLabel}` });
-    meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
+    if ((task.taskKind || "opencode") === "code") {
+      meta.createEl("span", { text: "{ } Code task" });
+    } else {
+      meta.createEl("span", { text: `🤖 ${modelLabel}` });
+      meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
+    }
 
     let scheduleText = "";
     if (task.scheduleType === "manual") {
@@ -4012,10 +4543,14 @@ class AutoOCView extends ItemView {
       meta.createEl("span", { text: "♻️ Ralph Loop active", cls: "auto-oc-ralph-badge" });
     }
 
-    const preview = details.createDiv("auto-oc-prompt-preview");
-    preview.createEl("span", {
-      text: task.prompt.slice(0, 140) + (task.prompt.length > 140 ? "…" : ""),
-    });
+    const preview = details.createDiv((task.taskKind || "opencode") === "code" ? "auto-oc-code-preview-wrap" : "auto-oc-prompt-preview");
+    if ((task.taskKind || "opencode") === "code") {
+      renderCodePreview(preview, task.code || task.prompt || "", 500);
+    } else {
+      preview.createEl("span", {
+        text: task.prompt.slice(0, 140) + (task.prompt.length > 140 ? "…" : ""),
+      });
+    }
 
     const actions = details.createDiv("auto-oc-card-actions");
 
@@ -4271,6 +4806,7 @@ class AutoOCView extends ItemView {
     // Steps list with task details/actions
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
     const stepLabel = (step: WorkflowStep): string => {
+      if (step.name?.trim()) return step.name.trim();
       if (step.stepKind === "code") return "{ } Code";
       if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
       const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
@@ -4308,6 +4844,13 @@ class AutoOCView extends ItemView {
           cls: `auto-oc-badge auto-oc-badge-${task.status}`,
         });
       }
+      const stepArea = step.area?.trim() || workflow.area?.trim();
+      if (stepArea) {
+        stepHeader.createSpan({
+          text: `🗂 ${stepArea}`,
+          cls: "auto-oc-workflow-transition-label",
+        });
+      }
 
       const transitions = step.transitions && step.transitions.length > 0
         ? step.transitions
@@ -4329,10 +4872,8 @@ class AutoOCView extends ItemView {
 
       if (!task) {
         if (step.stepKind === "code") {
-          const codePreview = stepItem.createDiv("auto-oc-workflow-task-prompt");
-          codePreview.createSpan({
-            text: (step.code || "(empty code step)").slice(0, 180) + ((step.code || "").length > 180 ? "…" : ""),
-          });
+          const codePreview = stepItem.createDiv("auto-oc-code-preview-wrap");
+          renderCodePreview(codePreview, step.code || "// empty code step", 500);
           const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
           const btnCodeLog = stepActions.createEl("button", {
             text: "📄 Log",
@@ -4378,16 +4919,26 @@ class AutoOCView extends ItemView {
 
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
       const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
-      taskMeta.createSpan({ text: `🤖 ${modelLabel || "(no model)"}` });
-      taskMeta.createSpan({ text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
+      if ((task.taskKind || "opencode") === "code") {
+        taskMeta.createSpan({ text: "{ } Code task" });
+      } else {
+        taskMeta.createSpan({ text: `🤖 ${modelLabel || "(no model)"}` });
+        taskMeta.createSpan({ text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
+      }
       if (task.branch) taskMeta.createSpan({ text: `🌿 ${task.branch}${task.createBranch ? " (create)" : ""}` });
       if (task.workingDirectory) taskMeta.createSpan({ text: `📂 ${task.workingDirectory}` });
       if (task.lastRun) taskMeta.createSpan({ text: `⏱ ${formatDateTime(task.lastRun)}` });
 
       const promptPreview = stepItem.createDiv("auto-oc-workflow-task-prompt");
-      promptPreview.createSpan({
-        text: task.prompt.slice(0, 180) + (task.prompt.length > 180 ? "…" : ""),
-      });
+      if ((task.taskKind || "opencode") === "code") {
+        promptPreview.removeClass("auto-oc-workflow-task-prompt");
+        promptPreview.addClass("auto-oc-code-preview-wrap");
+        renderCodePreview(promptPreview, task.code || task.prompt || "", 500);
+      } else {
+        promptPreview.createSpan({
+          text: task.prompt.slice(0, 180) + (task.prompt.length > 180 ? "…" : ""),
+        });
+      }
 
       const taskActions = stepItem.createDiv("auto-oc-workflow-task-actions");
       const btnLog = taskActions.createEl("button", {
@@ -4757,6 +5308,7 @@ class VisualBuilderModal extends Modal {
       const output = existing?.output || "";
       return {
         id,
+        taskKind: t.taskKind || existing?.taskKind || "opencode",
         name: t.name || "Unnamed",
         area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
         prompt: t.prompt || "",
@@ -4779,6 +5331,13 @@ class VisualBuilderModal extends Modal {
         workingDirectory: t.workingDirectory !== undefined ? t.workingDirectory : (existing?.workingDirectory ?? ""),
         branch: t.branch !== undefined ? (t.branch || "") : (existing?.branch || ""),
         createBranch: t.createBranch !== undefined ? !!t.createBranch : (existing?.createBranch ?? false),
+        code: t.code !== undefined ? t.code : existing?.code,
+        codeLang: t.codeLang !== undefined ? t.codeLang : existing?.codeLang,
+        codeInputVar: t.codeInputVar !== undefined ? t.codeInputVar : existing?.codeInputVar,
+        codeOutputVar: t.codeOutputVar !== undefined ? t.codeOutputVar : existing?.codeOutputVar,
+        codeAllowVault: t.codeAllowVault !== undefined ? !!t.codeAllowVault : existing?.codeAllowVault,
+        codeAllowFiles: t.codeAllowFiles !== undefined ? !!t.codeAllowFiles : existing?.codeAllowFiles,
+        codeAllowTerminal: t.codeAllowTerminal !== undefined ? !!t.codeAllowTerminal : existing?.codeAllowTerminal,
       };
     });
     const newWorkflows: Workflow[] = state.workflows.map((w: any) => {
@@ -4798,6 +5357,8 @@ class VisualBuilderModal extends Modal {
           return {
             id: s.id || generateId(),
             stepKind: s.stepKind || "task",
+            name: s.name,
+            area: s.area || w.area || existing?.area || "",
             taskId: s.taskId,
             transitionMode: s.transitionMode,
             evaluatePrompt: s.evaluatePrompt,
@@ -4859,6 +5420,7 @@ class CreateTaskModal extends Modal {
       ? { ...editTask }
       : {
             name: "",
+            taskKind: "opencode",
             prompt: "",
             model: plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
@@ -4882,9 +5444,32 @@ class CreateTaskModal extends Modal {
 
     // Header with X button
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
+    const taskKind = (this.draft.taskKind || "opencode") as TaskKind;
     headerBar.createEl("h3", {
-      text: this.editTask ? "Edit Task" : "New OpenCode Task",
+      text: this.editTask ? "Edit Task" : "New Task",
     });
+
+    if (!this.editTask) {
+      new Setting(contentEl)
+        .setName("Task type")
+        .setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.")
+        .addDropdown((dd) => {
+          dd.addOption("opencode", "OpenCode task");
+          dd.addOption("code", "Code task");
+          dd.setValue(taskKind);
+          dd.onChange((v) => {
+            this.draft.taskKind = v as TaskKind;
+            if (v === "code" && !this.draft.code) {
+              this.draft.code = "// Set output to pass data forward\noutput = input;";
+            }
+            this.onOpen();
+          });
+        });
+    } else {
+      new Setting(contentEl)
+        .setName("Task type")
+        .setDesc(taskKind === "code" ? "Code task" : "OpenCode task");
+    }
 
     new Setting(contentEl)
       .setName("Name")
@@ -4911,16 +5496,42 @@ class CreateTaskModal extends Modal {
         });
       });
 
-    new Setting(contentEl)
-      .setName("Prompt / Goal")
-      .setDesc("Text to send to OpenCode")
-      .addTextArea((ta) => {
-        ta.setValue(this.draft.prompt ?? "").onChange((v) => (this.draft.prompt = v));
-        ta.inputEl.addClass("auto-oc-modal-textarea");
-        ta.inputEl.rows = 5;
-        ta.inputEl.style.width = "100%";
-        ta.inputEl.spellcheck = false;
-      });
+    if (taskKind === "code") {
+      const initialCode = this.draft.code ?? "// Set output to pass data forward\noutput = input;";
+      new Setting(contentEl)
+        .setName("JavaScript code")
+        .setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.")
+        .addTextArea((ta) => {
+          ta.setValue(initialCode).onChange((v) => (this.draft.code = v));
+          ta.inputEl.addClass("auto-oc-modal-textarea");
+          setupCodeTextarea(ta.inputEl);
+          ta.inputEl.rows = 12;
+          ta.inputEl.style.width = "100%";
+        });
+
+      new Setting(contentEl)
+        .setName("Variables")
+        .setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => (this.draft.codeInputVar = v || "input"));
+        })
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.setPlaceholder("output").setValue(this.draft.codeOutputVar || "output").onChange((v) => (this.draft.codeOutputVar = v || "output"));
+        });
+    } else {
+      new Setting(contentEl)
+        .setName("Prompt / Goal")
+        .setDesc("Text to send to OpenCode")
+        .addTextArea((ta) => {
+          ta.setValue(this.draft.prompt ?? "").onChange((v) => (this.draft.prompt = v));
+          ta.inputEl.addClass("auto-oc-modal-textarea");
+          ta.inputEl.rows = 5;
+          ta.inputEl.style.width = "100%";
+          ta.inputEl.spellcheck = false;
+        });
+    }
 
     contentEl.createDiv("auto-oc-modal-section-title").setText("📂 Workspace & Git");
 
@@ -4936,121 +5547,148 @@ class CreateTaskModal extends Modal {
       });
 
     let branchInput: HTMLInputElement | null = null;
-    new Setting(contentEl)
-      .setName("Git Branch")
-      .setDesc("Branch to work on")
-      .addText((text) => {
-        branchInput = text.inputEl;
-        text.inputEl.addClass("auto-oc-modal-input");
-        text
-          .setPlaceholder("main")
-          .setValue(this.draft.branch ?? "")
-          .onChange((v) => (this.draft.branch = v));
-      })
-      .addButton((btn) => 
-        btn.setButtonText("🔍 Discover").onClick(async () => {
-          const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-          new Notice("AutoOC: Fetching branches...");
-          try {
-            const branches = listGitBranches(taskCwd);
-            if (branches.length > 0) {
-              const selected = await new BranchSelectorModal(this.app, branches).open();
-              if (selected) {
-                this.draft.branch = selected;
-                if (branchInput) branchInput.value = selected;
-                new Notice(`AutoOC: Selected branch ${selected}`);
+    if (taskKind === "opencode") {
+      new Setting(contentEl)
+        .setName("Git Branch")
+        .setDesc("Branch to work on")
+        .addText((text) => {
+          branchInput = text.inputEl;
+          text.inputEl.addClass("auto-oc-modal-input");
+          text
+            .setPlaceholder("main")
+            .setValue(this.draft.branch ?? "")
+            .onChange((v) => (this.draft.branch = v));
+        })
+        .addButton((btn) =>
+          btn.setButtonText("🔍 Discover").onClick(async () => {
+            const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+            new Notice("AutoOC: Fetching branches...");
+            try {
+              const branches = listGitBranches(taskCwd);
+              if (branches.length > 0) {
+                const selected = await new BranchSelectorModal(this.app, branches).open();
+                if (selected) {
+                  this.draft.branch = selected;
+                  if (branchInput) branchInput.value = selected;
+                  new Notice(`AutoOC: Selected branch ${selected}`);
+                }
+              } else {
+                new Notice("AutoOC: No branches found.");
               }
-            } else {
-              new Notice("AutoOC: No branches found.");
+            } catch (e) {
+              new Notice(`AutoOC: Could not list branches: ${String(e)}`);
             }
-          } catch (e) {
-            new Notice(`AutoOC: Could not list branches: ${String(e)}`);
+          })
+        );
+
+      new Setting(contentEl)
+        .setName("Create Branch")
+        .setDesc("Automatically create the branch if it doesn't exist")
+        .addToggle((tog) => {
+          tog.setValue(this.draft.createBranch ?? false);
+          tog.onChange((v) => (this.draft.createBranch = v));
+        });
+    }
+
+    if (taskKind === "opencode") {
+      const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+      const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
+
+      new Setting(contentEl)
+        .setName("Agent")
+        .setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`)
+        .addDropdown((dd) => {
+          projectAgents.forEach((a) => dd.addOption(a.value, a.label));
+          const current = this.draft.agent ?? this.plugin.getEffectiveAgent();
+          if (!current && projectAgents.length === 0) {
+            dd.addOption("", "(no agents; tap refresh)");
+          } else if (current && !projectAgents.find((a) => a.value === current)) {
+            dd.addOption(current, current);
           }
-        })
-      );
+          dd.setValue(current || "");
+          dd.onChange((v) => (this.draft.agent = v));
+        });
 
-    new Setting(contentEl)
-      .setName("Create Branch")
-      .setDesc("Automatically create the branch if it doesn't exist")
-      .addToggle((tog) => {
-        tog.setValue(this.draft.createBranch ?? false);
-        tog.onChange((v) => (this.draft.createBranch = v));
-      });
+      new Setting(contentEl)
+        .addButton((btn) =>
+          btn.setButtonText("🔄 Refresh Agents").onClick(() => {
+            this.plugin.refreshAgents(agentCwd);
+            new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
+            this.contentEl.empty();
+            this.onOpen();
+          })
+        );
 
-    const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-    const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
+      new Setting(contentEl)
+        .setName("Model")
+        .setDesc("AI model to use")
 
-    new Setting(contentEl)
-      .setName("Agent")
-      .setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`)
-      .addDropdown((dd) => {
-        projectAgents.forEach((a) => dd.addOption(a.value, a.label));
-        const current = this.draft.agent ?? this.plugin.getEffectiveAgent();
-        if (!current && projectAgents.length === 0) {
-          dd.addOption("", "(no agents; tap refresh)");
-        } else if (current && !projectAgents.find((a) => a.value === current)) {
-          dd.addOption(current, current);
-        }
-        dd.setValue(current || "");
-        dd.onChange((v) => (this.draft.agent = v));
-      });
-
-    new Setting(contentEl)
-      .addButton((btn) =>
-        btn.setButtonText("🔄 Refresh Agents").onClick(() => {
-          this.plugin.refreshAgents(agentCwd);
-          new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
-          this.contentEl.empty();
-          this.onOpen();
-        })
-      );
-
-    new Setting(contentEl)
-      .setName("Model")
-      .setDesc("AI model to use")
-
-      .addDropdown((dd) => {
-        const models = this.plugin.availableModels;
-        models.forEach((m) => dd.addOption(m.value, m.label));
-        const current = this.draft.model ?? this.plugin.getEffectiveDefaultModel();
-        if (!current && models.length === 0) {
-          dd.addOption("", "(no models; tap refresh)");
-        } else if (current && !models.find((m) => m.value === current)) {
-          dd.addOption(current, current);
-        }
-        dd.setValue(current || "");
-        dd.onChange((v) => (this.draft.model = v));
-      });
-
-    new Setting(contentEl)
-      .addButton((btn) =>
-        btn.setButtonText("🔄 Refresh Models").onClick(() => {
-          this.plugin.refreshModels();
-          new Notice("AutoOC: models updated. Reopen dialog.");
-        })
-      );
-
-    new Setting(contentEl)
-      .setName("Ralph Loop")
-      .setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE")
-      .addToggle((tog) => {
-        tog.setValue(this.draft.useRalphLoop ?? false);
-        tog.onChange((v) => (this.draft.useRalphLoop = v));
-      })
-      .addButton((btn) =>
-        btn.setButtonText("Installation Assistant").onClick(async () => {
-          try {
-            const result = await this.plugin.ensureRalphLoopPluginEnabled();
-            new Notice(
-              result.changed
-                ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
-                : `Ralph Loop was already active at ${result.configPath}.`
-            );
-          } catch (e) {
-            new Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+        .addDropdown((dd) => {
+          const models = this.plugin.availableModels;
+          models.forEach((m) => dd.addOption(m.value, m.label));
+          const current = this.draft.model ?? this.plugin.getEffectiveDefaultModel();
+          if (!current && models.length === 0) {
+            dd.addOption("", "(no models; tap refresh)");
+          } else if (current && !models.find((m) => m.value === current)) {
+            dd.addOption(current, current);
           }
+          dd.setValue(current || "");
+          dd.onChange((v) => (this.draft.model = v));
+        });
+
+      new Setting(contentEl)
+        .addButton((btn) =>
+          btn.setButtonText("🔄 Refresh Models").onClick(() => {
+            this.plugin.refreshModels();
+            new Notice("AutoOC: models updated. Reopen dialog.");
+          })
+        );
+
+      new Setting(contentEl)
+        .setName("Ralph Loop")
+        .setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE")
+        .addToggle((tog) => {
+          tog.setValue(this.draft.useRalphLoop ?? false);
+          tog.onChange((v) => (this.draft.useRalphLoop = v));
         })
-      );
+        .addButton((btn) =>
+          btn.setButtonText("Installation Assistant").onClick(async () => {
+            try {
+              const result = await this.plugin.ensureRalphLoopPluginEnabled();
+              new Notice(
+                result.changed
+                  ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
+                  : `Ralph Loop was already active at ${result.configPath}.`
+              );
+            } catch (e) {
+              new Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+            }
+          })
+        );
+    } else {
+      contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
+      new Setting(contentEl)
+        .setName("Vault API")
+        .setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.")
+        .addToggle((tog) => {
+          tog.setValue(!!this.draft.codeAllowVault);
+          tog.onChange((v) => (this.draft.codeAllowVault = v));
+        });
+      new Setting(contentEl)
+        .setName("Local files API")
+        .setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.")
+        .addToggle((tog) => {
+          tog.setValue(!!this.draft.codeAllowFiles);
+          tog.onChange((v) => (this.draft.codeAllowFiles = v));
+        });
+      new Setting(contentEl)
+        .setName("Terminal API")
+        .setDesc("Expose terminal.run(command, { cwd, timeoutMs }).")
+        .addToggle((tog) => {
+          tog.setValue(!!this.draft.codeAllowTerminal);
+          tog.onChange((v) => (this.draft.codeAllowTerminal = v));
+        });
+    }
 
     new Setting(contentEl)
       .setName("Schedule Type")
@@ -5173,11 +5811,16 @@ class CreateTaskModal extends Modal {
             new Notice("Name is required.");
             return;
           }
-          if (!this.draft.prompt?.trim()) {
+          const savingTaskKind = (this.draft.taskKind || "opencode") as TaskKind;
+          if (savingTaskKind === "opencode" && !this.draft.prompt?.trim()) {
             new Notice("Prompt is required.");
             return;
           }
-          if (!(this.draft.model ?? "").trim()) {
+          if (savingTaskKind === "code" && !(this.draft.code || "").trim()) {
+            new Notice("Code is required.");
+            return;
+          }
+          if (savingTaskKind === "opencode" && !(this.draft.model ?? "").trim()) {
             new Notice("You must select a model.");
             return;
           }
@@ -5213,6 +5856,8 @@ class CreateTaskModal extends Modal {
               this.plugin.settings.tasks[idx] = {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
+                prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
+                taskKind: savingTaskKind,
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,
@@ -5221,12 +5866,13 @@ class CreateTaskModal extends Modal {
           } else {
             const task: ScheduledTask = {
               id: generateId(),
+              taskKind: savingTaskKind,
               name: this.draft.name!,
-              prompt: this.draft.prompt!,
-              model: this.draft.model!,
+              prompt: savingTaskKind === "code" ? (this.draft.code || "") : this.draft.prompt!,
+              model: savingTaskKind === "code" ? "" : this.draft.model!,
               area: this.draft.area ?? "",
-              agent: this.plugin.getEffectiveAgent(this.draft.agent),
-              useRalphLoop: this.draft.useRalphLoop ?? false,
+              agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
+              useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? "",
@@ -5239,8 +5885,15 @@ class CreateTaskModal extends Modal {
               output: "",
               createdAt: new Date().toISOString(),
               workingDirectory: this.draft.workingDirectory,
-              branch: this.draft.branch,
-              createBranch: this.draft.createBranch,
+              branch: savingTaskKind === "opencode" ? this.draft.branch : "",
+              createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
+              code: savingTaskKind === "code" ? this.draft.code : undefined,
+              codeLang: savingTaskKind === "code" ? "javascript" : undefined,
+              codeInputVar: savingTaskKind === "code" ? (this.draft.codeInputVar || "input") : undefined,
+              codeOutputVar: savingTaskKind === "code" ? (this.draft.codeOutputVar || "output") : undefined,
+              codeAllowVault: savingTaskKind === "code" ? !!this.draft.codeAllowVault : undefined,
+              codeAllowFiles: savingTaskKind === "code" ? !!this.draft.codeAllowFiles : undefined,
+              codeAllowTerminal: savingTaskKind === "code" ? !!this.draft.codeAllowTerminal : undefined,
             };
             this.plugin.settings.tasks.push(task);
 
@@ -5285,6 +5938,28 @@ class EditWorkflowStepModal extends Modal {
       text: this.step.stepKind === "delay" ? "Edit Delay Step" : "Edit Code Step",
     });
 
+    new Setting(contentEl)
+      .setName("Step name")
+      .setDesc("Optional label used in this workflow")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder(this.step.stepKind === "delay" ? "Delay" : "Code")
+          .setValue(this.draft.name || "")
+          .onChange((v) => (this.draft.name = v.trim()));
+      });
+
+    new Setting(contentEl)
+      .setName("Area")
+      .setDesc("Defaults to the workflow area")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text
+          .setPlaceholder(this.workflow.area?.trim() || "No area")
+          .setValue(this.draft.area || this.workflow.area || "")
+          .onChange((v) => (this.draft.area = v.trim()));
+      });
+
     if (this.step.stepKind === "delay") {
       new Setting(contentEl)
         .setName("Delay")
@@ -5306,6 +5981,7 @@ class EditWorkflowStepModal extends Modal {
           dd.onChange((v) => (this.draft.delayUnit = v as IntervalUnit));
         });
     } else {
+      const initialCode = this.draft.code || "";
       new Setting(contentEl)
         .setName("JavaScript code")
         .setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.")
@@ -5313,7 +5989,7 @@ class EditWorkflowStepModal extends Modal {
           text.inputEl.addClass("auto-oc-modal-textarea");
           setupCodeTextarea(text.inputEl);
           text.inputEl.rows = 12;
-          text.setValue(this.draft.code || "").onChange((v) => (this.draft.code = v));
+          text.setValue(initialCode).onChange((v) => (this.draft.code = v));
         });
 
       new Setting(contentEl)
@@ -5365,6 +6041,7 @@ class EditWorkflowStepModal extends Modal {
         .setButtonText("Save Step")
         .setCta()
         .onClick(async () => {
+          if (!this.draft.area?.trim()) this.draft.area = this.workflow.area || "";
           Object.assign(this.step, this.draft);
           const wfIdx = this.plugin.settings.workflows.findIndex((w) => w.id === this.workflow.id);
           if (wfIdx !== -1) {
@@ -5405,6 +6082,7 @@ class CreateWorkflowModal extends Modal {
           ...s,
           id: s.id || generateId(),
           stepKind: s.stepKind || "task",
+          area: s.area || editWorkflow.area || "",
           transitions: [...(s.transitions || [])],
           position: s.position || { x: 60 + i * 280, y: 60 },
         }))
@@ -5463,9 +6141,19 @@ class CreateWorkflowModal extends Modal {
         text
           .setPlaceholder("No area")
           .setValue(this.draft.area ?? "")
-          .onChange((v) => (this.draft.area = v.trim()));
+          .onChange((v) => {
+            const previousArea = this.draft.area?.trim() || "";
+            const nextArea = v.trim();
+            this.draft.area = nextArea;
+            this.selectedSteps.forEach((step) => {
+              if (!step.area?.trim() || step.area.trim() === previousArea) step.area = nextArea;
+            });
+          });
         renderAreaSuggestions(contentEl, text.inputEl, getConfiguredAreaNames(this.plugin.settings), (area) => {
           this.draft.area = area;
+          this.selectedSteps.forEach((step) => {
+            if (!step.area?.trim()) step.area = area;
+          });
         });
       });
 
@@ -5664,10 +6352,13 @@ class CreateWorkflowModal extends Modal {
 
           const steps: WorkflowStep[] = this.selectedSteps.map((src, idx) => {
             const config = this.stepConfigs[src.id] || {};
+            const workflowArea = this.draft.area?.trim() || "";
             const step: WorkflowStep = {
               ...src,
               id: src.id || generateId(),
               stepKind: src.stepKind || "task",
+              name: src.name?.trim() || undefined,
+              area: src.area?.trim() || workflowArea,
               transitions: [],
               position: { x: 60 + idx * 280, y: 60 },
               transitionMode: config.transitionMode || "default",
@@ -5743,10 +6434,15 @@ class CreateWorkflowModal extends Modal {
   }
 
   private workflowStepLabel(step: WorkflowStep): string {
+    if (step.name?.trim()) return step.name.trim();
+    return this.defaultWorkflowStepName(step);
+  }
+
+  private defaultWorkflowStepName(step: WorkflowStep, index?: number): string {
     if (step.stepKind === "code") return "{ } Code";
     if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
     const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
-    return task ? `📌 ${task.name}` : "❌ Deleted task";
+    return task ? `${(task.taskKind || "opencode") === "code" ? "{ }" : "📌"} ${task.name}` : "❌ Deleted task";
   }
 
   private renderStepsList(container: HTMLElement) {
@@ -5800,7 +6496,32 @@ class CreateWorkflowModal extends Modal {
         this.renderStepsList(container);
       };
 
+      new Setting(stepEl)
+        .setName("Step name")
+        .setDesc("Optional label used in this workflow")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text
+            .setPlaceholder(this.defaultWorkflowStepName(step, i))
+            .setValue(step.name || "")
+            .onChange((v) => {
+              step.name = v.trim();
+            });
+        });
+
+      new Setting(stepEl)
+        .setName("Area")
+        .setDesc("Defaults to the workflow area")
+        .addText((text) => {
+          text.inputEl.addClass("auto-oc-modal-input");
+          text
+            .setPlaceholder(this.draft.area?.trim() || "No area")
+            .setValue(step.area || this.draft.area || "")
+            .onChange((v) => (step.area = v.trim()));
+        });
+
       if (step.stepKind === "code") {
+        const initialCode = step.code || "";
         new Setting(stepEl)
           .setName("JavaScript code")
           .setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.")
@@ -5808,7 +6529,7 @@ class CreateWorkflowModal extends Modal {
             text.inputEl.addClass("auto-oc-modal-textarea");
             setupCodeTextarea(text.inputEl);
             text.inputEl.rows = 6;
-            text.setValue(step.code || "").onChange((v) => (step.code = v));
+            text.setValue(initialCode).onChange((v) => (step.code = v));
           });
         new Setting(stepEl)
           .setName("Variables")
@@ -6043,7 +6764,7 @@ class CreateWorkflowModal extends Modal {
           if (newTasks.length > 0) {
             // Add the most recently created task
             const newest = newTasks[newTasks.length - 1];
-            this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: newest.id, transitions: [], position: { x: 0, y: 0 } });
+            this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: newest.id, area: this.draft.area || newest.area || "", transitions: [], position: { x: 0, y: 0 } });
             new Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
           }
           this.renderStepsList(container);
@@ -6072,7 +6793,8 @@ class CreateWorkflowModal extends Modal {
       addBtn.style.marginLeft = "4px";
       addBtn.onclick = () => {
         if (sel.value) {
-          this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: sel.value, transitions: [], position: { x: 0, y: 0 } });
+          const task = this.plugin.settings.tasks.find((t) => t.id === sel.value);
+          this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: sel.value, area: this.draft.area || task?.area || "", transitions: [], position: { x: 0, y: 0 } });
           this.renderStepsList(container);
         }
       };
@@ -6087,6 +6809,8 @@ class CreateWorkflowModal extends Modal {
       this.selectedSteps.push({
         id: generateId(),
         stepKind: "code",
+        name: "Code",
+        area: this.draft.area || "",
         code: "// input is the previous step's output\n// Set output to the value passed to the next step\noutput = String(input).toUpperCase();",
         codeLang: "javascript",
         codeInputVar: "input",
@@ -6106,6 +6830,8 @@ class CreateWorkflowModal extends Modal {
       this.selectedSteps.push({
         id: generateId(),
         stepKind: "delay",
+        name: "Delay",
+        area: this.draft.area || "",
         delayValue: 5,
         delayUnit: "minutes",
         transitions: [],
