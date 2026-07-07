@@ -1,6 +1,6 @@
 {
   "name": "auto-oc",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian",
   "main": "main.js",
   "files": [

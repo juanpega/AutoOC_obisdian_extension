@@ -1267,6 +1267,46 @@
   white-space: nowrap;
 }
 
+.auto-oc-secrets-help {
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 22%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--interactive-accent) 7%, transparent);
+}
+
+.auto-oc-secrets-help p {
+  margin: 4px 0 0 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.auto-oc-secrets-runtime-warning {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+  color: var(--text-normal);
+}
+
+.auto-oc-secrets-runtime-warning p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.auto-oc-secrets-runtime-warning button {
+  align-self: flex-start;
+}
+
+.auto-oc-secrets-runtime-ok {
+  font-family: var(--font-monospace);
+  font-size: 0.72rem;
+}
+
 .auto-oc-secrets-table-wrap {
   overflow-x: auto;
   border: 1px solid var(--background-modifier-border);

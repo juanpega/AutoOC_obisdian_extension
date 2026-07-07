@@ -3141,134 +3141,181 @@ function decodeCommandBuffer(bytes) {
 function getOpencodeConfigPath() {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
 }
+function getUvCandidates() {
+  return [
+    path.join(os.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
+    path.join(os.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
+    path.join(os.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
+  ];
+}
+function resolveUvBin() {
+  for (const candidate of getUvCandidates()) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch (e) {
+    }
+  }
+  return null;
+}
+function getUvInstallCommand() {
+  return process.platform === "win32" ? `powershell -ExecutionPolicy Bypass -c "irm https://astral.sh/uv/install.ps1 | iex"` : `curl -LsSf https://astral.sh/uv/install.sh | sh`;
+}
+function getUvHelpText() {
+  return `uv is required to run autooc-mcp because the MCP server is a self-contained FastMCP Python script. Install uv with: ${getUvInstallCommand()}`;
+}
+function requireUvBin() {
+  const uv = resolveUvBin();
+  if (!uv) throw new Error(getUvHelpText());
+  return uv;
+}
+function describeUvStatus() {
+  const uv = resolveUvBin();
+  return { available: !!uv, path: uv || void 0, installCommand: getUvInstallCommand() };
+}
+function resolveUvBinForDisplay() {
+  return resolveUvBin() || (process.platform === "win32" ? "uv.exe" : "uv");
+}
 function getAutoOcMcpServerSource() {
-  return String.raw`#!/usr/bin/env node
-const fs = require("fs");
-const path = require("path");
+  return String.raw`# /// script
+# dependencies = ["mcp>=1.10.0"]
+# ///
+import json
+import os
+import re
+from pathlib import Path
+from typing import Any
 
-const vaultPath = process.env.AUTOOC_VAULT_PATH || process.cwd();
-const secretsPath = path.join(vaultPath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
-let buffer = Buffer.alloc(0);
+from mcp.server.fastmcp import FastMCP
 
-function readSecretsMetadata() {
-  try {
-    if (!fs.existsSync(secretsPath)) return [];
-    const raw = fs.readFileSync(secretsPath, "utf8");
-    const parsed = raw.trim() ? JSON.parse(raw) : {};
-    return Array.isArray(parsed.secrets)
-      ? parsed.secrets.map((secret) => ({
-          name: secret.name,
-          envName: secret.envName,
-          type: secret.type,
-          profile: secret.profile || "default",
-          updatedAt: secret.updatedAt,
-        }))
-      : [];
-  } catch (error) {
-    return [{ error: String(error) }];
-  }
-}
+mcp = FastMCP("autooc-mcp")
+VAULT_PATH = Path(os.environ.get("AUTOOC_VAULT_PATH") or os.getcwd())
+SECRETS_PATH = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc" / "secrets.vault.json"
 
-function send(message) {
-  const body = Buffer.from(JSON.stringify(message), "utf8");
-  process.stdout.write("Content-Length: " + body.length + "\r\n\r\n");
-  process.stdout.write(body);
-}
 
-function result(id, payload) {
-  send({ jsonrpc: "2.0", id, result: payload });
-}
+def read_secrets_metadata() -> list[dict[str, Any]]:
+    try:
+        if not SECRETS_PATH.exists():
+            return []
+        data = json.loads(SECRETS_PATH.read_text(encoding="utf-8") or "{}")
+        secrets = data.get("secrets") if isinstance(data, dict) else []
+        if not isinstance(secrets, list):
+            return []
+        return [
+            {
+                "name": secret.get("name"),
+                "envName": secret.get("envName"),
+                "type": secret.get("type"),
+                "profile": secret.get("profile") or "default",
+                "updatedAt": secret.get("updatedAt"),
+            }
+            for secret in secrets
+            if isinstance(secret, dict)
+        ]
+    except Exception as exc:
+        return [{"error": str(exc)}]
 
-function error(id, code, message) {
-  send({ jsonrpc: "2.0", id, error: { code, message } });
-}
 
-function textResult(payload) {
-  return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
-}
+def normalize_key(value: str | None) -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"^https?://", "", text, flags=re.I)
+    text = re.sub(r"^www\.", "", text, flags=re.I)
+    text = text.split("/")[0].split(":")[0]
+    text = re.sub(r"\.[^.]+$", "", text)
+    text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
+    return text.upper()
 
-function handle(message) {
-  if (!message || message.id === undefined) return;
-  if (message.method === "initialize") {
-    result(message.id, {
-      protocolVersion: "2024-11-05",
-      capabilities: { tools: {} },
-      serverInfo: { name: "autooc-mcp", version: "0.1.0" },
-    });
-    return;
-  }
-  if (message.method === "tools/list") {
-    result(message.id, {
-      tools: [
-        {
-          name: "secrets_status",
-          description: "Show AutoOC secrets vault status without revealing secret values.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        },
-        {
-          name: "list_secret_envs",
-          description: "List configured AutoOC secret names and environment variable names without revealing values.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        },
-        {
-          name: "mcp_header_template",
-          description: "Return a headers template mapping AutoOC secret names to {env:...} references.",
-          inputSchema: { type: "object", properties: {}, additionalProperties: false },
-        },
-      ],
-    });
-    return;
-  }
-  if (message.method === "tools/call") {
-    const name = message.params && message.params.name;
-    const secrets = readSecretsMetadata();
-    if (name === "secrets_status") {
-      result(message.id, textResult({ vaultPath, secretsPath, secretsCount: secrets.filter((s) => !s.error).length }));
-      return;
+
+def secret_value_for(secret: dict[str, Any] | None) -> str:
+    if not secret:
+        return ""
+    env_name = secret.get("envName")
+    return os.environ.get(str(env_name), "") if env_name else ""
+
+
+def find_secret_by_name_or_env(name: str) -> dict[str, Any] | None:
+    wanted = normalize_key(name)
+    for secret in read_secrets_metadata():
+        if normalize_key(secret.get("name")) == wanted or normalize_key(secret.get("envName")) == wanted:
+            return secret
+    return None
+
+
+def find_web_credentials(site: str) -> dict[str, Any]:
+    key = normalize_key(site)
+    secrets = read_secrets_metadata()
+
+    def is_for_site(secret: dict[str, Any]) -> bool:
+        return key in normalize_key(secret.get("name")) or key in normalize_key(secret.get("envName"))
+
+    def is_user(secret: dict[str, Any]) -> bool:
+        name = normalize_key(secret.get("name"))
+        env = normalize_key(secret.get("envName"))
+        type_name = str(secret.get("type") or "").lower()
+        return type_name == "username" or "USER" in name or "USER" in env
+
+    def is_pass(secret: dict[str, Any]) -> bool:
+        name = normalize_key(secret.get("name"))
+        env = normalize_key(secret.get("envName"))
+        type_name = str(secret.get("type") or "").lower()
+        return type_name == "password" or "PASS" in name or "PASS" in env
+
+    user = next((secret for secret in secrets if is_for_site(secret) and is_user(secret)), None)
+    password = next((secret for secret in secrets if is_for_site(secret) and is_pass(secret)), None)
+    username_value = secret_value_for(user)
+    password_value = secret_value_for(password)
+    return {
+        "site": site,
+        "usernameEnv": user.get("envName") if user else None,
+        "passwordEnv": password.get("envName") if password else None,
+        "username": username_value,
+        "password": password_value,
+        "found": bool(username_value and password_value),
     }
-    if (name === "list_secret_envs") {
-      result(message.id, textResult(secrets));
-      return;
-    }
-    if (name === "mcp_header_template") {
-      const headers = {};
-      for (const secret of secrets) {
-        if (!secret.name || !secret.envName) continue;
-        headers[secret.name] = "{env:" + secret.envName + "}";
-      }
-      result(message.id, textResult({ headers }));
-      return;
-    }
-    error(message.id, -32602, "Unknown tool: " + name);
-    return;
-  }
-  error(message.id, -32601, "Unknown method: " + message.method);
-}
 
-function drain() {
-  while (true) {
-    const headerEnd = buffer.indexOf("\r\n\r\n");
-    if (headerEnd === -1) return;
-    const header = buffer.slice(0, headerEnd).toString("utf8");
-    const match = header.match(/Content-Length:\s*(\d+)/i);
-    if (!match) {
-      buffer = buffer.slice(headerEnd + 4);
-      continue;
-    }
-    const length = Number(match[1]);
-    const bodyStart = headerEnd + 4;
-    const bodyEnd = bodyStart + length;
-    if (buffer.length < bodyEnd) return;
-    const body = buffer.slice(bodyStart, bodyEnd).toString("utf8");
-    buffer = buffer.slice(bodyEnd);
-    try { handle(JSON.parse(body)); } catch (err) { /* ignore malformed notifications */ }
-  }
-}
 
-process.stdin.on("data", (chunk) => {
-  buffer = Buffer.concat([buffer, chunk]);
-  drain();
-});
+@mcp.tool()
+def secrets_status() -> dict[str, Any]:
+    """Show AutoOC secrets vault status without revealing secret values."""
+    secrets = [secret for secret in read_secrets_metadata() if "error" not in secret]
+    return {"vaultPath": str(VAULT_PATH), "secretsPath": str(SECRETS_PATH), "secretsCount": len(secrets)}
+
+
+@mcp.tool()
+def list_secret_envs() -> list[dict[str, Any]]:
+    """List AutoOC secret names and environment variable names without revealing values."""
+    return read_secrets_metadata()
+
+
+@mcp.tool()
+def mcp_header_template() -> dict[str, Any]:
+    """Return a headers template mapping AutoOC secret names to {env:...} references."""
+    headers: dict[str, str] = {}
+    for secret in read_secrets_metadata():
+        name = secret.get("name")
+        env_name = secret.get("envName")
+        if name and env_name:
+            headers[str(name)] = "{env:" + str(env_name) + "}"
+    return {"headers": headers}
+
+
+@mcp.tool()
+def get_secret_value(name: str) -> dict[str, Any]:
+    """Return one AutoOC secret value by secret name or env var. Use only when the task explicitly needs the credential."""
+    secret = find_secret_by_name_or_env(name)
+    if not secret:
+        return {"found": False}
+    value = secret_value_for(secret)
+    return {"found": bool(value), "name": secret.get("name"), "envName": secret.get("envName"), "value": value}
+
+
+@mcp.tool()
+def get_web_credentials(site: str) -> dict[str, Any]:
+    """Return username and password for a website from AutoOC secrets."""
+    return find_web_credentials(site)
+
+
+if __name__ == "__main__":
+    mcp.run(transport="stdio")
 `;
 }
 function getRalphStateFilePath(vaultBasePath) {
@@ -3784,14 +3831,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     return {
       vaultBasePath,
-      mcpPath: path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.js")
+      mcpPath: path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
     };
   }
-  getAutoOcMcpConfigBlock() {
+  getAutoOcMcpConfigBlock(requireAvailableUv = false) {
     const { vaultBasePath, mcpPath } = this.getAutoOcMcpPaths();
+    const uvBin = requireAvailableUv ? requireUvBin() : resolveUvBinForDisplay();
     return {
       type: "local",
-      command: ["node", mcpPath],
+      command: [uvBin, "run", "--script", mcpPath],
       enabled: true,
       env: {
         AUTOOC_VAULT_PATH: vaultBasePath
@@ -3820,7 +3868,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         throw new Error(`Could not read valid JSON from ${configPath}`);
       }
     }
-    const nextBlock = this.getAutoOcMcpConfigBlock();
+    const nextBlock = this.getAutoOcMcpConfigBlock(true);
     const mcp = data.mcp && typeof data.mcp === "object" && !Array.isArray(data.mcp) ? { ...data.mcp } : {};
     const current = mcp["autooc-mcp"];
     const changed = JSON.stringify(current) !== JSON.stringify(nextBlock);
@@ -5680,13 +5728,27 @@ var AutoOCView = class extends import_obsidian.ItemView {
       new import_obsidian.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
     }
   }
+  async copyUvInstallCommand() {
+    await copyTextToClipboard(getUvInstallCommand());
+    new import_obsidian.Notice("AutoOC: uv install command copied.");
+  }
   renderSecrets(containerEl) {
     const section = containerEl.createDiv("auto-oc-section auto-oc-secrets-section");
     section.createEl("h4", { text: "Secrets" });
     section.createEl("p", {
-      text: `Stored at ${this.plugin.secretStore.filePath}. Paste values normally; AutoOC encrypts them when saving and injects them into OpenCode as temporary env vars.`,
+      text: "Paste values normally; AutoOC encrypts them when saving and injects them into OpenCode as temporary env vars.",
       cls: "setting-item-description"
     });
+    const uvStatus = describeUvStatus();
+    if (!uvStatus.available) {
+      const uvWarning = section.createDiv("auto-oc-secrets-runtime-warning");
+      uvWarning.createEl("strong", { text: "autooc-mcp needs uv" });
+      uvWarning.createEl("p", {
+        text: "uv is not installed or AutoOC cannot find it. Install uv before using the autooc-mcp installer."
+      });
+      const copyUv = uvWarning.createEl("button", { text: "Copy uv install command", cls: "auto-oc-btn-secondary" });
+      copyUv.onclick = () => this.copyUvInstallCommand();
+    }
     if (!this.plugin.secretStore.isSecureStorageAvailable()) {
       section.createEl("p", {
         text: "Secure storage is not available on this system. Secrets cannot be created or revealed.",
@@ -9950,7 +10012,7 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
     new import_obsidian.Setting(containerEl).setName("Working Directory").setDesc(
       "Directory from which to launch OpenCode (empty = vault's current directory)"
     ).addText(
-      (text) => text.setPlaceholder("C:\\Users\\GiJu236\\projects\\mi-proyecto").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
+      (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
         this.plugin.settings.workingDirectory = v;
         await this.plugin.saveSettings();
       })

@@ -20,6 +20,7 @@ Obsidian plugin to schedule and run OpenCode CLI tasks and workflows with model 
 - Configurable timeout per task
 - Dynamic model loading via `opencode models`
 - Assistant to install/activate Ralph Loop in `~/.config/opencode/opencode.json`
+- Secrets vault with encrypted local storage, UI PIN, temporary environment injection, and optional `autooc-mcp` helper
 - Direct `OpenCode CLI` launcher from the AutoOC panel
 - Schedulable workflows that chain existing tasks in order
 - Workflow transitions: continue on success, force continue, or AI decides from previous output
@@ -73,6 +74,7 @@ A single step can declare multiple outgoing transitions, so a node can branch in
 
 - Obsidian Desktop (Community plugins enabled)
 - OpenCode installed locally
+- `uv` for the optional `autooc-mcp` helper. AutoOC detects it and shows an install command if it is missing.
 - Windows (current flow uses PowerShell/VBScript for silent execution)
 
 ## Project Structure
@@ -151,6 +153,67 @@ Notes:
 
 - This configures Ralph Loop plugin for OpenCode (not the full oh-my-opencode suite).
 - Loop state file is managed in `.opencode/ralph-loop.local.md` within the project.
+
+## Secrets Vault and autooc-mcp
+
+AutoOC can store credentials such as usernames, passwords, API keys, cookies, and tokens in a local encrypted secrets vault.
+
+Secrets are stored at:
+
+```text
+<Vault>/.obsidian/plugins/auto-oc/secrets.vault.json
+```
+
+Values are encrypted by Obsidian/Electron secure storage when you press `Save Secret`. Paste the password or token normally; do not encrypt it yourself.
+
+The UI PIN only protects reveal/edit/delete actions in the AutoOC panel. It is not the encryption key, so resetting the PIN does not delete secrets.
+
+### OpenCode environment injection
+
+When OpenCode is launched from AutoOC, AutoOC decrypts secrets in memory and injects them as temporary environment variables for that OpenCode process only.
+
+Example MCP headers can use:
+
+```json
+{
+  "api-token": "{env:AUTOOC_API_TOKEN}",
+  "web-user": "{env:AUTOOC_WEB_USER}"
+}
+```
+
+The variables disappear when that OpenCode process exits.
+
+### Installing autooc-mcp
+
+`autooc-mcp` is an optional local MCP helper for agents. It exposes safe metadata tools and credential lookup tools such as `get_web_credentials`.
+
+AutoOC installs it as a self-contained FastMCP Python script run with `uv`.
+
+1. Open AutoOC.
+2. Go to `Secrets`.
+3. If AutoOC says `uv` is missing, click `Copy uv install command`, run it in a terminal, then restart Obsidian.
+4. Click `Install autooc-mcp in OpenCode`.
+5. Restart OpenCode.
+6. Launch OpenCode from AutoOC so it inherits the secret environment variables.
+
+For users of other harnesses, click `Copy autooc-mcp install JSON` and paste the copied block into that harness config.
+
+### autooc-mcp tools
+
+- `secrets_status`: shows vault path and number of configured secrets, without values.
+- `list_secret_envs`: lists secret names and env var names, without values.
+- `mcp_header_template`: creates a headers template using `{env:...}` references.
+- `get_secret_value`: returns a specific secret value by name or env var.
+- `get_web_credentials`: returns username/password for a site by matching names/env vars such as `AUTOOC_EXAMPLE_USER` and `AUTOOC_EXAMPLE_PASS`.
+
+### Troubleshooting autooc-mcp
+
+If OpenCode shows `autooc-mcp Operation timed out after 30000ms`:
+
+1. Confirm `uv` is installed.
+2. Reopen AutoOC `Secrets` and click `Install autooc-mcp in OpenCode` again.
+3. Restart OpenCode.
+4. Launch OpenCode from AutoOC, not from a separate terminal, if the task needs secrets.
 
 ## Configuration
 
