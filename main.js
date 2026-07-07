@@ -2033,6 +2033,7 @@ var import_child_process = require("child_process");
 var os = __toESM(require("os"));
 var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
+var crypto = __toESM(require("crypto"));
 var visualBuilderHtml2 = (init_visualBuilderHtml_generated(), __toCommonJS(visualBuilderHtml_generated_exports)).visualBuilderHtml;
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
@@ -2052,9 +2053,13 @@ function psSingleQuoted(value) {
 function commandPreviewArg(value) {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
-function openOpencodeCli(bin, cwd) {
+function buildPowerShellEnvLines(env) {
+  return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
+}
+function openOpencodeCli(bin, cwd, env = {}) {
   if (process.platform === "win32") {
-    const command2 = `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const envScript = buildPowerShellEnvLines(env).join("; ");
+    const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
     const launcher2 = (0, import_child_process.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
@@ -2066,12 +2071,14 @@ function openOpencodeCli(bin, cwd) {
   if (process.platform === "darwin") {
     const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
     const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${escapedBin}"`;
+    const envPrefix2 = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix2 ? `${envPrefix2} ` : ""}${escapedBin}"`;
     const launcher2 = (0, import_child_process.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher2.unref();
     return;
   }
-  const command = `cd ${JSON.stringify(cwd)} && ${JSON.stringify(bin)}`;
+  const envPrefix = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
+  const command = `cd ${JSON.stringify(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${JSON.stringify(bin)}`;
   const launcher = (0, import_child_process.spawn)("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
   launcher.unref();
 }
@@ -2092,6 +2099,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     } catch (e) {
     }
   }, 1e4);
+  setTimeout(() => {
+    try {
+      fs2.unlinkSync(psScriptFile);
+    } catch (e) {
+    }
+  }, 3e4);
 }
 function writeUtf8BomFile(filePath, content) {
   fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
@@ -2496,6 +2509,156 @@ function renderAreaSuggestions(container, areaInput, areaNames, onSelect) {
     };
   }
 }
+var SECRET_TYPES = ["token", "api_key", "username", "password", "cookie", "basic_auth", "custom"];
+var SECRETS_SCHEMA_VERSION = 1;
+var SECRETS_UNLOCK_MS = 5 * 60 * 1e3;
+function normalizeEnvName(value) {
+  const cleaned = value.trim().replace(/[^A-Za-z0-9_]+/g, "_").replace(/^_+|_+$/g, "").toUpperCase();
+  const prefixed = cleaned.startsWith("AUTOOC_") ? cleaned : `AUTOOC_${cleaned || "SECRET"}`;
+  return /^[A-Za-z_]/.test(prefixed) ? prefixed : `AUTOOC_${prefixed}`;
+}
+function hashSecretPin(pin, salt) {
+  return crypto.pbkdf2Sync(pin, salt, 12e4, 32, "sha256").toString("base64");
+}
+function timingSafeEqualText(a, b) {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+}
+function tryGetSafeStorage() {
+  var _a, _b;
+  try {
+    const electron = typeof window !== "undefined" && window.require ? window.require("electron") : require("electron");
+    const safeStorage = (electron == null ? void 0 : electron.safeStorage) || ((_a = electron == null ? void 0 : electron.remote) == null ? void 0 : _a.safeStorage);
+    if ((_b = safeStorage == null ? void 0 : safeStorage.isEncryptionAvailable) == null ? void 0 : _b.call(safeStorage)) return safeStorage;
+  } catch (e) {
+  }
+  return null;
+}
+var SecretStore = class {
+  constructor(vaultBasePath) {
+    this.vaultBasePath = vaultBasePath;
+    this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
+    this.unlockedUntil = 0;
+  }
+  get filePath() {
+    return path.join(this.vaultBasePath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
+  }
+  load() {
+    const file = this.filePath;
+    if (!fs.existsSync(file)) {
+      this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
+      return;
+    }
+    const raw = fs.readFileSync(file, "utf8");
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    this.vault = {
+      schemaVersion: parsed.schemaVersion || SECRETS_SCHEMA_VERSION,
+      pin: parsed.pin,
+      secrets: Array.isArray(parsed.secrets) ? parsed.secrets : []
+    };
+  }
+  save() {
+    const file = this.filePath;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}
+`, "utf8");
+  }
+  isSecureStorageAvailable() {
+    return !!tryGetSafeStorage();
+  }
+  hasPin() {
+    var _a;
+    return !!((_a = this.vault.pin) == null ? void 0 : _a.enabled) && !!this.vault.pin.hash && !!this.vault.pin.salt;
+  }
+  isUnlocked() {
+    return !this.hasPin() || Date.now() < this.unlockedUntil;
+  }
+  lock() {
+    this.unlockedUntil = 0;
+  }
+  verifyPin(pin) {
+    const pinData = this.vault.pin;
+    if (!(pinData == null ? void 0 : pinData.enabled)) return true;
+    const hash = hashSecretPin(pin, pinData.salt);
+    const ok = timingSafeEqualText(hash, pinData.hash);
+    if (ok) this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
+    return ok;
+  }
+  setPin(pin) {
+    const salt = crypto.randomBytes(16).toString("base64");
+    this.vault.pin = { enabled: true, salt, hash: hashSecretPin(pin, salt) };
+    this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
+    this.save();
+  }
+  resetPin() {
+    delete this.vault.pin;
+    this.unlockedUntil = 0;
+    this.save();
+  }
+  list() {
+    return [...this.vault.secrets].sort((a, b) => a.name.localeCompare(b.name));
+  }
+  encryptValue(value) {
+    const safeStorage = tryGetSafeStorage();
+    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
+    return Buffer.from(safeStorage.encryptString(value)).toString("base64");
+  }
+  decryptValue(record) {
+    const safeStorage = tryGetSafeStorage();
+    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
+    return safeStorage.decryptString(Buffer.from(record.encryptedValue, "base64"));
+  }
+  upsert(input) {
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const existing = input.id ? this.vault.secrets.find((s) => s.id === input.id) : void 0;
+    if (existing) {
+      existing.name = input.name.trim();
+      existing.envName = normalizeEnvName(input.envName || input.name);
+      existing.type = input.type;
+      existing.profile = input.profile.trim() || "default";
+      existing.notes = input.notes || "";
+      existing.updatedAt = now;
+      if (input.value !== void 0) existing.encryptedValue = this.encryptValue(input.value);
+    } else {
+      this.vault.secrets.push({
+        id: generateId(),
+        name: input.name.trim(),
+        envName: normalizeEnvName(input.envName || input.name),
+        type: input.type,
+        profile: input.profile.trim() || "default",
+        encryptedValue: this.encryptValue(input.value || ""),
+        notes: input.notes || "",
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    this.save();
+  }
+  delete(id) {
+    this.vault.secrets = this.vault.secrets.filter((s) => s.id !== id);
+    this.save();
+  }
+  getEnv(profile = "default") {
+    const result = {};
+    for (const secret of this.vault.secrets) {
+      if (secret.profile && secret.profile !== "default" && secret.profile !== profile) continue;
+      result[secret.envName] = this.decryptValue(secret);
+    }
+    return result;
+  }
+  getRedactionValues() {
+    const values = [];
+    for (const secret of this.vault.secrets) {
+      try {
+        const value = this.decryptValue(secret);
+        if (value && value.length >= 4) values.push(value);
+      } catch (e) {
+      }
+    }
+    return values;
+  }
+};
 var FALLBACK_MODELS = [];
 var FALLBACK_AGENTS = [
   { value: "build", label: "build" },
@@ -2978,6 +3141,136 @@ function decodeCommandBuffer(bytes) {
 function getOpencodeConfigPath() {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
 }
+function getAutoOcMcpServerSource() {
+  return String.raw`#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+
+const vaultPath = process.env.AUTOOC_VAULT_PATH || process.cwd();
+const secretsPath = path.join(vaultPath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
+let buffer = Buffer.alloc(0);
+
+function readSecretsMetadata() {
+  try {
+    if (!fs.existsSync(secretsPath)) return [];
+    const raw = fs.readFileSync(secretsPath, "utf8");
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    return Array.isArray(parsed.secrets)
+      ? parsed.secrets.map((secret) => ({
+          name: secret.name,
+          envName: secret.envName,
+          type: secret.type,
+          profile: secret.profile || "default",
+          updatedAt: secret.updatedAt,
+        }))
+      : [];
+  } catch (error) {
+    return [{ error: String(error) }];
+  }
+}
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write("Content-Length: " + body.length + "\r\n\r\n");
+  process.stdout.write(body);
+}
+
+function result(id, payload) {
+  send({ jsonrpc: "2.0", id, result: payload });
+}
+
+function error(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
+}
+
+function textResult(payload) {
+  return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
+}
+
+function handle(message) {
+  if (!message || message.id === undefined) return;
+  if (message.method === "initialize") {
+    result(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "autooc-mcp", version: "0.1.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    result(message.id, {
+      tools: [
+        {
+          name: "secrets_status",
+          description: "Show AutoOC secrets vault status without revealing secret values.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        },
+        {
+          name: "list_secret_envs",
+          description: "List configured AutoOC secret names and environment variable names without revealing values.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        },
+        {
+          name: "mcp_header_template",
+          description: "Return a headers template mapping AutoOC secret names to {env:...} references.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        },
+      ],
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    const name = message.params && message.params.name;
+    const secrets = readSecretsMetadata();
+    if (name === "secrets_status") {
+      result(message.id, textResult({ vaultPath, secretsPath, secretsCount: secrets.filter((s) => !s.error).length }));
+      return;
+    }
+    if (name === "list_secret_envs") {
+      result(message.id, textResult(secrets));
+      return;
+    }
+    if (name === "mcp_header_template") {
+      const headers = {};
+      for (const secret of secrets) {
+        if (!secret.name || !secret.envName) continue;
+        headers[secret.name] = "{env:" + secret.envName + "}";
+      }
+      result(message.id, textResult({ headers }));
+      return;
+    }
+    error(message.id, -32602, "Unknown tool: " + name);
+    return;
+  }
+  error(message.id, -32601, "Unknown method: " + message.method);
+}
+
+function drain() {
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd === -1) return;
+    const header = buffer.slice(0, headerEnd).toString("utf8");
+    const match = header.match(/Content-Length:\s*(\d+)/i);
+    if (!match) {
+      buffer = buffer.slice(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + length;
+    if (buffer.length < bodyEnd) return;
+    const body = buffer.slice(bodyStart, bodyEnd).toString("utf8");
+    buffer = buffer.slice(bodyEnd);
+    try { handle(JSON.parse(body)); } catch (err) { /* ignore malformed notifications */ }
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  drain();
+});
+`;
+}
 function getRalphStateFilePath(vaultBasePath) {
   return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
 }
@@ -3340,6 +3633,14 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   async loadSettings() {
     var _a, _b;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    this.secretStore = new SecretStore(vaultBasePath);
+    try {
+      this.secretStore.load();
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not load secrets vault \u2014 ${String(e)}`);
+      this.secretStore = new SecretStore(vaultBasePath);
+    }
     delete this.settings.chatHistory;
     delete this.settings.chatModel;
     let changed = false;
@@ -3479,10 +3780,82 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 `, "utf8");
     return { changed: true, configPath };
   }
+  getAutoOcMcpPaths() {
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    return {
+      vaultBasePath,
+      mcpPath: path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.js")
+    };
+  }
+  getAutoOcMcpConfigBlock() {
+    const { vaultBasePath, mcpPath } = this.getAutoOcMcpPaths();
+    return {
+      type: "local",
+      command: ["node", mcpPath],
+      enabled: true,
+      env: {
+        AUTOOC_VAULT_PATH: vaultBasePath
+      }
+    };
+  }
+  ensureAutoOcMcpServerFile() {
+    const { mcpPath } = this.getAutoOcMcpPaths();
+    fs.mkdirSync(path.dirname(mcpPath), { recursive: true });
+    fs.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    return mcpPath;
+  }
+  async ensureAutoOcMcpEnabled() {
+    const configPath = getOpencodeConfigPath();
+    const configDir = path.dirname(configPath);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+    const mcpPath = this.ensureAutoOcMcpServerFile();
+    let data = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        const raw = fs.readFileSync(configPath, "utf8");
+        data = raw.trim() ? JSON.parse(raw) : {};
+      } catch (e) {
+        throw new Error(`Could not read valid JSON from ${configPath}`);
+      }
+    }
+    const nextBlock = this.getAutoOcMcpConfigBlock();
+    const mcp = data.mcp && typeof data.mcp === "object" && !Array.isArray(data.mcp) ? { ...data.mcp } : {};
+    const current = mcp["autooc-mcp"];
+    const changed = JSON.stringify(current) !== JSON.stringify(nextBlock);
+    if (changed) {
+      mcp["autooc-mcp"] = nextBlock;
+      data.mcp = mcp;
+      if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
+      fs.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+`, "utf8");
+    }
+    return { changed, configPath, mcpPath };
+  }
   async saveSettings(refreshView = true) {
     var _a;
     await this.saveData(this.settings);
     if (refreshView) (_a = this.view) == null ? void 0 : _a.refresh();
+  }
+  getSecretsEnv(profile = "default") {
+    var _a;
+    if (!((_a = this.secretStore) == null ? void 0 : _a.isSecureStorageAvailable())) return {};
+    try {
+      return this.secretStore.getEnv(profile);
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not load secrets for environment \u2014 ${String(e)}`);
+      return {};
+    }
+  }
+  redactSecrets(text) {
+    var _a;
+    if (!text || !((_a = this.secretStore) == null ? void 0 : _a.isSecureStorageAvailable())) return text;
+    let redacted = text;
+    for (const value of this.secretStore.getRedactionValues()) {
+      redacted = redacted.split(value).join("[secret:redacted]");
+    }
+    return redacted;
   }
   // ── Version / update helpers ────────────────────────────────────────────────
   async checkForUpdates(silent = false) {
@@ -3586,6 +3959,7 @@ Continue?`
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
+      const secretEnv = this.getSecretsEnv();
       const psScript = [
         ...psUtf8Prelude(),
         `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
@@ -3593,6 +3967,7 @@ Continue?`
         `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
         `$env:PATH        = '${process.env.PATH}'`,
         `$env:HOME        = '${process.env.USERPROFILE}'`,
+        ...buildPowerShellEnvLines(secretEnv),
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
@@ -3637,7 +4012,7 @@ DONE:" + $exitCode + "
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
-        resolve2({ output: normalizeCommandOutput(output), exitCode });
+        resolve2({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
       }, 2e3);
     });
   }
@@ -3716,6 +4091,7 @@ DONE:" + $exitCode + "
     fs2.writeFileSync(promptFile, preparedPrompt, "utf8");
     const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || (this.app.vault.adapter.basePath || ".");
     const safeCwd = taskCwd.replace(/'/g, "''");
+    const secretEnv = this.getSecretsEnv();
     let gitCmds = "";
     if (effectiveTask.branch) {
       const safeBranch = effectiveTask.branch.replace(/'/g, "''");
@@ -3732,6 +4108,7 @@ DONE:" + $exitCode + "
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
+      ...buildPowerShellEnvLines(secretEnv),
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
@@ -3797,7 +4174,7 @@ DONE:" + $exitCode + "
       } catch (e) {
       }
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
-      const normalized = formatTaskOutput(stdout, stderr);
+      const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
       t.output = normalized || "(no output)";
       if (exitCode !== 0) {
         t.status = "failed";
@@ -5154,6 +5531,15 @@ var AutoOCView = class extends import_obsidian.ItemView {
       this.currentTab = "workflows";
       this.render();
     };
+    const btnSecrets = navRow.createEl("button", {
+      text: "\u{1F512} Secrets",
+      cls: "auto-oc-tab-btn"
+    });
+    btnSecrets.title = "Manage local secrets injected into OpenCode as temporary environment variables";
+    btnSecrets.onclick = () => {
+      this.currentTab = "secrets";
+      this.render();
+    };
     const btnVisualBuilder = navRow.createEl("button", {
       text: "\u2728 WF Visual Builder",
       cls: "auto-oc-tab-btn"
@@ -5161,7 +5547,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     btnVisualBuilder.title = "Open the n8n-style visual workflow builder (loads and saves to this extension)";
     btnVisualBuilder.onclick = () => this.plugin.openVisualBuilder();
     const btnPrompt = navRow.createEl("button", {
-      text: "WF Builder Prompt",
+      text: "\u{1F4DD} WF Builder Prompt",
       cls: "auto-oc-tab-btn"
     });
     btnPrompt.title = "Copy this prompt to create your workflow";
@@ -5174,7 +5560,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       }
     };
     const btnCli = navRow.createEl("button", {
-      text: "OpenCode CLI",
+      text: "\u{1F4BB} OpenCode CLI",
       cls: "auto-oc-tab-btn"
     });
     btnCli.onclick = () => this.openCli();
@@ -5191,6 +5577,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
         cls: "auto-oc-btn-primary"
       });
       btnNewWorkflow.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
+    } else if (this.currentTab === "secrets") {
+      const btnNewSecret = toolsRow.createEl("button", {
+        text: "+ New Secret",
+        cls: "auto-oc-btn-primary"
+      });
+      btnNewSecret.onclick = () => this.openSecretEditor();
     }
     const toolsSpacer = toolsRow.createDiv("auto-oc-tab-spacer");
     toolsSpacer.style.flex = "1";
@@ -5209,12 +5601,166 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if (this.currentTab === "dashboard") btnDashboard.addClass("active");
     else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
+    else if (this.currentTab === "secrets") btnSecrets.addClass("active");
     if (this.currentTab === "dashboard") {
       this.renderDashboard(containerEl);
     } else if (this.currentTab === "workflows") {
       this.renderWorkflows(containerEl);
+    } else if (this.currentTab === "secrets") {
+      this.renderSecrets(containerEl);
     } else {
       this.renderTasks(containerEl);
+    }
+  }
+  async ensureSecretsUnlocked() {
+    const store = this.plugin.secretStore;
+    if (!store.hasPin()) {
+      const created = await new SecretsPinModal(this.app, store, "create").openAndWait();
+      if (created) this.render();
+      return created;
+    }
+    if (store.isUnlocked()) return true;
+    return new SecretsPinModal(this.app, store, "unlock").openAndWait();
+  }
+  async openSecretEditor(secret) {
+    if (!await this.ensureSecretsUnlocked()) return;
+    new SecretEditModal(this.app, this.plugin, secret, () => this.render()).open();
+  }
+  async revealSecret(secret) {
+    if (!await this.ensureSecretsUnlocked()) return;
+    try {
+      const value = this.plugin.secretStore.decryptValue(secret);
+      new SecretRevealModal(this.app, secret, value).open();
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not reveal secret \u2014 ${String(e)}`);
+    }
+  }
+  async copySecretValue(secret) {
+    if (!await this.ensureSecretsUnlocked()) return;
+    try {
+      await copyTextToClipboard(this.plugin.secretStore.decryptValue(secret));
+      new import_obsidian.Notice(`AutoOC: copied ${secret.name}.`);
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not copy secret \u2014 ${String(e)}`);
+    }
+  }
+  async deleteSecret(secret) {
+    if (!await this.ensureSecretsUnlocked()) return;
+    const confirmed = await new ConfirmModal(this.app, `Delete secret "${secret.name}"?`, "This cannot be undone.").openAndWait();
+    if (!confirmed) return;
+    this.plugin.secretStore.delete(secret.id);
+    new import_obsidian.Notice(`AutoOC: deleted secret ${secret.name}.`);
+    this.render();
+  }
+  async resetSecretsPin() {
+    const confirmed = await new ConfirmModal(
+      this.app,
+      "Reset Secrets PIN?",
+      "This only removes the UI PIN. Encrypted secrets are kept. You can create a new PIN afterwards."
+    ).openAndWait();
+    if (!confirmed) return;
+    this.plugin.secretStore.resetPin();
+    new import_obsidian.Notice("AutoOC: Secrets PIN reset. Secrets were kept.");
+    this.render();
+  }
+  async copyAutoOcMcpInstallJson() {
+    const snippet = {
+      "autooc-mcp": this.plugin.getAutoOcMcpConfigBlock()
+    };
+    await copyTextToClipboard(JSON.stringify(snippet, null, 2));
+    new import_obsidian.Notice("AutoOC: autooc-mcp install JSON copied.");
+  }
+  async installAutoOcMcpInOpenCode() {
+    try {
+      const result = await this.plugin.ensureAutoOcMcpEnabled();
+      new import_obsidian.Notice(
+        result.changed ? `AutoOC: autooc-mcp installed at ${result.configPath}. Restart OpenCode.` : `AutoOC: autooc-mcp was already configured at ${result.configPath}.`
+      );
+    } catch (e) {
+      new import_obsidian.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
+    }
+  }
+  renderSecrets(containerEl) {
+    const section = containerEl.createDiv("auto-oc-section auto-oc-secrets-section");
+    section.createEl("h4", { text: "Secrets" });
+    section.createEl("p", {
+      text: `Stored at ${this.plugin.secretStore.filePath}. Paste values normally; AutoOC encrypts them when saving and injects them into OpenCode as temporary env vars.`,
+      cls: "setting-item-description"
+    });
+    if (!this.plugin.secretStore.isSecureStorageAvailable()) {
+      section.createEl("p", {
+        text: "Secure storage is not available on this system. Secrets cannot be created or revealed.",
+        cls: "setting-item-description auto-oc-update-error"
+      });
+      return;
+    }
+    const actions = section.createDiv("auto-oc-task-actions");
+    actions.addClass("auto-oc-secrets-toolbar");
+    const lockBtn = actions.createEl("button", { text: "Lock", cls: "auto-oc-btn-secondary" });
+    lockBtn.onclick = () => {
+      this.plugin.secretStore.lock();
+      this.render();
+    };
+    const resetBtn = actions.createEl("button", { text: "Reset PIN", cls: "auto-oc-btn-secondary" });
+    resetBtn.onclick = () => this.resetSecretsPin();
+    if (!this.plugin.secretStore.hasPin()) {
+      section.createEl("p", {
+        text: "No UI PIN is set yet. Create one before managing secrets.",
+        cls: "setting-item-description"
+      });
+      const btn = section.createEl("button", { text: "Create PIN", cls: "auto-oc-btn-primary" });
+      btn.onclick = () => this.ensureSecretsUnlocked();
+      return;
+    }
+    if (!this.plugin.secretStore.isUnlocked()) {
+      section.createEl("p", { text: "Secrets are locked.", cls: "setting-item-description" });
+      const btn = section.createEl("button", { text: "Unlock Secrets", cls: "auto-oc-btn-primary" });
+      btn.onclick = async () => {
+        if (await this.ensureSecretsUnlocked()) this.render();
+      };
+      return;
+    }
+    const installMcpBtn = actions.createEl("button", { text: "Install autooc-mcp in OpenCode", cls: "auto-oc-btn-primary" });
+    installMcpBtn.title = "Write autooc-mcp into the global OpenCode config and create the local MCP server file.";
+    installMcpBtn.onclick = () => this.installAutoOcMcpInOpenCode();
+    const copyMcpBtn = actions.createEl("button", { text: "Copy autooc-mcp install JSON", cls: "auto-oc-btn-secondary" });
+    copyMcpBtn.title = "Copy the OpenCode/harness config block that installs the local autooc-mcp server.";
+    copyMcpBtn.onclick = () => this.copyAutoOcMcpInstallJson();
+    const secrets = this.plugin.secretStore.list();
+    if (secrets.length === 0) {
+      section.createEl("p", { text: "No secrets yet. Use + New Secret to add one.", cls: "setting-item-description" });
+      return;
+    }
+    const tableWrap = section.createDiv("auto-oc-secrets-table-wrap");
+    const table = tableWrap.createEl("table", { cls: "auto-oc-secrets-table" });
+    const thead = table.createEl("thead");
+    const headRow = thead.createEl("tr");
+    ["Name", "Env Var", "Type", "Profile", "Updated", "Actions"].forEach((h) => headRow.createEl("th", { text: h }));
+    const tbody = table.createEl("tbody");
+    for (const secret of secrets) {
+      const row = tbody.createEl("tr");
+      row.createEl("td", { text: secret.name, cls: "auto-oc-secret-name" });
+      row.createEl("td", { text: secret.envName, cls: "auto-oc-secret-env" });
+      const typeTd = row.createEl("td");
+      typeTd.createSpan({ text: secret.type, cls: "auto-oc-secret-chip" });
+      const profileTd = row.createEl("td");
+      profileTd.createSpan({ text: secret.profile || "default", cls: "auto-oc-secret-chip auto-oc-secret-profile" });
+      row.createEl("td", { text: secret.updatedAt ? new Date(secret.updatedAt).toLocaleString() : "" });
+      const actionTd = row.createEl("td", { cls: "auto-oc-secrets-actions-cell" });
+      const actionWrap = actionTd.createDiv("auto-oc-secrets-actions");
+      const reveal = actionWrap.createEl("button", { text: "Reveal" });
+      reveal.onclick = () => this.revealSecret(secret);
+      const copyValue = actionWrap.createEl("button", { text: "Copy value" });
+      copyValue.onclick = () => this.copySecretValue(secret);
+      const copyEnv = actionWrap.createEl("button", { text: "Copy env" });
+      copyEnv.onclick = async () => {
+        await copyTextToClipboard(secret.envName);
+        new import_obsidian.Notice("AutoOC: env var copied.");
+      };
+      const edit = actionWrap.createEl("button", { text: "Edit" });
+      edit.onclick = () => this.openSecretEditor(secret);
+      const del = actionWrap.createEl("button", { text: "Delete", cls: "auto-oc-secret-danger" });
+      del.onclick = () => this.deleteSecret(secret);
     }
   }
   // Renders the extension header at the top of the panel: title,
@@ -6772,6 +7318,232 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
     await this.plugin.saveSettings();
     (_a = this.plugin.view) == null ? void 0 : _a.refresh();
     new import_obsidian.Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
+  }
+};
+var ConfirmModal = class extends import_obsidian.Modal {
+  constructor(app, titleText, bodyText) {
+    super(app);
+    this.titleText = titleText;
+    this.bodyText = bodyText;
+  }
+  openAndWait() {
+    this.open();
+    return new Promise((resolve2) => {
+      this.resolve = resolve2;
+    });
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setupModalX(this);
+    contentEl.createEl("h3", { text: this.titleText });
+    contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
+    new import_obsidian.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
+      var _a;
+      (_a = this.resolve) == null ? void 0 : _a.call(this, false);
+      this.close();
+    })).addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => {
+      var _a;
+      (_a = this.resolve) == null ? void 0 : _a.call(this, true);
+      this.close();
+    }));
+  }
+  onClose() {
+    var _a;
+    (_a = this.resolve) == null ? void 0 : _a.call(this, false);
+    this.resolve = void 0;
+    this.contentEl.empty();
+  }
+};
+var SecretsPinModal = class extends import_obsidian.Modal {
+  constructor(app, store, mode) {
+    super(app);
+    this.store = store;
+    this.mode = mode;
+    this.settled = false;
+    this.pin = "";
+    this.confirmPin = "";
+  }
+  openAndWait() {
+    this.open();
+    return new Promise((resolve2) => {
+      this.resolve = resolve2;
+    });
+  }
+  finish(value) {
+    var _a;
+    this.settled = true;
+    (_a = this.resolve) == null ? void 0 : _a.call(this, value);
+    this.close();
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setupModalX(this);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", { text: this.mode === "create" ? "Create Secrets PIN" : "Unlock Secrets" });
+    contentEl.createEl("p", {
+      text: this.mode === "create" ? "This PIN protects the Secrets UI. It can be reset without deleting encrypted secrets." : "Enter the Secrets UI PIN.",
+      cls: "setting-item-description"
+    });
+    new import_obsidian.Setting(contentEl).setName("PIN").addText((text) => {
+      text.inputEl.type = "password";
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.onChange((v) => this.pin = v);
+      window.setTimeout(() => text.inputEl.focus(), 50);
+    });
+    if (this.mode === "create") {
+      new import_obsidian.Setting(contentEl).setName("Confirm PIN").addText((text) => {
+        text.inputEl.type = "password";
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.onChange((v) => this.confirmPin = v);
+      });
+    }
+    new import_obsidian.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.finish(false))).addButton((btn) => btn.setButtonText(this.mode === "create" ? "Create PIN" : "Unlock").setCta().onClick(() => {
+      if (this.pin.length < 4) {
+        new import_obsidian.Notice("AutoOC: PIN must be at least 4 characters.");
+        return;
+      }
+      if (this.mode === "create") {
+        if (this.pin !== this.confirmPin) {
+          new import_obsidian.Notice("AutoOC: PIN confirmation does not match.");
+          return;
+        }
+        this.store.setPin(this.pin);
+        new import_obsidian.Notice("AutoOC: Secrets PIN created.");
+        this.finish(true);
+        return;
+      }
+      if (!this.store.verifyPin(this.pin)) {
+        new import_obsidian.Notice("AutoOC: incorrect PIN.");
+        return;
+      }
+      this.finish(true);
+    }));
+  }
+  onClose() {
+    var _a;
+    if (!this.settled) (_a = this.resolve) == null ? void 0 : _a.call(this, false);
+    this.resolve = void 0;
+    this.contentEl.empty();
+  }
+};
+var SecretEditModal = class extends import_obsidian.Modal {
+  constructor(app, plugin, secret, onSaved) {
+    super(app);
+    this.plugin = plugin;
+    this.secret = secret;
+    this.onSaved = onSaved;
+    this.draft = {
+      name: (secret == null ? void 0 : secret.name) || "",
+      envName: (secret == null ? void 0 : secret.envName) || "",
+      type: (secret == null ? void 0 : secret.type) || "token",
+      profile: (secret == null ? void 0 : secret.profile) || "default",
+      value: "",
+      notes: (secret == null ? void 0 : secret.notes) || ""
+    };
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setAutoOCModalSize(this, 720);
+    setupModalX(this);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", { text: this.secret ? "Edit Secret" : "New Secret" });
+    new import_obsidian.Setting(contentEl).setName("Name").setDesc("Human-readable name, for example jira-token or web-login-password.").addText((text) => {
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setValue(this.draft.name).onChange((v) => {
+        this.draft.name = v;
+        if (!this.secret && !this.draft.envName.trim()) this.draft.envName = normalizeEnvName(v);
+      });
+      window.setTimeout(() => text.inputEl.focus(), 50);
+    });
+    new import_obsidian.Setting(contentEl).setName("Environment variable").setDesc("Use this in opencode MCP config as {env:NAME}.").addText((text) => {
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setPlaceholder("AUTOOC_JIRA_TOKEN").setValue(this.draft.envName).onChange((v) => this.draft.envName = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Type").addDropdown((dd) => {
+      for (const type of SECRET_TYPES) dd.addOption(type, type);
+      dd.setValue(this.draft.type);
+      dd.onChange((v) => this.draft.type = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Profile").setDesc("default is always injected. Other profiles are reserved for future per-task selection.").addText((text) => {
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setValue(this.draft.profile).onChange((v) => this.draft.profile = v || "default");
+    });
+    new import_obsidian.Setting(contentEl).setName(this.secret ? "New value" : "Value").setDesc(
+      this.secret ? "Paste the new password/token as plain text. AutoOC encrypts it when you save. Leave empty to keep the current value." : "Paste the password/token as plain text. AutoOC encrypts it when you save; the table never shows it."
+    ).addTextArea((ta) => {
+      ta.inputEl.addClass("auto-oc-modal-textarea");
+      ta.inputEl.rows = 4;
+      ta.inputEl.spellcheck = false;
+      ta.setValue(this.draft.value).onChange((v) => this.draft.value = v);
+    });
+    new import_obsidian.Setting(contentEl).setName("Notes").addText((text) => {
+      text.inputEl.addClass("auto-oc-modal-input");
+      text.setValue(this.draft.notes).onChange((v) => this.draft.notes = v);
+    });
+    new import_obsidian.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.close())).addButton((btn) => btn.setButtonText("Save Secret").setCta().onClick(() => {
+      var _a;
+      if (!this.draft.name.trim()) {
+        new import_obsidian.Notice("AutoOC: secret name is required.");
+        return;
+      }
+      if (!this.secret && !this.draft.value) {
+        new import_obsidian.Notice("AutoOC: secret value is required.");
+        return;
+      }
+      try {
+        this.plugin.secretStore.upsert({
+          id: (_a = this.secret) == null ? void 0 : _a.id,
+          name: this.draft.name,
+          envName: this.draft.envName || this.draft.name,
+          type: this.draft.type,
+          profile: this.draft.profile || "default",
+          value: this.draft.value || void 0,
+          notes: this.draft.notes
+        });
+        new import_obsidian.Notice("AutoOC: secret saved.");
+        this.onSaved();
+        this.close();
+      } catch (e) {
+        new import_obsidian.Notice(`AutoOC: could not save secret \u2014 ${String(e)}`);
+      }
+    }));
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var SecretRevealModal = class extends import_obsidian.Modal {
+  constructor(app, secret, value) {
+    super(app);
+    this.secret = secret;
+    this.value = value;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setupModalX(this);
+    contentEl.createEl("h3", { text: `Secret: ${this.secret.name}` });
+    contentEl.createEl("p", { text: this.secret.envName, cls: "setting-item-description" });
+    const textarea = contentEl.createEl("textarea", { cls: "auto-oc-modal-textarea" });
+    textarea.value = this.value;
+    textarea.readOnly = true;
+    textarea.rows = 4;
+    textarea.style.width = "100%";
+    new import_obsidian.Setting(contentEl).addButton((btn) => btn.setButtonText("Copy value").onClick(async () => {
+      await copyTextToClipboard(this.value);
+      new import_obsidian.Notice("AutoOC: secret copied.");
+    })).addButton((btn) => btn.setButtonText("Close").onClick(() => this.close()));
+  }
+  onClose() {
+    this.value = "";
+    this.contentEl.empty();
   }
 };
 var CreateTaskModal = class extends import_obsidian.Modal {
@@ -9021,8 +9793,8 @@ var OpenCodeCliModal = class extends import_obsidian.Modal {
   launch(cwd) {
     try {
       const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      openOpencodeCli(bin, cwd);
-      new import_obsidian.Notice(`AutoCO: opened OpenCode CLI in ${cwd}`);
+      openOpencodeCli(bin, cwd, this.plugin.getSecretsEnv());
+      new import_obsidian.Notice(`AutoOC: opened OpenCode CLI in ${cwd}`);
       this.close();
     } catch (e) {
       new import_obsidian.Notice(`AutoOC: could not open OpenCode CLI: ${String(e)}`);

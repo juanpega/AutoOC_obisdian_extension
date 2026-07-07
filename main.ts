@@ -13,6 +13,7 @@ import { spawn, exec } from "child_process";
 import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
+import * as crypto from "crypto";
 // The visual builder is shipped as a self-contained HTML file under
 // `util/ui_workflow_builder/index.html`. A pre-build step
 // (scripts/inline-visual-builder.mjs) reads the file at build time and
@@ -47,9 +48,16 @@ function commandPreviewArg(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
 
-function openOpencodeCli(bin: string, cwd: string): void {
+function buildPowerShellEnvLines(env: Record<string, string>): string[] {
+  return Object.entries(env)
+    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
+}
+
+function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}): void {
   if (process.platform === "win32") {
-    const command = `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const envScript = buildPowerShellEnvLines(env).join("; ");
+    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
     const launcher = spawn(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
@@ -62,13 +70,21 @@ function openOpencodeCli(bin: string, cwd: string): void {
   if (process.platform === "darwin") {
     const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
     const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${escapedBin}"`;
+    const envPrefix = Object.entries(env)
+      .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+      .join(" ");
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix ? `${envPrefix} ` : ""}${escapedBin}"`;
     const launcher = spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher.unref();
     return;
   }
 
-  const command = `cd ${JSON.stringify(cwd)} && ${JSON.stringify(bin)}`;
+  const envPrefix = Object.entries(env)
+    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
+    .join(" ");
+  const command = `cd ${JSON.stringify(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${JSON.stringify(bin)}`;
   const launcher = spawn("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
   launcher.unref();
 }
@@ -86,8 +102,10 @@ function launchHiddenPS(psScriptFile: string): void {
   const { spawn } = require("child_process");
   const ws = spawn("wscript.exe", [vbsFile], { detached: true, stdio: "ignore", windowsHide: true });
   ws.unref();
-  // Clean up vbs after a moment
+  // Clean up launcher files after PowerShell has had time to read them. This
+  // also limits exposure for launch scripts that contain temporary env vars.
   setTimeout(() => { try { fs.unlinkSync(vbsFile); } catch { /* ignore */ } }, 10000);
+  setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 30000);
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -741,6 +759,205 @@ interface LibraryIndex {
   library: LibraryEntry[];
 }
 
+type SecretType = "token" | "api_key" | "username" | "password" | "cookie" | "basic_auth" | "custom";
+
+interface SecretRecord {
+  id: string;
+  name: string;
+  envName: string;
+  type: SecretType;
+  profile: string;
+  encryptedValue: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface SecretsVaultPin {
+  enabled: boolean;
+  salt: string;
+  hash: string;
+}
+
+interface SecretsVault {
+  schemaVersion: number;
+  pin?: SecretsVaultPin;
+  secrets: SecretRecord[];
+}
+
+const SECRET_TYPES: SecretType[] = ["token", "api_key", "username", "password", "cookie", "basic_auth", "custom"];
+const SECRETS_SCHEMA_VERSION = 1;
+const SECRETS_UNLOCK_MS = 5 * 60 * 1000;
+
+function normalizeEnvName(value: string): string {
+  const cleaned = value
+    .trim()
+    .replace(/[^A-Za-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+  const prefixed = cleaned.startsWith("AUTOOC_") ? cleaned : `AUTOOC_${cleaned || "SECRET"}`;
+  return /^[A-Za-z_]/.test(prefixed) ? prefixed : `AUTOOC_${prefixed}`;
+}
+
+function hashSecretPin(pin: string, salt: string): string {
+  return crypto.pbkdf2Sync(pin, salt, 120_000, 32, "sha256").toString("base64");
+}
+
+function timingSafeEqualText(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a);
+  const bBuf = Buffer.from(b);
+  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+function tryGetSafeStorage(): any | null {
+  try {
+    const electron = typeof window !== "undefined" && (window as any).require
+      ? (window as any).require("electron")
+      : require("electron");
+    const safeStorage = electron?.safeStorage || electron?.remote?.safeStorage;
+    if (safeStorage?.isEncryptionAvailable?.()) return safeStorage;
+  } catch { /* ignore */ }
+  return null;
+}
+
+class SecretStore {
+  private vault: SecretsVault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
+  private unlockedUntil = 0;
+
+  constructor(private vaultBasePath: string) {}
+
+  get filePath(): string {
+    return path.join(this.vaultBasePath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
+  }
+
+  load(): void {
+    const file = this.filePath;
+    if (!fs.existsSync(file)) {
+      this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
+      return;
+    }
+    const raw = fs.readFileSync(file, "utf8");
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    this.vault = {
+      schemaVersion: parsed.schemaVersion || SECRETS_SCHEMA_VERSION,
+      pin: parsed.pin,
+      secrets: Array.isArray(parsed.secrets) ? parsed.secrets : [],
+    };
+  }
+
+  save(): void {
+    const file = this.filePath;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}\n`, "utf8");
+  }
+
+  isSecureStorageAvailable(): boolean {
+    return !!tryGetSafeStorage();
+  }
+
+  hasPin(): boolean {
+    return !!this.vault.pin?.enabled && !!this.vault.pin.hash && !!this.vault.pin.salt;
+  }
+
+  isUnlocked(): boolean {
+    return !this.hasPin() || Date.now() < this.unlockedUntil;
+  }
+
+  lock(): void {
+    this.unlockedUntil = 0;
+  }
+
+  verifyPin(pin: string): boolean {
+    const pinData = this.vault.pin;
+    if (!pinData?.enabled) return true;
+    const hash = hashSecretPin(pin, pinData.salt);
+    const ok = timingSafeEqualText(hash, pinData.hash);
+    if (ok) this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
+    return ok;
+  }
+
+  setPin(pin: string): void {
+    const salt = crypto.randomBytes(16).toString("base64");
+    this.vault.pin = { enabled: true, salt, hash: hashSecretPin(pin, salt) };
+    this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
+    this.save();
+  }
+
+  resetPin(): void {
+    delete this.vault.pin;
+    this.unlockedUntil = 0;
+    this.save();
+  }
+
+  list(): SecretRecord[] {
+    return [...this.vault.secrets].sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  encryptValue(value: string): string {
+    const safeStorage = tryGetSafeStorage();
+    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
+    return Buffer.from(safeStorage.encryptString(value)).toString("base64");
+  }
+
+  decryptValue(record: SecretRecord): string {
+    const safeStorage = tryGetSafeStorage();
+    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
+    return safeStorage.decryptString(Buffer.from(record.encryptedValue, "base64"));
+  }
+
+  upsert(input: { id?: string; name: string; envName: string; type: SecretType; profile: string; value?: string; notes?: string }): void {
+    const now = new Date().toISOString();
+    const existing = input.id ? this.vault.secrets.find((s) => s.id === input.id) : undefined;
+    if (existing) {
+      existing.name = input.name.trim();
+      existing.envName = normalizeEnvName(input.envName || input.name);
+      existing.type = input.type;
+      existing.profile = input.profile.trim() || "default";
+      existing.notes = input.notes || "";
+      existing.updatedAt = now;
+      if (input.value !== undefined) existing.encryptedValue = this.encryptValue(input.value);
+    } else {
+      this.vault.secrets.push({
+        id: generateId(),
+        name: input.name.trim(),
+        envName: normalizeEnvName(input.envName || input.name),
+        type: input.type,
+        profile: input.profile.trim() || "default",
+        encryptedValue: this.encryptValue(input.value || ""),
+        notes: input.notes || "",
+        createdAt: now,
+        updatedAt: now,
+      });
+    }
+    this.save();
+  }
+
+  delete(id: string): void {
+    this.vault.secrets = this.vault.secrets.filter((s) => s.id !== id);
+    this.save();
+  }
+
+  getEnv(profile = "default"): Record<string, string> {
+    const result: Record<string, string> = {};
+    for (const secret of this.vault.secrets) {
+      if (secret.profile && secret.profile !== "default" && secret.profile !== profile) continue;
+      result[secret.envName] = this.decryptValue(secret);
+    }
+    return result;
+  }
+
+  getRedactionValues(): string[] {
+    const values: string[] = [];
+    for (const secret of this.vault.secrets) {
+      try {
+        const value = this.decryptValue(secret);
+        if (value && value.length >= 4) values.push(value);
+      } catch { /* ignore */ }
+    }
+    return values;
+  }
+}
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 // No hardcoded models: load dynamically with `opencode models`.
@@ -1249,6 +1466,137 @@ function getOpencodeConfigPath(): string {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
 }
 
+function getAutoOcMcpServerSource(): string {
+  return String.raw`#!/usr/bin/env node
+const fs = require("fs");
+const path = require("path");
+
+const vaultPath = process.env.AUTOOC_VAULT_PATH || process.cwd();
+const secretsPath = path.join(vaultPath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
+let buffer = Buffer.alloc(0);
+
+function readSecretsMetadata() {
+  try {
+    if (!fs.existsSync(secretsPath)) return [];
+    const raw = fs.readFileSync(secretsPath, "utf8");
+    const parsed = raw.trim() ? JSON.parse(raw) : {};
+    return Array.isArray(parsed.secrets)
+      ? parsed.secrets.map((secret) => ({
+          name: secret.name,
+          envName: secret.envName,
+          type: secret.type,
+          profile: secret.profile || "default",
+          updatedAt: secret.updatedAt,
+        }))
+      : [];
+  } catch (error) {
+    return [{ error: String(error) }];
+  }
+}
+
+function send(message) {
+  const body = Buffer.from(JSON.stringify(message), "utf8");
+  process.stdout.write("Content-Length: " + body.length + "\r\n\r\n");
+  process.stdout.write(body);
+}
+
+function result(id, payload) {
+  send({ jsonrpc: "2.0", id, result: payload });
+}
+
+function error(id, code, message) {
+  send({ jsonrpc: "2.0", id, error: { code, message } });
+}
+
+function textResult(payload) {
+  return { content: [{ type: "text", text: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2) }] };
+}
+
+function handle(message) {
+  if (!message || message.id === undefined) return;
+  if (message.method === "initialize") {
+    result(message.id, {
+      protocolVersion: "2024-11-05",
+      capabilities: { tools: {} },
+      serverInfo: { name: "autooc-mcp", version: "0.1.0" },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    result(message.id, {
+      tools: [
+        {
+          name: "secrets_status",
+          description: "Show AutoOC secrets vault status without revealing secret values.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        },
+        {
+          name: "list_secret_envs",
+          description: "List configured AutoOC secret names and environment variable names without revealing values.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        },
+        {
+          name: "mcp_header_template",
+          description: "Return a headers template mapping AutoOC secret names to {env:...} references.",
+          inputSchema: { type: "object", properties: {}, additionalProperties: false },
+        },
+      ],
+    });
+    return;
+  }
+  if (message.method === "tools/call") {
+    const name = message.params && message.params.name;
+    const secrets = readSecretsMetadata();
+    if (name === "secrets_status") {
+      result(message.id, textResult({ vaultPath, secretsPath, secretsCount: secrets.filter((s) => !s.error).length }));
+      return;
+    }
+    if (name === "list_secret_envs") {
+      result(message.id, textResult(secrets));
+      return;
+    }
+    if (name === "mcp_header_template") {
+      const headers = {};
+      for (const secret of secrets) {
+        if (!secret.name || !secret.envName) continue;
+        headers[secret.name] = "{env:" + secret.envName + "}";
+      }
+      result(message.id, textResult({ headers }));
+      return;
+    }
+    error(message.id, -32602, "Unknown tool: " + name);
+    return;
+  }
+  error(message.id, -32601, "Unknown method: " + message.method);
+}
+
+function drain() {
+  while (true) {
+    const headerEnd = buffer.indexOf("\r\n\r\n");
+    if (headerEnd === -1) return;
+    const header = buffer.slice(0, headerEnd).toString("utf8");
+    const match = header.match(/Content-Length:\s*(\d+)/i);
+    if (!match) {
+      buffer = buffer.slice(headerEnd + 4);
+      continue;
+    }
+    const length = Number(match[1]);
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + length;
+    if (buffer.length < bodyEnd) return;
+    const body = buffer.slice(bodyStart, bodyEnd).toString("utf8");
+    buffer = buffer.slice(bodyEnd);
+    try { handle(JSON.parse(body)); } catch (err) { /* ignore malformed notifications */ }
+  }
+}
+
+process.stdin.on("data", (chunk) => {
+  buffer = Buffer.concat([buffer, chunk]);
+  drain();
+});
+`;
+}
+
 function getRalphStateFilePath(vaultBasePath: string): string {
   return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
 }
@@ -1467,6 +1815,7 @@ function isWorkflowDue(wf: Workflow): boolean {
 
 export default class AutoOCPlugin extends Plugin {
   settings!: AutoOCSettings;
+  secretStore!: SecretStore;
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
@@ -1657,6 +2006,14 @@ export default class AutoOCPlugin extends Plugin {
 
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    this.secretStore = new SecretStore(vaultBasePath);
+    try {
+      this.secretStore.load();
+    } catch (e) {
+      new Notice(`AutoOC: could not load secrets vault — ${String(e)}`);
+      this.secretStore = new SecretStore(vaultBasePath);
+    }
     delete (this.settings as any).chatHistory;
     delete (this.settings as any).chatModel;
     let changed = false;
@@ -1795,9 +2152,86 @@ export default class AutoOCPlugin extends Plugin {
     return { changed: true, configPath };
   }
 
+  getAutoOcMcpPaths(): { vaultBasePath: string; mcpPath: string } {
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    return {
+      vaultBasePath,
+      mcpPath: path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.js"),
+    };
+  }
+
+  getAutoOcMcpConfigBlock(): Record<string, any> {
+    const { vaultBasePath, mcpPath } = this.getAutoOcMcpPaths();
+    return {
+      type: "local",
+      command: ["node", mcpPath],
+      enabled: true,
+      env: {
+        AUTOOC_VAULT_PATH: vaultBasePath,
+      },
+    };
+  }
+
+  ensureAutoOcMcpServerFile(): string {
+    const { mcpPath } = this.getAutoOcMcpPaths();
+    fs.mkdirSync(path.dirname(mcpPath), { recursive: true });
+    fs.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    return mcpPath;
+  }
+
+  async ensureAutoOcMcpEnabled(): Promise<{ changed: boolean; configPath: string; mcpPath: string }> {
+    const configPath = getOpencodeConfigPath();
+    const configDir = path.dirname(configPath);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+
+    const mcpPath = this.ensureAutoOcMcpServerFile();
+    let data: Record<string, any> = {};
+    if (fs.existsSync(configPath)) {
+      try {
+        const raw = fs.readFileSync(configPath, "utf8");
+        data = raw.trim() ? JSON.parse(raw) : {};
+      } catch {
+        throw new Error(`Could not read valid JSON from ${configPath}`);
+      }
+    }
+
+    const nextBlock = this.getAutoOcMcpConfigBlock();
+    const mcp = data.mcp && typeof data.mcp === "object" && !Array.isArray(data.mcp) ? { ...data.mcp } : {};
+    const current = mcp["autooc-mcp"];
+    const changed = JSON.stringify(current) !== JSON.stringify(nextBlock);
+    if (changed) {
+      mcp["autooc-mcp"] = nextBlock;
+      data.mcp = mcp;
+      if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
+      fs.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}\n`, "utf8");
+    }
+    return { changed, configPath, mcpPath };
+  }
+
   async saveSettings(refreshView = true) {
     await this.saveData(this.settings);
     if (refreshView) this.view?.refresh();
+  }
+
+  getSecretsEnv(profile = "default"): Record<string, string> {
+    if (!this.secretStore?.isSecureStorageAvailable()) return {};
+    try {
+      return this.secretStore.getEnv(profile);
+    } catch (e) {
+      new Notice(`AutoOC: could not load secrets for environment — ${String(e)}`);
+      return {};
+    }
+  }
+
+  redactSecrets(text: string): string {
+    if (!text || !this.secretStore?.isSecureStorageAvailable()) return text;
+    let redacted = text;
+    for (const value of this.secretStore.getRedactionValues()) {
+      redacted = redacted.split(value).join("[secret:redacted]");
+    }
+    return redacted;
   }
 
   // ── Version / update helpers ────────────────────────────────────────────────
@@ -1915,6 +2349,7 @@ export default class AutoOCPlugin extends Plugin {
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
+      const secretEnv = this.getSecretsEnv();
 
       const psScript = [
         ...psUtf8Prelude(),
@@ -1923,6 +2358,7 @@ export default class AutoOCPlugin extends Plugin {
         `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
         `$env:PATH        = '${process.env.PATH}'`,
         `$env:HOME        = '${process.env.USERPROFILE}'`,
+        ...buildPowerShellEnvLines(secretEnv),
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
@@ -1957,7 +2393,7 @@ export default class AutoOCPlugin extends Plugin {
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
-        resolve({ output: normalizeCommandOutput(output), exitCode });
+        resolve({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
       }, 2000);
     });
   }
@@ -2041,6 +2477,7 @@ export default class AutoOCPlugin extends Plugin {
     // Resolve working directory: Task override -> Global Setting -> Vault Path
     const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || ((this.app.vault.adapter as any).basePath || ".");
     const safeCwd = taskCwd.replace(/'/g, "''");
+    const secretEnv = this.getSecretsEnv();
 
     // Git branch logic
     let gitCmds = "";
@@ -2060,6 +2497,7 @@ export default class AutoOCPlugin extends Plugin {
       `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
       `$env:PATH        = '${process.env.PATH}'`,
       `$env:HOME        = '${process.env.USERPROFILE}'`,
+      ...buildPowerShellEnvLines(secretEnv),
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
       `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
@@ -2118,7 +2556,7 @@ export default class AutoOCPlugin extends Plugin {
       try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
 
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
-      const normalized = formatTaskOutput(stdout, stderr);
+      const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
 
       t.output = normalized || "(no output)";
       if (exitCode !== 0) {
@@ -3154,7 +3592,7 @@ class AutoOCView extends ItemView {
   private filterText: string = "";
   private filterStatus: string = "all";
   private filterArea: string = "all";
-  private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
+  private currentTab: "dashboard" | "tasks" | "workflows" | "secrets" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
@@ -3614,6 +4052,13 @@ class AutoOCView extends ItemView {
     });
     btnWorkflows.onclick = () => { this.currentTab = "workflows"; this.render(); };
 
+    const btnSecrets = navRow.createEl("button", {
+      text: "🔒 Secrets",
+      cls: "auto-oc-tab-btn",
+    });
+    btnSecrets.title = "Manage local secrets injected into OpenCode as temporary environment variables";
+    btnSecrets.onclick = () => { this.currentTab = "secrets"; this.render(); };
+
     const btnVisualBuilder = navRow.createEl("button", {
       text: "✨ WF Visual Builder",
       cls: "auto-oc-tab-btn",
@@ -3622,7 +4067,7 @@ class AutoOCView extends ItemView {
     btnVisualBuilder.onclick = () => this.plugin.openVisualBuilder();
 
     const btnPrompt = navRow.createEl("button", {
-      text: "WF Builder Prompt",
+      text: "📝 WF Builder Prompt",
       cls: "auto-oc-tab-btn",
     });
     btnPrompt.title = "Copy this prompt to create your workflow";
@@ -3636,7 +4081,7 @@ class AutoOCView extends ItemView {
     };
 
     const btnCli = navRow.createEl("button", {
-      text: "OpenCode CLI",
+      text: "💻 OpenCode CLI",
       cls: "auto-oc-tab-btn",
     });
     btnCli.onclick = () => this.openCli();
@@ -3656,6 +4101,12 @@ class AutoOCView extends ItemView {
         cls: "auto-oc-btn-primary",
       });
       btnNewWorkflow.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
+    } else if (this.currentTab === "secrets") {
+      const btnNewSecret = toolsRow.createEl("button", {
+        text: "+ New Secret",
+        cls: "auto-oc-btn-primary",
+      });
+      btnNewSecret.onclick = () => this.openSecretEditor();
     }
     const toolsSpacer = toolsRow.createDiv("auto-oc-tab-spacer");
     toolsSpacer.style.flex = "1";
@@ -3677,14 +4128,179 @@ class AutoOCView extends ItemView {
     if (this.currentTab === "dashboard") btnDashboard.addClass("active");
     else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
+    else if (this.currentTab === "secrets") btnSecrets.addClass("active");
 
     // ── Content ──
     if (this.currentTab === "dashboard") {
       this.renderDashboard(containerEl);
     } else if (this.currentTab === "workflows") {
       this.renderWorkflows(containerEl);
+    } else if (this.currentTab === "secrets") {
+      this.renderSecrets(containerEl);
     } else {
       this.renderTasks(containerEl);
+    }
+  }
+
+  private async ensureSecretsUnlocked(): Promise<boolean> {
+    const store = this.plugin.secretStore;
+    if (!store.hasPin()) {
+      const created = await new SecretsPinModal(this.app, store, "create").openAndWait();
+      if (created) this.render();
+      return created;
+    }
+    if (store.isUnlocked()) return true;
+    return new SecretsPinModal(this.app, store, "unlock").openAndWait();
+  }
+
+  private async openSecretEditor(secret?: SecretRecord): Promise<void> {
+    if (!await this.ensureSecretsUnlocked()) return;
+    new SecretEditModal(this.app, this.plugin, secret, () => this.render()).open();
+  }
+
+  private async revealSecret(secret: SecretRecord): Promise<void> {
+    if (!await this.ensureSecretsUnlocked()) return;
+    try {
+      const value = this.plugin.secretStore.decryptValue(secret);
+      new SecretRevealModal(this.app, secret, value).open();
+    } catch (e) {
+      new Notice(`AutoOC: could not reveal secret — ${String(e)}`);
+    }
+  }
+
+  private async copySecretValue(secret: SecretRecord): Promise<void> {
+    if (!await this.ensureSecretsUnlocked()) return;
+    try {
+      await copyTextToClipboard(this.plugin.secretStore.decryptValue(secret));
+      new Notice(`AutoOC: copied ${secret.name}.`);
+    } catch (e) {
+      new Notice(`AutoOC: could not copy secret — ${String(e)}`);
+    }
+  }
+
+  private async deleteSecret(secret: SecretRecord): Promise<void> {
+    if (!await this.ensureSecretsUnlocked()) return;
+    const confirmed = await new ConfirmModal(this.app, `Delete secret "${secret.name}"?`, "This cannot be undone.").openAndWait();
+    if (!confirmed) return;
+    this.plugin.secretStore.delete(secret.id);
+    new Notice(`AutoOC: deleted secret ${secret.name}.`);
+    this.render();
+  }
+
+  private async resetSecretsPin(): Promise<void> {
+    const confirmed = await new ConfirmModal(
+      this.app,
+      "Reset Secrets PIN?",
+      "This only removes the UI PIN. Encrypted secrets are kept. You can create a new PIN afterwards."
+    ).openAndWait();
+    if (!confirmed) return;
+    this.plugin.secretStore.resetPin();
+    new Notice("AutoOC: Secrets PIN reset. Secrets were kept.");
+    this.render();
+  }
+
+  private async copyAutoOcMcpInstallJson(): Promise<void> {
+    const snippet = {
+      "autooc-mcp": this.plugin.getAutoOcMcpConfigBlock(),
+    };
+    await copyTextToClipboard(JSON.stringify(snippet, null, 2));
+    new Notice("AutoOC: autooc-mcp install JSON copied.");
+  }
+
+  private async installAutoOcMcpInOpenCode(): Promise<void> {
+    try {
+      const result = await this.plugin.ensureAutoOcMcpEnabled();
+      new Notice(
+        result.changed
+          ? `AutoOC: autooc-mcp installed at ${result.configPath}. Restart OpenCode.`
+          : `AutoOC: autooc-mcp was already configured at ${result.configPath}.`
+      );
+    } catch (e) {
+      new Notice(`AutoOC: could not install autooc-mcp — ${String(e)}`);
+    }
+  }
+
+  private renderSecrets(containerEl: HTMLElement): void {
+    const section = containerEl.createDiv("auto-oc-section auto-oc-secrets-section");
+    section.createEl("h4", { text: "Secrets" });
+    section.createEl("p", {
+      text: `Stored at ${this.plugin.secretStore.filePath}. Paste values normally; AutoOC encrypts them when saving and injects them into OpenCode as temporary env vars.`,
+      cls: "setting-item-description",
+    });
+
+    if (!this.plugin.secretStore.isSecureStorageAvailable()) {
+      section.createEl("p", {
+        text: "Secure storage is not available on this system. Secrets cannot be created or revealed.",
+        cls: "setting-item-description auto-oc-update-error",
+      });
+      return;
+    }
+
+    const actions = section.createDiv("auto-oc-task-actions");
+    actions.addClass("auto-oc-secrets-toolbar");
+    const lockBtn = actions.createEl("button", { text: "Lock", cls: "auto-oc-btn-secondary" });
+    lockBtn.onclick = () => { this.plugin.secretStore.lock(); this.render(); };
+    const resetBtn = actions.createEl("button", { text: "Reset PIN", cls: "auto-oc-btn-secondary" });
+    resetBtn.onclick = () => this.resetSecretsPin();
+
+    if (!this.plugin.secretStore.hasPin()) {
+      section.createEl("p", {
+        text: "No UI PIN is set yet. Create one before managing secrets.",
+        cls: "setting-item-description",
+      });
+      const btn = section.createEl("button", { text: "Create PIN", cls: "auto-oc-btn-primary" });
+      btn.onclick = () => this.ensureSecretsUnlocked();
+      return;
+    }
+
+    if (!this.plugin.secretStore.isUnlocked()) {
+      section.createEl("p", { text: "Secrets are locked.", cls: "setting-item-description" });
+      const btn = section.createEl("button", { text: "Unlock Secrets", cls: "auto-oc-btn-primary" });
+      btn.onclick = async () => { if (await this.ensureSecretsUnlocked()) this.render(); };
+      return;
+    }
+
+    const installMcpBtn = actions.createEl("button", { text: "Install autooc-mcp in OpenCode", cls: "auto-oc-btn-primary" });
+    installMcpBtn.title = "Write autooc-mcp into the global OpenCode config and create the local MCP server file.";
+    installMcpBtn.onclick = () => this.installAutoOcMcpInOpenCode();
+
+    const copyMcpBtn = actions.createEl("button", { text: "Copy autooc-mcp install JSON", cls: "auto-oc-btn-secondary" });
+    copyMcpBtn.title = "Copy the OpenCode/harness config block that installs the local autooc-mcp server.";
+    copyMcpBtn.onclick = () => this.copyAutoOcMcpInstallJson();
+
+    const secrets = this.plugin.secretStore.list();
+    if (secrets.length === 0) {
+      section.createEl("p", { text: "No secrets yet. Use + New Secret to add one.", cls: "setting-item-description" });
+      return;
+    }
+
+    const tableWrap = section.createDiv("auto-oc-secrets-table-wrap");
+    const table = tableWrap.createEl("table", { cls: "auto-oc-secrets-table" });
+    const thead = table.createEl("thead");
+    const headRow = thead.createEl("tr");
+    ["Name", "Env Var", "Type", "Profile", "Updated", "Actions"].forEach((h) => headRow.createEl("th", { text: h }));
+    const tbody = table.createEl("tbody");
+    for (const secret of secrets) {
+      const row = tbody.createEl("tr");
+      row.createEl("td", { text: secret.name, cls: "auto-oc-secret-name" });
+      row.createEl("td", { text: secret.envName, cls: "auto-oc-secret-env" });
+      const typeTd = row.createEl("td");
+      typeTd.createSpan({ text: secret.type, cls: "auto-oc-secret-chip" });
+      const profileTd = row.createEl("td");
+      profileTd.createSpan({ text: secret.profile || "default", cls: "auto-oc-secret-chip auto-oc-secret-profile" });
+      row.createEl("td", { text: secret.updatedAt ? new Date(secret.updatedAt).toLocaleString() : "" });
+      const actionTd = row.createEl("td", { cls: "auto-oc-secrets-actions-cell" });
+      const actionWrap = actionTd.createDiv("auto-oc-secrets-actions");
+      const reveal = actionWrap.createEl("button", { text: "Reveal" });
+      reveal.onclick = () => this.revealSecret(secret);
+      const copyValue = actionWrap.createEl("button", { text: "Copy value" });
+      copyValue.onclick = () => this.copySecretValue(secret);
+      const copyEnv = actionWrap.createEl("button", { text: "Copy env" });
+      copyEnv.onclick = async () => { await copyTextToClipboard(secret.envName); new Notice("AutoOC: env var copied."); };
+      const edit = actionWrap.createEl("button", { text: "Edit" });
+      edit.onclick = () => this.openSecretEditor(secret);
+      const del = actionWrap.createEl("button", { text: "Delete", cls: "auto-oc-secret-danger" });
+      del.onclick = () => this.deleteSecret(secret);
     }
   }
 
@@ -5402,6 +6018,269 @@ class VisualBuilderModal extends Modal {
     await this.plugin.saveSettings();
     this.plugin.view?.refresh();
     new Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
+  }
+}
+
+class ConfirmModal extends Modal {
+  private resolve?: (value: boolean) => void;
+
+  constructor(app: App, private titleText: string, private bodyText: string) {
+    super(app);
+  }
+
+  openAndWait(): Promise<boolean> {
+    this.open();
+    return new Promise((resolve) => { this.resolve = resolve; });
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setupModalX(this);
+    contentEl.createEl("h3", { text: this.titleText });
+    contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
+    new Setting(contentEl)
+      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => { this.resolve?.(false); this.close(); }))
+      .addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => { this.resolve?.(true); this.close(); }));
+  }
+
+  onClose() {
+    this.resolve?.(false);
+    this.resolve = undefined;
+    this.contentEl.empty();
+  }
+}
+
+class SecretsPinModal extends Modal {
+  private resolve?: (value: boolean) => void;
+  private settled = false;
+  private pin = "";
+  private confirmPin = "";
+
+  constructor(app: App, private store: SecretStore, private mode: "create" | "unlock") {
+    super(app);
+  }
+
+  openAndWait(): Promise<boolean> {
+    this.open();
+    return new Promise((resolve) => { this.resolve = resolve; });
+  }
+
+  private finish(value: boolean): void {
+    this.settled = true;
+    this.resolve?.(value);
+    this.close();
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setupModalX(this);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", { text: this.mode === "create" ? "Create Secrets PIN" : "Unlock Secrets" });
+    contentEl.createEl("p", {
+      text: this.mode === "create"
+        ? "This PIN protects the Secrets UI. It can be reset without deleting encrypted secrets."
+        : "Enter the Secrets UI PIN.",
+      cls: "setting-item-description",
+    });
+
+    new Setting(contentEl)
+      .setName("PIN")
+      .addText((text) => {
+        text.inputEl.type = "password";
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.onChange((v) => (this.pin = v));
+        window.setTimeout(() => text.inputEl.focus(), 50);
+      });
+
+    if (this.mode === "create") {
+      new Setting(contentEl)
+        .setName("Confirm PIN")
+        .addText((text) => {
+          text.inputEl.type = "password";
+          text.inputEl.addClass("auto-oc-modal-input");
+          text.onChange((v) => (this.confirmPin = v));
+        });
+    }
+
+    new Setting(contentEl)
+      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.finish(false)))
+      .addButton((btn) => btn.setButtonText(this.mode === "create" ? "Create PIN" : "Unlock").setCta().onClick(() => {
+        if (this.pin.length < 4) {
+          new Notice("AutoOC: PIN must be at least 4 characters.");
+          return;
+        }
+        if (this.mode === "create") {
+          if (this.pin !== this.confirmPin) {
+            new Notice("AutoOC: PIN confirmation does not match.");
+            return;
+          }
+          this.store.setPin(this.pin);
+          new Notice("AutoOC: Secrets PIN created.");
+          this.finish(true);
+          return;
+        }
+        if (!this.store.verifyPin(this.pin)) {
+          new Notice("AutoOC: incorrect PIN.");
+          return;
+        }
+        this.finish(true);
+      }));
+  }
+
+  onClose() {
+    if (!this.settled) this.resolve?.(false);
+    this.resolve = undefined;
+    this.contentEl.empty();
+  }
+}
+
+class SecretEditModal extends Modal {
+  private draft: { name: string; envName: string; type: SecretType; profile: string; value: string; notes: string };
+
+  constructor(app: App, private plugin: AutoOCPlugin, private secret: SecretRecord | undefined, private onSaved: () => void) {
+    super(app);
+    this.draft = {
+      name: secret?.name || "",
+      envName: secret?.envName || "",
+      type: secret?.type || "token",
+      profile: secret?.profile || "default",
+      value: "",
+      notes: secret?.notes || "",
+    };
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setAutoOCModalSize(this, 720);
+    setupModalX(this);
+    preventBackdropClose(this);
+    contentEl.createEl("h3", { text: this.secret ? "Edit Secret" : "New Secret" });
+
+    new Setting(contentEl)
+      .setName("Name")
+      .setDesc("Human-readable name, for example jira-token or web-login-password.")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setValue(this.draft.name).onChange((v) => {
+          this.draft.name = v;
+          if (!this.secret && !this.draft.envName.trim()) this.draft.envName = normalizeEnvName(v);
+        });
+        window.setTimeout(() => text.inputEl.focus(), 50);
+      });
+
+    new Setting(contentEl)
+      .setName("Environment variable")
+      .setDesc("Use this in opencode MCP config as {env:NAME}.")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setPlaceholder("AUTOOC_JIRA_TOKEN").setValue(this.draft.envName).onChange((v) => (this.draft.envName = v));
+      });
+
+    new Setting(contentEl)
+      .setName("Type")
+      .addDropdown((dd) => {
+        for (const type of SECRET_TYPES) dd.addOption(type, type);
+        dd.setValue(this.draft.type);
+        dd.onChange((v) => (this.draft.type = v as SecretType));
+      });
+
+    new Setting(contentEl)
+      .setName("Profile")
+      .setDesc("default is always injected. Other profiles are reserved for future per-task selection.")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setValue(this.draft.profile).onChange((v) => (this.draft.profile = v || "default"));
+      });
+
+    new Setting(contentEl)
+      .setName(this.secret ? "New value" : "Value")
+      .setDesc(this.secret
+        ? "Paste the new password/token as plain text. AutoOC encrypts it when you save. Leave empty to keep the current value."
+        : "Paste the password/token as plain text. AutoOC encrypts it when you save; the table never shows it."
+      )
+      .addTextArea((ta) => {
+        ta.inputEl.addClass("auto-oc-modal-textarea");
+        ta.inputEl.rows = 4;
+        ta.inputEl.spellcheck = false;
+        ta.setValue(this.draft.value).onChange((v) => (this.draft.value = v));
+      });
+
+    new Setting(contentEl)
+      .setName("Notes")
+      .addText((text) => {
+        text.inputEl.addClass("auto-oc-modal-input");
+        text.setValue(this.draft.notes).onChange((v) => (this.draft.notes = v));
+      });
+
+    new Setting(contentEl)
+      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.close()))
+      .addButton((btn) => btn.setButtonText("Save Secret").setCta().onClick(() => {
+        if (!this.draft.name.trim()) {
+          new Notice("AutoOC: secret name is required.");
+          return;
+        }
+        if (!this.secret && !this.draft.value) {
+          new Notice("AutoOC: secret value is required.");
+          return;
+        }
+        try {
+          this.plugin.secretStore.upsert({
+            id: this.secret?.id,
+            name: this.draft.name,
+            envName: this.draft.envName || this.draft.name,
+            type: this.draft.type,
+            profile: this.draft.profile || "default",
+            value: this.draft.value || undefined,
+            notes: this.draft.notes,
+          });
+          new Notice("AutoOC: secret saved.");
+          this.onSaved();
+          this.close();
+        } catch (e) {
+          new Notice(`AutoOC: could not save secret — ${String(e)}`);
+        }
+      }));
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class SecretRevealModal extends Modal {
+  constructor(app: App, private secret: SecretRecord, private value: string) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.addClass("auto-oc-modal");
+    setupModalX(this);
+    contentEl.createEl("h3", { text: `Secret: ${this.secret.name}` });
+    contentEl.createEl("p", { text: this.secret.envName, cls: "setting-item-description" });
+    const textarea = contentEl.createEl("textarea", { cls: "auto-oc-modal-textarea" });
+    textarea.value = this.value;
+    textarea.readOnly = true;
+    textarea.rows = 4;
+    textarea.style.width = "100%";
+    new Setting(contentEl)
+      .addButton((btn) => btn.setButtonText("Copy value").onClick(async () => {
+        await copyTextToClipboard(this.value);
+        new Notice("AutoOC: secret copied.");
+      }))
+      .addButton((btn) => btn.setButtonText("Close").onClick(() => this.close()));
+  }
+
+  onClose() {
+    this.value = "";
+    this.contentEl.empty();
   }
 }
 
@@ -8123,8 +9002,8 @@ class OpenCodeCliModal extends Modal {
   private launch(cwd: string) {
     try {
       const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      openOpencodeCli(bin, cwd);
-      new Notice(`AutoCO: opened OpenCode CLI in ${cwd}`);
+      openOpencodeCli(bin, cwd, this.plugin.getSecretsEnv());
+      new Notice(`AutoOC: opened OpenCode CLI in ${cwd}`);
       this.close();
     } catch (e) {
       new Notice(`AutoOC: could not open OpenCode CLI: ${String(e)}`);

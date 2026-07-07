@@ -1238,6 +1238,155 @@
   border-bottom-color: var(--interactive-accent);
 }
 
+/* ── Secrets Vault ──────────────────────────────────────────────────────────── */
+
+.auto-oc-secrets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.auto-oc-secrets-section h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.auto-oc-secrets-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 10px;
+  background: var(--background-secondary);
+}
+
+.auto-oc-secrets-toolbar button {
+  white-space: nowrap;
+}
+
+.auto-oc-secrets-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 12px;
+  background: var(--background-primary);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.03);
+}
+
+.auto-oc-secrets-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.82rem;
+}
+
+.auto-oc-secrets-table th,
+.auto-oc-secrets-table td {
+  padding: 10px 12px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.auto-oc-secrets-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  text-align: left;
+  color: var(--text-muted);
+  background: var(--background-secondary);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.auto-oc-secrets-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.auto-oc-secrets-table tbody tr:hover {
+  background: var(--background-modifier-hover);
+}
+
+.auto-oc-secret-name {
+  font-weight: 650;
+  color: var(--text-normal);
+  max-width: 170px;
+  overflow-wrap: anywhere;
+}
+
+.auto-oc-secret-env {
+  font-family: var(--font-monospace);
+  font-size: 0.76rem;
+  color: var(--text-accent);
+  white-space: nowrap;
+}
+
+.auto-oc-secret-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 140px;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--interactive-accent) 28%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--interactive-accent) 10%, transparent);
+  color: var(--text-normal);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.auto-oc-secret-profile {
+  border-color: var(--background-modifier-border);
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.auto-oc-secrets-actions-cell {
+  min-width: 230px;
+}
+
+.auto-oc-secrets-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-start;
+}
+
+.auto-oc-secrets-actions button {
+  padding: 3px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 7px;
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.auto-oc-secrets-actions button:hover {
+  border-color: var(--interactive-accent);
+  background: var(--background-modifier-hover);
+}
+
+.auto-oc-secrets-actions .auto-oc-secret-danger {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+@media (max-width: 520px) {
+  .auto-oc-secrets-table {
+    min-width: 650px;
+  }
+
+  .auto-oc-secrets-toolbar {
+    padding: 6px;
+  }
+}
+
 /* ── Version / update indicator ─────────────────────────────────────────────── */
 
 .auto-oc-title-row {
