@@ -4335,14 +4335,14 @@ DONE:" + $exitCode + "
         sandbox.terminal = {
           run: (command, options = {}) => execSync(String(command), {
             cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
-            timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 12e4),
+            timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 6e5),
             encoding: "utf8"
           })
         };
       }
       const context = vm.createContext(sandbox);
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 1e4 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 9e5 });
       const out = String(result == null ? "" : result);
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
@@ -5007,7 +5007,7 @@ Reply ONLY with YES or NO.`;
       sandbox.terminal = {
         run: (command, options = {}) => execSync(String(command), {
           cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
-          timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 12e4),
+          timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 6e5),
           encoding: "utf8"
         })
       };
@@ -5016,7 +5016,7 @@ Reply ONLY with YES or NO.`;
       const context = vm.createContext(sandbox);
       const code = step.code || "";
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 1e4 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 9e5 });
       const out = String(result == null ? "" : result);
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new import_obsidian.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
