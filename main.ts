@@ -48,16 +48,23 @@ function commandPreviewArg(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function shSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 function buildPowerShellEnvLines(env: Record<string, string>): string[] {
   return Object.entries(env)
     .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     .map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
 
-function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}): void {
+function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}, args: string[] = []): void {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
-    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const runCommand = args.length > 0
+      ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList`
+      : `& ${psSingleQuoted(bin)}`;
+    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
     const launcher = spawn(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
@@ -69,12 +76,12 @@ function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> =
 
   if (process.platform === "darwin") {
     const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
-    const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
+    const escapedCmd = [bin, ...args].map(shSingleQuoted).join(" ").replace(/(["\\$`])/g, "\\$1");
     const envPrefix = Object.entries(env)
       .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
       .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
       .join(" ");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix ? `${envPrefix} ` : ""}${escapedBin}"`;
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix ? `${envPrefix} ` : ""}${escapedCmd}"`;
     const launcher = spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher.unref();
     return;
@@ -84,7 +91,7 @@ function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> =
     .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
     .join(" ");
-  const command = `cd ${JSON.stringify(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${JSON.stringify(bin)}`;
+  const command = `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
   const launcher = spawn("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
   launcher.unref();
 }
@@ -565,6 +572,7 @@ interface ScheduledTask {
   codeAllowVault?: boolean;
   codeAllowFiles?: boolean;
   codeAllowTerminal?: boolean;
+  interactiveTerminal?: boolean;
 }
 
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
@@ -599,6 +607,7 @@ interface AutoOCSettings {
   workingDirectory: string;
   cmdTemplate: string;
   taskTimeoutSeconds: number;
+  defaultInteractiveTerminal: boolean;
   logsEnabled: boolean;
   maxLogsPerTask: number;
   logRetentionDays: number;
@@ -670,6 +679,7 @@ interface ExportTask {
   codeAllowVault?: boolean;
   codeAllowFiles?: boolean;
   codeAllowTerminal?: boolean;
+  interactiveTerminal?: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;
   scheduleDate: string;
@@ -1039,6 +1049,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 7200,  // 2 h default
+  defaultInteractiveTerminal: false,
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
@@ -1222,6 +1233,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     codeAllowVault: task.codeAllowVault,
     codeAllowFiles: task.codeAllowFiles,
     codeAllowTerminal: task.codeAllowTerminal,
+    interactiveTerminal: task.interactiveTerminal,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -2492,6 +2504,40 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const secretEnv = this.getSecretsEnv();
+
+    if (effectiveTask.interactiveTerminal) {
+      const current = this.settings.tasks[idx];
+      current.status = "running";
+      current.lastRun = new Date().toISOString();
+      current.output = "[opening interactive OpenCode CLI...]";
+      this.view?.resetDashboardTaskShift(task.id);
+      await this.saveSettings();
+
+      try {
+        let prompt = effectiveTask.prompt;
+        if (effectiveTask.useRalphLoop) {
+          prompt = `/ralph-loop ${prompt}`;
+        }
+        const bin = resolveOpencodeBin(this.settings.opencodePath);
+        const args = ["-m", effectiveTask.model, "--agent", this.getEffectiveAgent(effectiveTask.agent), "--prompt", prompt];
+        openOpencodeCli(bin, taskCwd, secretEnv, args);
+        current.status = "completed";
+        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
+        await this.saveSettings();
+        new Notice(`AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, 0);
+      } catch (e) {
+        current.status = "failed";
+        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
+        this.view?.startGradualSink(task.id);
+        await this.saveSettings();
+        new Notice(`AutoOC: could not open CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, -1);
+      }
+      return;
+    }
 
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = new Date().toISOString();
@@ -2531,9 +2577,7 @@ export default class AutoOCPlugin extends Plugin {
 
     // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
     // Resolve working directory: Task override -> Global Setting -> Vault Path
-    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || ((this.app.vault.adapter as any).basePath || ".");
     const safeCwd = taskCwd.replace(/'/g, "''");
-    const secretEnv = this.getSecretsEnv();
 
     // Git branch logic
     let gitCmds = "";
@@ -3063,6 +3107,7 @@ export default class AutoOCPlugin extends Plugin {
         createdAt: new Date().toISOString(),
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
+        interactiveTerminal: importedTaskKind === "opencode" ? (et.interactiveTerminal ?? this.settings.defaultInteractiveTerminal) : undefined,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -5199,6 +5244,7 @@ class AutoOCView extends ItemView {
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else {
+      if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
       meta.createEl("span", { text: `🤖 ${modelLabel}` });
       meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -6019,6 +6065,7 @@ class VisualBuilderModal extends Modal {
         workingDirectory: t.workingDirectory !== undefined ? t.workingDirectory : (existing?.workingDirectory ?? ""),
         branch: t.branch !== undefined ? (t.branch || "") : (existing?.branch || ""),
         createBranch: t.createBranch !== undefined ? !!t.createBranch : (existing?.createBranch ?? false),
+        interactiveTerminal: t.interactiveTerminal !== undefined ? !!t.interactiveTerminal : existing?.interactiveTerminal,
         code: t.code !== undefined ? t.code : existing?.code,
         codeLang: t.codeLang !== undefined ? t.codeLang : existing?.codeLang,
         codeInputVar: t.codeInputVar !== undefined ? t.codeInputVar : existing?.codeInputVar,
@@ -6376,6 +6423,7 @@ class CreateTaskModal extends Modal {
             model: plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
             useRalphLoop: false,
+            interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
             scheduleDate: todayString(),
@@ -6396,6 +6444,7 @@ class CreateTaskModal extends Modal {
     // Header with X button
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = (this.draft.taskKind || "opencode") as TaskKind;
+    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task",
     });
@@ -6407,9 +6456,11 @@ class CreateTaskModal extends Modal {
         .addDropdown((dd) => {
           dd.addOption("opencode", "OpenCode task");
           dd.addOption("code", "Code task");
-          dd.setValue(taskKind);
+          dd.addOption("cli", "CLI task");
+          dd.setValue(taskType);
           dd.onChange((v) => {
-            this.draft.taskKind = v as TaskKind;
+            this.draft.taskKind = v === "code" ? "code" : "opencode";
+            this.draft.interactiveTerminal = v === "cli";
             if (v === "code" && !this.draft.code) {
               this.draft.code = "// Set output to pass data forward\noutput = input;";
             }
@@ -6419,7 +6470,7 @@ class CreateTaskModal extends Modal {
     } else {
       new Setting(contentEl)
         .setName("Task type")
-        .setDesc(taskKind === "code" ? "Code task" : "OpenCode task");
+        .setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
     }
 
     new Setting(contentEl)
@@ -6616,6 +6667,14 @@ class CreateTaskModal extends Modal {
             }
           })
         );
+
+      new Setting(contentEl)
+        .setName("CLI task")
+        .setDesc("Open OpenCode in an interactive terminal and mark this task completed once the terminal opens.")
+        .addToggle((tog) => {
+          tog.setValue(!!this.draft.interactiveTerminal);
+          tog.onChange((v) => (this.draft.interactiveTerminal = v));
+        });
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new Setting(contentEl)
@@ -6838,6 +6897,7 @@ class CreateTaskModal extends Modal {
               workingDirectory: this.draft.workingDirectory,
               branch: savingTaskKind === "opencode" ? this.draft.branch : "",
               createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
+              interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : undefined,
               code: savingTaskKind === "code" ? this.draft.code : undefined,
               codeLang: savingTaskKind === "code" ? "javascript" : undefined,
               codeInputVar: savingTaskKind === "code" ? (this.draft.codeInputVar || "input") : undefined,
@@ -9260,6 +9320,18 @@ class AutoOCSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.workingDirectory)
           .onChange(async (v) => {
             this.plugin.settings.workingDirectory = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Default CLI task mode")
+      .setDesc("New OpenCode tasks open an interactive terminal by default.")
+      .addToggle((tog) =>
+        tog
+          .setValue(!!this.plugin.settings.defaultInteractiveTerminal)
+          .onChange(async (v) => {
+            this.plugin.settings.defaultInteractiveTerminal = v;
             await this.plugin.saveSettings();
           })
       );

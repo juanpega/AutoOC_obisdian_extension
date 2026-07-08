@@ -2053,13 +2053,17 @@ function psSingleQuoted(value) {
 function commandPreviewArg(value) {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
+function shSingleQuoted(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 function buildPowerShellEnvLines(env) {
   return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
-function openOpencodeCli(bin, cwd, env = {}) {
+function openOpencodeCli(bin, cwd, env = {}, args = []) {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
-    const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const runCommand = args.length > 0 ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList` : `& ${psSingleQuoted(bin)}`;
+    const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
     const launcher2 = (0, import_child_process.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
@@ -2070,15 +2074,15 @@ function openOpencodeCli(bin, cwd, env = {}) {
   }
   if (process.platform === "darwin") {
     const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
-    const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
+    const escapedCmd = [bin, ...args].map(shSingleQuoted).join(" ").replace(/(["\\$`])/g, "\\$1");
     const envPrefix2 = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix2 ? `${envPrefix2} ` : ""}${escapedBin}"`;
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix2 ? `${envPrefix2} ` : ""}${escapedCmd}"`;
     const launcher2 = (0, import_child_process.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher2.unref();
     return;
   }
   const envPrefix = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
-  const command = `cd ${JSON.stringify(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${JSON.stringify(bin)}`;
+  const command = `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
   const launcher = (0, import_child_process.spawn)("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
   launcher.unref();
 }
@@ -2721,6 +2725,7 @@ var DEFAULT_SETTINGS = {
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 7200,
   // 2 h default
+  defaultInteractiveTerminal: false,
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
@@ -2869,6 +2874,7 @@ function toExportTask(task, exportId) {
     codeAllowVault: task.codeAllowVault,
     codeAllowFiles: task.codeAllowFiles,
     codeAllowTerminal: task.codeAllowTerminal,
+    interactiveTerminal: task.interactiveTerminal,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -4068,7 +4074,7 @@ DONE:" + $exitCode + "
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   async runTask(task, onComplete, overrides = {}) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
@@ -4095,10 +4101,42 @@ DONE:" + $exitCode + "
       return;
     }
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const secretEnv = this.getSecretsEnv();
+    if (effectiveTask.interactiveTerminal) {
+      const current = this.settings.tasks[idx];
+      current.status = "running";
+      current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      current.output = "[opening interactive OpenCode CLI...]";
+      (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
+      await this.saveSettings();
+      try {
+        let prompt2 = effectiveTask.prompt;
+        if (effectiveTask.useRalphLoop) {
+          prompt2 = `/ralph-loop ${prompt2}`;
+        }
+        const bin2 = resolveOpencodeBin(this.settings.opencodePath);
+        const args2 = ["-m", effectiveTask.model, "--agent", this.getEffectiveAgent(effectiveTask.agent), "--prompt", prompt2];
+        openOpencodeCli(bin2, taskCwd, secretEnv, args2);
+        current.status = "completed";
+        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, 0);
+      } catch (e) {
+        current.status = "failed";
+        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
+        (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: could not open CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, -1);
+      }
+      return;
+    }
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
+    (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -4137,9 +4175,7 @@ DONE:" + $exitCode + "
     } catch (e) {
     }
     fs2.writeFileSync(promptFile, preparedPrompt, "utf8");
-    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || (this.app.vault.adapter.basePath || ".");
     const safeCwd = taskCwd.replace(/'/g, "''");
-    const secretEnv = this.getSecretsEnv();
     let gitCmds = "";
     if (effectiveTask.branch) {
       const safeBranch = effectiveTask.branch.replace(/'/g, "''");
@@ -4171,7 +4207,7 @@ DONE:" + $exitCode + "
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
-    const timeoutSeconds = (_d = this.settings.taskTimeoutSeconds) != null ? _d : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -4335,14 +4371,14 @@ DONE:" + $exitCode + "
         sandbox.terminal = {
           run: (command, options = {}) => execSync(String(command), {
             cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
-            timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 6e5),
+            timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 12e4),
             encoding: "utf8"
           })
         };
       }
       const context = vm.createContext(sandbox);
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 9e5 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 1e4 });
       const out = String(result == null ? "" : result);
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
@@ -4590,7 +4626,7 @@ DONE:" + $exitCode + "
     return this.importFromData(data);
   }
   async importFromData(data) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u;
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
@@ -4624,6 +4660,7 @@ DONE:" + $exitCode + "
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
+        interactiveTerminal: importedTaskKind === "opencode" ? (_j = et.interactiveTerminal) != null ? _j : this.settings.defaultInteractiveTerminal : void 0,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -4702,21 +4739,21 @@ DONE:" + $exitCode + "
       const workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
-        area: (_j = ew.area) != null ? _j : "",
-        description: (_k = ew.description) != null ? _k : "",
+        area: (_k = ew.area) != null ? _k : "",
+        description: (_l = ew.description) != null ? _l : "",
         steps,
         status: "pending",
         currentStep: -1,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        handoffBranch: (_l = ew.handoffBranch) != null ? _l : false,
-        handoffOutput: (_m = ew.handoffOutput) != null ? _m : true,
-        scheduleType: (_n = ew.scheduleType) != null ? _n : "manual",
-        scheduleTime: (_o = ew.scheduleTime) != null ? _o : nowTimeString(),
-        scheduleDate: (_p = ew.scheduleDate) != null ? _p : "",
-        scheduleDays: (_q = ew.scheduleDays) != null ? _q : [],
-        scheduleMonthDays: (_r = ew.scheduleMonthDays) != null ? _r : [],
-        scheduleIntervalValue: (_s = ew.scheduleIntervalValue) != null ? _s : 10,
-        scheduleIntervalUnit: (_t = ew.scheduleIntervalUnit) != null ? _t : "minutes"
+        handoffBranch: (_m = ew.handoffBranch) != null ? _m : false,
+        handoffOutput: (_n = ew.handoffOutput) != null ? _n : true,
+        scheduleType: (_o = ew.scheduleType) != null ? _o : "manual",
+        scheduleTime: (_p = ew.scheduleTime) != null ? _p : nowTimeString(),
+        scheduleDate: (_q = ew.scheduleDate) != null ? _q : "",
+        scheduleDays: (_r = ew.scheduleDays) != null ? _r : [],
+        scheduleMonthDays: (_s = ew.scheduleMonthDays) != null ? _s : [],
+        scheduleIntervalValue: (_t = ew.scheduleIntervalValue) != null ? _t : 10,
+        scheduleIntervalUnit: (_u = ew.scheduleIntervalUnit) != null ? _u : "minutes"
       };
       this.settings.workflows.push(workflow);
       workflowsImported++;
@@ -5007,7 +5044,7 @@ Reply ONLY with YES or NO.`;
       sandbox.terminal = {
         run: (command, options = {}) => execSync(String(command), {
           cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
-          timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 6e5),
+          timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 12e4),
           encoding: "utf8"
         })
       };
@@ -5016,7 +5053,7 @@ Reply ONLY with YES or NO.`;
       const context = vm.createContext(sandbox);
       const code = step.code || "";
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 9e5 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 1e4 });
       const out = String(result == null ? "" : result);
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new import_obsidian.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
@@ -6600,6 +6637,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else {
+      if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
       meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
       meta.createEl("span", { text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -7310,6 +7348,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_c = existing == null ? void 0 : existing.workingDirectory) != null ? _c : "",
         branch: t.branch !== void 0 ? t.branch || "" : (existing == null ? void 0 : existing.branch) || "",
         createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_d = existing == null ? void 0 : existing.createBranch) != null ? _d : false,
+        interactiveTerminal: t.interactiveTerminal !== void 0 ? !!t.interactiveTerminal : existing == null ? void 0 : existing.interactiveTerminal,
         code: t.code !== void 0 ? t.code : existing == null ? void 0 : existing.code,
         codeLang: t.codeLang !== void 0 ? t.codeLang : existing == null ? void 0 : existing.codeLang,
         codeInputVar: t.codeInputVar !== void 0 ? t.codeInputVar : existing == null ? void 0 : existing.codeInputVar,
@@ -7620,6 +7659,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       model: plugin.getEffectiveDefaultModel(),
       agent: plugin.getEffectiveAgent(),
       useRalphLoop: false,
+      interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
       scheduleDate: todayString(),
@@ -7638,6 +7678,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     preventBackdropClose(this);
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = this.draft.taskKind || "opencode";
+    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
@@ -7645,9 +7686,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
         dd.addOption("opencode", "OpenCode task");
         dd.addOption("code", "Code task");
-        dd.setValue(taskKind);
+        dd.addOption("cli", "CLI task");
+        dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v;
+          this.draft.taskKind = v === "code" ? "code" : "opencode";
+          this.draft.interactiveTerminal = v === "cli";
           if (v === "code" && !this.draft.code) {
             this.draft.code = "// Set output to pass data forward\noutput = input;";
           }
@@ -7655,7 +7698,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         });
       });
     } else {
-      new import_obsidian.Setting(contentEl).setName("Task type").setDesc(taskKind === "code" ? "Code task" : "OpenCode task");
+      new import_obsidian.Setting(contentEl).setName("Task type").setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
     }
     new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
@@ -7795,6 +7838,10 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           }
         })
       );
+      new import_obsidian.Setting(contentEl).setName("CLI task").setDesc("Open OpenCode in an interactive terminal and mark this task completed once the terminal opens.").addToggle((tog) => {
+        tog.setValue(!!this.draft.interactiveTerminal);
+        tog.onChange((v) => this.draft.interactiveTerminal = v);
+      });
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new import_obsidian.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
@@ -7964,6 +8011,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             workingDirectory: this.draft.workingDirectory,
             branch: savingTaskKind === "opencode" ? this.draft.branch : "",
             createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
+            interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : void 0,
             code: savingTaskKind === "code" ? this.draft.code : void 0,
             codeLang: savingTaskKind === "code" ? "javascript" : void 0,
             codeInputVar: savingTaskKind === "code" ? this.draft.codeInputVar || "input" : void 0,
@@ -10014,6 +10062,12 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
         this.plugin.settings.workingDirectory = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
+      (tog) => tog.setValue(!!this.plugin.settings.defaultInteractiveTerminal).onChange(async (v) => {
+        this.plugin.settings.defaultInteractiveTerminal = v;
         await this.plugin.saveSettings();
       })
     );
