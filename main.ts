@@ -2763,7 +2763,7 @@ export default class AutoOCPlugin extends Plugin {
         sandbox.terminal = {
           run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
             cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 120_000),
+            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
             encoding: "utf8",
           }),
         };
@@ -2771,7 +2771,7 @@ export default class AutoOCPlugin extends Plugin {
 
       const context = vm.createContext(sandbox);
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 10_000 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
       const out = String(result == null ? "" : result);
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
@@ -3519,7 +3519,7 @@ export default class AutoOCPlugin extends Plugin {
       sandbox.terminal = {
         run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
           cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-          timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 120_000),
+          timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
           encoding: "utf8",
         }),
       };
@@ -3531,7 +3531,7 @@ export default class AutoOCPlugin extends Plugin {
       // We prepend a small preamble so the user can name their input/output
       // variables freely while we still inject the standard ones.
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 10_000 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
       const out = String(result == null ? "" : result);
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
