@@ -172,7 +172,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.2",
+    "pluginVersion": "1.5.5",
     "name": "Package name",
     "description": "Short description"
   },
@@ -195,6 +195,7 @@ Task fields:
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: complete direct instruction for OpenCode. For code tasks, mirror the code here for compatibility.
+- interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -375,7 +376,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.2",
+    "pluginVersion": "1.5.5",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -394,6 +395,7 @@ Minimal valid workflow example:
       "scheduleIntervalValue": 10,
       "scheduleIntervalUnit": "minutes",
       "useRalphLoop": false,
+      "interactiveTerminal": false,
       "agent": "build",
       "branch": "",
       "createBranch": false
@@ -1887,6 +1889,8 @@ export default class AutoOCPlugin extends Plugin {
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
   private visualBuilders = new Set<VisualBuilderModal>();
+  private taskUpdatedCallbacks = new Set<(task: ScheduledTask) => void>();
+  private workflowUpdatedCallbacks = new Set<(workflow: Workflow) => void>();
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
   private dueCheckInProgress = false;
@@ -2069,6 +2073,26 @@ export default class AutoOCPlugin extends Plugin {
 
   syncVisualBuilders(): void {
     for (const modal of this.visualBuilders) modal.sendState();
+  }
+
+  onTaskUpdated(callback: (task: ScheduledTask) => void): () => void {
+    this.taskUpdatedCallbacks.add(callback);
+    return () => this.taskUpdatedCallbacks.delete(callback);
+  }
+
+  onWorkflowUpdated(callback: (workflow: Workflow) => void): () => void {
+    this.workflowUpdatedCallbacks.add(callback);
+    return () => this.workflowUpdatedCallbacks.delete(callback);
+  }
+
+  emitTaskUpdated(task: ScheduledTask): void {
+    for (const callback of this.taskUpdatedCallbacks) callback(task);
+    this.syncVisualBuilders();
+  }
+
+  emitWorkflowUpdated(workflow: Workflow): void {
+    for (const callback of this.workflowUpdatedCallbacks) callback(workflow);
+    this.syncVisualBuilders();
   }
 
   async loadSettings() {
@@ -3713,6 +3737,8 @@ class AutoOCView extends ItemView {
   // without this, shrinking the canvas leaves stale px sizes that overflow
   // their now-smaller container.
   private dashboardResizeObserver: ResizeObserver | null = null;
+  private unsubscribeTaskUpdated?: () => void;
+  private unsubscribeWorkflowUpdated?: () => void;
   // Set right before a resize-triggered render so renderDashboard's settle+fit
   // pass runs even though the task/workflow structure didn't change (normally
   // that pass is skipped on unchanged layouts to avoid redoing work every
@@ -3746,10 +3772,16 @@ class AutoOCView extends ItemView {
   getIcon() { return "workflow"; }
 
   async onOpen() {
+    this.unsubscribeTaskUpdated = this.plugin.onTaskUpdated((task) => this.updateTaskNameDom(task));
+    this.unsubscribeWorkflowUpdated = this.plugin.onWorkflowUpdated((workflow) => this.updateWorkflowNameDom(workflow));
     this.loadDashboardPositions();
     this.render();
   }
   async onClose() {
+    this.unsubscribeTaskUpdated?.();
+    this.unsubscribeWorkflowUpdated?.();
+    this.unsubscribeTaskUpdated = undefined;
+    this.unsubscribeWorkflowUpdated = undefined;
     await this.persistDashboardPositions();
     this.dashboardResizeObserver?.disconnect();
     this.dashboardResizeObserver = null;
@@ -3758,6 +3790,32 @@ class AutoOCView extends ItemView {
     this.dashboardTaskDriftDirection.clear();
   }
   refresh() { this.render(); }
+
+  private updateTaskNameDom(task: ScheduledTask) {
+    const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
+      return count + workflow.steps.filter((step) => step.taskId === task.id).length;
+    }, 0);
+    this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-task-id="${task.id}"]`).forEach((el) => {
+      el.querySelector<HTMLElement>(".auto-oc-task-name")?.setText(task.name);
+      const label = el.querySelector<HTMLElement>(".auto-oc-dashboard-hover-label");
+      if (label) label.setText(task.name);
+      if (el.classList.contains("auto-oc-dashboard-task-bubble")) {
+        el.setAttr("aria-label", `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
+      }
+    });
+  }
+
+  private updateWorkflowNameDom(workflow: Workflow) {
+    const area = workflow.area?.trim() || "No area";
+    this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
+      el.querySelector<HTMLElement>(".auto-oc-task-name")?.setText(workflow.name);
+      const label = el.querySelector<HTMLElement>(".auto-oc-dashboard-hover-label");
+      if (label) label.setText(workflow.name);
+      if (el.classList.contains("auto-oc-dashboard-workflow-bubble")) {
+        el.setAttr("aria-label", `Workflow: ${workflow.name}. Area: ${area}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+      }
+    });
+  }
 
   resetDashboardTaskShift(taskId: string) {
     const existing = this.sinkIntervals.get(taskId);
@@ -4961,6 +5019,7 @@ class AutoOCView extends ItemView {
       // All task bubbles render at the same size regardless of usage/failure
       // history — only their position drifts based on activity, not their size.
       const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      taskBubble.setAttr("data-auto-oc-task-id", task.id);
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
       addBubbleVisual(taskBubble);
@@ -5035,6 +5094,7 @@ class AutoOCView extends ItemView {
         const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
         const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
         const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+        workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
         addBubbleVisual(workflowBubble);
         if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
         if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
@@ -5077,6 +5137,7 @@ class AutoOCView extends ItemView {
       const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
       if (!workflowLayout) return;
       const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+      workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
       addBubbleVisual(workflowBubble);
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
@@ -6031,6 +6092,8 @@ class VisualBuilderModal extends Modal {
     }
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
+    const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
+    const oldWorkflowById = new Map(oldWorkflows.map((workflow) => [workflow.id, workflow]));
     const newTasks: ScheduledTask[] = state.tasks.map((t: any) => {
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = (existing ? t.id : t.id || generateId());
@@ -6132,10 +6195,14 @@ class VisualBuilderModal extends Modal {
         scheduleIntervalUnit: w.scheduleIntervalUnit || existing?.scheduleIntervalUnit || "minutes",
       };
     });
+    const renamedTasks = newTasks.filter((task) => oldTaskById.get(task.id)?.name !== undefined && oldTaskById.get(task.id)?.name !== task.name);
+    const renamedWorkflows = newWorkflows.filter((workflow) => oldWorkflowById.get(workflow.id)?.name !== undefined && oldWorkflowById.get(workflow.id)?.name !== workflow.name);
     this.plugin.settings.tasks = newTasks;
     this.plugin.settings.workflows = newWorkflows;
-    await this.plugin.saveSettings();
+    await this.plugin.saveSettings(false);
     this.plugin.view?.refresh();
+    renamedTasks.forEach((task) => this.plugin.emitTaskUpdated(task));
+    renamedWorkflows.forEach((workflow) => this.plugin.emitWorkflowUpdated(workflow));
     new Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
   }
 }
@@ -6668,13 +6735,6 @@ class CreateTaskModal extends Modal {
           })
         );
 
-      new Setting(contentEl)
-        .setName("CLI task")
-        .setDesc("Open OpenCode in an interactive terminal and mark this task completed once the terminal opens.")
-        .addToggle((tog) => {
-          tog.setValue(!!this.draft.interactiveTerminal);
-          tog.onChange((v) => (this.draft.interactiveTerminal = v));
-        });
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new Setting(contentEl)
@@ -6857,12 +6917,15 @@ class CreateTaskModal extends Modal {
             return;
           }
 
+          let updatedTask: ScheduledTask | null = null;
+          let areaChanged = false;
           if (this.editTask) {
             const idx = this.plugin.settings.tasks.findIndex(
               (t) => t.id === this.editTask!.id
             );
             if (idx !== -1) {
               const existing = this.plugin.settings.tasks[idx];
+              const previousArea = existing.area?.trim() || "";
               this.plugin.settings.tasks[idx] = {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
@@ -6872,6 +6935,8 @@ class CreateTaskModal extends Modal {
                 lastRun: existing.lastRun,
                 output: existing.output,
               };
+              updatedTask = this.plugin.settings.tasks[idx];
+              areaChanged = previousArea !== (updatedTask.area?.trim() || "");
             }
           } else {
             const task: ScheduledTask = {
@@ -6910,7 +6975,11 @@ class CreateTaskModal extends Modal {
 
           }
 
-          await this.plugin.saveSettings();
+          await this.plugin.saveSettings(!this.editTask);
+          if (updatedTask) {
+            if (areaChanged) this.plugin.view?.render();
+            this.plugin.emitTaskUpdated(updatedTask);
+          }
           new Notice(`Task "${this.draft.name}" saved.`);
           this.close();
         })
@@ -7388,12 +7457,15 @@ class CreateWorkflowModal extends Modal {
             }];
           }
 
+          let updatedWorkflow: Workflow | null = null;
+          let areaChanged = false;
           if (this.editWorkflow) {
             const idx = this.plugin.settings.workflows.findIndex(
               (w) => w.id === this.editWorkflow!.id
             );
             if (idx !== -1) {
               const existing = this.plugin.settings.workflows[idx];
+              const previousArea = existing.area?.trim() || "";
               this.plugin.settings.workflows[idx] = {
                 ...this.editWorkflow,
                 name: this.draft.name!,
@@ -7413,6 +7485,8 @@ class CreateWorkflowModal extends Modal {
                 scheduleIntervalValue: this.draft.scheduleIntervalValue ?? 10,
                 scheduleIntervalUnit: this.draft.scheduleIntervalUnit ?? "minutes",
               };
+              updatedWorkflow = this.plugin.settings.workflows[idx];
+              areaChanged = previousArea !== (updatedWorkflow.area?.trim() || "");
             }
           } else {
             const workflow: Workflow = {
@@ -7437,7 +7511,11 @@ class CreateWorkflowModal extends Modal {
             this.plugin.settings.workflows.push(workflow);
           }
 
-          await this.plugin.saveSettings();
+          await this.plugin.saveSettings(!this.editWorkflow);
+          if (updatedWorkflow) {
+            if (areaChanged) this.plugin.view?.render();
+            this.plugin.emitWorkflowUpdated(updatedWorkflow);
+          }
           new Notice(`Workflow "${this.draft.name}" saved.`);
           this.close();
         })
