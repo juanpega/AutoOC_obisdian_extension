@@ -48,16 +48,23 @@ function commandPreviewArg(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
 
+function shSingleQuoted(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
 function buildPowerShellEnvLines(env: Record<string, string>): string[] {
   return Object.entries(env)
     .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     .map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
 
-function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}): void {
+function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}, args: string[] = []): void {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
-    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const runCommand = args.length > 0
+      ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList`
+      : `& ${psSingleQuoted(bin)}`;
+    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
     const launcher = spawn(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
@@ -69,12 +76,12 @@ function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> =
 
   if (process.platform === "darwin") {
     const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
-    const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
+    const escapedCmd = [bin, ...args].map(shSingleQuoted).join(" ").replace(/(["\\$`])/g, "\\$1");
     const envPrefix = Object.entries(env)
       .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
       .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
       .join(" ");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix ? `${envPrefix} ` : ""}${escapedBin}"`;
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix ? `${envPrefix} ` : ""}${escapedCmd}"`;
     const launcher = spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher.unref();
     return;
@@ -84,7 +91,7 @@ function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> =
     .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
     .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
     .join(" ");
-  const command = `cd ${JSON.stringify(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${JSON.stringify(bin)}`;
+  const command = `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
   const launcher = spawn("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
   launcher.unref();
 }
@@ -165,7 +172,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.2",
+    "pluginVersion": "1.5.5",
     "name": "Package name",
     "description": "Short description"
   },
@@ -188,6 +195,7 @@ Task fields:
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: complete direct instruction for OpenCode. For code tasks, mirror the code here for compatibility.
+- interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -368,7 +376,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.2",
+    "pluginVersion": "1.5.5",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -387,6 +395,7 @@ Minimal valid workflow example:
       "scheduleIntervalValue": 10,
       "scheduleIntervalUnit": "minutes",
       "useRalphLoop": false,
+      "interactiveTerminal": false,
       "agent": "build",
       "branch": "",
       "createBranch": false
@@ -565,6 +574,7 @@ interface ScheduledTask {
   codeAllowVault?: boolean;
   codeAllowFiles?: boolean;
   codeAllowTerminal?: boolean;
+  interactiveTerminal?: boolean;
 }
 
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
@@ -599,6 +609,7 @@ interface AutoOCSettings {
   workingDirectory: string;
   cmdTemplate: string;
   taskTimeoutSeconds: number;
+  defaultInteractiveTerminal: boolean;
   logsEnabled: boolean;
   maxLogsPerTask: number;
   logRetentionDays: number;
@@ -670,6 +681,7 @@ interface ExportTask {
   codeAllowVault?: boolean;
   codeAllowFiles?: boolean;
   codeAllowTerminal?: boolean;
+  interactiveTerminal?: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;
   scheduleDate: string;
@@ -1039,6 +1051,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 7200,  // 2 h default
+  defaultInteractiveTerminal: false,
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
@@ -1222,6 +1235,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     codeAllowVault: task.codeAllowVault,
     codeAllowFiles: task.codeAllowFiles,
     codeAllowTerminal: task.codeAllowTerminal,
+    interactiveTerminal: task.interactiveTerminal,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -1875,6 +1889,8 @@ export default class AutoOCPlugin extends Plugin {
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
   private visualBuilders = new Set<VisualBuilderModal>();
+  private taskUpdatedCallbacks = new Set<(task: ScheduledTask) => void>();
+  private workflowUpdatedCallbacks = new Set<(workflow: Workflow) => void>();
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
   private dueCheckInProgress = false;
@@ -2057,6 +2073,26 @@ export default class AutoOCPlugin extends Plugin {
 
   syncVisualBuilders(): void {
     for (const modal of this.visualBuilders) modal.sendState();
+  }
+
+  onTaskUpdated(callback: (task: ScheduledTask) => void): () => void {
+    this.taskUpdatedCallbacks.add(callback);
+    return () => this.taskUpdatedCallbacks.delete(callback);
+  }
+
+  onWorkflowUpdated(callback: (workflow: Workflow) => void): () => void {
+    this.workflowUpdatedCallbacks.add(callback);
+    return () => this.workflowUpdatedCallbacks.delete(callback);
+  }
+
+  emitTaskUpdated(task: ScheduledTask): void {
+    for (const callback of this.taskUpdatedCallbacks) callback(task);
+    this.syncVisualBuilders();
+  }
+
+  emitWorkflowUpdated(workflow: Workflow): void {
+    for (const callback of this.workflowUpdatedCallbacks) callback(workflow);
+    this.syncVisualBuilders();
   }
 
   async loadSettings() {
@@ -2492,6 +2528,40 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const secretEnv = this.getSecretsEnv();
+
+    if (effectiveTask.interactiveTerminal) {
+      const current = this.settings.tasks[idx];
+      current.status = "running";
+      current.lastRun = new Date().toISOString();
+      current.output = "[opening interactive OpenCode CLI...]";
+      this.view?.resetDashboardTaskShift(task.id);
+      await this.saveSettings();
+
+      try {
+        let prompt = effectiveTask.prompt;
+        if (effectiveTask.useRalphLoop) {
+          prompt = `/ralph-loop ${prompt}`;
+        }
+        const bin = resolveOpencodeBin(this.settings.opencodePath);
+        const args = ["-m", effectiveTask.model, "--agent", this.getEffectiveAgent(effectiveTask.agent), "--prompt", prompt];
+        openOpencodeCli(bin, taskCwd, secretEnv, args);
+        current.status = "completed";
+        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
+        await this.saveSettings();
+        new Notice(`AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, 0);
+      } catch (e) {
+        current.status = "failed";
+        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
+        this.view?.startGradualSink(task.id);
+        await this.saveSettings();
+        new Notice(`AutoOC: could not open CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, -1);
+      }
+      return;
+    }
 
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = new Date().toISOString();
@@ -2531,9 +2601,7 @@ export default class AutoOCPlugin extends Plugin {
 
     // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
     // Resolve working directory: Task override -> Global Setting -> Vault Path
-    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || ((this.app.vault.adapter as any).basePath || ".");
     const safeCwd = taskCwd.replace(/'/g, "''");
-    const secretEnv = this.getSecretsEnv();
 
     // Git branch logic
     let gitCmds = "";
@@ -2719,7 +2787,7 @@ export default class AutoOCPlugin extends Plugin {
         sandbox.terminal = {
           run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
             cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 120_000),
+            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
             encoding: "utf8",
           }),
         };
@@ -2727,7 +2795,7 @@ export default class AutoOCPlugin extends Plugin {
 
       const context = vm.createContext(sandbox);
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 10_000 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
       const out = String(result == null ? "" : result);
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
@@ -3063,6 +3131,7 @@ export default class AutoOCPlugin extends Plugin {
         createdAt: new Date().toISOString(),
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
+        interactiveTerminal: importedTaskKind === "opencode" ? (et.interactiveTerminal ?? this.settings.defaultInteractiveTerminal) : undefined,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -3474,7 +3543,7 @@ export default class AutoOCPlugin extends Plugin {
       sandbox.terminal = {
         run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
           cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-          timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 120_000),
+          timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
           encoding: "utf8",
         }),
       };
@@ -3486,7 +3555,7 @@ export default class AutoOCPlugin extends Plugin {
       // We prepend a small preamble so the user can name their input/output
       // variables freely while we still inject the standard ones.
       const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 10_000 });
+      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
       const out = String(result == null ? "" : result);
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
@@ -3668,6 +3737,8 @@ class AutoOCView extends ItemView {
   // without this, shrinking the canvas leaves stale px sizes that overflow
   // their now-smaller container.
   private dashboardResizeObserver: ResizeObserver | null = null;
+  private unsubscribeTaskUpdated?: () => void;
+  private unsubscribeWorkflowUpdated?: () => void;
   // Set right before a resize-triggered render so renderDashboard's settle+fit
   // pass runs even though the task/workflow structure didn't change (normally
   // that pass is skipped on unchanged layouts to avoid redoing work every
@@ -3701,10 +3772,16 @@ class AutoOCView extends ItemView {
   getIcon() { return "workflow"; }
 
   async onOpen() {
+    this.unsubscribeTaskUpdated = this.plugin.onTaskUpdated((task) => this.updateTaskNameDom(task));
+    this.unsubscribeWorkflowUpdated = this.plugin.onWorkflowUpdated((workflow) => this.updateWorkflowNameDom(workflow));
     this.loadDashboardPositions();
     this.render();
   }
   async onClose() {
+    this.unsubscribeTaskUpdated?.();
+    this.unsubscribeWorkflowUpdated?.();
+    this.unsubscribeTaskUpdated = undefined;
+    this.unsubscribeWorkflowUpdated = undefined;
     await this.persistDashboardPositions();
     this.dashboardResizeObserver?.disconnect();
     this.dashboardResizeObserver = null;
@@ -3713,6 +3790,32 @@ class AutoOCView extends ItemView {
     this.dashboardTaskDriftDirection.clear();
   }
   refresh() { this.render(); }
+
+  private updateTaskNameDom(task: ScheduledTask) {
+    const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
+      return count + workflow.steps.filter((step) => step.taskId === task.id).length;
+    }, 0);
+    this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-task-id="${task.id}"]`).forEach((el) => {
+      el.querySelector<HTMLElement>(".auto-oc-task-name")?.setText(task.name);
+      const label = el.querySelector<HTMLElement>(".auto-oc-dashboard-hover-label");
+      if (label) label.setText(task.name);
+      if (el.classList.contains("auto-oc-dashboard-task-bubble")) {
+        el.setAttr("aria-label", `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
+      }
+    });
+  }
+
+  private updateWorkflowNameDom(workflow: Workflow) {
+    const area = workflow.area?.trim() || "No area";
+    this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
+      el.querySelector<HTMLElement>(".auto-oc-task-name")?.setText(workflow.name);
+      const label = el.querySelector<HTMLElement>(".auto-oc-dashboard-hover-label");
+      if (label) label.setText(workflow.name);
+      if (el.classList.contains("auto-oc-dashboard-workflow-bubble")) {
+        el.setAttr("aria-label", `Workflow: ${workflow.name}. Area: ${area}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+      }
+    });
+  }
 
   resetDashboardTaskShift(taskId: string) {
     const existing = this.sinkIntervals.get(taskId);
@@ -4916,6 +5019,7 @@ class AutoOCView extends ItemView {
       // All task bubbles render at the same size regardless of usage/failure
       // history — only their position drifts based on activity, not their size.
       const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      taskBubble.setAttr("data-auto-oc-task-id", task.id);
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
       addBubbleVisual(taskBubble);
@@ -4990,6 +5094,7 @@ class AutoOCView extends ItemView {
         const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
         const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
         const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+        workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
         addBubbleVisual(workflowBubble);
         if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
         if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
@@ -5032,6 +5137,7 @@ class AutoOCView extends ItemView {
       const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
       if (!workflowLayout) return;
       const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+      workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
       addBubbleVisual(workflowBubble);
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
       if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
@@ -5199,6 +5305,7 @@ class AutoOCView extends ItemView {
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else {
+      if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
       meta.createEl("span", { text: `🤖 ${modelLabel}` });
       meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -5985,6 +6092,8 @@ class VisualBuilderModal extends Modal {
     }
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
+    const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
+    const oldWorkflowById = new Map(oldWorkflows.map((workflow) => [workflow.id, workflow]));
     const newTasks: ScheduledTask[] = state.tasks.map((t: any) => {
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = (existing ? t.id : t.id || generateId());
@@ -6019,6 +6128,7 @@ class VisualBuilderModal extends Modal {
         workingDirectory: t.workingDirectory !== undefined ? t.workingDirectory : (existing?.workingDirectory ?? ""),
         branch: t.branch !== undefined ? (t.branch || "") : (existing?.branch || ""),
         createBranch: t.createBranch !== undefined ? !!t.createBranch : (existing?.createBranch ?? false),
+        interactiveTerminal: t.interactiveTerminal !== undefined ? !!t.interactiveTerminal : existing?.interactiveTerminal,
         code: t.code !== undefined ? t.code : existing?.code,
         codeLang: t.codeLang !== undefined ? t.codeLang : existing?.codeLang,
         codeInputVar: t.codeInputVar !== undefined ? t.codeInputVar : existing?.codeInputVar,
@@ -6085,10 +6195,14 @@ class VisualBuilderModal extends Modal {
         scheduleIntervalUnit: w.scheduleIntervalUnit || existing?.scheduleIntervalUnit || "minutes",
       };
     });
+    const renamedTasks = newTasks.filter((task) => oldTaskById.get(task.id)?.name !== undefined && oldTaskById.get(task.id)?.name !== task.name);
+    const renamedWorkflows = newWorkflows.filter((workflow) => oldWorkflowById.get(workflow.id)?.name !== undefined && oldWorkflowById.get(workflow.id)?.name !== workflow.name);
     this.plugin.settings.tasks = newTasks;
     this.plugin.settings.workflows = newWorkflows;
-    await this.plugin.saveSettings();
+    await this.plugin.saveSettings(false);
     this.plugin.view?.refresh();
+    renamedTasks.forEach((task) => this.plugin.emitTaskUpdated(task));
+    renamedWorkflows.forEach((workflow) => this.plugin.emitWorkflowUpdated(workflow));
     new Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
   }
 }
@@ -6376,6 +6490,7 @@ class CreateTaskModal extends Modal {
             model: plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
             useRalphLoop: false,
+            interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
             scheduleDate: todayString(),
@@ -6396,6 +6511,7 @@ class CreateTaskModal extends Modal {
     // Header with X button
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = (this.draft.taskKind || "opencode") as TaskKind;
+    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task",
     });
@@ -6407,9 +6523,11 @@ class CreateTaskModal extends Modal {
         .addDropdown((dd) => {
           dd.addOption("opencode", "OpenCode task");
           dd.addOption("code", "Code task");
-          dd.setValue(taskKind);
+          dd.addOption("cli", "CLI task");
+          dd.setValue(taskType);
           dd.onChange((v) => {
-            this.draft.taskKind = v as TaskKind;
+            this.draft.taskKind = v === "code" ? "code" : "opencode";
+            this.draft.interactiveTerminal = v === "cli";
             if (v === "code" && !this.draft.code) {
               this.draft.code = "// Set output to pass data forward\noutput = input;";
             }
@@ -6419,7 +6537,7 @@ class CreateTaskModal extends Modal {
     } else {
       new Setting(contentEl)
         .setName("Task type")
-        .setDesc(taskKind === "code" ? "Code task" : "OpenCode task");
+        .setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
     }
 
     new Setting(contentEl)
@@ -6616,6 +6734,7 @@ class CreateTaskModal extends Modal {
             }
           })
         );
+
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new Setting(contentEl)
@@ -6798,12 +6917,15 @@ class CreateTaskModal extends Modal {
             return;
           }
 
+          let updatedTask: ScheduledTask | null = null;
+          let areaChanged = false;
           if (this.editTask) {
             const idx = this.plugin.settings.tasks.findIndex(
               (t) => t.id === this.editTask!.id
             );
             if (idx !== -1) {
               const existing = this.plugin.settings.tasks[idx];
+              const previousArea = existing.area?.trim() || "";
               this.plugin.settings.tasks[idx] = {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
@@ -6813,6 +6935,8 @@ class CreateTaskModal extends Modal {
                 lastRun: existing.lastRun,
                 output: existing.output,
               };
+              updatedTask = this.plugin.settings.tasks[idx];
+              areaChanged = previousArea !== (updatedTask.area?.trim() || "");
             }
           } else {
             const task: ScheduledTask = {
@@ -6838,6 +6962,7 @@ class CreateTaskModal extends Modal {
               workingDirectory: this.draft.workingDirectory,
               branch: savingTaskKind === "opencode" ? this.draft.branch : "",
               createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
+              interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : undefined,
               code: savingTaskKind === "code" ? this.draft.code : undefined,
               codeLang: savingTaskKind === "code" ? "javascript" : undefined,
               codeInputVar: savingTaskKind === "code" ? (this.draft.codeInputVar || "input") : undefined,
@@ -6850,7 +6975,11 @@ class CreateTaskModal extends Modal {
 
           }
 
-          await this.plugin.saveSettings();
+          await this.plugin.saveSettings(!this.editTask);
+          if (updatedTask) {
+            if (areaChanged) this.plugin.view?.render();
+            this.plugin.emitTaskUpdated(updatedTask);
+          }
           new Notice(`Task "${this.draft.name}" saved.`);
           this.close();
         })
@@ -7328,12 +7457,15 @@ class CreateWorkflowModal extends Modal {
             }];
           }
 
+          let updatedWorkflow: Workflow | null = null;
+          let areaChanged = false;
           if (this.editWorkflow) {
             const idx = this.plugin.settings.workflows.findIndex(
               (w) => w.id === this.editWorkflow!.id
             );
             if (idx !== -1) {
               const existing = this.plugin.settings.workflows[idx];
+              const previousArea = existing.area?.trim() || "";
               this.plugin.settings.workflows[idx] = {
                 ...this.editWorkflow,
                 name: this.draft.name!,
@@ -7353,6 +7485,8 @@ class CreateWorkflowModal extends Modal {
                 scheduleIntervalValue: this.draft.scheduleIntervalValue ?? 10,
                 scheduleIntervalUnit: this.draft.scheduleIntervalUnit ?? "minutes",
               };
+              updatedWorkflow = this.plugin.settings.workflows[idx];
+              areaChanged = previousArea !== (updatedWorkflow.area?.trim() || "");
             }
           } else {
             const workflow: Workflow = {
@@ -7377,7 +7511,11 @@ class CreateWorkflowModal extends Modal {
             this.plugin.settings.workflows.push(workflow);
           }
 
-          await this.plugin.saveSettings();
+          await this.plugin.saveSettings(!this.editWorkflow);
+          if (updatedWorkflow) {
+            if (areaChanged) this.plugin.view?.render();
+            this.plugin.emitWorkflowUpdated(updatedWorkflow);
+          }
           new Notice(`Workflow "${this.draft.name}" saved.`);
           this.close();
         })
@@ -9260,6 +9398,18 @@ class AutoOCSettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.workingDirectory)
           .onChange(async (v) => {
             this.plugin.settings.workingDirectory = v;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Default CLI task mode")
+      .setDesc("New OpenCode tasks open an interactive terminal by default.")
+      .addToggle((tog) =>
+        tog
+          .setValue(!!this.plugin.settings.defaultInteractiveTerminal)
+          .onChange(async (v) => {
+            this.plugin.settings.defaultInteractiveTerminal = v;
             await this.plugin.saveSettings();
           })
       );

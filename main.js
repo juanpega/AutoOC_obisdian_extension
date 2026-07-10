@@ -1987,7 +1987,7 @@ var init_visualBuilderHtml_generated = __esm({
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.5.1",
+        pluginVersion: "1.5.5",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
@@ -2053,13 +2053,17 @@ function psSingleQuoted(value) {
 function commandPreviewArg(value) {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
+function shSingleQuoted(value) {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 function buildPowerShellEnvLines(env) {
   return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
-function openOpencodeCli(bin, cwd, env = {}) {
+function openOpencodeCli(bin, cwd, env = {}, args = []) {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
-    const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; & ${psSingleQuoted(bin)}`;
+    const runCommand = args.length > 0 ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList` : `& ${psSingleQuoted(bin)}`;
+    const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
     const launcher2 = (0, import_child_process.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
@@ -2070,15 +2074,15 @@ function openOpencodeCli(bin, cwd, env = {}) {
   }
   if (process.platform === "darwin") {
     const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
-    const escapedBin = bin.replace(/(["\\$`])/g, "\\$1");
+    const escapedCmd = [bin, ...args].map(shSingleQuoted).join(" ").replace(/(["\\$`])/g, "\\$1");
     const envPrefix2 = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix2 ? `${envPrefix2} ` : ""}${escapedBin}"`;
+    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix2 ? `${envPrefix2} ` : ""}${escapedCmd}"`;
     const launcher2 = (0, import_child_process.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher2.unref();
     return;
   }
   const envPrefix = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
-  const command = `cd ${JSON.stringify(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${JSON.stringify(bin)}`;
+  const command = `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
   const launcher = (0, import_child_process.spawn)("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
   launcher.unref();
 }
@@ -2160,7 +2164,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.2",
+    "pluginVersion": "1.5.5",
     "name": "Package name",
     "description": "Short description"
   },
@@ -2183,6 +2187,7 @@ Task fields:
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: complete direct instruction for OpenCode. For code tasks, mirror the code here for compatibility.
+- interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -2363,7 +2368,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.2",
+    "pluginVersion": "1.5.5",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -2382,6 +2387,7 @@ Minimal valid workflow example:
       "scheduleIntervalValue": 10,
       "scheduleIntervalUnit": "minutes",
       "useRalphLoop": false,
+      "interactiveTerminal": false,
       "agent": "build",
       "branch": "",
       "createBranch": false
@@ -2721,6 +2727,7 @@ var DEFAULT_SETTINGS = {
   cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
   taskTimeoutSeconds: 7200,
   // 2 h default
+  defaultInteractiveTerminal: false,
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
@@ -2869,6 +2876,7 @@ function toExportTask(task, exportId) {
     codeAllowVault: task.codeAllowVault,
     codeAllowFiles: task.codeAllowFiles,
     codeAllowTerminal: task.codeAllowTerminal,
+    interactiveTerminal: task.interactiveTerminal,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -3523,6 +3531,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
     this.visualBuilders = /* @__PURE__ */ new Set();
+    this.taskUpdatedCallbacks = /* @__PURE__ */ new Set();
+    this.workflowUpdatedCallbacks = /* @__PURE__ */ new Set();
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
     this.dueCheckInProgress = false;
@@ -3676,6 +3686,22 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   syncVisualBuilders() {
     for (const modal of this.visualBuilders) modal.sendState();
+  }
+  onTaskUpdated(callback) {
+    this.taskUpdatedCallbacks.add(callback);
+    return () => this.taskUpdatedCallbacks.delete(callback);
+  }
+  onWorkflowUpdated(callback) {
+    this.workflowUpdatedCallbacks.add(callback);
+    return () => this.workflowUpdatedCallbacks.delete(callback);
+  }
+  emitTaskUpdated(task) {
+    for (const callback of this.taskUpdatedCallbacks) callback(task);
+    this.syncVisualBuilders();
+  }
+  emitWorkflowUpdated(workflow) {
+    for (const callback of this.workflowUpdatedCallbacks) callback(workflow);
+    this.syncVisualBuilders();
   }
   async loadSettings() {
     var _a, _b;
@@ -4068,7 +4094,7 @@ DONE:" + $exitCode + "
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   async runTask(task, onComplete, overrides = {}) {
-    var _a, _b, _c, _d;
+    var _a, _b, _c, _d, _e, _f;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
@@ -4095,10 +4121,42 @@ DONE:" + $exitCode + "
       return;
     }
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const secretEnv = this.getSecretsEnv();
+    if (effectiveTask.interactiveTerminal) {
+      const current = this.settings.tasks[idx];
+      current.status = "running";
+      current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      current.output = "[opening interactive OpenCode CLI...]";
+      (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
+      await this.saveSettings();
+      try {
+        let prompt2 = effectiveTask.prompt;
+        if (effectiveTask.useRalphLoop) {
+          prompt2 = `/ralph-loop ${prompt2}`;
+        }
+        const bin2 = resolveOpencodeBin(this.settings.opencodePath);
+        const args2 = ["-m", effectiveTask.model, "--agent", this.getEffectiveAgent(effectiveTask.agent), "--prompt", prompt2];
+        openOpencodeCli(bin2, taskCwd, secretEnv, args2);
+        current.status = "completed";
+        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, 0);
+      } catch (e) {
+        current.status = "failed";
+        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
+        (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: could not open CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, -1);
+      }
+      return;
+    }
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
+    (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -4137,9 +4195,7 @@ DONE:" + $exitCode + "
     } catch (e) {
     }
     fs2.writeFileSync(promptFile, preparedPrompt, "utf8");
-    const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || (this.app.vault.adapter.basePath || ".");
     const safeCwd = taskCwd.replace(/'/g, "''");
-    const secretEnv = this.getSecretsEnv();
     let gitCmds = "";
     if (effectiveTask.branch) {
       const safeBranch = effectiveTask.branch.replace(/'/g, "''");
@@ -4171,7 +4227,7 @@ DONE:" + $exitCode + "
     launchHiddenPS(psScriptFile);
     this.runningProcesses.set(task.id, { kill: () => {
     } });
-    const timeoutSeconds = (_d = this.settings.taskTimeoutSeconds) != null ? _d : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -4590,7 +4646,7 @@ DONE:" + $exitCode + "
     return this.importFromData(data);
   }
   async importFromData(data) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u;
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
@@ -4624,6 +4680,7 @@ DONE:" + $exitCode + "
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
+        interactiveTerminal: importedTaskKind === "opencode" ? (_j = et.interactiveTerminal) != null ? _j : this.settings.defaultInteractiveTerminal : void 0,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -4702,21 +4759,21 @@ DONE:" + $exitCode + "
       const workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
-        area: (_j = ew.area) != null ? _j : "",
-        description: (_k = ew.description) != null ? _k : "",
+        area: (_k = ew.area) != null ? _k : "",
+        description: (_l = ew.description) != null ? _l : "",
         steps,
         status: "pending",
         currentStep: -1,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        handoffBranch: (_l = ew.handoffBranch) != null ? _l : false,
-        handoffOutput: (_m = ew.handoffOutput) != null ? _m : true,
-        scheduleType: (_n = ew.scheduleType) != null ? _n : "manual",
-        scheduleTime: (_o = ew.scheduleTime) != null ? _o : nowTimeString(),
-        scheduleDate: (_p = ew.scheduleDate) != null ? _p : "",
-        scheduleDays: (_q = ew.scheduleDays) != null ? _q : [],
-        scheduleMonthDays: (_r = ew.scheduleMonthDays) != null ? _r : [],
-        scheduleIntervalValue: (_s = ew.scheduleIntervalValue) != null ? _s : 10,
-        scheduleIntervalUnit: (_t = ew.scheduleIntervalUnit) != null ? _t : "minutes"
+        handoffBranch: (_m = ew.handoffBranch) != null ? _m : false,
+        handoffOutput: (_n = ew.handoffOutput) != null ? _n : true,
+        scheduleType: (_o = ew.scheduleType) != null ? _o : "manual",
+        scheduleTime: (_p = ew.scheduleTime) != null ? _p : nowTimeString(),
+        scheduleDate: (_q = ew.scheduleDate) != null ? _q : "",
+        scheduleDays: (_r = ew.scheduleDays) != null ? _r : [],
+        scheduleMonthDays: (_s = ew.scheduleMonthDays) != null ? _s : [],
+        scheduleIntervalValue: (_t = ew.scheduleIntervalValue) != null ? _t : 10,
+        scheduleIntervalUnit: (_u = ew.scheduleIntervalUnit) != null ? _u : "minutes"
       };
       this.settings.workflows.push(workflow);
       workflowsImported++;
@@ -5210,13 +5267,19 @@ var AutoOCView = class extends import_obsidian.ItemView {
     return "workflow";
   }
   async onOpen() {
+    this.unsubscribeTaskUpdated = this.plugin.onTaskUpdated((task) => this.updateTaskNameDom(task));
+    this.unsubscribeWorkflowUpdated = this.plugin.onWorkflowUpdated((workflow) => this.updateWorkflowNameDom(workflow));
     this.loadDashboardPositions();
     this.render();
   }
   async onClose() {
-    var _a;
+    var _a, _b, _c;
+    (_a = this.unsubscribeTaskUpdated) == null ? void 0 : _a.call(this);
+    (_b = this.unsubscribeWorkflowUpdated) == null ? void 0 : _b.call(this);
+    this.unsubscribeTaskUpdated = void 0;
+    this.unsubscribeWorkflowUpdated = void 0;
     await this.persistDashboardPositions();
-    (_a = this.dashboardResizeObserver) == null ? void 0 : _a.disconnect();
+    (_c = this.dashboardResizeObserver) == null ? void 0 : _c.disconnect();
     this.dashboardResizeObserver = null;
     this.sinkIntervals.forEach((iv) => clearInterval(iv));
     this.sinkIntervals.clear();
@@ -5224,6 +5287,33 @@ var AutoOCView = class extends import_obsidian.ItemView {
   }
   refresh() {
     this.render();
+  }
+  updateTaskNameDom(task) {
+    const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
+      return count + workflow.steps.filter((step) => step.taskId === task.id).length;
+    }, 0);
+    this.containerEl.querySelectorAll(`[data-auto-oc-task-id="${task.id}"]`).forEach((el) => {
+      var _a;
+      (_a = el.querySelector(".auto-oc-task-name")) == null ? void 0 : _a.setText(task.name);
+      const label = el.querySelector(".auto-oc-dashboard-hover-label");
+      if (label) label.setText(task.name);
+      if (el.classList.contains("auto-oc-dashboard-task-bubble")) {
+        el.setAttr("aria-label", `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
+      }
+    });
+  }
+  updateWorkflowNameDom(workflow) {
+    var _a;
+    const area = ((_a = workflow.area) == null ? void 0 : _a.trim()) || "No area";
+    this.containerEl.querySelectorAll(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
+      var _a2;
+      (_a2 = el.querySelector(".auto-oc-task-name")) == null ? void 0 : _a2.setText(workflow.name);
+      const label = el.querySelector(".auto-oc-dashboard-hover-label");
+      if (label) label.setText(workflow.name);
+      if (el.classList.contains("auto-oc-dashboard-workflow-bubble")) {
+        el.setAttr("aria-label", `Workflow: ${workflow.name}. Area: ${area}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
+      }
+    });
   }
   resetDashboardTaskShift(taskId) {
     const existing = this.sinkIntervals.get(taskId);
@@ -6341,6 +6431,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const createTaskBubble = (parent, task, x, y, size, extraCls = "", positionKey = `task:${task.id}`) => {
       var _a, _b;
       const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      taskBubble.setAttr("data-auto-oc-task-id", task.id);
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
       addBubbleVisual(taskBubble);
@@ -6411,6 +6502,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
         const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
         const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+        workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
         addBubbleVisual(workflowBubble);
         if (taskSteps.some((step) => {
           var _a2;
@@ -6457,6 +6549,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
       if (!workflowLayout) return;
       const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
+      workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
       addBubbleVisual(workflowBubble);
       if (taskSteps.some((step) => {
         var _a2;
@@ -6600,6 +6693,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else {
+      if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
       meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
       meta.createEl("span", { text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -7278,6 +7372,8 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
     }
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
+    const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
+    const oldWorkflowById = new Map(oldWorkflows.map((workflow) => [workflow.id, workflow]));
     const newTasks = state.tasks.map((t) => {
       var _a2, _b, _c, _d;
       const existing = oldTasks.find((x) => x.id === t.id);
@@ -7310,6 +7406,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_c = existing == null ? void 0 : existing.workingDirectory) != null ? _c : "",
         branch: t.branch !== void 0 ? t.branch || "" : (existing == null ? void 0 : existing.branch) || "",
         createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_d = existing == null ? void 0 : existing.createBranch) != null ? _d : false,
+        interactiveTerminal: t.interactiveTerminal !== void 0 ? !!t.interactiveTerminal : existing == null ? void 0 : existing.interactiveTerminal,
         code: t.code !== void 0 ? t.code : existing == null ? void 0 : existing.code,
         codeLang: t.codeLang !== void 0 ? t.codeLang : existing == null ? void 0 : existing.codeLang,
         codeInputVar: t.codeInputVar !== void 0 ? t.codeInputVar : existing == null ? void 0 : existing.codeInputVar,
@@ -7375,10 +7472,20 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         scheduleIntervalUnit: w.scheduleIntervalUnit || (existing == null ? void 0 : existing.scheduleIntervalUnit) || "minutes"
       };
     });
+    const renamedTasks = newTasks.filter((task) => {
+      var _a2, _b;
+      return ((_a2 = oldTaskById.get(task.id)) == null ? void 0 : _a2.name) !== void 0 && ((_b = oldTaskById.get(task.id)) == null ? void 0 : _b.name) !== task.name;
+    });
+    const renamedWorkflows = newWorkflows.filter((workflow) => {
+      var _a2, _b;
+      return ((_a2 = oldWorkflowById.get(workflow.id)) == null ? void 0 : _a2.name) !== void 0 && ((_b = oldWorkflowById.get(workflow.id)) == null ? void 0 : _b.name) !== workflow.name;
+    });
     this.plugin.settings.tasks = newTasks;
     this.plugin.settings.workflows = newWorkflows;
-    await this.plugin.saveSettings();
+    await this.plugin.saveSettings(false);
     (_a = this.plugin.view) == null ? void 0 : _a.refresh();
+    renamedTasks.forEach((task) => this.plugin.emitTaskUpdated(task));
+    renamedWorkflows.forEach((workflow) => this.plugin.emitWorkflowUpdated(workflow));
     new import_obsidian.Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
   }
 };
@@ -7620,6 +7727,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       model: plugin.getEffectiveDefaultModel(),
       agent: plugin.getEffectiveAgent(),
       useRalphLoop: false,
+      interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
       scheduleDate: todayString(),
@@ -7638,6 +7746,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     preventBackdropClose(this);
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = this.draft.taskKind || "opencode";
+    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
@@ -7645,9 +7754,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
         dd.addOption("opencode", "OpenCode task");
         dd.addOption("code", "Code task");
-        dd.setValue(taskKind);
+        dd.addOption("cli", "CLI task");
+        dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v;
+          this.draft.taskKind = v === "code" ? "code" : "opencode";
+          this.draft.interactiveTerminal = v === "cli";
           if (v === "code" && !this.draft.code) {
             this.draft.code = "// Set output to pass data forward\noutput = input;";
           }
@@ -7655,7 +7766,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         });
       });
     } else {
-      new import_obsidian.Setting(contentEl).setName("Task type").setDesc(taskKind === "code" ? "Code task" : "OpenCode task");
+      new import_obsidian.Setting(contentEl).setName("Task type").setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
     }
     new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
@@ -7894,7 +8005,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     }
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
-        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
         if (!((_a2 = this.draft.name) == null ? void 0 : _a2.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -7924,12 +8035,15 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           new import_obsidian.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
+        let updatedTask = null;
+        let areaChanged = false;
         if (this.editTask) {
           const idx = this.plugin.settings.tasks.findIndex(
             (t) => t.id === this.editTask.id
           );
           if (idx !== -1) {
             const existing = this.plugin.settings.tasks[idx];
+            const previousArea = ((_g = existing.area) == null ? void 0 : _g.trim()) || "";
             this.plugin.settings.tasks[idx] = {
               ...this.editTask,
               ...this.draft,
@@ -7939,6 +8053,8 @@ var CreateTaskModal = class extends import_obsidian.Modal {
               lastRun: existing.lastRun,
               output: existing.output
             };
+            updatedTask = this.plugin.settings.tasks[idx];
+            areaChanged = previousArea !== (((_h = updatedTask.area) == null ? void 0 : _h.trim()) || "");
           }
         } else {
           const task = {
@@ -7947,16 +8063,16 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             name: this.draft.name,
             prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt,
             model: savingTaskKind === "code" ? "" : this.draft.model,
-            area: (_g = this.draft.area) != null ? _g : "",
+            area: (_i = this.draft.area) != null ? _i : "",
             agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
-            useRalphLoop: savingTaskKind === "opencode" ? (_h = this.draft.useRalphLoop) != null ? _h : false : false,
-            scheduleType: (_i = this.draft.scheduleType) != null ? _i : "manual",
-            scheduleTime: (_j = this.draft.scheduleTime) != null ? _j : nowTimeString(),
-            scheduleDate: (_k = this.draft.scheduleDate) != null ? _k : "",
-            scheduleDays: (_l = this.draft.scheduleDays) != null ? _l : [],
-            scheduleMonthDays: (_m = this.draft.scheduleMonthDays) != null ? _m : [],
-            scheduleIntervalValue: (_n = this.draft.scheduleIntervalValue) != null ? _n : 10,
-            scheduleIntervalUnit: (_o = this.draft.scheduleIntervalUnit) != null ? _o : "minutes",
+            useRalphLoop: savingTaskKind === "opencode" ? (_j = this.draft.useRalphLoop) != null ? _j : false : false,
+            scheduleType: (_k = this.draft.scheduleType) != null ? _k : "manual",
+            scheduleTime: (_l = this.draft.scheduleTime) != null ? _l : nowTimeString(),
+            scheduleDate: (_m = this.draft.scheduleDate) != null ? _m : "",
+            scheduleDays: (_n = this.draft.scheduleDays) != null ? _n : [],
+            scheduleMonthDays: (_o = this.draft.scheduleMonthDays) != null ? _o : [],
+            scheduleIntervalValue: (_p = this.draft.scheduleIntervalValue) != null ? _p : 10,
+            scheduleIntervalUnit: (_q = this.draft.scheduleIntervalUnit) != null ? _q : "minutes",
             status: "pending",
             lastRun: "",
             output: "",
@@ -7964,6 +8080,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             workingDirectory: this.draft.workingDirectory,
             branch: savingTaskKind === "opencode" ? this.draft.branch : "",
             createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
+            interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : void 0,
             code: savingTaskKind === "code" ? this.draft.code : void 0,
             codeLang: savingTaskKind === "code" ? "javascript" : void 0,
             codeInputVar: savingTaskKind === "code" ? this.draft.codeInputVar || "input" : void 0,
@@ -7974,7 +8091,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           };
           this.plugin.settings.tasks.push(task);
         }
-        await this.plugin.saveSettings();
+        await this.plugin.saveSettings(!this.editTask);
+        if (updatedTask) {
+          if (areaChanged) (_r = this.plugin.view) == null ? void 0 : _r.render();
+          this.plugin.emitTaskUpdated(updatedTask);
+        }
         new import_obsidian.Notice(`Task "${this.draft.name}" saved.`);
         this.close();
       })
@@ -8273,7 +8394,7 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
     this.renderStepsList(stepsContainer);
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -8320,55 +8441,64 @@ var CreateWorkflowModal = class extends import_obsidian.Modal {
             forceContinue: steps[i].forceContinue
           }];
         }
+        let updatedWorkflow = null;
+        let areaChanged = false;
         if (this.editWorkflow) {
           const idx = this.plugin.settings.workflows.findIndex(
             (w) => w.id === this.editWorkflow.id
           );
           if (idx !== -1) {
             const existing = this.plugin.settings.workflows[idx];
+            const previousArea = ((_e = existing.area) == null ? void 0 : _e.trim()) || "";
             this.plugin.settings.workflows[idx] = {
               ...this.editWorkflow,
               name: this.draft.name,
-              area: (_e = this.draft.area) != null ? _e : "",
+              area: (_f = this.draft.area) != null ? _f : "",
               description: this.draft.description,
               steps,
-              handoffBranch: (_f = this.draft.handoffBranch) != null ? _f : false,
-              handoffOutput: (_g = this.draft.handoffOutput) != null ? _g : false,
+              handoffBranch: (_g = this.draft.handoffBranch) != null ? _g : false,
+              handoffOutput: (_h = this.draft.handoffOutput) != null ? _h : false,
               status: existing.status,
               currentStep: existing.currentStep,
               lastRun: existing.lastRun,
-              scheduleType: (_h = this.draft.scheduleType) != null ? _h : "manual",
-              scheduleTime: (_i = this.draft.scheduleTime) != null ? _i : nowTimeString(),
-              scheduleDate: (_j = this.draft.scheduleDate) != null ? _j : "",
-              scheduleDays: (_k = this.draft.scheduleDays) != null ? _k : [],
-              scheduleMonthDays: (_l = this.draft.scheduleMonthDays) != null ? _l : [],
-              scheduleIntervalValue: (_m = this.draft.scheduleIntervalValue) != null ? _m : 10,
-              scheduleIntervalUnit: (_n = this.draft.scheduleIntervalUnit) != null ? _n : "minutes"
+              scheduleType: (_i = this.draft.scheduleType) != null ? _i : "manual",
+              scheduleTime: (_j = this.draft.scheduleTime) != null ? _j : nowTimeString(),
+              scheduleDate: (_k = this.draft.scheduleDate) != null ? _k : "",
+              scheduleDays: (_l = this.draft.scheduleDays) != null ? _l : [],
+              scheduleMonthDays: (_m = this.draft.scheduleMonthDays) != null ? _m : [],
+              scheduleIntervalValue: (_n = this.draft.scheduleIntervalValue) != null ? _n : 10,
+              scheduleIntervalUnit: (_o = this.draft.scheduleIntervalUnit) != null ? _o : "minutes"
             };
+            updatedWorkflow = this.plugin.settings.workflows[idx];
+            areaChanged = previousArea !== (((_p = updatedWorkflow.area) == null ? void 0 : _p.trim()) || "");
           }
         } else {
           const workflow = {
             id: generateId(),
             name: this.draft.name,
-            area: (_o = this.draft.area) != null ? _o : "",
-            description: (_p = this.draft.description) != null ? _p : "",
+            area: (_q = this.draft.area) != null ? _q : "",
+            description: (_r = this.draft.description) != null ? _r : "",
             steps,
             status: "pending",
             currentStep: -1,
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-            handoffBranch: (_q = this.draft.handoffBranch) != null ? _q : false,
-            handoffOutput: (_r = this.draft.handoffOutput) != null ? _r : false,
-            scheduleType: (_s = this.draft.scheduleType) != null ? _s : "manual",
-            scheduleTime: (_t = this.draft.scheduleTime) != null ? _t : nowTimeString(),
-            scheduleDate: (_u = this.draft.scheduleDate) != null ? _u : todayString(),
-            scheduleDays: (_v = this.draft.scheduleDays) != null ? _v : [],
-            scheduleMonthDays: (_w = this.draft.scheduleMonthDays) != null ? _w : [],
-            scheduleIntervalValue: (_x = this.draft.scheduleIntervalValue) != null ? _x : 10,
-            scheduleIntervalUnit: (_y = this.draft.scheduleIntervalUnit) != null ? _y : "minutes"
+            handoffBranch: (_s = this.draft.handoffBranch) != null ? _s : false,
+            handoffOutput: (_t = this.draft.handoffOutput) != null ? _t : false,
+            scheduleType: (_u = this.draft.scheduleType) != null ? _u : "manual",
+            scheduleTime: (_v = this.draft.scheduleTime) != null ? _v : nowTimeString(),
+            scheduleDate: (_w = this.draft.scheduleDate) != null ? _w : todayString(),
+            scheduleDays: (_x = this.draft.scheduleDays) != null ? _x : [],
+            scheduleMonthDays: (_y = this.draft.scheduleMonthDays) != null ? _y : [],
+            scheduleIntervalValue: (_z = this.draft.scheduleIntervalValue) != null ? _z : 10,
+            scheduleIntervalUnit: (_A = this.draft.scheduleIntervalUnit) != null ? _A : "minutes"
           };
           this.plugin.settings.workflows.push(workflow);
         }
-        await this.plugin.saveSettings();
+        await this.plugin.saveSettings(!this.editWorkflow);
+        if (updatedWorkflow) {
+          if (areaChanged) (_B = this.plugin.view) == null ? void 0 : _B.render();
+          this.plugin.emitWorkflowUpdated(updatedWorkflow);
+        }
         new import_obsidian.Notice(`Workflow "${this.draft.name}" saved.`);
         this.close();
       })
@@ -10014,6 +10144,12 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
         this.plugin.settings.workingDirectory = v;
+        await this.plugin.saveSettings();
+      })
+    );
+    new import_obsidian.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
+      (tog) => tog.setValue(!!this.plugin.settings.defaultInteractiveTerminal).onChange(async (v) => {
+        this.plugin.settings.defaultInteractiveTerminal = v;
         await this.plugin.saveSettings();
       })
     );
