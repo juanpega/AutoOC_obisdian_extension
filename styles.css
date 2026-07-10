@@ -920,6 +920,16 @@
   resize: vertical;
 }
 
+.auto-oc-prompt-too-long {
+  border-color: var(--text-error) !important;
+}
+
+.auto-oc-prompt-notice {
+  color: var(--text-error);
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+}
+
 .auto-oc-code-editor {
   font-family: "Cascadia Code", "Fira Code", Consolas, "SFMono-Regular", ui-monospace, monospace !important;
   font-size: 0.82rem !important;

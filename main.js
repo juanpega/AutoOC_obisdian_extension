@@ -2059,6 +2059,7 @@ function shSingleQuoted(value) {
 function buildPowerShellEnvLines(env) {
   return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
+var SAFE_CLI_PROMPT_LENGTH = 4e3;
 function openOpencodeCli(bin, cwd, env = {}, args = []) {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
@@ -2084,6 +2085,25 @@ function openOpencodeCli(bin, cwd, env = {}, args = []) {
   const envPrefix = Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `${key}=${JSON.stringify(value)}`).join(" ");
   const command = `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
   const launcher = (0, import_child_process.spawn)("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
+  launcher.unref();
+}
+function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
+  const promptFile = path.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
+  fs.writeFileSync(promptFile, prompt, "utf8");
+  setTimeout(() => {
+    try {
+      fs.unlinkSync(promptFile);
+    } catch (e) {
+    }
+  }, 60 * 1e3);
+  const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
+  const envScript = buildPowerShellEnvLines(env).join("; ");
+  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}, "--agent", ${psSingleQuoted(agent)}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
+  const launcher = (0, import_child_process.spawn)(
+    "cmd.exe",
+    ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
+    { detached: true, stdio: "ignore", windowsHide: false }
+  );
   launcher.unref();
 }
 function launchHiddenPS(psScriptFile) {
@@ -4136,8 +4156,13 @@ DONE:" + $exitCode + "
           prompt2 = `/ralph-loop ${prompt2}`;
         }
         const bin2 = resolveOpencodeBin(this.settings.opencodePath);
-        const args2 = ["-m", effectiveTask.model, "--agent", this.getEffectiveAgent(effectiveTask.agent), "--prompt", prompt2];
-        openOpencodeCli(bin2, taskCwd, secretEnv, args2);
+        const agent = this.getEffectiveAgent(effectiveTask.agent);
+        if (prompt2.length > SAFE_CLI_PROMPT_LENGTH && process.platform === "win32") {
+          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, agent, prompt2);
+        } else {
+          const args2 = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt2];
+          openOpencodeCli(bin2, taskCwd, secretEnv, args2);
+        }
         current.status = "completed";
         current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
         await this.saveSettings();
@@ -7799,13 +7824,32 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         text.setPlaceholder("output").setValue(this.draft.codeOutputVar || "output").onChange((v) => this.draft.codeOutputVar = v || "output");
       });
     } else {
+      const promptNotice = contentEl.createDiv("auto-oc-prompt-notice");
+      promptNotice.style.display = "none";
       new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Text to send to OpenCode").addTextArea((ta) => {
-        var _a2;
-        ta.setValue((_a2 = this.draft.prompt) != null ? _a2 : "").onChange((v) => this.draft.prompt = v);
+        var _a2, _b;
+        const updatePromptNotice = (value) => {
+          if (this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
+            ta.inputEl.addClass("auto-oc-prompt-too-long");
+            promptNotice.setText(
+              `CLI prompts over ${SAFE_CLI_PROMPT_LENGTH} characters are saved to a temporary workspace file, the OpenCode TUI is instructed to read it, and the file is deleted after 1 minute.`
+            );
+            promptNotice.style.display = "block";
+          } else {
+            ta.inputEl.removeClass("auto-oc-prompt-too-long");
+            promptNotice.setText("");
+            promptNotice.style.display = "none";
+          }
+        };
+        ta.setValue((_a2 = this.draft.prompt) != null ? _a2 : "").onChange((v) => {
+          this.draft.prompt = v;
+          updatePromptNotice(v);
+        });
         ta.inputEl.addClass("auto-oc-modal-textarea");
         ta.inputEl.rows = 5;
         ta.inputEl.style.width = "100%";
         ta.inputEl.spellcheck = false;
+        updatePromptNotice((_b = this.draft.prompt) != null ? _b : "");
       });
     }
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4C2} Workspace & Git");
