@@ -58,6 +58,7 @@ function buildPowerShellEnvLines(env: Record<string, string>): string[] {
     .map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
 
+const HANDOFF_CONTEXT_LIMIT = 50000;
 const SAFE_CLI_PROMPT_LENGTH = 4000;
 
 function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}, args: string[] = []): void {
@@ -1413,7 +1414,10 @@ function formatTaskOutput(stdout: string, stderr: string): string {
 }
 
 function extractSection(output: string, title: string): string {
-  const match = output.match(new RegExp(`^## ${title}\\s*\\n\\s*([\\s\\S]*?)(?:\\n\\n---\\n\\n## |$)`, "m"));
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = output.match(
+    new RegExp(`(?:^|\\r?\\n)## ${escaped}\\s*(?:\\r?\\n)+([\\s\\S]*?)(?=(?:\\r?\\n){2}---(?:\\r?\\n){2}## |$)`)
+  );
   return match ? match[1].trim() : "";
 }
 
@@ -1435,14 +1439,24 @@ function extractContextForHandoff(output: string): string {
 
   const response = extractSection(cleaned, "Response");
   const touchedFiles = extractSection(cleaned, "Touched files");
-  const trace = extractSection(cleaned, "OpenCode trace").replace(/^```text\s*/, "").replace(/```$/, "").trim();
   const parts: string[] = [];
 
-  if (response) parts.push(`Response: ${response}`);
-  if (touchedFiles) parts.push(`Touched files: ${touchedFiles}`);
-  if (trace) parts.push(`OpenCode trace: ${trace}`);
+  if (response) {
+    parts.push(`PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${response}`);
+    if (touchedFiles) {
+      parts.push(`DIAGNOSTIC ONLY — touched files (do not re-read unless the current task explicitly asks):\n\n${touchedFiles}`);
+    }
+  } else {
+    // No explicit Response section: use the cleaned output as the primary input,
+    // omitting the OpenCode trace so diagnostics don't leak into the handoff.
+    const primary = cleaned
+      .replace(/\n\n---\n\n## OpenCode trace[\s\S]*$/, "")
+      .replace(/^## OpenCode trace[\s\S]*$/, "")
+      .trim();
+    parts.push(`PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${primary}`);
+  }
 
-  return (parts.length > 0 ? parts.join("\n\n") : cleaned).slice(0, 6000).trim();
+  return parts.join("\n\n").slice(0, HANDOFF_CONTEXT_LIMIT).trim();
 }
 
 function formatLogContent(text: string): string {
@@ -2583,7 +2597,7 @@ export default class AutoOCPlugin extends Plugin {
         }
         const bin = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
-        if (prompt.length > SAFE_CLI_PROMPT_LENGTH && process.platform === "win32") {
+        if (process.platform === "win32") {
           openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, agent, prompt);
         } else {
           const args = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt];
@@ -3625,12 +3639,28 @@ export default class AutoOCPlugin extends Plugin {
     if (wf.handoffOutput) {
       const ctx = (this as any).workflowRuntime.get(wf.id);
       if (ctx && ctx.stepOutputs.size > 0) {
-        const previousOutput: string = String(Array.from(ctx.stepOutputs.values()).pop() || "");
-        const cleanOutput = extractContextForHandoff(previousOutput);
-        if (cleanOutput) {
-          const contextBlock = ` Previous step output to use as context: ${cleanOutput} End of previous step output.`;
-          taskOverrides.prompt = `${task.prompt}${contextBlock}`;
-        }
+        const stepOutputs = ctx.stepOutputs as Map<string, string>;
+        const entries = Array.from(stepOutputs.entries());
+        const [previousStepId, previousOutputRaw] = entries[entries.length - 1];
+        const previousStep = wf.steps.find((s) => s.id === previousStepId);
+        const sourceLine = previousStep
+          ? `Source: step "${previousStep.name || previousStepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})`
+          : `Source: step ${previousStepId}`;
+        const cleanOutput = extractContextForHandoff(String(previousOutputRaw || ""));
+        const contextBlock = [
+          "",
+          "=== WORKFLOW HANDOFF CONTEXT ===",
+          sourceLine,
+          "The previous step's output below is the PRIMARY INPUT for this task.",
+          "Touched files are DIAGNOSTIC ONLY — do not re-read them unless this task explicitly asks.",
+          "",
+          cleanOutput || String(previousOutputRaw || "").trim(),
+          "=== END WORKFLOW HANDOFF CONTEXT ===",
+        ].join("\n");
+        const capped = contextBlock.length > HANDOFF_CONTEXT_LIMIT
+          ? contextBlock.slice(0, HANDOFF_CONTEXT_LIMIT) + `\n... [truncated at ${HANDOFF_CONTEXT_LIMIT} chars]`
+          : contextBlock;
+        taskOverrides.prompt = `${task.prompt}\n${capped}`;
       }
     }
 

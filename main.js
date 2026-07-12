@@ -2059,6 +2059,7 @@ function shSingleQuoted(value) {
 function buildPowerShellEnvLines(env) {
   return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
+var HANDOFF_CONTEXT_LIMIT = 5e4;
 var SAFE_CLI_PROMPT_LENGTH = 4e3;
 function openOpencodeCli(bin, cwd, env = {}, args = []) {
   if (process.platform === "win32") {
@@ -3019,7 +3020,10 @@ ${cleanStderr}
   return parts.join("\n\n---\n\n").trim();
 }
 function extractSection(output, title) {
-  const match = output.match(new RegExp(`^## ${title}\\s*\\n\\s*([\\s\\S]*?)(?:\\n\\n---\\n\\n## |$)`, "m"));
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = output.match(
+    new RegExp(`(?:^|\\r?\\n)## ${escaped}\\s*(?:\\r?\\n)+([\\s\\S]*?)(?=(?:\\r?\\n){2}---(?:\\r?\\n){2}## |$)`)
+  );
   return match ? match[1].trim() : "";
 }
 function cleanWorkflowContext(output) {
@@ -3031,12 +3035,23 @@ function extractContextForHandoff(output) {
   if (!cleaned) return "";
   const response = extractSection(cleaned, "Response");
   const touchedFiles = extractSection(cleaned, "Touched files");
-  const trace = extractSection(cleaned, "OpenCode trace").replace(/^```text\s*/, "").replace(/```$/, "").trim();
   const parts = [];
-  if (response) parts.push(`Response: ${response}`);
-  if (touchedFiles) parts.push(`Touched files: ${touchedFiles}`);
-  if (trace) parts.push(`OpenCode trace: ${trace}`);
-  return (parts.length > 0 ? parts.join("\n\n") : cleaned).slice(0, 6e3).trim();
+  if (response) {
+    parts.push(`PRIMARY HANDOFF INPUT \u2014 use this as the main input for the current task:
+
+${response}`);
+    if (touchedFiles) {
+      parts.push(`DIAGNOSTIC ONLY \u2014 touched files (do not re-read unless the current task explicitly asks):
+
+${touchedFiles}`);
+    }
+  } else {
+    const primary = cleaned.replace(/\n\n---\n\n## OpenCode trace[\s\S]*$/, "").replace(/^## OpenCode trace[\s\S]*$/, "").trim();
+    parts.push(`PRIMARY HANDOFF INPUT \u2014 use this as the main input for the current task:
+
+${primary}`);
+  }
+  return parts.join("\n\n").slice(0, HANDOFF_CONTEXT_LIMIT).trim();
 }
 function formatLogContent(text) {
   if (!text) return "";
@@ -4157,7 +4172,7 @@ DONE:" + $exitCode + "
         }
         const bin2 = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
-        if (prompt2.length > SAFE_CLI_PROMPT_LENGTH && process.platform === "win32") {
+        if (process.platform === "win32") {
           openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, agent, prompt2);
         } else {
           const args2 = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt2];
@@ -5123,12 +5138,26 @@ Reply ONLY with YES or NO.`;
     if (wf.handoffOutput) {
       const ctx = this.workflowRuntime.get(wf.id);
       if (ctx && ctx.stepOutputs.size > 0) {
-        const previousOutput = String(Array.from(ctx.stepOutputs.values()).pop() || "");
-        const cleanOutput = extractContextForHandoff(previousOutput);
-        if (cleanOutput) {
-          const contextBlock = ` Previous step output to use as context: ${cleanOutput} End of previous step output.`;
-          taskOverrides.prompt = `${task.prompt}${contextBlock}`;
-        }
+        const stepOutputs = ctx.stepOutputs;
+        const entries = Array.from(stepOutputs.entries());
+        const [previousStepId, previousOutputRaw] = entries[entries.length - 1];
+        const previousStep = wf.steps.find((s) => s.id === previousStepId);
+        const sourceLine = previousStep ? `Source: step "${previousStep.name || previousStepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})` : `Source: step ${previousStepId}`;
+        const cleanOutput = extractContextForHandoff(String(previousOutputRaw || ""));
+        const contextBlock = [
+          "",
+          "=== WORKFLOW HANDOFF CONTEXT ===",
+          sourceLine,
+          "The previous step's output below is the PRIMARY INPUT for this task.",
+          "Touched files are DIAGNOSTIC ONLY \u2014 do not re-read them unless this task explicitly asks.",
+          "",
+          cleanOutput || String(previousOutputRaw || "").trim(),
+          "=== END WORKFLOW HANDOFF CONTEXT ==="
+        ].join("\n");
+        const capped = contextBlock.length > HANDOFF_CONTEXT_LIMIT ? contextBlock.slice(0, HANDOFF_CONTEXT_LIMIT) + `
+... [truncated at ${HANDOFF_CONTEXT_LIMIT} chars]` : contextBlock;
+        taskOverrides.prompt = `${task.prompt}
+${capped}`;
       }
     }
     wf.currentStep = stepIndex;
