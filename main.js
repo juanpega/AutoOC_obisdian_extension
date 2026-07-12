@@ -1987,7 +1987,7 @@ var init_visualBuilderHtml_generated = __esm({
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.5.6",
+        pluginVersion: "1.5.7",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
@@ -2185,7 +2185,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.6",
+    "pluginVersion": "1.5.7",
     "name": "Package name",
     "description": "Short description"
   },
@@ -2389,7 +2389,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.6",
+    "pluginVersion": "1.5.7",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
