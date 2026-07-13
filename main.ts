@@ -44,6 +44,10 @@ function psSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+function cmdQuotedArg(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 function commandPreviewArg(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
@@ -150,7 +154,8 @@ function launchHiddenPS(psScriptFile: string): void {
   // Clean up launcher files after PowerShell has had time to read them. This
   // also limits exposure for launch scripts that contain temporary env vars.
   setTimeout(() => { try { fs.unlinkSync(vbsFile); } catch { /* ignore */ } }, 10000);
-  setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 30000);
+  // ponytail: 10-minute fallback cleanup so generated ps1 stays available for debugging.
+  setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 600000);
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -2496,18 +2501,18 @@ export default class AutoOCPlugin extends Plugin {
 
       const psScript = [
         ...psUtf8Prelude(),
-        `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-        `$env:APPDATA     = '${process.env.APPDATA}'`,
-        `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-        `$env:PATH        = '${process.env.PATH}'`,
-        `$env:HOME        = '${process.env.USERPROFILE}'`,
+        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         ...buildPowerShellEnvLines(secretEnv),
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
         `$bin = ${psSingleQuoted(bin)}`,
         `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2> $errTmp`,
+        `& $bin @argList > $outTmp 2>$null`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
@@ -2645,6 +2650,8 @@ export default class AutoOCPlugin extends Plugin {
     const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
+    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
+    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
     const fs = require("fs");
 
     // Clean up any previous temp files
@@ -2653,7 +2660,26 @@ export default class AutoOCPlugin extends Plugin {
     try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
     try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-    fs.writeFileSync(promptFile, preparedPrompt, "utf8");
+    try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmpFullPromptFile); } catch { /* ignore */ }
+
+    // Long prompts are externalized to avoid command-line length limits; opencode
+    // is asked to read the full prompt from the workspace temp file instead.
+    // Workflow handoff prompts are always externalized so the full context is
+    // passed through the workspace file even when the prompt is short.
+    if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
+      try {
+        fs.writeFileSync(fullPromptFile, prompt, "utf8");
+      } catch {
+        fullPromptFile = tmpFullPromptFile;
+        fs.writeFileSync(fullPromptFile, prompt, "utf8");
+      }
+      const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
+      const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
+      fs.writeFileSync(promptFile, shortPrompt, "utf8");
+    } else {
+      fs.writeFileSync(promptFile, preparedPrompt, "utf8");
+    }
 
     // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
     // Resolve working directory: Task override -> Global Setting -> Vault Path
@@ -2672,20 +2698,41 @@ export default class AutoOCPlugin extends Plugin {
 
     const psScript = [
       ...psUtf8Prelude(),
-      `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-      `$env:APPDATA     = '${process.env.APPDATA}'`,
-      `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-      `$env:PATH        = '${process.env.PATH}'`,
-      `$env:HOME        = '${process.env.USERPROFILE}'`,
-      ...buildPowerShellEnvLines(secretEnv),
-      `Set-Location -LiteralPath '${safeCwd}'`,
-      gitCmds ? gitCmds : "",
-      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
-      `$bin = ${psSingleQuoted(bin)}`,
-      `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))},'--dangerously-skip-permissions','--',$prompt)`,
-      `& $bin @argList > '${outFile.replace(/'/g, "''")}' 2> '${errFile.replace(/'/g, "''")}'`,
-      `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        ...buildPowerShellEnvLines(secretEnv),
+        `Set-Location -LiteralPath '${safeCwd}'`,
+        gitCmds ? gitCmds : "",
+      `try {`,
+      `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
+      `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
+      `$psi.RedirectStandardOutput = $true`,
+      `$psi.RedirectStandardError = $true`,
+      `$psi.UseShellExecute = $false`,
+      `$psi.CreateNoWindow = $true`,
+      `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
+      `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
+      `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
+      `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
+      `$psi.Arguments = '/d /s /c "' + $bin + ' run -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + '"'`,
+      `$proc = [System.Diagnostics.Process]::Start($psi)`,
+      `$stdoutTask = $proc.StandardOutput.ReadToEndAsync()`,
+      `$stderrTask = $proc.StandardError.ReadToEndAsync()`,
+      `$proc.WaitForExit()`,
+      `$stdout = $stdoutTask.Result`,
+      `$stderr = $stderrTask.Result`,
+      `$exitCode = $proc.ExitCode`,
+      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $stdout, [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $stderr, [System.Text.Encoding]::UTF8)`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
+      `} catch {`,
+      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
+      `}`,
     ].filter(line => line !== "").join("\n");
 
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
@@ -2714,6 +2761,26 @@ export default class AutoOCPlugin extends Plugin {
         new Notice(`AutoOC: ⏱ "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
 
+      if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 300_000) {
+        clearInterval(pollHandle);
+        this.runningProcesses.delete(task.id);
+        try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(tmpFullPromptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(errFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
+
+        t.status = "failed";
+        t.output += `\n[⏱ timed out after ${timeoutSeconds}s + 300s grace; no completion marker was written]`;
+        this.view?.startGradualSink(task.id);
+        await this.saveSettings();
+        if (onComplete) await onComplete(t, -1);
+        new Notice(`AutoOC: ⏱ "${task.name}" timed out.`);
+        return;
+      }
+
       if (!fs.existsSync(doneFile)) {
         // Still running — heartbeat dot
         t.output += ".";
@@ -2727,6 +2794,7 @@ export default class AutoOCPlugin extends Plugin {
       this.runningProcesses.delete(task.id);
       try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
       try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
 
       const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
       const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
@@ -9375,18 +9443,18 @@ class DiagnosticModal extends Modal {
 
         const psScript = [
           ...psUtf8Prelude(),
-          `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-          `$env:APPDATA     = '${process.env.APPDATA}'`,
-          `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-          `$env:PATH        = '${process.env.PATH}'`,
-          `$env:HOME        = '${process.env.USERPROFILE}'`,
+          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
           `$outTmp = [System.IO.Path]::GetTempFileName()`,
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
           `$bin = ${psSingleQuoted(bin)}`,
           `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-          `& $bin @argList > $outTmp 2> $errTmp`,
-          `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-          `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+        `& $bin @argList > $outTmp 2>$null`,
+        `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+        `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
           `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "\nDONE:" + $exitCode)`,
         ].join("\n");
