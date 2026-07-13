@@ -3280,6 +3280,7 @@ export default class AutoOCPlugin extends Plugin {
       let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind: StepKind = (s as any).stepKind || "task";
+        const importedTransitions = (s as { transitions?: unknown }).transitions;
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
@@ -3298,7 +3299,11 @@ export default class AutoOCPlugin extends Plugin {
           codeAllowVault: (s as any).codeAllowVault,
           codeAllowFiles: (s as any).codeAllowFiles,
           codeAllowTerminal: (s as any).codeAllowTerminal,
-          transitions: (s as any).transitions,
+          transitions: Array.isArray(importedTransitions)
+            ? importedTransitions
+            : importedTransitions && typeof importedTransitions === "object" && typeof (importedTransitions as { toStepId?: unknown }).toStepId === "string"
+              ? [importedTransitions as WorkflowTransition]
+              : [],
           position: (s as any).position,
         };
         // Legacy: if no transitions are present but stepKind is "task", build

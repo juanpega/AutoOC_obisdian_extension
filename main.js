@@ -4831,6 +4831,7 @@ DONE:" + $exitCode + "
       let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind = s.stepKind || "task";
+        const importedTransitions = s.transitions;
         const step = {
           id: s.id || generateId(),
           stepKind,
@@ -4849,7 +4850,7 @@ DONE:" + $exitCode + "
           codeAllowVault: s.codeAllowVault,
           codeAllowFiles: s.codeAllowFiles,
           codeAllowTerminal: s.codeAllowTerminal,
-          transitions: s.transitions,
+          transitions: Array.isArray(importedTransitions) ? importedTransitions : importedTransitions && typeof importedTransitions === "object" && typeof importedTransitions.toStepId === "string" ? [importedTransitions] : [],
           position: s.position
         };
         if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
