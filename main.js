@@ -9697,12 +9697,13 @@ var ImportModal = class extends import_obsidian.Modal {
               warnings.push(swhere + '.codeLang is "' + s.codeLang + `"; only 'javascript' is currently supported.`);
             }
           }
-          if (s.transitions !== void 0 && !Array.isArray(s.transitions)) {
-            errors.push(swhere + ".transitions must be an array.");
+          const transitions = Array.isArray(s.transitions) ? s.transitions : s.transitions && typeof s.transitions === "object" && typeof s.transitions.toStepId === "string" ? [s.transitions] : [];
+          if (s.transitions !== void 0 && !Array.isArray(s.transitions) && transitions.length === 0) {
+            errors.push(swhere + ".transitions must be an array or a single transition object.");
           }
-          if (Array.isArray(s.transitions)) {
+          if (transitions.length > 0) {
             const validModes = ["default", "force", "eval", "conditional"];
-            s.transitions.forEach((t, ti) => {
+            transitions.forEach((t, ti) => {
               const twhere = swhere + ".transitions[" + ti + "]";
               if (!t || typeof t !== "object") {
                 errors.push(twhere + " is not an object.");
@@ -9727,7 +9728,7 @@ var ImportModal = class extends import_obsidian.Modal {
         });
         const incoming = /* @__PURE__ */ new Set();
         steps.forEach((s) => {
-          (Array.isArray(s.transitions) ? s.transitions : []).forEach((t) => incoming.add(t.toStepId));
+          (Array.isArray(s.transitions) ? s.transitions : s.transitions && typeof s.transitions === "object" && typeof s.transitions.toStepId === "string" ? [s.transitions] : []).forEach((t) => incoming.add(t.toStepId));
         });
         const entryCandidates = steps.filter((s) => s.id && !incoming.has(s.id));
         if (steps.length > 0 && entryCandidates.length === 0) {
