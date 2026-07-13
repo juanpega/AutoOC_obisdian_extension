@@ -6656,29 +6656,23 @@ class CreateTaskModal extends Modal {
       text: this.editTask ? "Edit Task" : "New Task",
     });
 
-    if (!this.editTask) {
-      new Setting(contentEl)
-        .setName("Task type")
-        .setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.")
-        .addDropdown((dd) => {
-          dd.addOption("opencode", "OpenCode task");
-          dd.addOption("code", "Code task");
-          dd.addOption("cli", "CLI task");
-          dd.setValue(taskType);
-          dd.onChange((v) => {
-            this.draft.taskKind = v === "code" ? "code" : "opencode";
-            this.draft.interactiveTerminal = v === "cli";
-            if (v === "code" && !this.draft.code) {
-              this.draft.code = "// Set output to pass data forward\noutput = input;";
-            }
-            this.onOpen();
-          });
+    new Setting(contentEl)
+      .setName("Task type")
+      .setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.")
+      .addDropdown((dd) => {
+        dd.addOption("opencode", "OpenCode task");
+        dd.addOption("code", "Code task");
+        dd.addOption("cli", "CLI task");
+        dd.setValue(taskType);
+        dd.onChange((v) => {
+          this.draft.taskKind = v === "code" ? "code" : "opencode";
+          this.draft.interactiveTerminal = v === "cli";
+          if (v === "code" && !this.draft.code) {
+            this.draft.code = "// Set output to pass data forward\noutput = input;";
+          }
+          this.onOpen();
         });
-    } else {
-      new Setting(contentEl)
-        .setName("Task type")
-        .setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
-    }
+      });
 
     new Setting(contentEl)
       .setName("Name")
@@ -7090,6 +7084,7 @@ class CreateTaskModal extends Modal {
                 ...(this.draft as ScheduledTask),
                 prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
                 taskKind: savingTaskKind,
+                interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : undefined,
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,

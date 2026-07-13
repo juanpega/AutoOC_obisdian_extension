@@ -7894,24 +7894,20 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
-    if (!this.editTask) {
-      new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
-        dd.addOption("opencode", "OpenCode task");
-        dd.addOption("code", "Code task");
-        dd.addOption("cli", "CLI task");
-        dd.setValue(taskType);
-        dd.onChange((v) => {
-          this.draft.taskKind = v === "code" ? "code" : "opencode";
-          this.draft.interactiveTerminal = v === "cli";
-          if (v === "code" && !this.draft.code) {
-            this.draft.code = "// Set output to pass data forward\noutput = input;";
-          }
-          this.onOpen();
-        });
+    new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
+      dd.addOption("opencode", "OpenCode task");
+      dd.addOption("code", "Code task");
+      dd.addOption("cli", "CLI task");
+      dd.setValue(taskType);
+      dd.onChange((v) => {
+        this.draft.taskKind = v === "code" ? "code" : "opencode";
+        this.draft.interactiveTerminal = v === "cli";
+        if (v === "code" && !this.draft.code) {
+          this.draft.code = "// Set output to pass data forward\noutput = input;";
+        }
+        this.onOpen();
       });
-    } else {
-      new import_obsidian.Setting(contentEl).setName("Task type").setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
-    }
+    });
     new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
@@ -8212,6 +8208,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
               ...this.draft,
               prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt || "",
               taskKind: savingTaskKind,
+              interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : void 0,
               status: existing.status,
               lastRun: existing.lastRun,
               output: existing.output
