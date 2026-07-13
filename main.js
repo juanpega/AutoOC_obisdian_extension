@@ -9727,7 +9727,7 @@ var ImportModal = class extends import_obsidian.Modal {
         });
         const incoming = /* @__PURE__ */ new Set();
         steps.forEach((s) => {
-          (s.transitions || []).forEach((t) => incoming.add(t.toStepId));
+          (Array.isArray(s.transitions) ? s.transitions : []).forEach((t) => incoming.add(t.toStepId));
         });
         const entryCandidates = steps.filter((s) => s.id && !incoming.has(s.id));
         if (steps.length > 0 && entryCandidates.length === 0) {

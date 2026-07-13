@@ -8857,7 +8857,7 @@ class ImportModal extends Modal {
         // Entry step check: at least one step must have no incoming transitions.
         const incoming = new Set<string>();
         steps.forEach((s: any) => {
-          (s.transitions || []).forEach((t: any) => incoming.add(t.toStepId));
+          (Array.isArray(s.transitions) ? s.transitions : []).forEach((t: any) => incoming.add(t.toStepId));
         });
         const entryCandidates = steps.filter((s: any) => s.id && !incoming.has(s.id));
         if (steps.length > 0 && entryCandidates.length === 0) {
