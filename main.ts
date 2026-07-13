@@ -63,7 +63,7 @@ function buildPowerShellEnvLines(env: Record<string, string>): string[] {
 }
 
 const HANDOFF_CONTEXT_LIMIT = 50000;
-const SAFE_CLI_PROMPT_LENGTH = 4000;
+const SAFE_CLI_PROMPT_LENGTH = 7500;
 
 function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}, args: string[] = []): void {
   if (process.platform === "win32") {

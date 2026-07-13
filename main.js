@@ -2063,7 +2063,7 @@ function buildPowerShellEnvLines(env) {
   return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
 var HANDOFF_CONTEXT_LIMIT = 5e4;
-var SAFE_CLI_PROMPT_LENGTH = 4e3;
+var SAFE_CLI_PROMPT_LENGTH = 7500;
 function openOpencodeCli(bin, cwd, env = {}, args = []) {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
