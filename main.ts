@@ -251,6 +251,7 @@ Task fields:
 - agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
+- workingDirectory: optional absolute path where this task should run.
 
 Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
 
@@ -710,7 +711,6 @@ function renderAreaSuggestions(
 // Intentionally excludes machine/runtime-specific fields:
 //   - internal id, status, lastRun, output, createdAt
 //   - model (taken from the importer's system default)
-//   - workingDirectory (taken from the importer's settings / vault)
 interface ExportTask {
   exportId: string;
   taskKind?: TaskKind;
@@ -736,6 +736,7 @@ interface ExportTask {
   agent: string;
   branch?: string;
   createBranch?: boolean;
+  workingDirectory?: string;
 }
 
 interface ExportWorkflowTransition {
@@ -1290,6 +1291,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     agent: task.agent,
     branch: task.branch,
     createBranch: task.createBranch,
+    workingDirectory: task.workingDirectory,
   };
 }
 
@@ -3256,6 +3258,7 @@ export default class AutoOCPlugin extends Plugin {
         lastRun: "",
         output: "",
         createdAt: new Date().toISOString(),
+        workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
         interactiveTerminal: importedTaskKind === "opencode" ? (et.interactiveTerminal ?? this.settings.defaultInteractiveTerminal) : undefined,

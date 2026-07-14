@@ -2224,6 +2224,7 @@ Task fields:
 - agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
+- workingDirectory: optional absolute path where this task should run.
 
 Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
 
@@ -2911,7 +2912,8 @@ function toExportTask(task, exportId) {
     useRalphLoop: task.useRalphLoop,
     agent: task.agent,
     branch: task.branch,
-    createBranch: task.createBranch
+    createBranch: task.createBranch,
+    workingDirectory: task.workingDirectory
   };
 }
 function toExportWorkflow(workflow, exportId, taskExportIdMap) {
@@ -4812,6 +4814,7 @@ DONE:" + $exitCode + "
         lastRun: "",
         output: "",
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
         interactiveTerminal: importedTaskKind === "opencode" ? (_j = et.interactiveTerminal) != null ? _j : this.settings.defaultInteractiveTerminal : void 0,
