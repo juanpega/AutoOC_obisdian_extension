@@ -1987,7 +1987,7 @@ var init_visualBuilderHtml_generated = __esm({
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.5.7",
+        pluginVersion: "1.5.8",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
@@ -2050,6 +2050,9 @@ function resolveOpencodeBin(configured) {
 function psSingleQuoted(value) {
   return `'${value.replace(/'/g, "''")}'`;
 }
+function cmdQuotedArg(value) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
 function commandPreviewArg(value) {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
@@ -2060,7 +2063,7 @@ function buildPowerShellEnvLines(env) {
   return Object.entries(env).filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key)).map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
 }
 var HANDOFF_CONTEXT_LIMIT = 5e4;
-var SAFE_CLI_PROMPT_LENGTH = 4e3;
+var SAFE_CLI_PROMPT_LENGTH = 7500;
 function openOpencodeCli(bin, cwd, env = {}, args = []) {
   if (process.platform === "win32") {
     const envScript = buildPowerShellEnvLines(env).join("; ");
@@ -2129,7 +2132,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       fs2.unlinkSync(psScriptFile);
     } catch (e) {
     }
-  }, 3e4);
+  }, 6e5);
 }
 function writeUtf8BomFile(filePath, content) {
   fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
@@ -2185,7 +2188,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.7",
+    "pluginVersion": "1.5.8",
     "name": "Package name",
     "description": "Short description"
   },
@@ -2221,6 +2224,7 @@ Task fields:
 - agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
+- workingDirectory: optional absolute path where this task should run.
 
 Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
 
@@ -2389,7 +2393,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.7",
+    "pluginVersion": "1.5.8",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -2908,7 +2912,8 @@ function toExportTask(task, exportId) {
     useRalphLoop: task.useRalphLoop,
     agent: task.agent,
     branch: task.branch,
-    createBranch: task.createBranch
+    createBranch: task.createBranch,
+    workingDirectory: task.workingDirectory
   };
 }
 function toExportWorkflow(workflow, exportId, taskExportIdMap) {
@@ -4071,18 +4076,18 @@ Continue?`
       const secretEnv = this.getSecretsEnv();
       const psScript = [
         ...psUtf8Prelude(),
-        `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-        `$env:APPDATA     = '${process.env.APPDATA}'`,
-        `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-        `$env:PATH        = '${process.env.PATH}'`,
-        `$env:HOME        = '${process.env.USERPROFILE}'`,
+        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         ...buildPowerShellEnvLines(secretEnv),
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
         `$bin = ${psSingleQuoted(bin)}`,
         `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2> $errTmp`,
+        `& $bin @argList > $outTmp 2>$null`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
@@ -4213,6 +4218,8 @@ DONE:" + $exitCode + "
     const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
+    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
+    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
     const fs2 = require("fs");
     try {
       fs2.unlinkSync(outFile);
@@ -4234,7 +4241,27 @@ DONE:" + $exitCode + "
       fs2.unlinkSync(promptFile);
     } catch (e) {
     }
-    fs2.writeFileSync(promptFile, preparedPrompt, "utf8");
+    try {
+      fs2.unlinkSync(fullPromptFile);
+    } catch (e) {
+    }
+    try {
+      fs2.unlinkSync(tmpFullPromptFile);
+    } catch (e) {
+    }
+    if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
+      try {
+        fs2.writeFileSync(fullPromptFile, prompt, "utf8");
+      } catch (e) {
+        fullPromptFile = tmpFullPromptFile;
+        fs2.writeFileSync(fullPromptFile, prompt, "utf8");
+      }
+      const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
+      const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
+      fs2.writeFileSync(promptFile, shortPrompt, "utf8");
+    } else {
+      fs2.writeFileSync(promptFile, preparedPrompt, "utf8");
+    }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
     if (effectiveTask.branch) {
@@ -4247,20 +4274,37 @@ DONE:" + $exitCode + "
     }
     const psScript = [
       ...psUtf8Prelude(),
-      `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-      `$env:APPDATA     = '${process.env.APPDATA}'`,
-      `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-      `$env:PATH        = '${process.env.PATH}'`,
-      `$env:HOME        = '${process.env.USERPROFILE}'`,
+      `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+      `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+      `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+      `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+      `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
       ...buildPowerShellEnvLines(secretEnv),
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
-      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
-      `$bin = ${psSingleQuoted(bin)}`,
-      `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))},'--dangerously-skip-permissions','--',$prompt)`,
-      `& $bin @argList > '${outFile.replace(/'/g, "''")}' 2> '${errFile.replace(/'/g, "''")}'`,
-      `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`
+      `try {`,
+      `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
+      `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
+      `$psi.RedirectStandardOutput = $false`,
+      `$psi.RedirectStandardError = $false`,
+      `$psi.UseShellExecute = $false`,
+      `$psi.CreateNoWindow = $true`,
+      `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
+      `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
+      `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
+      `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
+      `$outFile = ${psSingleQuoted(outFile)}`,
+      `$errFile = ${psSingleQuoted(errFile)}`,
+      `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
+      `$proc = [System.Diagnostics.Process]::Start($psi)`,
+      `$proc.WaitForExit()`,
+      `$exitCode = $proc.ExitCode`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
+      `} catch {`,
+      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
+      `}`
     ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
@@ -4273,7 +4317,7 @@ DONE:" + $exitCode + "
     const startedAt = Date.now();
     let timeoutWarned = false;
     const pollHandle = setInterval(async () => {
-      var _a2, _b2;
+      var _a2, _b2, _c2;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         clearInterval(pollHandle);
@@ -4286,9 +4330,57 @@ DONE:" + $exitCode + "
         await this.saveSettings(false);
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
+      if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
+        clearInterval(pollHandle);
+        this.runningProcesses.delete(task.id);
+        try {
+          fs2.unlinkSync(psScriptFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(promptFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(fullPromptFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(tmpFullPromptFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(outFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(errFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(doneFile);
+        } catch (e) {
+        }
+        t.status = "failed";
+        t.output += `
+[\u23F1 timed out after ${timeoutSeconds}s + 300s grace; no completion marker was written]`;
+        (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
+        await this.saveSettings();
+        if (onComplete) await onComplete(t, -1);
+        new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
+        return;
+      }
       if (!fs2.existsSync(doneFile)) {
-        t.output += ".";
-        (_a2 = this.view) == null ? void 0 : _a2.nudgeDashboardTask(task.id, "up");
+        const stdout2 = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
+        const stderr2 = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
+        const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
+        if (normalized2) {
+          t.output = `${normalized2}
+[running\u2026]`;
+        } else {
+          t.output += ".";
+        }
+        (_b2 = this.view) == null ? void 0 : _b2.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);
         return;
       }
@@ -4300,6 +4392,10 @@ DONE:" + $exitCode + "
       }
       try {
         fs2.unlinkSync(promptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       const stdout = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
@@ -4324,7 +4420,7 @@ DONE:" + $exitCode + "
         t.status = "failed";
         t.output += `
 [exit code: ${exitCode}]`;
-        (_b2 = this.view) == null ? void 0 : _b2.startGradualSink(task.id);
+        (_c2 = this.view) == null ? void 0 : _c2.startGradualSink(task.id);
         new import_obsidian.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
@@ -4718,6 +4814,7 @@ DONE:" + $exitCode + "
         lastRun: "",
         output: "",
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+        workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
         interactiveTerminal: importedTaskKind === "opencode" ? (_j = et.interactiveTerminal) != null ? _j : this.settings.defaultInteractiveTerminal : void 0,
@@ -4741,6 +4838,7 @@ DONE:" + $exitCode + "
       let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind = s.stepKind || "task";
+        const importedTransitions = s.transitions;
         const step = {
           id: s.id || generateId(),
           stepKind,
@@ -4759,7 +4857,7 @@ DONE:" + $exitCode + "
           codeAllowVault: s.codeAllowVault,
           codeAllowFiles: s.codeAllowFiles,
           codeAllowTerminal: s.codeAllowTerminal,
-          transitions: s.transitions,
+          transitions: Array.isArray(importedTransitions) ? importedTransitions : importedTransitions && typeof importedTransitions === "object" && typeof importedTransitions.toStepId === "string" ? [importedTransitions] : [],
           position: s.position
         };
         if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
@@ -4825,6 +4923,10 @@ DONE:" + $exitCode + "
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+    if (wf.status === "running") {
+      new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      return;
+    }
     if (wf.steps.length === 0) {
       new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
       return;
@@ -7804,24 +7906,20 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
-    if (!this.editTask) {
-      new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
-        dd.addOption("opencode", "OpenCode task");
-        dd.addOption("code", "Code task");
-        dd.addOption("cli", "CLI task");
-        dd.setValue(taskType);
-        dd.onChange((v) => {
-          this.draft.taskKind = v === "code" ? "code" : "opencode";
-          this.draft.interactiveTerminal = v === "cli";
-          if (v === "code" && !this.draft.code) {
-            this.draft.code = "// Set output to pass data forward\noutput = input;";
-          }
-          this.onOpen();
-        });
+    new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
+      dd.addOption("opencode", "OpenCode task");
+      dd.addOption("code", "Code task");
+      dd.addOption("cli", "CLI task");
+      dd.setValue(taskType);
+      dd.onChange((v) => {
+        this.draft.taskKind = v === "code" ? "code" : "opencode";
+        this.draft.interactiveTerminal = v === "cli";
+        if (v === "code" && !this.draft.code) {
+          this.draft.code = "// Set output to pass data forward\noutput = input;";
+        }
+        this.onOpen();
       });
-    } else {
-      new import_obsidian.Setting(contentEl).setName("Task type").setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
-    }
+    });
     new import_obsidian.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
@@ -8122,6 +8220,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
               ...this.draft,
               prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt || "",
               taskKind: savingTaskKind,
+              interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : void 0,
               status: existing.status,
               lastRun: existing.lastRun,
               output: existing.output
@@ -9609,12 +9708,13 @@ var ImportModal = class extends import_obsidian.Modal {
               warnings.push(swhere + '.codeLang is "' + s.codeLang + `"; only 'javascript' is currently supported.`);
             }
           }
-          if (s.transitions !== void 0 && !Array.isArray(s.transitions)) {
-            errors.push(swhere + ".transitions must be an array.");
+          const transitions = Array.isArray(s.transitions) ? s.transitions : s.transitions && typeof s.transitions === "object" && typeof s.transitions.toStepId === "string" ? [s.transitions] : [];
+          if (s.transitions !== void 0 && !Array.isArray(s.transitions) && transitions.length === 0) {
+            errors.push(swhere + ".transitions must be an array or a single transition object.");
           }
-          if (Array.isArray(s.transitions)) {
+          if (transitions.length > 0) {
             const validModes = ["default", "force", "eval", "conditional"];
-            s.transitions.forEach((t, ti) => {
+            transitions.forEach((t, ti) => {
               const twhere = swhere + ".transitions[" + ti + "]";
               if (!t || typeof t !== "object") {
                 errors.push(twhere + " is not an object.");
@@ -9639,7 +9739,7 @@ var ImportModal = class extends import_obsidian.Modal {
         });
         const incoming = /* @__PURE__ */ new Set();
         steps.forEach((s) => {
-          (s.transitions || []).forEach((t) => incoming.add(t.toStepId));
+          (Array.isArray(s.transitions) ? s.transitions : s.transitions && typeof s.transitions === "object" && typeof s.transitions.toStepId === "string" ? [s.transitions] : []).forEach((t) => incoming.add(t.toStepId));
         });
         const entryCandidates = steps.filter((s) => s.id && !incoming.has(s.id));
         if (steps.length > 0 && entryCandidates.length === 0) {
@@ -10120,16 +10220,16 @@ var DiagnosticModal = class extends import_obsidian.Modal {
         }
         const psScript = [
           ...psUtf8Prelude(),
-          `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-          `$env:APPDATA     = '${process.env.APPDATA}'`,
-          `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-          `$env:PATH        = '${process.env.PATH}'`,
-          `$env:HOME        = '${process.env.USERPROFILE}'`,
+          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
           `$outTmp = [System.IO.Path]::GetTempFileName()`,
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
           `$bin = ${psSingleQuoted(bin2)}`,
           `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-          `& $bin @argList > $outTmp 2> $errTmp`,
+          `& $bin @argList > $outTmp 2>$null`,
           `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
           `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,

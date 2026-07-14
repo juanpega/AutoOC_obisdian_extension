@@ -44,6 +44,10 @@ function psSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+function cmdQuotedArg(value: string): string {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 function commandPreviewArg(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
@@ -59,7 +63,7 @@ function buildPowerShellEnvLines(env: Record<string, string>): string[] {
 }
 
 const HANDOFF_CONTEXT_LIMIT = 50000;
-const SAFE_CLI_PROMPT_LENGTH = 4000;
+const SAFE_CLI_PROMPT_LENGTH = 7500;
 
 function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}, args: string[] = []): void {
   if (process.platform === "win32") {
@@ -150,7 +154,8 @@ function launchHiddenPS(psScriptFile: string): void {
   // Clean up launcher files after PowerShell has had time to read them. This
   // also limits exposure for launch scripts that contain temporary env vars.
   setTimeout(() => { try { fs.unlinkSync(vbsFile); } catch { /* ignore */ } }, 10000);
-  setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 30000);
+  // ponytail: 10-minute fallback cleanup so generated ps1 stays available for debugging.
+  setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 600000);
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -210,7 +215,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.7",
+    "pluginVersion": "1.5.8",
     "name": "Package name",
     "description": "Short description"
   },
@@ -246,6 +251,7 @@ Task fields:
 - agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
+- workingDirectory: optional absolute path where this task should run.
 
 Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
 
@@ -414,7 +420,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.7",
+    "pluginVersion": "1.5.8",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -705,7 +711,6 @@ function renderAreaSuggestions(
 // Intentionally excludes machine/runtime-specific fields:
 //   - internal id, status, lastRun, output, createdAt
 //   - model (taken from the importer's system default)
-//   - workingDirectory (taken from the importer's settings / vault)
 interface ExportTask {
   exportId: string;
   taskKind?: TaskKind;
@@ -731,6 +736,7 @@ interface ExportTask {
   agent: string;
   branch?: string;
   createBranch?: boolean;
+  workingDirectory?: string;
 }
 
 interface ExportWorkflowTransition {
@@ -1285,6 +1291,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     agent: task.agent,
     branch: task.branch,
     createBranch: task.createBranch,
+    workingDirectory: task.workingDirectory,
   };
 }
 
@@ -2496,18 +2503,18 @@ export default class AutoOCPlugin extends Plugin {
 
       const psScript = [
         ...psUtf8Prelude(),
-        `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-        `$env:APPDATA     = '${process.env.APPDATA}'`,
-        `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-        `$env:PATH        = '${process.env.PATH}'`,
-        `$env:HOME        = '${process.env.USERPROFILE}'`,
+        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         ...buildPowerShellEnvLines(secretEnv),
         `Set-Location -LiteralPath '${safeCwd}'`,
         `$outTmp = [System.IO.Path]::GetTempFileName()`,
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
         `$bin = ${psSingleQuoted(bin)}`,
         `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2> $errTmp`,
+        `& $bin @argList > $outTmp 2>$null`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
@@ -2645,6 +2652,8 @@ export default class AutoOCPlugin extends Plugin {
     const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
     const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
+    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
+    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
     const fs = require("fs");
 
     // Clean up any previous temp files
@@ -2653,7 +2662,26 @@ export default class AutoOCPlugin extends Plugin {
     try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
     try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
     try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-    fs.writeFileSync(promptFile, preparedPrompt, "utf8");
+    try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(tmpFullPromptFile); } catch { /* ignore */ }
+
+    // Long prompts are externalized to avoid command-line length limits; opencode
+    // is asked to read the full prompt from the workspace temp file instead.
+    // Workflow handoff prompts are always externalized so the full context is
+    // passed through the workspace file even when the prompt is short.
+    if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
+      try {
+        fs.writeFileSync(fullPromptFile, prompt, "utf8");
+      } catch {
+        fullPromptFile = tmpFullPromptFile;
+        fs.writeFileSync(fullPromptFile, prompt, "utf8");
+      }
+      const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
+      const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
+      fs.writeFileSync(promptFile, shortPrompt, "utf8");
+    } else {
+      fs.writeFileSync(promptFile, preparedPrompt, "utf8");
+    }
 
     // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
     // Resolve working directory: Task override -> Global Setting -> Vault Path
@@ -2672,20 +2700,37 @@ export default class AutoOCPlugin extends Plugin {
 
     const psScript = [
       ...psUtf8Prelude(),
-      `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-      `$env:APPDATA     = '${process.env.APPDATA}'`,
-      `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-      `$env:PATH        = '${process.env.PATH}'`,
-      `$env:HOME        = '${process.env.USERPROFILE}'`,
-      ...buildPowerShellEnvLines(secretEnv),
-      `Set-Location -LiteralPath '${safeCwd}'`,
-      gitCmds ? gitCmds : "",
-      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
-      `$bin = ${psSingleQuoted(bin)}`,
-      `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))},'--dangerously-skip-permissions','--',$prompt)`,
-      `& $bin @argList > '${outFile.replace(/'/g, "''")}' 2> '${errFile.replace(/'/g, "''")}'`,
-      `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
+        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+        ...buildPowerShellEnvLines(secretEnv),
+        `Set-Location -LiteralPath '${safeCwd}'`,
+        gitCmds ? gitCmds : "",
+      `try {`,
+      `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
+      `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
+      `$psi.RedirectStandardOutput = $false`,
+      `$psi.RedirectStandardError = $false`,
+      `$psi.UseShellExecute = $false`,
+      `$psi.CreateNoWindow = $true`,
+      `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
+      `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
+      `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
+      `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
+       `$outFile = ${psSingleQuoted(outFile)}`,
+       `$errFile = ${psSingleQuoted(errFile)}`,
+       `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
+       `$proc = [System.Diagnostics.Process]::Start($psi)`,
+       `$proc.WaitForExit()`,
+       `$exitCode = $proc.ExitCode`,
+       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
+      `} catch {`,
+      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
+      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
+      `}`,
     ].filter(line => line !== "").join("\n");
 
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
@@ -2714,9 +2759,36 @@ export default class AutoOCPlugin extends Plugin {
         new Notice(`AutoOC: ⏱ "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
 
+      if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 300_000) {
+        clearInterval(pollHandle);
+        this.runningProcesses.delete(task.id);
+        try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(tmpFullPromptFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(errFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
+
+        t.status = "failed";
+        t.output += `\n[⏱ timed out after ${timeoutSeconds}s + 300s grace; no completion marker was written]`;
+        this.view?.startGradualSink(task.id);
+        await this.saveSettings();
+        if (onComplete) await onComplete(t, -1);
+        new Notice(`AutoOC: ⏱ "${task.name}" timed out.`);
+        return;
+      }
+
       if (!fs.existsSync(doneFile)) {
-        // Still running — heartbeat dot
-        t.output += ".";
+        const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
+        const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
+        const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
+        if (normalized) {
+          t.output = `${normalized}\n[running…]`;
+        } else {
+          // Still running — heartbeat dot
+          t.output += ".";
+        }
         this.view?.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);
         return;
@@ -2727,6 +2799,7 @@ export default class AutoOCPlugin extends Plugin {
       this.runningProcesses.delete(task.id);
       try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
       try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
 
       const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
       const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
@@ -3185,6 +3258,7 @@ export default class AutoOCPlugin extends Plugin {
         lastRun: "",
         output: "",
         createdAt: new Date().toISOString(),
+        workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
         interactiveTerminal: importedTaskKind === "opencode" ? (et.interactiveTerminal ?? this.settings.defaultInteractiveTerminal) : undefined,
@@ -3212,6 +3286,7 @@ export default class AutoOCPlugin extends Plugin {
       let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind: StepKind = (s as any).stepKind || "task";
+        const importedTransitions = (s as { transitions?: unknown }).transitions;
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
@@ -3230,7 +3305,11 @@ export default class AutoOCPlugin extends Plugin {
           codeAllowVault: (s as any).codeAllowVault,
           codeAllowFiles: (s as any).codeAllowFiles,
           codeAllowTerminal: (s as any).codeAllowTerminal,
-          transitions: (s as any).transitions,
+          transitions: Array.isArray(importedTransitions)
+            ? importedTransitions
+            : importedTransitions && typeof importedTransitions === "object" && typeof (importedTransitions as { toStepId?: unknown }).toStepId === "string"
+              ? [importedTransitions as WorkflowTransition]
+              : [],
           position: (s as any).position,
         };
         // Legacy: if no transitions are present but stepKind is "task", build
@@ -3311,6 +3390,11 @@ export default class AutoOCPlugin extends Plugin {
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+
+    if (wf.status === "running") {
+      new Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      return;
+    }
 
     if (wf.steps.length === 0) {
       new Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
@@ -6588,29 +6672,23 @@ class CreateTaskModal extends Modal {
       text: this.editTask ? "Edit Task" : "New Task",
     });
 
-    if (!this.editTask) {
-      new Setting(contentEl)
-        .setName("Task type")
-        .setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.")
-        .addDropdown((dd) => {
-          dd.addOption("opencode", "OpenCode task");
-          dd.addOption("code", "Code task");
-          dd.addOption("cli", "CLI task");
-          dd.setValue(taskType);
-          dd.onChange((v) => {
-            this.draft.taskKind = v === "code" ? "code" : "opencode";
-            this.draft.interactiveTerminal = v === "cli";
-            if (v === "code" && !this.draft.code) {
-              this.draft.code = "// Set output to pass data forward\noutput = input;";
-            }
-            this.onOpen();
-          });
+    new Setting(contentEl)
+      .setName("Task type")
+      .setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.")
+      .addDropdown((dd) => {
+        dd.addOption("opencode", "OpenCode task");
+        dd.addOption("code", "Code task");
+        dd.addOption("cli", "CLI task");
+        dd.setValue(taskType);
+        dd.onChange((v) => {
+          this.draft.taskKind = v === "code" ? "code" : "opencode";
+          this.draft.interactiveTerminal = v === "cli";
+          if (v === "code" && !this.draft.code) {
+            this.draft.code = "// Set output to pass data forward\noutput = input;";
+          }
+          this.onOpen();
         });
-    } else {
-      new Setting(contentEl)
-        .setName("Task type")
-        .setDesc(taskKind === "code" ? "Code task" : this.draft.interactiveTerminal ? "CLI task" : "OpenCode task");
-    }
+      });
 
     new Setting(contentEl)
       .setName("Name")
@@ -7022,6 +7100,7 @@ class CreateTaskModal extends Modal {
                 ...(this.draft as ScheduledTask),
                 prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
                 taskKind: savingTaskKind,
+                interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : undefined,
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,
@@ -8761,12 +8840,17 @@ class ImportModal extends Modal {
               warnings.push(swhere + ".codeLang is \"" + s.codeLang + "\"; only 'javascript' is currently supported.");
             }
           }
-          if (s.transitions !== undefined && !Array.isArray(s.transitions)) {
-            errors.push(swhere + ".transitions must be an array.");
+          const transitions = Array.isArray(s.transitions)
+            ? s.transitions
+            : s.transitions && typeof s.transitions === "object" && typeof s.transitions.toStepId === "string"
+              ? [s.transitions]
+              : [];
+          if (s.transitions !== undefined && !Array.isArray(s.transitions) && transitions.length === 0) {
+            errors.push(swhere + ".transitions must be an array or a single transition object.");
           }
-          if (Array.isArray(s.transitions)) {
+          if (transitions.length > 0) {
             const validModes = ["default", "force", "eval", "conditional"];
-            s.transitions.forEach((t: any, ti: number) => {
+            transitions.forEach((t: any, ti: number) => {
               const twhere = swhere + ".transitions[" + ti + "]";
               if (!t || typeof t !== "object") { errors.push(twhere + " is not an object."); return; }
               if (typeof t.toStepId !== "string" || !t.toStepId.trim()) {
@@ -8789,7 +8873,7 @@ class ImportModal extends Modal {
         // Entry step check: at least one step must have no incoming transitions.
         const incoming = new Set<string>();
         steps.forEach((s: any) => {
-          (s.transitions || []).forEach((t: any) => incoming.add(t.toStepId));
+          (Array.isArray(s.transitions) ? s.transitions : s.transitions && typeof s.transitions === "object" && typeof s.transitions.toStepId === "string" ? [s.transitions] : []).forEach((t: any) => incoming.add(t.toStepId));
         });
         const entryCandidates = steps.filter((s: any) => s.id && !incoming.has(s.id));
         if (steps.length > 0 && entryCandidates.length === 0) {
@@ -9375,18 +9459,18 @@ class DiagnosticModal extends Modal {
 
         const psScript = [
           ...psUtf8Prelude(),
-          `$env:USERPROFILE = '${process.env.USERPROFILE}'`,
-          `$env:APPDATA     = '${process.env.APPDATA}'`,
-          `$env:LOCALAPPDATA= '${process.env.LOCALAPPDATA}'`,
-          `$env:PATH        = '${process.env.PATH}'`,
-          `$env:HOME        = '${process.env.USERPROFILE}'`,
+          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
           `$outTmp = [System.IO.Path]::GetTempFileName()`,
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
           `$bin = ${psSingleQuoted(bin)}`,
           `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-          `& $bin @argList > $outTmp 2> $errTmp`,
-          `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-          `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+        `& $bin @argList > $outTmp 2>$null`,
+        `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+        `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
           `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "\nDONE:" + $exitCode)`,
         ].join("\n");
