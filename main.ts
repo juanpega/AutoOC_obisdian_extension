@@ -2709,25 +2709,21 @@ export default class AutoOCPlugin extends Plugin {
       `try {`,
       `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
       `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
-      `$psi.RedirectStandardOutput = $true`,
-      `$psi.RedirectStandardError = $true`,
+      `$psi.RedirectStandardOutput = $false`,
+      `$psi.RedirectStandardError = $false`,
       `$psi.UseShellExecute = $false`,
       `$psi.CreateNoWindow = $true`,
       `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
       `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
       `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
       `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
-      `$psi.Arguments = '/d /s /c "' + $bin + ' run -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + '"'`,
-      `$proc = [System.Diagnostics.Process]::Start($psi)`,
-      `$stdoutTask = $proc.StandardOutput.ReadToEndAsync()`,
-      `$stderrTask = $proc.StandardError.ReadToEndAsync()`,
-      `$proc.WaitForExit()`,
-      `$stdout = $stdoutTask.Result`,
-      `$stderr = $stderrTask.Result`,
-      `$exitCode = $proc.ExitCode`,
-      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $stdout, [System.Text.Encoding]::UTF8)`,
-      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $stderr, [System.Text.Encoding]::UTF8)`,
-      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
+       `$outFile = ${psSingleQuoted(outFile)}`,
+       `$errFile = ${psSingleQuoted(errFile)}`,
+       `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
+       `$proc = [System.Diagnostics.Process]::Start($psi)`,
+       `$proc.WaitForExit()`,
+       `$exitCode = $proc.ExitCode`,
+       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
       `} catch {`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
       `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
@@ -2782,8 +2778,15 @@ export default class AutoOCPlugin extends Plugin {
       }
 
       if (!fs.existsSync(doneFile)) {
-        // Still running — heartbeat dot
-        t.output += ".";
+        const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
+        const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
+        const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
+        if (normalized) {
+          t.output = `${normalized}\n[running…]`;
+        } else {
+          // Still running — heartbeat dot
+          t.output += ".";
+        }
         this.view?.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);
         return;
@@ -3384,6 +3387,11 @@ export default class AutoOCPlugin extends Plugin {
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+
+    if (wf.status === "running") {
+      new Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      return;
+    }
 
     if (wf.steps.length === 0) {
       new Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);

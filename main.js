@@ -4283,24 +4283,20 @@ DONE:" + $exitCode + "
       `try {`,
       `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
       `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
-      `$psi.RedirectStandardOutput = $true`,
-      `$psi.RedirectStandardError = $true`,
+      `$psi.RedirectStandardOutput = $false`,
+      `$psi.RedirectStandardError = $false`,
       `$psi.UseShellExecute = $false`,
       `$psi.CreateNoWindow = $true`,
       `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
       `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
       `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
       `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
-      `$psi.Arguments = '/d /s /c "' + $bin + ' run -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + '"'`,
+      `$outFile = ${psSingleQuoted(outFile)}`,
+      `$errFile = ${psSingleQuoted(errFile)}`,
+      `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
       `$proc = [System.Diagnostics.Process]::Start($psi)`,
-      `$stdoutTask = $proc.StandardOutput.ReadToEndAsync()`,
-      `$stderrTask = $proc.StandardError.ReadToEndAsync()`,
       `$proc.WaitForExit()`,
-      `$stdout = $stdoutTask.Result`,
-      `$stderr = $stderrTask.Result`,
       `$exitCode = $proc.ExitCode`,
-      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $stdout, [System.Text.Encoding]::UTF8)`,
-      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $stderr, [System.Text.Encoding]::UTF8)`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
       `} catch {`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
@@ -4373,7 +4369,15 @@ DONE:" + $exitCode + "
         return;
       }
       if (!fs2.existsSync(doneFile)) {
-        t.output += ".";
+        const stdout2 = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
+        const stderr2 = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
+        const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
+        if (normalized2) {
+          t.output = `${normalized2}
+[running\u2026]`;
+        } else {
+          t.output += ".";
+        }
         (_b2 = this.view) == null ? void 0 : _b2.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);
         return;
@@ -4916,6 +4920,10 @@ DONE:" + $exitCode + "
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+    if (wf.status === "running") {
+      new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      return;
+    }
     if (wf.steps.length === 0) {
       new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
       return;
