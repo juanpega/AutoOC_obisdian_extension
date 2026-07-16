@@ -1987,7 +1987,7 @@ var init_visualBuilderHtml_generated = __esm({
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.5.8",
+        pluginVersion: "1.5.9",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
@@ -2189,7 +2189,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.8",
+    "pluginVersion": "1.5.9",
     "name": "Package name",
     "description": "Short description"
   },
@@ -2394,7 +2394,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.8",
+    "pluginVersion": "1.5.9",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -2758,7 +2758,8 @@ var DEFAULT_SETTINGS = {
   maxLogsPerTask: 50,
   logRetentionDays: 30,
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
-  dashboardPositions: {}
+  dashboardPositions: {},
+  dashboardTaskBubbleSize: "md"
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -6471,7 +6472,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
       return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
     };
-    const TASK_BUBBLE_PX = 30;
+    const TASK_BUBBLE_PX = { sm: 24, md: 30, lg: 38, xl: 48 }[this.plugin.settings.dashboardTaskBubbleSize];
     const taskBubbleSizeForParent = (parent) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -6845,7 +6846,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     };
     const createTaskBubble = (parent, task, x, y, size, extraCls = "", positionKey = `task:${task.id}`) => {
       var _a, _b;
-      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${this.plugin.settings.dashboardTaskBubbleSize} ${extraCls}`.trim());
       taskBubble.setAttr("data-auto-oc-task-id", task.id);
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
@@ -10542,6 +10543,12 @@ var AutoOCSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
+    new import_obsidian.Setting(containerEl).setName("Dashboard task bubble size").setDesc("Fixed task bubble diameter in pixels.").addDropdown((dropdown) => dropdown.addOptions({ sm: "Small (24px)", md: "Medium (30px)", lg: "Large (38px)", xl: "Extra large (48px)" }).setValue(this.plugin.settings.dashboardTaskBubbleSize).onChange(async (value) => {
+      if (value === "sm" || value === "md" || value === "lg" || value === "xl") {
+        this.plugin.settings.dashboardTaskBubbleSize = value;
+        await this.plugin.saveSettings();
+      }
+    }));
     new import_obsidian.Setting(containerEl).setName("OpenCode CLI Path").setDesc(
       `Absolute path to executable. Empty = auto-detect.
 Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`

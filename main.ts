@@ -216,7 +216,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.8",
+    "pluginVersion": "1.5.9",
     "name": "Package name",
     "description": "Short description"
   },
@@ -421,7 +421,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.8",
+    "pluginVersion": "1.5.9",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -660,6 +660,7 @@ interface AutoOCSettings {
   logRetentionDays: number;
   libraryUrl: string;
   dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
+  dashboardTaskBubbleSize: "sm" | "md" | "lg" | "xl";
 }
 
 function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workflows">): string[] {
@@ -1102,6 +1103,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   logRetentionDays: 30,
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
   dashboardPositions: {},
+  dashboardTaskBubbleSize: "md",
 };
 
 export const VIEW_TYPE = "auto-oc-view";
@@ -5058,7 +5060,7 @@ class AutoOCView extends ItemView {
     // Every task/step bubble renders at the same physical diameter,
     // regardless of usage, status, or nesting depth. Containers must adapt
     // around tasks; tasks should not shrink based on the current container.
-    const TASK_BUBBLE_PX = 30;
+    const TASK_BUBBLE_PX = { sm: 24, md: 30, lg: 38, xl: 48 }[this.plugin.settings.dashboardTaskBubbleSize];
     const taskBubbleSizeForParent = (parent: HTMLElement) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -5443,7 +5445,7 @@ class AutoOCView extends ItemView {
     const createTaskBubble = (parent: HTMLElement, task: ScheduledTask, x: number, y: number, size: number, extraCls = "", positionKey = `task:${task.id}`) => {
       // All task bubbles render at the same size regardless of usage/failure
       // history — only their position drifts based on activity, not their size.
-      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${this.plugin.settings.dashboardTaskBubbleSize} ${extraCls}`.trim());
       taskBubble.setAttr("data-auto-oc-task-id", task.id);
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
@@ -9793,6 +9795,19 @@ class AutoOCSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
+
+    new Setting(containerEl)
+      .setName("Dashboard task bubble size")
+      .setDesc("Fixed task bubble diameter in pixels.")
+      .addDropdown((dropdown) => dropdown
+        .addOptions({ sm: "Small (24px)", md: "Medium (30px)", lg: "Large (38px)", xl: "Extra large (48px)" })
+        .setValue(this.plugin.settings.dashboardTaskBubbleSize)
+        .onChange(async (value) => {
+          if (value === "sm" || value === "md" || value === "lg" || value === "xl") {
+            this.plugin.settings.dashboardTaskBubbleSize = value;
+            await this.plugin.saveSettings();
+          }
+        }));
 
     new Setting(containerEl)
       .setName("OpenCode CLI Path")
