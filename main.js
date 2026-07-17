@@ -1987,7 +1987,7 @@ var init_visualBuilderHtml_generated = __esm({
       autoOCExport: {
         schemaVersion: "1.4.0",
         exportedAt: new Date().toISOString(),
-        pluginVersion: "1.5.8",
+        pluginVersion: "1.5.9",
         name: "Visual Builder export",
         description: "Exported from the standalone Visual Builder",
       },
@@ -2034,6 +2034,7 @@ var os = __toESM(require("os"));
 var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
 var crypto = __toESM(require("crypto"));
+var http = __toESM(require("http"));
 var visualBuilderHtml2 = (init_visualBuilderHtml_generated(), __toCommonJS(visualBuilderHtml_generated_exports)).visualBuilderHtml;
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
@@ -2188,7 +2189,7 @@ Required root format:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.8",
+    "pluginVersion": "1.5.9",
     "name": "Package name",
     "description": "Short description"
   },
@@ -2393,7 +2394,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.8",
+    "pluginVersion": "1.5.9",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -2757,7 +2758,8 @@ var DEFAULT_SETTINGS = {
   maxLogsPerTask: 50,
   logRetentionDays: 30,
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
-  dashboardPositions: {}
+  dashboardPositions: {},
+  dashboardTaskBubbleSize: "md"
 };
 var VIEW_TYPE = "auto-oc-view";
 var DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -3236,8 +3238,11 @@ from typing import Any
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("autooc-mcp")
-VAULT_PATH = Path(os.environ.get("AUTOOC_VAULT_PATH") or os.getcwd())
+SCRIPT_PATH = Path(__file__).resolve()
+VAULT_PATH = Path(os.environ.get("AUTOOC_VAULT_PATH") or SCRIPT_PATH.parents[3])
 SECRETS_PATH = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc" / "secrets.vault.json"
+PLUGIN_DIR = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc"
+BRIDGE_PATH = PLUGIN_DIR / "mcp-bridge.json"
 
 
 def read_secrets_metadata() -> list[dict[str, Any]]:
@@ -3321,6 +3326,40 @@ def find_web_credentials(site: str) -> dict[str, Any]:
     }
 
 
+def bridge_post(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if not BRIDGE_PATH.exists():
+        return {"ok": False, "error": "AutoOC plugin is not running", "vaultPath": str(VAULT_PATH), "bridgePath": str(BRIDGE_PATH)}
+    try:
+        bridge = json.loads(BRIDGE_PATH.read_text(encoding="utf-8"))
+        url = bridge.get("url")
+        token = bridge.get("token")
+        if not isinstance(url, str) or not isinstance(token, str):
+            return {"ok": False, "error": "AutoOC plugin is not running"}
+        from urllib.request import Request, urlopen
+        request = Request(
+            url.rstrip("/") + endpoint,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"},
+            method="POST",
+        )
+        with urlopen(request, timeout=10) as response:
+            result = json.loads(response.read().decode("utf-8"))
+        return result if isinstance(result, dict) else {"ok": False, "error": "Invalid bridge response"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
+def vault_note_path(note_path: str) -> Path | None:
+    try:
+        candidate = (VAULT_PATH / note_path).resolve()
+        vault = VAULT_PATH.resolve()
+        if candidate != vault and vault not in candidate.parents:
+            return None
+        return candidate if candidate.suffix.lower() == ".md" else None
+    except Exception:
+        return None
+
+
 @mcp.tool()
 def secrets_status() -> dict[str, Any]:
     """Show AutoOC secrets vault status without revealing secret values."""
@@ -3360,6 +3399,79 @@ def get_secret_value(name: str) -> dict[str, Any]:
 def get_web_credentials(site: str) -> dict[str, Any]:
     """Return username and password for a website from AutoOC secrets."""
     return find_web_credentials(site)
+
+
+@mcp.tool()
+def autooc_list(kind: str = "all") -> dict[str, Any]:
+    """List AutoOC tasks and/or workflows. kind must be tasks, workflows, or all."""
+    if kind not in {"tasks", "workflows", "all"}:
+        return {"ok": False, "error": "kind must be tasks, workflows, or all"}
+    return bridge_post("/list", {"kind": kind})
+
+
+@mcp.tool()
+def autooc_create(kind: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """Create an AutoOC task or workflow from an export object or export file payload."""
+    if kind not in {"task", "workflow"}:
+        return {"ok": False, "error": "kind must be task or workflow"}
+    return bridge_post("/create", {"kind": kind, "payload": payload})
+
+
+@mcp.tool()
+def autooc_export(kind: str = "all", id_or_name: str | None = None) -> dict[str, Any]:
+    """Export AutoOC tasks/workflows as reusable import JSON. kind: all, tasks, workflows, task, or workflow."""
+    if kind not in {"all", "tasks", "workflows", "task", "workflow"}:
+        return {"ok": False, "error": "kind must be all, tasks, workflows, task, or workflow"}
+    return bridge_post("/export", {"kind": kind, "idOrName": id_or_name})
+
+
+@mcp.tool()
+def autooc_play(kind: str, id_or_name: str) -> dict[str, Any]:
+    """Run an AutoOC task or workflow by id or name."""
+    if kind not in {"task", "workflow"}:
+        return {"ok": False, "error": "kind must be task or workflow"}
+    return bridge_post("/play", {"kind": kind, "idOrName": id_or_name})
+
+
+@mcp.tool()
+def autooc_stop(kind: str, id_or_name: str) -> dict[str, Any]:
+    """Stop an AutoOC task or workflow by id or name."""
+    if kind not in {"task", "workflow"}:
+        return {"ok": False, "error": "kind must be task or workflow"}
+    return bridge_post("/stop", {"kind": kind, "idOrName": id_or_name})
+
+
+@mcp.tool()
+def obsidian_note(action: str, path: str | None = None, query: str | None = None) -> dict[str, Any]:
+    """Read-only Obsidian markdown access. Supports list, read, and search."""
+    try:
+        vault = VAULT_PATH.resolve()
+        if action == "list":
+            notes = [str(note.relative_to(vault)) for note in vault.rglob("*.md") if ".obsidian" not in note.relative_to(vault).parts]
+            return {"ok": True, "files": notes[:200], "truncated": len(notes) > 200}
+        if action == "read":
+            if not path:
+                return {"ok": False, "error": "path is required"}
+            note = vault_note_path(path)
+            if not note or not note.is_file():
+                return {"ok": False, "error": "Markdown note not found"}
+            content = note.read_text(encoding="utf-8")[:200000]
+            return {"ok": True, "path": str(note.relative_to(vault)), "content": content, "truncated": note.stat().st_size > len(content.encode("utf-8"))}
+        if action == "search":
+            if not query:
+                return {"ok": False, "error": "query is required"}
+            matches = []
+            for note in vault.rglob("*.md"):
+                if ".obsidian" in note.relative_to(vault).parts:
+                    continue
+                if query.lower() in note.read_text(encoding="utf-8").lower():
+                    matches.append(str(note.relative_to(vault)))
+                    if len(matches) == 200:
+                        break
+            return {"ok": True, "files": matches, "truncated": len(matches) == 200}
+        return {"ok": False, "error": "action must be list, read, or search"}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 if __name__ == "__main__":
@@ -3578,6 +3690,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.dueCheckInProgress = false;
     // Workflows that have been manually stopped; checked in step callbacks to abort chaining
     this.stoppingWorkflows = /* @__PURE__ */ new Set();
+    this.mcpBridgeToken = "";
     // Update-check state
     this.latestVersion = null;
     this.updateAvailable = false;
@@ -3586,6 +3699,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   async onload() {
     await this.loadSettings();
+    void this.startMcpBridge().catch((error) => console.warn("AutoOC MCP bridge failed to start", error));
     setTimeout(() => {
       this.refreshModels();
       this.refreshAgents();
@@ -3646,11 +3760,157 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     setTimeout(() => this.checkForUpdates(true), 3e3);
   }
   async onunload() {
+    await this.stopMcpBridge();
     for (const [, proc] of this.runningProcesses) {
       proc.kill();
     }
     this.runningProcesses.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+  }
+  getMcpBridgePath() {
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    return path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
+  }
+  async startMcpBridge() {
+    await this.stopMcpBridge();
+    this.mcpBridgeToken = crypto.randomBytes(24).toString("hex");
+    const server = http.createServer((request, response) => void this.handleMcpBridgeRequest(request, response));
+    await new Promise((resolve2, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        server.off("error", reject);
+        resolve2();
+      });
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      server.close();
+      throw new Error("Could not determine MCP bridge address");
+    }
+    try {
+      const bridgePath = this.getMcpBridgePath();
+      fs.mkdirSync(path.dirname(bridgePath), { recursive: true });
+      fs.writeFileSync(bridgePath, JSON.stringify({ url: `http://127.0.0.1:${address.port}`, token: this.mcpBridgeToken }), "utf8");
+      this.mcpBridgeServer = server;
+    } catch (error) {
+      await new Promise((resolve2) => server.close(() => resolve2()));
+      throw error;
+    }
+  }
+  async stopMcpBridge() {
+    const server = this.mcpBridgeServer;
+    this.mcpBridgeServer = void 0;
+    this.mcpBridgeToken = "";
+    try {
+      fs.unlinkSync(this.getMcpBridgePath());
+    } catch (e) {
+    }
+    if (server) await new Promise((resolve2) => server.close(() => resolve2()));
+  }
+  findTaskByIdOrName(idOrName) {
+    return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
+  }
+  findWorkflowByIdOrName(idOrName) {
+    return this.settings.workflows.find((workflow) => workflow.id === idOrName || workflow.name === idOrName);
+  }
+  wrapMcpCreatePayload(kind, payload) {
+    if (!payload || typeof payload !== "object") return null;
+    if ("autoOCExport" in payload) return payload;
+    const autoOCExport = {
+      schemaVersion: "1.4.0",
+      exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      pluginVersion: this.manifest.version
+    };
+    return kind === "task" ? { autoOCExport, tasks: [{ ...payload, exportId: crypto.randomUUID() }], workflows: [] } : { autoOCExport, tasks: [], workflows: [{ ...payload, exportId: crypto.randomUUID() }] };
+  }
+  async handleMcpBridgeRequest(request, response) {
+    const send = (status, body) => {
+      response.writeHead(status, { "Content-Type": "application/json" });
+      response.end(JSON.stringify(body));
+    };
+    if (request.method !== "POST") return send(405, { ok: false, error: "POST required" });
+    if (request.headers.authorization !== `Bearer ${this.mcpBridgeToken}`) return send(401, { ok: false, error: "Unauthorized" });
+    const chunks = [];
+    let size = 0;
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size <= 1024 * 1024) chunks.push(chunk);
+    });
+    request.on("error", () => send(400, { ok: false, error: "Invalid request" }));
+    request.on("end", async () => {
+      if (size > 1024 * 1024) return send(413, { ok: false, error: "Request too large" });
+      let body;
+      try {
+        body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+      } catch (e) {
+        return send(400, { ok: false, error: "Invalid JSON" });
+      }
+      if (!body || typeof body !== "object") return send(400, { ok: false, error: "Invalid request" });
+      const input = body;
+      const kind = input.kind;
+      try {
+        if (request.url === "/list") {
+          if (kind !== "tasks" && kind !== "workflows" && kind !== "all") return send(400, { ok: false, error: "Invalid kind" });
+          return send(200, {
+            ok: true,
+            ...kind !== "workflows" ? { tasks: this.settings.tasks } : {},
+            ...kind !== "tasks" ? { workflows: this.settings.workflows } : {}
+          });
+        }
+        if (request.url === "/create") {
+          if (kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
+          const data = this.wrapMcpCreatePayload(kind, input.payload);
+          if (!data) return send(400, { ok: false, error: "Invalid payload" });
+          return send(200, { ok: true, ...await this.importFromData(data) });
+        }
+        if (request.url === "/export") {
+          if (kind !== "all" && kind !== "tasks" && kind !== "workflows" && kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
+          const idOrName = typeof input.idOrName === "string" && input.idOrName.trim() ? input.idOrName : void 0;
+          let tasks = [];
+          let workflows = [];
+          if (kind === "task") {
+            const task = idOrName ? this.findTaskByIdOrName(idOrName) : void 0;
+            if (!task) return send(404, { ok: false, error: "task not found" });
+            tasks = [task];
+          } else if (kind === "workflow") {
+            const workflow = idOrName ? this.findWorkflowByIdOrName(idOrName) : void 0;
+            if (!workflow) return send(404, { ok: false, error: "workflow not found" });
+            const payload = this.buildExportSelectionPayload(/* @__PURE__ */ new Set(), /* @__PURE__ */ new Set([workflow.id]));
+            tasks = payload.tasks;
+            workflows = payload.workflows;
+          } else if (kind === "tasks") {
+            tasks = this.settings.tasks;
+          } else if (kind === "workflows") {
+            const payload = this.buildExportSelectionPayload(/* @__PURE__ */ new Set(), new Set(this.settings.workflows.map((workflow) => workflow.id)));
+            tasks = payload.tasks;
+            workflows = payload.workflows;
+          } else {
+            tasks = this.settings.tasks;
+            workflows = this.settings.workflows;
+          }
+          const json = this.buildExportJson(tasks, workflows, idOrName || `AutoOC ${kind} export`);
+          return send(200, { ok: true, export: JSON.parse(json) });
+        }
+        if (kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
+        if (typeof input.idOrName !== "string") return send(400, { ok: false, error: "idOrName is required" });
+        const item = kind === "task" ? this.findTaskByIdOrName(input.idOrName) : this.findWorkflowByIdOrName(input.idOrName);
+        if (!item) return send(404, { ok: false, error: `${kind} not found` });
+        if (request.url === "/play") {
+          if (kind === "task") void this.runTask(item);
+          else void this.runWorkflow(item);
+          return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
+        }
+        if (request.url === "/stop") {
+          if (kind === "task") await this.killTask(item.id);
+          else await this.killWorkflow(item.id);
+          return send(200, { ok: true, id: item.id, name: item.name, status: "stopped" });
+        }
+        return send(404, { ok: false, error: "Unknown endpoint" });
+      } catch (error) {
+        console.warn("AutoOC MCP bridge request failed", error);
+        return send(500, { ok: false, error: "Bridge request failed" });
+      }
+    });
   }
   refreshModels() {
     var _a;
@@ -6212,7 +6472,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
       return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
     };
-    const TASK_BUBBLE_PX = 30;
+    const TASK_BUBBLE_PX = { sm: 24, md: 30, lg: 38, xl: 48 }[this.plugin.settings.dashboardTaskBubbleSize];
     const taskBubbleSizeForParent = (parent) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -6586,7 +6846,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     };
     const createTaskBubble = (parent, task, x, y, size, extraCls = "", positionKey = `task:${task.id}`) => {
       var _a, _b;
-      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-md ${extraCls}`.trim());
+      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${this.plugin.settings.dashboardTaskBubbleSize} ${extraCls}`.trim());
       taskBubble.setAttr("data-auto-oc-task-id", task.id);
       taskBubble.setAttr("data-dashboard-key", positionKey);
       taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
@@ -10283,6 +10543,12 @@ var AutoOCSettingTab = class extends import_obsidian.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
+    new import_obsidian.Setting(containerEl).setName("Dashboard task bubble size").setDesc("Fixed task bubble diameter in pixels.").addDropdown((dropdown) => dropdown.addOptions({ sm: "Small (24px)", md: "Medium (30px)", lg: "Large (38px)", xl: "Extra large (48px)" }).setValue(this.plugin.settings.dashboardTaskBubbleSize).onChange(async (value) => {
+      if (value === "sm" || value === "md" || value === "lg" || value === "xl") {
+        this.plugin.settings.dashboardTaskBubbleSize = value;
+        await this.plugin.saveSettings();
+      }
+    }));
     new import_obsidian.Setting(containerEl).setName("OpenCode CLI Path").setDesc(
       `Absolute path to executable. Empty = auto-detect.
 Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
