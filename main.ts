@@ -5709,6 +5709,40 @@ class AutoOCView extends ItemView {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
+    const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
+    btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
+    btnQuickRun.disabled = task.status === "running";
+    btnQuickRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runTask(task);
+    };
+    if (task.status === "running") {
+      const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
+      btnQuickStop.title = "Terminate process now";
+      btnQuickStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnQuickStop.disabled = true;
+        await this.plugin.killTask(task.id);
+      };
+    }
+    const btnQuickLog = quickActions.createEl("button", { text: "📄", cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output" });
+    btnQuickLog.title = task.status === "running" ? "Live log" : "Log";
+    btnQuickLog.disabled = !task.output && task.status !== "running";
+    btnQuickLog.onclick = (e) => {
+      e.stopPropagation();
+      new LiveLogModal(this.app, task, this.plugin).open();
+    };
+    const btnQuickHistory = quickActions.createEl("button", { text: "📜", cls: "auto-oc-btn-history" });
+    btnQuickHistory.title = "History";
+    btnQuickHistory.onclick = (e) => {
+      e.stopPropagation();
+      try {
+        new LogHistoryModal(this.app, task, this.plugin).open();
+      } catch (err) {
+        new Notice(`AutoOC: could not open history — ${String(err)}`);
+      }
+    };
     if (task.status === "failed") {
       badge.addClass("auto-oc-badge-clickable");
       badge.title = "Click to reset to pending (will run on next schedule, or hit ▶ Run now)";
@@ -6000,6 +6034,38 @@ class AutoOCView extends ItemView {
       text: workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
+    const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
+    btnQuickRun.title = workflow.status === "running" ? "Running" : "Run workflow";
+    btnQuickRun.disabled = workflow.status === "running";
+    btnQuickRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runWorkflow(workflow);
+    };
+    if (workflow.status === "running") {
+      const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
+      btnQuickStop.title = "Stop workflow now";
+      btnQuickStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnQuickStop.disabled = true;
+        await this.plugin.killWorkflow(workflow.id);
+      };
+    }
+    const currentTask = this.plugin.settings.tasks.find((task) => task.id === workflow.steps[workflow.currentStep]?.taskId);
+    const btnQuickLog = quickActions.createEl("button", { text: "📄", cls: "auto-oc-btn-output" });
+    btnQuickLog.title = "Current step log";
+    btnQuickLog.disabled = !currentTask || (!currentTask.output && currentTask.status !== "running");
+    btnQuickLog.onclick = (e) => {
+      e.stopPropagation();
+      if (currentTask) new LiveLogModal(this.app, currentTask, this.plugin).open();
+    };
+    const btnQuickHistory = quickActions.createEl("button", { text: "📜", cls: "auto-oc-btn-history" });
+    btnQuickHistory.title = "Current step history";
+    btnQuickHistory.disabled = !currentTask;
+    btnQuickHistory.onclick = (e) => {
+      e.stopPropagation();
+      if (currentTask) new LogHistoryModal(this.app, currentTask, this.plugin).open();
+    };
     if (workflow.status === "failed") {
       badge.addClass("auto-oc-badge-clickable");
       badge.title = "Click to reset to pending";
