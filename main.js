@@ -1480,7 +1480,7 @@ var init_visualBuilderHtml_generated = __esm({
         <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">\u{1F504} Refresh Models</button></div>
         <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" />\${dataListHtml("dlAgents", agentOptions)}<div class="hint-inline">\${esc(agentHint)}</div><button type="button" class="tiny btn-refresh-agents">\u{1F504} Refresh Agents</button></div>
       </div>
-      <div class="field" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;padding:6px 10px;margin-top:-2px"><label class="checkbox-row" style="margin:0"><input type="checkbox" data-f="forceModel" \${t.forceModel ? "checked" : ""} style="width:auto" /> <strong style="color:var(--accent)">Forzar modelo</strong> <span class="hint-inline">omite --agent, usa exactamente el modelo seleccionado</span></label></div>
+      <div class="field" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;padding:6px 10px;margin-top:-2px"><label class="checkbox-row" style="margin:0"><input type="checkbox" data-f="forceModel" \${t.forceModel ? "checked" : ""} style="width:auto" /> <strong style="color:var(--accent)">Force model</strong> <span class="hint-inline">skip --agent; use exactly the selected model</span></label></div>
       <div class="row-2">
         <div class="field"><label>Icon</label><select data-f="icon">\${["\u26A1","\u2728","\u{1F9E0}","\u{1F4DD}","\u{1F50D}","\u{1F4A1}","\u{1F6E0}","\u{1F4CA}","\u{1F4E5}","\u{1F4E4}","\u{1F504}","\u{1F680}","\u{1F916}","\u{1F4DA}","\u{1F9EA}","\u{1F514}"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
         <div class="field"><label>Color</label><select data-f="color">\${["#4a7dff","#b07ad9","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (t.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">\u25CF ' + esc(c) + '</option>').join("")}</select></div>
@@ -1550,7 +1550,7 @@ var init_visualBuilderHtml_generated = __esm({
       const checkedAttr = t && t.forceModel ? "checked" : "";
       body = \`
         <div class="field"><label>Task</label><select data-f="taskId">\${state.tasks.map(x => '<option value="' + x.id + '" ' + (x.id === s.taskId ? "selected" : "") + '>' + esc((x.icon || "\u26A1") + " " + (x.name || "(unnamed)")) + '</option>').join("")}</select></div>
-        \${t ? '<div class="field"><label class="checkbox-row" style="margin-top:2px"><input type="checkbox" class="chk-step-force-model" ' + checkedAttr + ' /> <strong>Forzar modelo</strong> <span class="hint-inline">modelo: ' + currentModel + '</span></label></div>' : ""}
+        \${t ? '<div class="field"><label class="checkbox-row" style="margin-top:2px"><input type="checkbox" class="chk-step-force-model" ' + checkedAttr + ' /> <strong>Force model</strong> <span class="hint-inline">model: ' + currentModel + '</span></label></div>' : ""}
         \${t ? '<div class="hint-inline">' + esc((t.prompt || "(no prompt)").slice(0, 200)) + ((t.prompt || "").length > 200 ? "\u2026" : "") + '</div>' : ""}
       \`;
     } else if (kind === "delay") {
@@ -8416,7 +8416,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.model = v);
       });
-      new import_obsidian.Setting(contentEl).setName("Forzar modelo").setDesc("Omite --agent para que OpenCode use exactamente el modelo seleccionado.").addToggle((tog) => {
+      new import_obsidian.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.forceModel) != null ? _a2 : false);
         tog.onChange((v) => this.draft.forceModel = v);

@@ -7228,8 +7228,8 @@ class CreateTaskModal extends Modal {
         });
 
       new Setting(contentEl)
-        .setName("Forzar modelo")
-        .setDesc("Omite --agent para que OpenCode use exactamente el modelo seleccionado.")
+        .setName("Force model")
+        .setDesc("Skip --agent so OpenCode uses exactly the selected model.")
         .addToggle((tog) => {
           tog.setValue(this.draft.forceModel ?? false);
           tog.onChange((v) => (this.draft.forceModel = v));
