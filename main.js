@@ -2127,29 +2127,84 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
   );
   launcher.unref();
 }
-function launchHiddenPS(psScriptFile) {
+function launchHiddenPS(psScriptFile, pidFile) {
   const fs2 = require("fs");
-  const path2 = require("path");
-  const vbsFile = psScriptFile.replace(/\.ps1$/, ".vbs");
-  const vbs = `Set sh = CreateObject("WScript.Shell")\r
-sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & "${psScriptFile.replace(/"/g, '""')}" & """", 0, False\r
-`;
-  fs2.writeFileSync(vbsFile, vbs, "utf8");
+  const launcherFile = psScriptFile.replace(/\.ps1$/, ".launch.ps1");
+  const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
+  const launcherScript = [
+    `$PID | Set-Content -LiteralPath ${psSingleQuoted(effectivePidFile)} -Encoding ASCII`,
+    `& ${psSingleQuoted(psScriptFile)}`
+  ].join("\r\n");
+  fs2.writeFileSync(launcherFile, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(launcherScript, "utf8")]));
   const { spawn: spawn2 } = require("child_process");
-  const ws = spawn2("wscript.exe", [vbsFile], { detached: true, stdio: "ignore", windowsHide: true });
-  ws.unref();
-  setTimeout(() => {
+  const child = spawn2("powershell.exe", [
+    "-NoLogo",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-WindowStyle",
+    "Hidden",
+    "-File",
+    launcherFile
+  ], { detached: true, stdio: "ignore", windowsHide: true });
+  child.unref();
+  const launcherTimer = setTimeout(() => {
     try {
-      fs2.unlinkSync(vbsFile);
+      fs2.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
-  setTimeout(() => {
+  const scriptTimer = setTimeout(() => {
     try {
       fs2.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
+  const cleanup = (removeScript = false) => {
+    clearTimeout(launcherTimer);
+    clearTimeout(scriptTimer);
+    try {
+      fs2.unlinkSync(launcherFile);
+    } catch (e) {
+    }
+    if (removeScript) {
+      try {
+        fs2.unlinkSync(psScriptFile);
+      } catch (e) {
+      }
+    }
+  };
+  const kill = () => {
+    let killedChildTree = false;
+    if (child.pid) {
+      try {
+        const killer = spawn2("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        killer.unref();
+        killedChildTree = true;
+      } catch (e) {
+      }
+    }
+    if (!killedChildTree) {
+      try {
+        child.kill();
+      } catch (e) {
+      }
+    }
+    try {
+      const pid = fs2.existsSync(effectivePidFile) ? String(fs2.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
+        const killer = spawn2("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        killer.unref();
+      }
+    } catch (e) {
+    }
+    cleanup(true);
+    try {
+      fs2.unlinkSync(effectivePidFile);
+    } catch (e) {
+    }
+  };
+  return { kill, cleanup };
 }
 function writeUtf8BomFile(filePath, content) {
   fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
@@ -4374,10 +4429,28 @@ Continue?`
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const outFile = path2.join(tmpDir, `autooc-eval-${evalId}.txt`);
+      const pidFile = path2.join(tmpDir, `autooc-eval-${evalId}.pid`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
       const secretEnv = this.getSecretsEnv();
+      let settled = false;
+      let hiddenProc = null;
+      const cleanup = (removeScript = true) => {
+        hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
+        try {
+          fs2.unlinkSync(psFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(outFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(pidFile);
+        } catch (e) {
+        }
+      };
       const psScript = [
         ...psUtf8Prelude(),
         `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
@@ -4391,7 +4464,7 @@ Continue?`
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
         `$bin = ${psSingleQuoted(bin)}`,
         `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2>$null`,
+        `& $bin @argList > $outTmp 2> $errTmp`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
@@ -4404,29 +4477,23 @@ DONE:" + $exitCode + "
       ].join("\n");
       const psFile = path2.join(tmpDir, `autooc-eval-${evalId}.ps1`);
       writeUtf8BomFile(psFile, psScript);
-      launchHiddenPS(psFile);
+      hiddenProc = launchHiddenPS(psFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
+        if (settled) return;
         if (Date.now() - startedAt > 18e4) {
+          settled = true;
           clearInterval(poll);
-          try {
-            fs2.unlinkSync(psFile);
-          } catch (e) {
-          }
+          hiddenProc == null ? void 0 : hiddenProc.kill();
+          cleanup(true);
           resolve2({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
         if (!fs2.existsSync(outFile)) return;
+        settled = true;
         clearInterval(poll);
-        try {
-          fs2.unlinkSync(psFile);
-        } catch (e) {
-        }
         const raw = fs2.readFileSync(outFile, "utf8");
-        try {
-          fs2.unlinkSync(outFile);
-        } catch (e) {
-        }
+        cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
@@ -4639,19 +4706,78 @@ DONE:" + $exitCode + "
     ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
-    launchHiddenPS(psScriptFile);
-    this.runningProcesses.set(task.id, { kill: () => {
-    } });
+    const hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    let settled = false;
+    let cancelled = false;
+    let pollHandle = null;
+    const wasManuallyStopped = (current) => cancelled || current.output.includes("[task stopped manually]");
+    const shouldAbortBeforeFinalMutation = (current) => wasManuallyStopped(current) || current.status !== "running";
+    const cleanupTempFiles = () => {
+      hiddenProc.cleanup(true);
+      try {
+        fs2.unlinkSync(promptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(fullPromptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(tmpFullPromptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(outFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(errFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(doneFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(pidFile);
+      } catch (e) {
+      }
+    };
+    this.runningProcesses.set(task.id, {
+      kill: () => {
+        cancelled = true;
+        settled = true;
+        if (pollHandle) {
+          clearInterval(pollHandle);
+          pollHandle = null;
+        }
+        hiddenProc.kill();
+        cleanupTempFiles();
+        this.runningProcesses.delete(task.id);
+      }
+    });
     const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
     let timeoutWarned = false;
-    const pollHandle = setInterval(async () => {
+    pollHandle = setInterval(async () => {
       var _a2, _b2, _c2;
+      if (settled || cancelled) return;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
-        clearInterval(pollHandle);
+        settled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        cleanupTempFiles();
+        this.runningProcesses.delete(task.id);
+        return;
+      }
+      if (t.status !== "running" && !this.runningProcesses.has(task.id)) {
+        cancelled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        cleanupTempFiles();
         return;
       }
       if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
@@ -4662,41 +4788,21 @@ DONE:" + $exitCode + "
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
-        clearInterval(pollHandle);
+        if (shouldAbortBeforeFinalMutation(t)) return;
+        settled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        hiddenProc.kill();
         this.runningProcesses.delete(task.id);
-        try {
-          fs2.unlinkSync(psScriptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(promptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(fullPromptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(tmpFullPromptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(outFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(errFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(doneFile);
-        } catch (e) {
-        }
+        cleanupTempFiles();
+        if (shouldAbortBeforeFinalMutation(t)) return;
         t.status = "failed";
         t.output += `
 [\u23F1 timed out after ${timeoutSeconds}s + 300s grace; no completion marker was written]`;
         (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
+        if (wasManuallyStopped(t)) return;
         await this.saveSettings();
+        if (wasManuallyStopped(t)) return;
         if (onComplete) await onComplete(t, -1);
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
@@ -4715,37 +4821,19 @@ DONE:" + $exitCode + "
         await this.saveSettings(false);
         return;
       }
-      clearInterval(pollHandle);
+      if (settled || shouldAbortBeforeFinalMutation(t)) return;
+      settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      pollHandle = null;
       this.runningProcesses.delete(task.id);
-      try {
-        fs2.unlinkSync(psScriptFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(promptFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(fullPromptFile);
-      } catch (e) {
-      }
       const stdout = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
       const stderr = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
       const exitCodeRaw = fs2.readFileSync(doneFile, "utf8").trim();
-      try {
-        fs2.unlinkSync(outFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(errFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(doneFile);
-      } catch (e) {
-      }
+      cleanupTempFiles();
+      if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
       const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
+      if (shouldAbortBeforeFinalMutation(t)) return;
       t.output = normalized || "(no output)";
       if (exitCode !== 0) {
         t.status = "failed";
@@ -4762,7 +4850,9 @@ DONE:" + $exitCode + "
         cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
         cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
       }
+      if (wasManuallyStopped(t)) return;
       await this.saveSettings();
+      if (wasManuallyStopped(t)) return;
       if (onComplete) {
         await onComplete(t, exitCode);
       }
@@ -5623,7 +5713,9 @@ ${capped}`;
         lastSucceeded,
         transitions
       );
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       if (!nextStepId) {
+        if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         const failedByTask = !lastSucceeded;
         currentWf.status = failedByTask ? "failed" : "completed";
         completedTask.output += failedByTask ? `
@@ -5638,13 +5730,16 @@ ${capped}`;
       }
       const nextIdx = currentWf.steps.findIndex((s) => s.id === nextStepId);
       if (nextIdx === -1) {
+        if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         currentWf.status = "failed";
         new import_obsidian.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
         await this.saveSettings();
         return;
       }
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       currentWf.currentStep = nextIdx;
       await this.saveSettings();
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       new import_obsidian.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
         this.runWorkflowStepById(currentWf.id, nextStepId);
@@ -10603,7 +10698,31 @@ var DiagnosticModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
     this.logEl = null;
+    this.pollHandle = null;
+    this.hiddenProc = null;
+    this.tempFiles = [];
     this.plugin = plugin;
+  }
+  cleanupDiagnostics(killProcess = false) {
+    var _a, _b;
+    if (this.pollHandle) {
+      clearInterval(this.pollHandle);
+      this.pollHandle = null;
+    }
+    if (killProcess) {
+      (_a = this.hiddenProc) == null ? void 0 : _a.kill();
+    } else {
+      (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
+    }
+    this.hiddenProc = null;
+    const fs2 = require("fs");
+    for (const file of this.tempFiles) {
+      try {
+        fs2.unlinkSync(file);
+      } catch (e) {
+      }
+    }
+    this.tempFiles = [];
   }
   onOpen() {
     const { contentEl } = this;
@@ -10618,6 +10737,7 @@ var DiagnosticModal = class extends import_obsidian.Modal {
     contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u25B6 Launch test: 'di hola'").setCta().onClick(() => {
+        this.cleanupDiagnostics(true);
         if (this.logEl) this.logEl.textContent = "[launching detached PowerShell process\u2026]\n";
         const bin2 = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
@@ -10629,8 +10749,13 @@ var DiagnosticModal = class extends import_obsidian.Modal {
         const path2 = require("path");
         const osTmp = require("os").tmpdir();
         const outFile = path2.join(osTmp, "autooc-diag.txt");
+        const pidFile = path2.join(osTmp, "autooc-diag.pid");
         try {
           fs2.unlinkSync(outFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(pidFile);
         } catch (e) {
         }
         const psScript = [
@@ -10644,31 +10769,38 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
           `$bin = ${psSingleQuoted(bin2)}`,
           `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-          `& $bin @argList > $outTmp 2>$null`,
+          `& $bin @argList > $outTmp 2> $errTmp`,
           `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
           `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+          `$err = (Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "
+          `$combined = ($out + $(if($err){"
+" + $err}else{""})).Trim()`,
+          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "
 DONE:" + $exitCode)`
         ].join("\n");
         const psFile = path2.join(osTmp, "autooc-diag.ps1");
         writeUtf8BomFile(psFile, psScript);
+        this.tempFiles = [outFile, pidFile, psFile];
         if (this.logEl) this.logEl.textContent += `Script: ${psFile}
 
 `;
-        launchHiddenPS(psFile);
-        const poll = setInterval(() => {
+        this.hiddenProc = launchHiddenPS(psFile, pidFile);
+        const startedAt = Date.now();
+        this.pollHandle = setInterval(() => {
+          if (Date.now() - startedAt > 18e4) {
+            this.cleanupDiagnostics(true);
+            if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
+            return;
+          }
           if (!fs2.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
-          clearInterval(poll);
+          if (this.pollHandle) clearInterval(this.pollHandle);
+          this.pollHandle = null;
           const raw = fs2.readFileSync(outFile, "utf8");
-          try {
-            fs2.unlinkSync(outFile);
-            fs2.unlinkSync(psFile);
-          } catch (e) {
-          }
+          this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
           const normalized = normalizeCommandOutput(output);
@@ -10686,6 +10818,7 @@ DONE:" + $exitCode)`
     this.logEl.textContent = "(output will appear here\u2026)";
   }
   onClose() {
+    this.cleanupDiagnostics(true);
     this.contentEl.empty();
   }
 };
