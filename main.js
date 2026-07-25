@@ -3896,6 +3896,151 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     return null;
   }
+  isMcpObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  getMcpScheduleValidationError(prefix, payload) {
+    const scheduleTypes = ["manual", "once", "daily", "weekly", "monthly", "interval"];
+    const intervalUnits = ["seconds", "minutes", "hours"];
+    if (payload.scheduleType !== void 0 && (typeof payload.scheduleType !== "string" || !scheduleTypes.includes(payload.scheduleType))) {
+      return `${prefix}.scheduleType must be one of: ${scheduleTypes.join(", ")}.`;
+    }
+    if (payload.scheduleTime !== void 0 && typeof payload.scheduleTime !== "string") return `${prefix}.scheduleTime must be a string.`;
+    if (payload.scheduleDate !== void 0 && typeof payload.scheduleDate !== "string") return `${prefix}.scheduleDate must be a string.`;
+    if (payload.scheduleDays !== void 0 && (!Array.isArray(payload.scheduleDays) || payload.scheduleDays.some((day) => typeof day !== "number" || day < 0 || day > 6))) {
+      return `${prefix}.scheduleDays must be an array of numbers from 0 to 6.`;
+    }
+    if (payload.scheduleMonthDays !== void 0 && (!Array.isArray(payload.scheduleMonthDays) || payload.scheduleMonthDays.some((day) => typeof day !== "number" || day < 1 || day > 31))) {
+      return `${prefix}.scheduleMonthDays must be an array of numbers from 1 to 31.`;
+    }
+    if (payload.scheduleIntervalValue !== void 0 && (typeof payload.scheduleIntervalValue !== "number" || !Number.isFinite(payload.scheduleIntervalValue))) {
+      return `${prefix}.scheduleIntervalValue must be a finite number.`;
+    }
+    if (payload.scheduleIntervalUnit !== void 0 && (typeof payload.scheduleIntervalUnit !== "string" || !intervalUnits.includes(payload.scheduleIntervalUnit))) {
+      return `${prefix}.scheduleIntervalUnit must be one of: ${intervalUnits.join(", ")}.`;
+    }
+    return null;
+  }
+  getMcpRawTaskPayloadError(payload) {
+    if ("steps" in payload) return 'Raw task payloads must not include workflow steps; use kind "workflow".';
+    const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
+    if (taskKind !== "opencode" && taskKind !== "code") return 'payload.taskKind must be "opencode" or "code".';
+    if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw task payloads.";
+    if (taskKind === "code") {
+      const hasCode = typeof payload.code === "string" && payload.code.trim();
+      const hasPrompt = typeof payload.prompt === "string" && payload.prompt.trim();
+      if (!hasCode && !hasPrompt) return "payload.code or payload.prompt is required for raw code task payloads.";
+    } else if (typeof payload.prompt !== "string" || !payload.prompt.trim()) {
+      return "payload.prompt is required for raw task payloads.";
+    }
+    return this.getMcpScheduleValidationError("payload", payload);
+  }
+  getMcpRawWorkflowPayloadError(payload) {
+    if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw workflow payloads.";
+    if (!Array.isArray(payload.steps)) return "payload.steps must be a non-empty array for raw workflow payloads.";
+    if (payload.steps.length === 0) return "payload.steps must contain at least one step.";
+    const scheduleError = this.getMcpScheduleValidationError("payload", payload);
+    if (scheduleError) return scheduleError;
+    const stepIds = /* @__PURE__ */ new Set();
+    let hasTransitions = false;
+    for (let i = 0; i < payload.steps.length; i++) {
+      const step = payload.steps[i];
+      const prefix = `payload.steps[${i}]`;
+      if (!this.isMcpObject(step)) return `${prefix} must be an object.`;
+      if (typeof step.id === "string" && step.id.trim()) stepIds.add(step.id);
+      const stepKind = typeof step.stepKind === "string" ? step.stepKind : "task";
+      if (stepKind === "task") return "Raw workflow payload task steps are not supported; send a full AutoOC export with task mappings.";
+      if (stepKind !== "delay" && stepKind !== "code") return `${prefix}.stepKind must be "delay" or "code" for raw workflow payloads.`;
+      if (stepKind === "delay") {
+        if (step.delayValue !== void 0 && (typeof step.delayValue !== "number" || !Number.isFinite(step.delayValue))) return `${prefix}.delayValue must be a finite number.`;
+        if (step.delayUnit !== void 0 && (typeof step.delayUnit !== "string" || !["seconds", "minutes", "hours"].includes(step.delayUnit))) return `${prefix}.delayUnit must be one of: seconds, minutes, hours.`;
+      }
+      if (stepKind === "code" && (typeof step.code !== "string" || !step.code.trim())) return `${prefix}.code is required for raw code workflow steps.`;
+      if (step.transitions !== void 0) {
+        if (!Array.isArray(step.transitions)) return `${prefix}.transitions must be an array.`;
+        if (step.transitions.length > 0) hasTransitions = true;
+        for (let j = 0; j < step.transitions.length; j++) {
+          const transition = step.transitions[j];
+          const transitionPrefix = `${prefix}.transitions[${j}]`;
+          if (!this.isMcpObject(transition)) return `${transitionPrefix} must be an object.`;
+          if (typeof transition.toStepId !== "string" || !transition.toStepId.trim()) return `${transitionPrefix}.toStepId is required.`;
+          if (transition.mode !== "default" && transition.mode !== "force" && transition.mode !== "eval" && transition.mode !== "conditional") {
+            return `${transitionPrefix}.mode must be one of: default, force, eval, conditional.`;
+          }
+        }
+      }
+    }
+    if (hasTransitions) {
+      if (stepIds.size !== payload.steps.length) return "Raw workflow steps with transitions must each include a unique string id.";
+      for (let i = 0; i < payload.steps.length; i++) {
+        const step = payload.steps[i];
+        for (const transition of step.transitions || []) {
+          const toStepId = transition.toStepId;
+          if (typeof toStepId === "string" && !stepIds.has(toStepId)) return `payload.steps[${i}].transitions references unknown step id "${toStepId}".`;
+        }
+      }
+    }
+    return null;
+  }
+  getMcpFullExportKindError(kind, payload) {
+    if (!Array.isArray(payload.tasks)) return "Full AutoOC exports must include a tasks array.";
+    if (!Array.isArray(payload.workflows)) return "Full AutoOC exports must include a workflows array.";
+    if (kind === "task") {
+      if (payload.tasks.length === 0) return "Full task exports must include at least one task.";
+      if (payload.workflows.length > 0) return 'Full task exports must not include workflows; use kind "workflow" for workflow exports.';
+    } else {
+      if (payload.workflows.length === 0) return "Full workflow exports must include at least one workflow.";
+    }
+    return null;
+  }
+  getMcpCreatePayloadError(kind, payload) {
+    if (!this.isMcpObject(payload)) return "Invalid payload: expected a JSON object.";
+    if ("autoOCExport" in payload) return this.getMcpFullExportKindError(kind, payload);
+    if (kind === "task") return this.getMcpRawTaskPayloadError(payload);
+    const referenceError = this.getMcpRawWorkflowReferenceError(payload);
+    return referenceError || this.getMcpRawWorkflowPayloadError(payload);
+  }
+  getMcpWorkflowPlayError(workflow) {
+    const wf = this.settings.workflows.find((w) => w.id === workflow.id);
+    if (!wf) return { status: 404, body: { ok: false, error: "workflow not found" } };
+    if (wf.status === "running") {
+      return { status: 409, body: { ok: false, id: wf.id, name: wf.name, status: "conflict", error: `Workflow "${wf.name}" is already running.` } };
+    }
+    if (wf.steps.length === 0) {
+      return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" has no steps.` } };
+    }
+    const stepIds = /* @__PURE__ */ new Set();
+    for (let i = 0; i < wf.steps.length; i++) {
+      const step = wf.steps[i];
+      if (typeof step.id !== "string" || !step.id.trim()) {
+        return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} must include a unique string id.` } };
+      }
+      if (stepIds.has(step.id)) {
+        return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} duplicates step id "${step.id}".` } };
+      }
+      stepIds.add(step.id);
+      if (step.stepKind === "task" && !this.settings.tasks.find((task) => task.id === step.taskId)) {
+        return { status: 404, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.` } };
+      }
+    }
+    const incoming = /* @__PURE__ */ new Set();
+    for (let i = 0; i < wf.steps.length; i++) {
+      const step = wf.steps[i];
+      for (const transition of step.transitions || []) {
+        if (typeof transition.toStepId !== "string" || !transition.toStepId.trim()) {
+          return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} has a transition with a missing target step id.` } };
+        }
+        if (!stepIds.has(transition.toStepId)) {
+          return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} references unknown step id "${transition.toStepId}".` } };
+        }
+        incoming.add(transition.toStepId);
+      }
+    }
+    if (!wf.steps.some((step) => !incoming.has(step.id))) {
+      return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" has no reachable entry step.` } };
+    }
+    return null;
+  }
   findWorkflowByIdOrName(idOrName) {
     return this.settings.workflows.find((workflow) => workflow.id === idOrName || workflow.name === idOrName);
   }
@@ -3945,13 +4090,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         }
         if (request.url === "/create") {
           if (kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
-          if (kind === "workflow") {
-            const referenceError = this.getMcpRawWorkflowReferenceError(input.payload);
-            if (referenceError) return send(400, { ok: false, error: referenceError });
-          }
+          const createPayloadError = this.getMcpCreatePayloadError(kind, input.payload);
+          if (createPayloadError) return send(400, { ok: false, error: createPayloadError });
           const data = this.wrapMcpCreatePayload(kind, input.payload);
           if (!data) return send(400, { ok: false, error: "Invalid payload" });
-          return send(200, { ok: true, ...await this.importFromData(data) });
+          try {
+            return send(200, { ok: true, ...await this.importFromData(data) });
+          } catch (error) {
+            return send(400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
         }
         if (request.url === "/export") {
           if (kind !== "all" && kind !== "tasks" && kind !== "workflows" && kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
@@ -3992,6 +4139,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
             }
             void this.runTask(item);
           } else {
+            const workflowPlayError = this.getMcpWorkflowPlayError(item);
+            if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
             void this.runWorkflow(item);
           }
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
