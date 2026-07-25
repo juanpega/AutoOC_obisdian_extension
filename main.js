@@ -3823,6 +3823,24 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   findTaskByIdOrName(idOrName) {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
   }
+  isTaskActive(task) {
+    const canonical = this.settings.tasks.find((t) => t.id === task.id);
+    return (canonical == null ? void 0 : canonical.status) === "running" || this.runningProcesses.has(task.id);
+  }
+  getMcpRawWorkflowReferenceError(payload) {
+    if (!payload || typeof payload !== "object" || "autoOCExport" in payload) return null;
+    const steps = payload.steps;
+    if (!Array.isArray(steps)) return null;
+    for (const step of steps) {
+      if (!step || typeof step !== "object") continue;
+      const s = step;
+      const stepKind = typeof s.stepKind === "string" ? s.stepKind : "task";
+      if (stepKind === "task") {
+        return "Raw workflow payload task steps are not supported; send a full AutoOC export with task mappings.";
+      }
+    }
+    return null;
+  }
   findWorkflowByIdOrName(idOrName) {
     return this.settings.workflows.find((workflow) => workflow.id === idOrName || workflow.name === idOrName);
   }
@@ -3872,6 +3890,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         }
         if (request.url === "/create") {
           if (kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
+          if (kind === "workflow") {
+            const referenceError = this.getMcpRawWorkflowReferenceError(input.payload);
+            if (referenceError) return send(400, { ok: false, error: referenceError });
+          }
           const data = this.wrapMcpCreatePayload(kind, input.payload);
           if (!data) return send(400, { ok: false, error: "Invalid payload" });
           return send(200, { ok: true, ...await this.importFromData(data) });
@@ -3909,8 +3931,14 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         const item = kind === "task" ? this.findTaskByIdOrName(input.idOrName) : this.findWorkflowByIdOrName(input.idOrName);
         if (!item) return send(404, { ok: false, error: `${kind} not found` });
         if (request.url === "/play") {
-          if (kind === "task") void this.runTask(item);
-          else void this.runWorkflow(item);
+          if (kind === "task") {
+            if (this.isTaskActive(item)) {
+              return send(409, { ok: false, id: item.id, name: item.name, status: "conflict", error: `Task "${item.name}" is already running.` });
+            }
+            void this.runTask(item);
+          } else {
+            void this.runWorkflow(item);
+          }
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
         }
         if (request.url === "/stop") {
@@ -4413,6 +4441,11 @@ DONE:" + $exitCode + "
     var _a, _b, _c, _d, _e, _f;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
+    if (this.isTaskActive(this.settings.tasks[idx])) {
+      new import_obsidian.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
     if ((effectiveTask.taskKind || "opencode") === "code") {
       await this.runCodeTask(effectiveTask, onComplete);
