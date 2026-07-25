@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.5.10] - 2026-07-26
+
 ### Added
 - Added interactive CLI tasks.
 - Added workflow prompt sync support for workflow builder import/export changes.

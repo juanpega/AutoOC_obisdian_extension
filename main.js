@@ -7,6 +7,9 @@ var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
+var __commonJS = (cb, mod) => function __require() {
+  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -645,7 +648,7 @@ var init_visualBuilderHtml_generated = __esm({
     const defaultAgent = optionValue(meta.availableAgents[0]) || "build";
     return {
       id: uid(), name: "New task", prompt: "", model: defaultModel, agent: defaultAgent,
-      useRalphLoop: false, scheduleType: "manual", scheduleTime: "09:00",
+      useRalphLoop: false, forceModel: false, scheduleType: "manual", scheduleTime: "09:00",
       scheduleDate: "", scheduleDays: [], scheduleMonthDays: [],
       scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
       status: "pending", lastRun: "", output: "", createdAt: new Date().toISOString(),
@@ -1480,6 +1483,7 @@ var init_visualBuilderHtml_generated = __esm({
         <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">\u{1F504} Refresh Models</button></div>
         <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" />\${dataListHtml("dlAgents", agentOptions)}<div class="hint-inline">\${esc(agentHint)}</div><button type="button" class="tiny btn-refresh-agents">\u{1F504} Refresh Agents</button></div>
       </div>
+      <div class="field" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;padding:6px 10px;margin-top:-2px"><label class="checkbox-row" style="margin:0"><input type="checkbox" data-f="forceModel" \${t.forceModel ? "checked" : ""} style="width:auto" /> <strong style="color:var(--accent)">Force model</strong> <span class="hint-inline">skip --agent; use exactly the selected model</span></label></div>
       <div class="row-2">
         <div class="field"><label>Icon</label><select data-f="icon">\${["\u26A1","\u2728","\u{1F9E0}","\u{1F4DD}","\u{1F50D}","\u{1F4A1}","\u{1F6E0}","\u{1F4CA}","\u{1F4E5}","\u{1F4E4}","\u{1F504}","\u{1F680}","\u{1F916}","\u{1F4DA}","\u{1F9EA}","\u{1F514}"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
         <div class="field"><label>Color</label><select data-f="color">\${["#4a7dff","#b07ad9","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (t.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">\u25CF ' + esc(c) + '</option>').join("")}</select></div>
@@ -1545,8 +1549,11 @@ var init_visualBuilderHtml_generated = __esm({
     let body = "";
     if (kind === "task") {
       const t = stepTask(s);
+      const currentModel = t ? esc(t.model || "(no model)") : "(no task selected)";
+      const checkedAttr = t && t.forceModel ? "checked" : "";
       body = \`
         <div class="field"><label>Task</label><select data-f="taskId">\${state.tasks.map(x => '<option value="' + x.id + '" ' + (x.id === s.taskId ? "selected" : "") + '>' + esc((x.icon || "\u26A1") + " " + (x.name || "(unnamed)")) + '</option>').join("")}</select></div>
+        \${t ? '<div class="field"><label class="checkbox-row" style="margin-top:2px"><input type="checkbox" class="chk-step-force-model" ' + checkedAttr + ' /> <strong>Force model</strong> <span class="hint-inline">model: ' + currentModel + '</span></label></div>' : ""}
         \${t ? '<div class="hint-inline">' + esc((t.prompt || "(no prompt)").slice(0, 200)) + ((t.prompt || "").length > 200 ? "\u2026" : "") + '</div>' : ""}
       \`;
     } else if (kind === "delay") {
@@ -1724,6 +1731,20 @@ var init_visualBuilderHtml_generated = __esm({
     });
     $$(".btn-refresh-models", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("models")));
     $$(".btn-refresh-agents", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("agents")));
+    const stepForceChk = body.querySelector(".chk-step-force-model");
+    if (stepForceChk) {
+      stepForceChk.addEventListener("change", function() {
+        if (sel.type !== "step") return;
+        const wf = findWorkflow(sel.ref.wfId);
+        const step = wf && wf.steps[sel.ref.idx];
+        if (!step) return;
+        const task = stepTask(step);
+        if (task) {
+          task.forceModel = this.checked;
+          isDirty = true;
+        }
+      });
+    }
   }
 
   function requestMetaRefresh(kind) {
@@ -2021,6 +2042,31 @@ var init_visualBuilderHtml_generated = __esm({
   }
 });
 
+// import-utils.js
+var require_import_utils = __commonJS({
+  "import-utils.js"(exports, module2) {
+    function isValidGitBranchName(branch) {
+      if (typeof branch !== "string" || !branch || branch === "@" || branch.startsWith("-")) return false;
+      if (/[\x00-\x20~^:?*\[\\]/.test(branch)) return false;
+      if (branch.includes("..") || branch.includes("@{") || branch.startsWith("/") || branch.endsWith("/") || branch.endsWith(".")) return false;
+      return !branch.split("/").some((component) => !component || component === "." || component === ".." || component.startsWith(".") || component.endsWith(".lock"));
+    }
+    function applyLegacyLinearTransitions(steps) {
+      for (let index = 0; index < steps.length - 1; index++) {
+        const step = steps[index];
+        if (step.transitions !== void 0) continue;
+        step.transitions = [{
+          toStepId: steps[index + 1].id,
+          mode: step.transitionMode || "default",
+          evaluatePrompt: step.evaluatePrompt,
+          forceContinue: step.forceContinue
+        }];
+      }
+    }
+    module2.exports = { applyLegacyLinearTransitions, isValidGitBranchName };
+  }
+});
+
 // main.ts
 var main_exports = {};
 __export(main_exports, {
@@ -2050,9 +2096,6 @@ function resolveOpencodeBin(configured) {
 }
 function psSingleQuoted(value) {
   return `'${value.replace(/'/g, "''")}'`;
-}
-function cmdQuotedArg(value) {
-  return `"${value.replace(/"/g, '""')}"`;
 }
 function commandPreviewArg(value) {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
@@ -2103,7 +2146,8 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
   }, 60 * 1e3);
   const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
   const envScript = buildPowerShellEnvLines(env).join("; ");
-  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}, "--agent", ${psSingleQuoted(agent)}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
+  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
+  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
   const launcher = (0, import_child_process.spawn)(
     "cmd.exe",
     ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
@@ -2111,29 +2155,84 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
   );
   launcher.unref();
 }
-function launchHiddenPS(psScriptFile) {
+function launchHiddenPS(psScriptFile, pidFile) {
   const fs2 = require("fs");
-  const path2 = require("path");
-  const vbsFile = psScriptFile.replace(/\.ps1$/, ".vbs");
-  const vbs = `Set sh = CreateObject("WScript.Shell")\r
-sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & "${psScriptFile.replace(/"/g, '""')}" & """", 0, False\r
-`;
-  fs2.writeFileSync(vbsFile, vbs, "utf8");
+  const launcherFile = psScriptFile.replace(/\.ps1$/, ".launch.ps1");
+  const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
+  const launcherScript = [
+    `$PID | Set-Content -LiteralPath ${psSingleQuoted(effectivePidFile)} -Encoding ASCII`,
+    `& ${psSingleQuoted(psScriptFile)}`
+  ].join("\r\n");
+  fs2.writeFileSync(launcherFile, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(launcherScript, "utf8")]));
   const { spawn: spawn2 } = require("child_process");
-  const ws = spawn2("wscript.exe", [vbsFile], { detached: true, stdio: "ignore", windowsHide: true });
-  ws.unref();
-  setTimeout(() => {
+  const child = spawn2("powershell.exe", [
+    "-NoLogo",
+    "-NonInteractive",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-WindowStyle",
+    "Hidden",
+    "-File",
+    launcherFile
+  ], { detached: true, stdio: "ignore", windowsHide: true });
+  child.unref();
+  const launcherTimer = setTimeout(() => {
     try {
-      fs2.unlinkSync(vbsFile);
+      fs2.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
-  setTimeout(() => {
+  const scriptTimer = setTimeout(() => {
     try {
       fs2.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
+  const cleanup = (removeScript = false) => {
+    clearTimeout(launcherTimer);
+    clearTimeout(scriptTimer);
+    try {
+      fs2.unlinkSync(launcherFile);
+    } catch (e) {
+    }
+    if (removeScript) {
+      try {
+        fs2.unlinkSync(psScriptFile);
+      } catch (e) {
+      }
+    }
+  };
+  const kill = () => {
+    let killedChildTree = false;
+    if (child.pid) {
+      try {
+        const killer = spawn2("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        killer.unref();
+        killedChildTree = true;
+      } catch (e) {
+      }
+    }
+    if (!killedChildTree) {
+      try {
+        child.kill();
+      } catch (e) {
+      }
+    }
+    try {
+      const pid = fs2.existsSync(effectivePidFile) ? String(fs2.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
+        const killer = spawn2("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        killer.unref();
+      }
+    } catch (e) {
+    }
+    cleanup(true);
+    try {
+      fs2.unlinkSync(effectivePidFile);
+    } catch (e) {
+    }
+  };
+  return { kill, cleanup };
 }
 function writeUtf8BomFile(filePath, content) {
   fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
@@ -2506,7 +2605,7 @@ async function copyTextToClipboard(text) {
   textarea.remove();
 }
 function getConfiguredAreaNames(settings) {
-  var _a, _b, _c;
+  var _a, _b;
   const names = /* @__PURE__ */ new Set();
   for (const task of settings.tasks) {
     const area = (_a = task.area) == null ? void 0 : _a.trim();
@@ -2515,10 +2614,6 @@ function getConfiguredAreaNames(settings) {
   for (const workflow of settings.workflows) {
     const area = (_b = workflow.area) == null ? void 0 : _b.trim();
     if (area) names.add(area);
-    for (const step of workflow.steps || []) {
-      const stepArea = (_c = step.area) == null ? void 0 : _c.trim();
-      if (stepArea) names.add(stepArea);
-    }
   }
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 }
@@ -2912,6 +3007,7 @@ function toExportTask(task, exportId) {
     scheduleIntervalValue: (_a = task.scheduleIntervalValue) != null ? _a : 10,
     scheduleIntervalUnit: (_b = task.scheduleIntervalUnit) != null ? _b : "minutes",
     useRalphLoop: task.useRalphLoop,
+    forceModel: task.forceModel,
     agent: task.agent,
     branch: task.branch,
     createBranch: task.createBranch,
@@ -3810,6 +3906,169 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   findTaskByIdOrName(idOrName) {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
   }
+  isTaskActive(task) {
+    const canonical = this.settings.tasks.find((t) => t.id === task.id);
+    return (canonical == null ? void 0 : canonical.status) === "running" || this.runningProcesses.has(task.id);
+  }
+  getMcpRawWorkflowReferenceError(payload) {
+    if (!payload || typeof payload !== "object" || "autoOCExport" in payload) return null;
+    const steps = payload.steps;
+    if (!Array.isArray(steps)) return null;
+    for (const step of steps) {
+      if (!step || typeof step !== "object") continue;
+      const s = step;
+      const stepKind = typeof s.stepKind === "string" ? s.stepKind : "task";
+      if (stepKind === "task") {
+        return "Raw workflow payload task steps are not supported; send a full AutoOC export with task mappings.";
+      }
+    }
+    return null;
+  }
+  isMcpObject(value) {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+  getMcpScheduleValidationError(prefix, payload) {
+    const scheduleTypes = ["manual", "once", "daily", "weekly", "monthly", "interval"];
+    const intervalUnits = ["seconds", "minutes", "hours"];
+    if (payload.scheduleType !== void 0 && (typeof payload.scheduleType !== "string" || !scheduleTypes.includes(payload.scheduleType))) {
+      return `${prefix}.scheduleType must be one of: ${scheduleTypes.join(", ")}.`;
+    }
+    if (payload.scheduleTime !== void 0 && typeof payload.scheduleTime !== "string") return `${prefix}.scheduleTime must be a string.`;
+    if (payload.scheduleDate !== void 0 && typeof payload.scheduleDate !== "string") return `${prefix}.scheduleDate must be a string.`;
+    if (payload.scheduleDays !== void 0 && (!Array.isArray(payload.scheduleDays) || payload.scheduleDays.some((day) => typeof day !== "number" || day < 0 || day > 6))) {
+      return `${prefix}.scheduleDays must be an array of numbers from 0 to 6.`;
+    }
+    if (payload.scheduleMonthDays !== void 0 && (!Array.isArray(payload.scheduleMonthDays) || payload.scheduleMonthDays.some((day) => typeof day !== "number" || day < 1 || day > 31))) {
+      return `${prefix}.scheduleMonthDays must be an array of numbers from 1 to 31.`;
+    }
+    if (payload.scheduleIntervalValue !== void 0 && (typeof payload.scheduleIntervalValue !== "number" || !Number.isFinite(payload.scheduleIntervalValue))) {
+      return `${prefix}.scheduleIntervalValue must be a finite number.`;
+    }
+    if (payload.scheduleIntervalUnit !== void 0 && (typeof payload.scheduleIntervalUnit !== "string" || !intervalUnits.includes(payload.scheduleIntervalUnit))) {
+      return `${prefix}.scheduleIntervalUnit must be one of: ${intervalUnits.join(", ")}.`;
+    }
+    return null;
+  }
+  getMcpRawTaskPayloadError(payload) {
+    if ("steps" in payload) return 'Raw task payloads must not include workflow steps; use kind "workflow".';
+    const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
+    if (taskKind !== "opencode" && taskKind !== "code") return 'payload.taskKind must be "opencode" or "code".';
+    if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw task payloads.";
+    if (taskKind === "code") {
+      const hasCode = typeof payload.code === "string" && payload.code.trim();
+      const hasPrompt = typeof payload.prompt === "string" && payload.prompt.trim();
+      if (!hasCode && !hasPrompt) return "payload.code or payload.prompt is required for raw code task payloads.";
+    } else if (typeof payload.prompt !== "string" || !payload.prompt.trim()) {
+      return "payload.prompt is required for raw task payloads.";
+    }
+    return this.getMcpScheduleValidationError("payload", payload);
+  }
+  getMcpRawWorkflowPayloadError(payload) {
+    if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw workflow payloads.";
+    if (!Array.isArray(payload.steps)) return "payload.steps must be a non-empty array for raw workflow payloads.";
+    if (payload.steps.length === 0) return "payload.steps must contain at least one step.";
+    const scheduleError = this.getMcpScheduleValidationError("payload", payload);
+    if (scheduleError) return scheduleError;
+    const stepIds = /* @__PURE__ */ new Set();
+    let hasTransitions = false;
+    for (let i = 0; i < payload.steps.length; i++) {
+      const step = payload.steps[i];
+      const prefix = `payload.steps[${i}]`;
+      if (!this.isMcpObject(step)) return `${prefix} must be an object.`;
+      if (typeof step.id === "string" && step.id.trim()) stepIds.add(step.id);
+      const stepKind = typeof step.stepKind === "string" ? step.stepKind : "task";
+      if (stepKind === "task") return "Raw workflow payload task steps are not supported; send a full AutoOC export with task mappings.";
+      if (stepKind !== "delay" && stepKind !== "code") return `${prefix}.stepKind must be "delay" or "code" for raw workflow payloads.`;
+      if (stepKind === "delay") {
+        if (step.delayValue !== void 0 && (typeof step.delayValue !== "number" || !Number.isFinite(step.delayValue))) return `${prefix}.delayValue must be a finite number.`;
+        if (step.delayUnit !== void 0 && (typeof step.delayUnit !== "string" || !["seconds", "minutes", "hours"].includes(step.delayUnit))) return `${prefix}.delayUnit must be one of: seconds, minutes, hours.`;
+      }
+      if (stepKind === "code" && (typeof step.code !== "string" || !step.code.trim())) return `${prefix}.code is required for raw code workflow steps.`;
+      if (step.transitions !== void 0) {
+        if (!Array.isArray(step.transitions)) return `${prefix}.transitions must be an array.`;
+        if (step.transitions.length > 0) hasTransitions = true;
+        for (let j = 0; j < step.transitions.length; j++) {
+          const transition = step.transitions[j];
+          const transitionPrefix = `${prefix}.transitions[${j}]`;
+          if (!this.isMcpObject(transition)) return `${transitionPrefix} must be an object.`;
+          if (typeof transition.toStepId !== "string" || !transition.toStepId.trim()) return `${transitionPrefix}.toStepId is required.`;
+          if (transition.mode !== "default" && transition.mode !== "force" && transition.mode !== "eval" && transition.mode !== "conditional") {
+            return `${transitionPrefix}.mode must be one of: default, force, eval, conditional.`;
+          }
+        }
+      }
+    }
+    if (hasTransitions) {
+      if (stepIds.size !== payload.steps.length) return "Raw workflow steps with transitions must each include a unique string id.";
+      for (let i = 0; i < payload.steps.length; i++) {
+        const step = payload.steps[i];
+        for (const transition of step.transitions || []) {
+          const toStepId = transition.toStepId;
+          if (typeof toStepId === "string" && !stepIds.has(toStepId)) return `payload.steps[${i}].transitions references unknown step id "${toStepId}".`;
+        }
+      }
+    }
+    return null;
+  }
+  getMcpFullExportKindError(kind, payload) {
+    if (!Array.isArray(payload.tasks)) return "Full AutoOC exports must include a tasks array.";
+    if (!Array.isArray(payload.workflows)) return "Full AutoOC exports must include a workflows array.";
+    if (kind === "task") {
+      if (payload.tasks.length === 0) return "Full task exports must include at least one task.";
+      if (payload.workflows.length > 0) return 'Full task exports must not include workflows; use kind "workflow" for workflow exports.';
+    } else {
+      if (payload.workflows.length === 0) return "Full workflow exports must include at least one workflow.";
+    }
+    return null;
+  }
+  getMcpCreatePayloadError(kind, payload) {
+    if (!this.isMcpObject(payload)) return "Invalid payload: expected a JSON object.";
+    if ("autoOCExport" in payload) return this.getMcpFullExportKindError(kind, payload);
+    if (kind === "task") return this.getMcpRawTaskPayloadError(payload);
+    const referenceError = this.getMcpRawWorkflowReferenceError(payload);
+    return referenceError || this.getMcpRawWorkflowPayloadError(payload);
+  }
+  getMcpWorkflowPlayError(workflow) {
+    const wf = this.settings.workflows.find((w) => w.id === workflow.id);
+    if (!wf) return { status: 404, body: { ok: false, error: "workflow not found" } };
+    if (wf.status === "running") {
+      return { status: 409, body: { ok: false, id: wf.id, name: wf.name, status: "conflict", error: `Workflow "${wf.name}" is already running.` } };
+    }
+    if (wf.steps.length === 0) {
+      return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" has no steps.` } };
+    }
+    const stepIds = /* @__PURE__ */ new Set();
+    for (let i = 0; i < wf.steps.length; i++) {
+      const step = wf.steps[i];
+      if (typeof step.id !== "string" || !step.id.trim()) {
+        return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} must include a unique string id.` } };
+      }
+      if (stepIds.has(step.id)) {
+        return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} duplicates step id "${step.id}".` } };
+      }
+      stepIds.add(step.id);
+      if (step.stepKind === "task" && !this.settings.tasks.find((task) => task.id === step.taskId)) {
+        return { status: 404, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.` } };
+      }
+    }
+    const incoming = /* @__PURE__ */ new Set();
+    for (let i = 0; i < wf.steps.length; i++) {
+      const step = wf.steps[i];
+      for (const transition of step.transitions || []) {
+        if (typeof transition.toStepId !== "string" || !transition.toStepId.trim()) {
+          return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} has a transition with a missing target step id.` } };
+        }
+        if (!stepIds.has(transition.toStepId)) {
+          return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" \u2014 step ${i + 1} references unknown step id "${transition.toStepId}".` } };
+        }
+        incoming.add(transition.toStepId);
+      }
+    }
+    if (!wf.steps.some((step) => !incoming.has(step.id))) {
+      return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" has no reachable entry step.` } };
+    }
+    return null;
+  }
   findWorkflowByIdOrName(idOrName) {
     return this.settings.workflows.find((workflow) => workflow.id === idOrName || workflow.name === idOrName);
   }
@@ -3859,9 +4118,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         }
         if (request.url === "/create") {
           if (kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
+          const createPayloadError = this.getMcpCreatePayloadError(kind, input.payload);
+          if (createPayloadError) return send(400, { ok: false, error: createPayloadError });
           const data = this.wrapMcpCreatePayload(kind, input.payload);
           if (!data) return send(400, { ok: false, error: "Invalid payload" });
-          return send(200, { ok: true, ...await this.importFromData(data) });
+          try {
+            return send(200, { ok: true, ...await this.importFromData(data) });
+          } catch (error) {
+            return send(400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
         }
         if (request.url === "/export") {
           if (kind !== "all" && kind !== "tasks" && kind !== "workflows" && kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
@@ -3896,8 +4161,16 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         const item = kind === "task" ? this.findTaskByIdOrName(input.idOrName) : this.findWorkflowByIdOrName(input.idOrName);
         if (!item) return send(404, { ok: false, error: `${kind} not found` });
         if (request.url === "/play") {
-          if (kind === "task") void this.runTask(item);
-          else void this.runWorkflow(item);
+          if (kind === "task") {
+            if (this.isTaskActive(item)) {
+              return send(409, { ok: false, id: item.id, name: item.name, status: "conflict", error: `Task "${item.name}" is already running.` });
+            }
+            void this.runTask(item);
+          } else {
+            const workflowPlayError = this.getMcpWorkflowPlayError(item);
+            if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
+            void this.runWorkflow(item);
+          }
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
         }
         if (request.url === "/stop") {
@@ -4314,7 +4587,10 @@ Continue?`
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
     const agent = this.getEffectiveAgent(task.agent);
-    return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
+    const args = [bin, "run", "-m", task.model];
+    if (!task.forceModel) args.push("--agent", agent);
+    args.push("--dangerously-skip-permissions", "--", prompt);
+    return args;
   }
   // Human-readable command string for the preview modal
   buildCommand(task) {
@@ -4330,10 +4606,28 @@ Continue?`
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const outFile = path2.join(tmpDir, `autooc-eval-${evalId}.txt`);
+      const pidFile = path2.join(tmpDir, `autooc-eval-${evalId}.pid`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
       const secretEnv = this.getSecretsEnv();
+      let settled = false;
+      let hiddenProc = null;
+      const cleanup = (removeScript = true) => {
+        hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
+        try {
+          fs2.unlinkSync(psFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(outFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(pidFile);
+        } catch (e) {
+        }
+      };
       const psScript = [
         ...psUtf8Prelude(),
         `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
@@ -4347,7 +4641,7 @@ Continue?`
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
         `$bin = ${psSingleQuoted(bin)}`,
         `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2>$null`,
+        `& $bin @argList > $outTmp 2> $errTmp`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
@@ -4360,29 +4654,23 @@ DONE:" + $exitCode + "
       ].join("\n");
       const psFile = path2.join(tmpDir, `autooc-eval-${evalId}.ps1`);
       writeUtf8BomFile(psFile, psScript);
-      launchHiddenPS(psFile);
+      hiddenProc = launchHiddenPS(psFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
+        if (settled) return;
         if (Date.now() - startedAt > 18e4) {
+          settled = true;
           clearInterval(poll);
-          try {
-            fs2.unlinkSync(psFile);
-          } catch (e) {
-          }
+          hiddenProc == null ? void 0 : hiddenProc.kill();
+          cleanup(true);
           resolve2({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
         if (!fs2.existsSync(outFile)) return;
+        settled = true;
         clearInterval(poll);
-        try {
-          fs2.unlinkSync(psFile);
-        } catch (e) {
-        }
         const raw = fs2.readFileSync(outFile, "utf8");
-        try {
-          fs2.unlinkSync(outFile);
-        } catch (e) {
-        }
+        cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
@@ -4397,10 +4685,27 @@ DONE:" + $exitCode + "
     var _a, _b, _c, _d, _e, _f;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
+    if (this.isTaskActive(this.settings.tasks[idx])) {
+      new import_obsidian.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
     if ((effectiveTask.taskKind || "opencode") === "code") {
       await this.runCodeTask(effectiveTask, onComplete);
       return;
+    }
+    if (effectiveTask.branch) {
+      const { isValidGitBranchName } = require_import_utils();
+      if (!isValidGitBranchName(effectiveTask.branch)) {
+        this.settings.tasks[idx].status = "failed";
+        this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
+        this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+        return;
+      }
     }
     if (!((_a = effectiveTask.prompt) == null ? void 0 : _a.trim())) {
       this.settings.tasks[idx].status = "failed";
@@ -4417,6 +4722,16 @@ DONE:" + $exitCode + "
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new import_obsidian.Notice(`AutoOC: "${task.name}" has no model selected.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -4438,9 +4753,11 @@ DONE:" + $exitCode + "
         const bin2 = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, agent, prompt2);
+          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt2);
         } else {
-          const args2 = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt2];
+          const args2 = ["-m", effectiveTask.model];
+          if (!effectiveTask.forceModel) args2.push("--agent", agent);
+          args2.push("--prompt", prompt2);
           openOpencodeCli(bin2, taskCwd, secretEnv, args2);
         }
         current.status = "completed";
@@ -4525,11 +4842,11 @@ DONE:" + $exitCode + "
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
     if (effectiveTask.branch) {
-      const safeBranch = effectiveTask.branch.replace(/'/g, "''");
+      const safeBranch = psSingleQuoted(effectiveTask.branch);
       if (effectiveTask.createBranch) {
-        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
+        gitCmds = `$safeBranch = ${safeBranch}; $timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = $safeBranch + "-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout $safeBranch }`;
       } else {
-        gitCmds = `git checkout ${safeBranch}`;
+        gitCmds = `$safeBranch = ${safeBranch}; git checkout $safeBranch`;
       }
     }
     const psScript = [
@@ -4543,22 +4860,42 @@ DONE:" + $exitCode + "
       `Set-Location -LiteralPath '${safeCwd}'`,
       gitCmds ? gitCmds : "",
       `try {`,
-      `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
-      `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
-      `$psi.RedirectStandardOutput = $false`,
-      `$psi.RedirectStandardError = $false`,
-      `$psi.UseShellExecute = $false`,
-      `$psi.CreateNoWindow = $true`,
-      `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
-      `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
-      `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
-      `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
+      `$bin = ${psSingleQuoted(bin)}`,
+      `$binExt = [System.IO.Path]::GetExtension($bin)`,
+      `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
+      `$nodeScript = ''`,
+      `if ($psShim -and [System.IO.File]::Exists($psShim)) {`,
+      `$bin = $psShim`,
+      `} elseif ($binExt -ieq '.cmd') {`,
+      `$cmdText = Get-Content $bin -Raw -Encoding UTF8`,
+      `if ($cmdText -match '"([^"]+\\.exe)"\\s+%\\*') {`,
+      `$bin = $Matches[1]`,
+      `} elseif ($cmdText -match '"%_prog%"\\s+"%dp0%\\\\([^"]+)"\\s+%\\*') {`,
+      `$cmdDir = Split-Path -Parent $bin`,
+      `$nodeCandidate = Join-Path $cmdDir 'node.exe'`,
+      `$bin = if ([System.IO.File]::Exists($nodeCandidate)) { $nodeCandidate } else { 'node' }`,
+      `$nodeScript = Join-Path $cmdDir $Matches[1]`,
+      `} else {`,
+      `throw "Cannot safely parse npm command shim '$bin' for shell-sensitive prompt text."`,
+      `}`,
+      `}`,
+      `$model = ${psSingleQuoted(model)}`,
+      `$agent = ${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))}`,
+      `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
+      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
       `$outFile = ${psSingleQuoted(outFile)}`,
       `$errFile = ${psSingleQuoted(errFile)}`,
-      `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
-      `$proc = [System.Diagnostics.Process]::Start($psi)`,
-      `$proc.WaitForExit()`,
-      `$exitCode = $proc.ExitCode`,
+      `$opencodeArgs = @()`,
+      `if ($nodeScript) {`,
+      `$opencodeArgs += $nodeScript`,
+      `}`,
+      `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
+      `if (-not $forceModel) {`,
+      `$opencodeArgs += @('--agent', $agent)`,
+      `}`,
+      `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
+      `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
+      `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
       `} catch {`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
@@ -4568,19 +4905,78 @@ DONE:" + $exitCode + "
     ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
-    launchHiddenPS(psScriptFile);
-    this.runningProcesses.set(task.id, { kill: () => {
-    } });
+    const hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    let settled = false;
+    let cancelled = false;
+    let pollHandle = null;
+    const wasManuallyStopped = (current) => cancelled || current.output.includes("[task stopped manually]");
+    const shouldAbortBeforeFinalMutation = (current) => wasManuallyStopped(current) || current.status !== "running";
+    const cleanupTempFiles = () => {
+      hiddenProc.cleanup(true);
+      try {
+        fs2.unlinkSync(promptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(fullPromptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(tmpFullPromptFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(outFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(errFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(doneFile);
+      } catch (e) {
+      }
+      try {
+        fs2.unlinkSync(pidFile);
+      } catch (e) {
+      }
+    };
+    this.runningProcesses.set(task.id, {
+      kill: () => {
+        cancelled = true;
+        settled = true;
+        if (pollHandle) {
+          clearInterval(pollHandle);
+          pollHandle = null;
+        }
+        hiddenProc.kill();
+        cleanupTempFiles();
+        this.runningProcesses.delete(task.id);
+      }
+    });
     const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
     let timeoutWarned = false;
-    const pollHandle = setInterval(async () => {
+    pollHandle = setInterval(async () => {
       var _a2, _b2, _c2;
+      if (settled || cancelled) return;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
-        clearInterval(pollHandle);
+        settled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        cleanupTempFiles();
+        this.runningProcesses.delete(task.id);
+        return;
+      }
+      if (t.status !== "running" && !this.runningProcesses.has(task.id)) {
+        cancelled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        cleanupTempFiles();
         return;
       }
       if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
@@ -4591,41 +4987,21 @@ DONE:" + $exitCode + "
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
-        clearInterval(pollHandle);
+        if (shouldAbortBeforeFinalMutation(t)) return;
+        settled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        hiddenProc.kill();
         this.runningProcesses.delete(task.id);
-        try {
-          fs2.unlinkSync(psScriptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(promptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(fullPromptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(tmpFullPromptFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(outFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(errFile);
-        } catch (e) {
-        }
-        try {
-          fs2.unlinkSync(doneFile);
-        } catch (e) {
-        }
+        cleanupTempFiles();
+        if (shouldAbortBeforeFinalMutation(t)) return;
         t.status = "failed";
         t.output += `
 [\u23F1 timed out after ${timeoutSeconds}s + 300s grace; no completion marker was written]`;
         (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
+        if (wasManuallyStopped(t)) return;
         await this.saveSettings();
+        if (wasManuallyStopped(t)) return;
         if (onComplete) await onComplete(t, -1);
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
@@ -4644,37 +5020,19 @@ DONE:" + $exitCode + "
         await this.saveSettings(false);
         return;
       }
-      clearInterval(pollHandle);
+      if (settled || shouldAbortBeforeFinalMutation(t)) return;
+      settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      pollHandle = null;
       this.runningProcesses.delete(task.id);
-      try {
-        fs2.unlinkSync(psScriptFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(promptFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(fullPromptFile);
-      } catch (e) {
-      }
       const stdout = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
       const stderr = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
       const exitCodeRaw = fs2.readFileSync(doneFile, "utf8").trim();
-      try {
-        fs2.unlinkSync(outFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(errFile);
-      } catch (e) {
-      }
-      try {
-        fs2.unlinkSync(doneFile);
-      } catch (e) {
-      }
+      cleanupTempFiles();
+      if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
       const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
+      if (shouldAbortBeforeFinalMutation(t)) return;
       t.output = normalized || "(no output)";
       if (exitCode !== 0) {
         t.status = "failed";
@@ -4691,7 +5049,9 @@ DONE:" + $exitCode + "
         cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
         cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
       }
+      if (wasManuallyStopped(t)) return;
       await this.saveSettings();
+      if (wasManuallyStopped(t)) return;
       if (onComplete) {
         await onComplete(t, exitCode);
       }
@@ -5042,7 +5402,7 @@ DONE:" + $exitCode + "
     return this.importFromData(data);
   }
   async importFromData(data) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
@@ -5063,13 +5423,14 @@ DONE:" + $exitCode + "
         model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
         agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
         useRalphLoop: importedTaskKind === "opencode" ? (_b = et.useRalphLoop) != null ? _b : false : false,
-        scheduleType: (_c = et.scheduleType) != null ? _c : "manual",
-        scheduleTime: (_d = et.scheduleTime) != null ? _d : nowTimeString(),
-        scheduleDate: (_e = et.scheduleDate) != null ? _e : "",
-        scheduleDays: (_f = et.scheduleDays) != null ? _f : [],
-        scheduleMonthDays: (_g = et.scheduleMonthDays) != null ? _g : [],
-        scheduleIntervalValue: (_h = et.scheduleIntervalValue) != null ? _h : 10,
-        scheduleIntervalUnit: (_i = et.scheduleIntervalUnit) != null ? _i : "minutes",
+        forceModel: importedTaskKind === "opencode" ? (_c = et.forceModel) != null ? _c : false : false,
+        scheduleType: (_d = et.scheduleType) != null ? _d : "manual",
+        scheduleTime: (_e = et.scheduleTime) != null ? _e : nowTimeString(),
+        scheduleDate: (_f = et.scheduleDate) != null ? _f : "",
+        scheduleDays: (_g = et.scheduleDays) != null ? _g : [],
+        scheduleMonthDays: (_h = et.scheduleMonthDays) != null ? _h : [],
+        scheduleIntervalValue: (_i = et.scheduleIntervalValue) != null ? _i : 10,
+        scheduleIntervalUnit: (_j = et.scheduleIntervalUnit) != null ? _j : "minutes",
         status: "pending",
         lastRun: "",
         output: "",
@@ -5077,7 +5438,7 @@ DONE:" + $exitCode + "
         workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
-        interactiveTerminal: importedTaskKind === "opencode" ? (_j = et.interactiveTerminal) != null ? _j : this.settings.defaultInteractiveTerminal : void 0,
+        interactiveTerminal: importedTaskKind === "opencode" ? (_k = et.interactiveTerminal) != null ? _k : this.settings.defaultInteractiveTerminal : void 0,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -5094,11 +5455,10 @@ DONE:" + $exitCode + "
     for (const ew of data.workflows || []) {
       const exportIdToStepId = /* @__PURE__ */ new Map();
       const steps = [];
-      const legacySteps = [];
-      let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind = s.stepKind || "task";
         const importedTransitions = s.transitions;
+        const hasImportedTransitions = Object.prototype.hasOwnProperty.call(s, "transitions");
         const step = {
           id: s.id || generateId(),
           stepKind,
@@ -5117,61 +5477,33 @@ DONE:" + $exitCode + "
           codeAllowVault: s.codeAllowVault,
           codeAllowFiles: s.codeAllowFiles,
           codeAllowTerminal: s.codeAllowTerminal,
-          transitions: Array.isArray(importedTransitions) ? importedTransitions : importedTransitions && typeof importedTransitions === "object" && typeof importedTransitions.toStepId === "string" ? [importedTransitions] : [],
+          transitions: !hasImportedTransitions ? void 0 : Array.isArray(importedTransitions) ? importedTransitions : importedTransitions && typeof importedTransitions === "object" && typeof importedTransitions.toStepId === "string" ? [importedTransitions] : [],
           position: s.position
         };
-        if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
-          step.transitions = void 0;
-          legacySteps.push(step);
-        } else {
-          steps.push(step);
-        }
+        steps.push(step);
         exportIdToStepId.set(step.id, step.id);
       }
-      if (legacySteps.length > 0) {
-        for (let i = 0; i < legacySteps.length; i++) {
-          const cur = legacySteps[i];
-          const next = legacySteps[i + 1];
-          if (next) {
-            cur.transitions = [{
-              toStepId: next.id,
-              mode: cur.transitionMode || "default",
-              evaluatePrompt: cur.evaluatePrompt,
-              forceContinue: cur.forceContinue
-            }];
-          }
-          steps.push(cur);
-        }
-      }
-      if (steps.length > 0 && steps.every((s) => !s.transitions || s.transitions.length === 0)) {
-        for (let i = 0; i < steps.length - 1; i++) {
-          steps[i].transitions = [{
-            toStepId: steps[i + 1].id,
-            mode: steps[i].transitionMode || "default",
-            evaluatePrompt: steps[i].evaluatePrompt,
-            forceContinue: steps[i].forceContinue
-          }];
-        }
-      }
+      const { applyLegacyLinearTransitions } = require_import_utils();
+      applyLegacyLinearTransitions(steps);
       if (steps.length === 0) continue;
       const workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
-        area: (_k = ew.area) != null ? _k : "",
-        description: (_l = ew.description) != null ? _l : "",
+        area: (_l = ew.area) != null ? _l : "",
+        description: (_m = ew.description) != null ? _m : "",
         steps,
         status: "pending",
         currentStep: -1,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        handoffBranch: (_m = ew.handoffBranch) != null ? _m : false,
-        handoffOutput: (_n = ew.handoffOutput) != null ? _n : true,
-        scheduleType: (_o = ew.scheduleType) != null ? _o : "manual",
-        scheduleTime: (_p = ew.scheduleTime) != null ? _p : nowTimeString(),
-        scheduleDate: (_q = ew.scheduleDate) != null ? _q : "",
-        scheduleDays: (_r = ew.scheduleDays) != null ? _r : [],
-        scheduleMonthDays: (_s = ew.scheduleMonthDays) != null ? _s : [],
-        scheduleIntervalValue: (_t = ew.scheduleIntervalValue) != null ? _t : 10,
-        scheduleIntervalUnit: (_u = ew.scheduleIntervalUnit) != null ? _u : "minutes"
+        handoffBranch: (_n = ew.handoffBranch) != null ? _n : false,
+        handoffOutput: (_o = ew.handoffOutput) != null ? _o : true,
+        scheduleType: (_p = ew.scheduleType) != null ? _p : "manual",
+        scheduleTime: (_q = ew.scheduleTime) != null ? _q : nowTimeString(),
+        scheduleDate: (_r = ew.scheduleDate) != null ? _r : "",
+        scheduleDays: (_s = ew.scheduleDays) != null ? _s : [],
+        scheduleMonthDays: (_t = ew.scheduleMonthDays) != null ? _t : [],
+        scheduleIntervalValue: (_u = ew.scheduleIntervalValue) != null ? _u : 10,
+        scheduleIntervalUnit: (_v = ew.scheduleIntervalUnit) != null ? _v : "minutes"
       };
       this.settings.workflows.push(workflow);
       workflowsImported++;
@@ -5551,7 +5883,9 @@ ${capped}`;
         lastSucceeded,
         transitions
       );
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       if (!nextStepId) {
+        if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         const failedByTask = !lastSucceeded;
         currentWf.status = failedByTask ? "failed" : "completed";
         completedTask.output += failedByTask ? `
@@ -5566,13 +5900,16 @@ ${capped}`;
       }
       const nextIdx = currentWf.steps.findIndex((s) => s.id === nextStepId);
       if (nextIdx === -1) {
+        if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         currentWf.status = "failed";
         new import_obsidian.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
         await this.saveSettings();
         return;
       }
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       currentWf.currentStep = nextIdx;
       await this.saveSettings();
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       new import_obsidian.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
         this.runWorkflowStepById(currentWf.id, nextStepId);
@@ -6207,6 +6544,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.render();
   }
   async resetSecretsPin() {
+    if (!await this.ensureSecretsUnlocked()) return;
     const confirmed = await new ConfirmModal(
       this.app,
       "Reset Secrets PIN?",
@@ -6871,13 +7209,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
       clampBubbleToParent(taskBubble);
     };
     const configuredAreaNames = areaNames.filter((name) => name !== "No area");
+    const areaContentWeight = (areaWorkflows, looseTasks) => {
+      return looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
+        return sum + workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length;
+      }, 0);
+    };
     const topLevelItems = [];
     configuredAreaNames.forEach((name) => {
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
-        return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
-      }, 0);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
       const areaSize = areaSizeForContent(contentWeight);
       topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
     });
@@ -6893,9 +7235,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     configuredAreaNames.forEach((name) => {
       const areaLayout = topLevelLayout.get(`area:${name}`);
       if (!areaLayout) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => {
         var _a;
         return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "running";
@@ -7089,6 +7433,40 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
+    const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const btnQuickRun = quickActions.createEl("button", { text: "\u25B6", cls: "auto-oc-btn-run" });
+    btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
+    btnQuickRun.disabled = task.status === "running";
+    btnQuickRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runTask(task);
+    };
+    if (task.status === "running") {
+      const btnQuickStop = quickActions.createEl("button", { text: "\u23F9", cls: "auto-oc-btn-stop" });
+      btnQuickStop.title = "Terminate process now";
+      btnQuickStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnQuickStop.disabled = true;
+        await this.plugin.killTask(task.id);
+      };
+    }
+    const btnQuickLog = quickActions.createEl("button", { text: "\u{1F4C4}", cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output" });
+    btnQuickLog.title = task.status === "running" ? "Live log" : "Log";
+    btnQuickLog.disabled = !task.output && task.status !== "running";
+    btnQuickLog.onclick = (e) => {
+      e.stopPropagation();
+      new LiveLogModal(this.app, task, this.plugin).open();
+    };
+    const btnQuickHistory = quickActions.createEl("button", { text: "\u{1F4DC}", cls: "auto-oc-btn-history" });
+    btnQuickHistory.title = "History";
+    btnQuickHistory.onclick = (e) => {
+      e.stopPropagation();
+      try {
+        new LogHistoryModal(this.app, task, this.plugin).open();
+      } catch (err) {
+        new import_obsidian.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+      }
+    };
     if (task.status === "failed") {
       badge.addClass("auto-oc-badge-clickable");
       badge.title = "Click to reset to pending (will run on next schedule, or hit \u25B6 Run now)";
@@ -7344,6 +7722,41 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`
     });
+    const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const btnQuickRun = quickActions.createEl("button", { text: "\u25B6", cls: "auto-oc-btn-run" });
+    btnQuickRun.title = workflow.status === "running" ? "Running" : "Run workflow";
+    btnQuickRun.disabled = workflow.status === "running";
+    btnQuickRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runWorkflow(workflow);
+    };
+    if (workflow.status === "running") {
+      const btnQuickStop = quickActions.createEl("button", { text: "\u23F9", cls: "auto-oc-btn-stop" });
+      btnQuickStop.title = "Stop workflow now";
+      btnQuickStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnQuickStop.disabled = true;
+        await this.plugin.killWorkflow(workflow.id);
+      };
+    }
+    const currentTask = this.plugin.settings.tasks.find((task) => {
+      var _a2;
+      return task.id === ((_a2 = workflow.steps[workflow.currentStep]) == null ? void 0 : _a2.taskId);
+    });
+    const btnQuickLog = quickActions.createEl("button", { text: "\u{1F4C4}", cls: "auto-oc-btn-output" });
+    btnQuickLog.title = "Current step log";
+    btnQuickLog.disabled = !currentTask || !currentTask.output && currentTask.status !== "running";
+    btnQuickLog.onclick = (e) => {
+      e.stopPropagation();
+      if (currentTask) new LiveLogModal(this.app, currentTask, this.plugin).open();
+    };
+    const btnQuickHistory = quickActions.createEl("button", { text: "\u{1F4DC}", cls: "auto-oc-btn-history" });
+    btnQuickHistory.title = "Current step history";
+    btnQuickHistory.disabled = !currentTask;
+    btnQuickHistory.onclick = (e) => {
+      e.stopPropagation();
+      if (currentTask) new LogHistoryModal(this.app, currentTask, this.plugin).open();
+    };
     if (workflow.status === "failed") {
       badge.addClass("auto-oc-badge-clickable");
       badge.title = "Click to reset to pending";
@@ -7791,7 +8204,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
     const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
     const oldWorkflowById = new Map(oldWorkflows.map((workflow) => [workflow.id, workflow]));
     const newTasks = state.tasks.map((t) => {
-      var _a2, _b, _c, _d;
+      var _a2, _b, _c, _d, _e;
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = existing ? t.id : t.id || generateId();
       const status = (existing == null ? void 0 : existing.status) || "pending";
@@ -7806,12 +8219,13 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
         useRalphLoop: t.useRalphLoop !== void 0 ? !!t.useRalphLoop : (_a2 = existing == null ? void 0 : existing.useRalphLoop) != null ? _a2 : false,
+        forceModel: t.forceModel !== void 0 ? !!t.forceModel : (_b = existing == null ? void 0 : existing.forceModel) != null ? _b : false,
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
         scheduleDays: Array.isArray(t.scheduleDays) ? t.scheduleDays : [],
         scheduleMonthDays: Array.isArray(t.scheduleMonthDays) ? t.scheduleMonthDays : [],
-        scheduleIntervalValue: typeof t.scheduleIntervalValue === "number" ? t.scheduleIntervalValue : (_b = existing == null ? void 0 : existing.scheduleIntervalValue) != null ? _b : 10,
+        scheduleIntervalValue: typeof t.scheduleIntervalValue === "number" ? t.scheduleIntervalValue : (_c = existing == null ? void 0 : existing.scheduleIntervalValue) != null ? _c : 10,
         scheduleIntervalUnit: t.scheduleIntervalUnit || (existing == null ? void 0 : existing.scheduleIntervalUnit) || "minutes",
         status,
         lastRun,
@@ -7819,9 +8233,9 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         createdAt: (existing == null ? void 0 : existing.createdAt) || t.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
         // Preserve classic-only fields when older Visual Builder payloads do
         // not send them.
-        workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_c = existing == null ? void 0 : existing.workingDirectory) != null ? _c : "",
+        workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_d = existing == null ? void 0 : existing.workingDirectory) != null ? _d : "",
         branch: t.branch !== void 0 ? t.branch || "" : (existing == null ? void 0 : existing.branch) || "",
-        createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_d = existing == null ? void 0 : existing.createBranch) != null ? _d : false,
+        createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_e = existing == null ? void 0 : existing.createBranch) != null ? _e : false,
         interactiveTerminal: t.interactiveTerminal !== void 0 ? !!t.interactiveTerminal : existing == null ? void 0 : existing.interactiveTerminal,
         code: t.code !== void 0 ? t.code : existing == null ? void 0 : existing.code,
         codeLang: t.codeLang !== void 0 ? t.codeLang : existing == null ? void 0 : existing.codeLang,
@@ -8143,6 +8557,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       model: plugin.getEffectiveDefaultModel(),
       agent: plugin.getEffectiveAgent(),
       useRalphLoop: false,
+      forceModel: false,
       interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
@@ -8315,6 +8730,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.model = v);
       });
+      new import_obsidian.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
+        var _a2;
+        tog.setValue((_a2 = this.draft.forceModel) != null ? _a2 : false);
+        tog.onChange((v) => this.draft.forceModel = v);
+      });
       new import_obsidian.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Models").onClick(() => {
           this.plugin.refreshModels();
@@ -8436,7 +8856,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     }
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
-        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
         if (!((_a2 = this.draft.name) == null ? void 0 : _a2.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -8498,13 +8918,14 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             area: (_i = this.draft.area) != null ? _i : "",
             agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
             useRalphLoop: savingTaskKind === "opencode" ? (_j = this.draft.useRalphLoop) != null ? _j : false : false,
-            scheduleType: (_k = this.draft.scheduleType) != null ? _k : "manual",
-            scheduleTime: (_l = this.draft.scheduleTime) != null ? _l : nowTimeString(),
-            scheduleDate: (_m = this.draft.scheduleDate) != null ? _m : "",
-            scheduleDays: (_n = this.draft.scheduleDays) != null ? _n : [],
-            scheduleMonthDays: (_o = this.draft.scheduleMonthDays) != null ? _o : [],
-            scheduleIntervalValue: (_p = this.draft.scheduleIntervalValue) != null ? _p : 10,
-            scheduleIntervalUnit: (_q = this.draft.scheduleIntervalUnit) != null ? _q : "minutes",
+            forceModel: savingTaskKind === "opencode" ? (_k = this.draft.forceModel) != null ? _k : false : false,
+            scheduleType: (_l = this.draft.scheduleType) != null ? _l : "manual",
+            scheduleTime: (_m = this.draft.scheduleTime) != null ? _m : nowTimeString(),
+            scheduleDate: (_n = this.draft.scheduleDate) != null ? _n : "",
+            scheduleDays: (_o = this.draft.scheduleDays) != null ? _o : [],
+            scheduleMonthDays: (_p = this.draft.scheduleMonthDays) != null ? _p : [],
+            scheduleIntervalValue: (_q = this.draft.scheduleIntervalValue) != null ? _q : 10,
+            scheduleIntervalUnit: (_r = this.draft.scheduleIntervalUnit) != null ? _r : "minutes",
             status: "pending",
             lastRun: "",
             output: "",
@@ -8525,7 +8946,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         }
         await this.plugin.saveSettings(!this.editTask);
         if (updatedTask) {
-          if (areaChanged) (_r = this.plugin.view) == null ? void 0 : _r.render();
+          if (areaChanged) (_s = this.plugin.view) == null ? void 0 : _s.render();
           this.plugin.emitTaskUpdated(updatedTask);
         }
         new import_obsidian.Notice(`Task "${this.draft.name}" saved.`);
@@ -10448,7 +10869,31 @@ var DiagnosticModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
     this.logEl = null;
+    this.pollHandle = null;
+    this.hiddenProc = null;
+    this.tempFiles = [];
     this.plugin = plugin;
+  }
+  cleanupDiagnostics(killProcess = false) {
+    var _a, _b;
+    if (this.pollHandle) {
+      clearInterval(this.pollHandle);
+      this.pollHandle = null;
+    }
+    if (killProcess) {
+      (_a = this.hiddenProc) == null ? void 0 : _a.kill();
+    } else {
+      (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
+    }
+    this.hiddenProc = null;
+    const fs2 = require("fs");
+    for (const file of this.tempFiles) {
+      try {
+        fs2.unlinkSync(file);
+      } catch (e) {
+      }
+    }
+    this.tempFiles = [];
   }
   onOpen() {
     const { contentEl } = this;
@@ -10463,6 +10908,7 @@ var DiagnosticModal = class extends import_obsidian.Modal {
     contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u25B6 Launch test: 'di hola'").setCta().onClick(() => {
+        this.cleanupDiagnostics(true);
         if (this.logEl) this.logEl.textContent = "[launching detached PowerShell process\u2026]\n";
         const bin2 = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
@@ -10474,8 +10920,13 @@ var DiagnosticModal = class extends import_obsidian.Modal {
         const path2 = require("path");
         const osTmp = require("os").tmpdir();
         const outFile = path2.join(osTmp, "autooc-diag.txt");
+        const pidFile = path2.join(osTmp, "autooc-diag.pid");
         try {
           fs2.unlinkSync(outFile);
+        } catch (e) {
+        }
+        try {
+          fs2.unlinkSync(pidFile);
         } catch (e) {
         }
         const psScript = [
@@ -10489,31 +10940,38 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
           `$bin = ${psSingleQuoted(bin2)}`,
           `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-          `& $bin @argList > $outTmp 2>$null`,
+          `& $bin @argList > $outTmp 2> $errTmp`,
           `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
           `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+          `$err = (Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "
+          `$combined = ($out + $(if($err){"
+" + $err}else{""})).Trim()`,
+          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "
 DONE:" + $exitCode)`
         ].join("\n");
         const psFile = path2.join(osTmp, "autooc-diag.ps1");
         writeUtf8BomFile(psFile, psScript);
+        this.tempFiles = [outFile, pidFile, psFile];
         if (this.logEl) this.logEl.textContent += `Script: ${psFile}
 
 `;
-        launchHiddenPS(psFile);
-        const poll = setInterval(() => {
+        this.hiddenProc = launchHiddenPS(psFile, pidFile);
+        const startedAt = Date.now();
+        this.pollHandle = setInterval(() => {
+          if (Date.now() - startedAt > 18e4) {
+            this.cleanupDiagnostics(true);
+            if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
+            return;
+          }
           if (!fs2.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
-          clearInterval(poll);
+          if (this.pollHandle) clearInterval(this.pollHandle);
+          this.pollHandle = null;
           const raw = fs2.readFileSync(outFile, "utf8");
-          try {
-            fs2.unlinkSync(outFile);
-            fs2.unlinkSync(psFile);
-          } catch (e) {
-          }
+          this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
           const normalized = normalizeCommandOutput(output);
@@ -10531,6 +10989,7 @@ DONE:" + $exitCode)`
     this.logEl.textContent = "(output will appear here\u2026)";
   }
   onClose() {
+    this.cleanupDiagnostics(true);
     this.contentEl.empty();
   }
 };

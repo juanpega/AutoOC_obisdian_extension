@@ -703,6 +703,20 @@
   background: var(--background-modifier-hover);
 }
 
+.auto-oc-card-quick-actions {
+  display: flex;
+  gap: 3px;
+  margin-left: auto;
+}
+
+.auto-oc-card-quick-actions button {
+  padding: 1px 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-primary);
+  cursor: pointer;
+}
+
 .auto-oc-task-name {
   font-weight: 600;
   font-size: 0.88rem;

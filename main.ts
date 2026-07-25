@@ -45,10 +45,6 @@ function psSingleQuoted(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
-function cmdQuotedArg(value: string): string {
-  return `"${value.replace(/"/g, '""')}"`;
-}
-
 function commandPreviewArg(value: string): string {
   return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
 }
@@ -125,11 +121,12 @@ function openOpencodeCliLongPromptWindows(
 
   const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
   const envScript = buildPowerShellEnvLines(env).join("; ");
+  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
   const command =
     `${envScript ? `${envScript}; ` : ""}` +
     `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ` +
     `$bin = ${psSingleQuoted(bin)}; ` +
-    `$argList = @("-m", ${psSingleQuoted(model)}, "--agent", ${psSingleQuoted(agent)}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
+    `$argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
     `& $bin @argList`;
   const launcher = spawn(
     "cmd.exe",
@@ -139,24 +136,69 @@ function openOpencodeCliLongPromptWindows(
   launcher.unref();
 }
 
-// Launch a PowerShell script completely silently using wscript.exe + VBScript.
-// wscript.exe with WScript.Shell.Run(..., 0, false) shows NO window at all —
-// not even a brief black flash — and breaks out of Electron's Job Object.
-function launchHiddenPS(psScriptFile: string): void {
+// Launch a PowerShell script hidden as a direct detached child so cancellation can
+// kill the actual process tree immediately, even before the PID file is written.
+type ProcessHandle = { kill: () => void };
+
+type HiddenProcessHandle = ProcessHandle & { cleanup: (removeScript?: boolean) => void };
+
+function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHandle {
   const fs   = require("fs");
-  const path = require("path");
-  const vbsFile = psScriptFile.replace(/\.ps1$/, ".vbs");
-  const vbs = `Set sh = CreateObject("WScript.Shell")\r\n` +
-    `sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & "${psScriptFile.replace(/"/g, '""')}" & """", 0, False\r\n`;
-  fs.writeFileSync(vbsFile, vbs, "utf8");
+  const launcherFile = psScriptFile.replace(/\.ps1$/, ".launch.ps1");
+  const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
+  const launcherScript = [
+    `$PID | Set-Content -LiteralPath ${psSingleQuoted(effectivePidFile)} -Encoding ASCII`,
+    `& ${psSingleQuoted(psScriptFile)}`,
+  ].join("\r\n");
+  fs.writeFileSync(launcherFile, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(launcherScript, "utf8")]));
   const { spawn } = require("child_process");
-  const ws = spawn("wscript.exe", [vbsFile], { detached: true, stdio: "ignore", windowsHide: true });
-  ws.unref();
+  const child = spawn("powershell.exe", [
+    "-NoLogo",
+    "-NonInteractive",
+    "-ExecutionPolicy", "Bypass",
+    "-WindowStyle", "Hidden",
+    "-File", launcherFile,
+  ], { detached: true, stdio: "ignore", windowsHide: true });
+  child.unref();
   // Clean up launcher files after PowerShell has had time to read them. This
   // also limits exposure for launch scripts that contain temporary env vars.
-  setTimeout(() => { try { fs.unlinkSync(vbsFile); } catch { /* ignore */ } }, 10000);
+  const launcherTimer = setTimeout(() => { try { fs.unlinkSync(launcherFile); } catch { /* ignore */ } }, 10000);
   // ponytail: 10-minute fallback cleanup so generated ps1 stays available for debugging.
-  setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 600000);
+  const scriptTimer = setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 600000);
+
+  const cleanup = (removeScript = false) => {
+    clearTimeout(launcherTimer);
+    clearTimeout(scriptTimer);
+    try { fs.unlinkSync(launcherFile); } catch { /* ignore */ }
+    if (removeScript) {
+      try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
+    }
+  };
+
+  const kill = () => {
+    let killedChildTree = false;
+    if (child.pid) {
+      try {
+        const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        killer.unref();
+        killedChildTree = true;
+      } catch { /* ignore */ }
+    }
+    if (!killedChildTree) {
+      try { child.kill(); } catch { /* ignore */ }
+    }
+    try {
+      const pid = fs.existsSync(effectivePidFile) ? String(fs.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
+        const killer = spawn("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        killer.unref();
+      }
+    } catch { /* ignore */ }
+    cleanup(true);
+    try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
+  };
+
+  return { kill, cleanup };
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -597,6 +639,7 @@ interface ScheduledTask {
   prompt: string;
   model: string;
   agent: string;
+  forceModel: boolean;
   useRalphLoop: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;    // "HH:MM"
@@ -672,10 +715,6 @@ function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workfl
   for (const workflow of settings.workflows) {
     const area = workflow.area?.trim();
     if (area) names.add(area);
-    for (const step of workflow.steps || []) {
-      const stepArea = step.area?.trim();
-      if (stepArea) names.add(stepArea);
-    }
   }
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 }
@@ -735,6 +774,7 @@ interface ExportTask {
   scheduleIntervalValue: number;
   scheduleIntervalUnit: IntervalUnit;
   useRalphLoop: boolean;
+  forceModel: boolean;
   agent: string;
   branch?: string;
   createBranch?: boolean;
@@ -1291,6 +1331,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     scheduleIntervalValue: task.scheduleIntervalValue ?? 10,
     scheduleIntervalUnit: task.scheduleIntervalUnit ?? "minutes",
     useRalphLoop: task.useRalphLoop,
+    forceModel: task.forceModel,
     agent: task.agent,
     branch: task.branch,
     createBranch: task.createBranch,
@@ -2063,7 +2104,7 @@ export default class AutoOCPlugin extends Plugin {
   private taskUpdatedCallbacks = new Set<(task: ScheduledTask) => void>();
   private workflowUpdatedCallbacks = new Set<(workflow: Workflow) => void>();
   // Map taskId -> child process, so we can kill running tasks
-  private runningProcesses = new Map<string, ReturnType<typeof spawn>>();
+  private runningProcesses = new Map<string, ProcessHandle>();
   private dueCheckInProgress = false;
   // Workflows that have been manually stopped; checked in step callbacks to abort chaining
   private stoppingWorkflows = new Set<string>();
@@ -2216,6 +2257,179 @@ export default class AutoOCPlugin extends Plugin {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
   }
 
+  private isTaskActive(task: ScheduledTask): boolean {
+    const canonical = this.settings.tasks.find((t) => t.id === task.id);
+    return canonical?.status === "running" || this.runningProcesses.has(task.id);
+  }
+
+  private getMcpRawWorkflowReferenceError(payload: unknown): string | null {
+    if (!payload || typeof payload !== "object" || "autoOCExport" in payload) return null;
+    const steps = (payload as { steps?: unknown }).steps;
+    if (!Array.isArray(steps)) return null;
+    for (const step of steps) {
+      if (!step || typeof step !== "object") continue;
+      const s = step as { stepKind?: unknown };
+      const stepKind = typeof s.stepKind === "string" ? s.stepKind : "task";
+      if (stepKind === "task") {
+        return "Raw workflow payload task steps are not supported; send a full AutoOC export with task mappings.";
+      }
+    }
+    return null;
+  }
+
+  private isMcpObject(value: unknown): value is Record<string, unknown> {
+    return !!value && typeof value === "object" && !Array.isArray(value);
+  }
+
+  private getMcpScheduleValidationError(prefix: string, payload: Record<string, unknown>): string | null {
+    const scheduleTypes: ScheduleType[] = ["manual", "once", "daily", "weekly", "monthly", "interval"];
+    const intervalUnits: IntervalUnit[] = ["seconds", "minutes", "hours"];
+    if (payload.scheduleType !== undefined && (typeof payload.scheduleType !== "string" || !scheduleTypes.includes(payload.scheduleType as ScheduleType))) {
+      return `${prefix}.scheduleType must be one of: ${scheduleTypes.join(", ")}.`;
+    }
+    if (payload.scheduleTime !== undefined && typeof payload.scheduleTime !== "string") return `${prefix}.scheduleTime must be a string.`;
+    if (payload.scheduleDate !== undefined && typeof payload.scheduleDate !== "string") return `${prefix}.scheduleDate must be a string.`;
+    if (payload.scheduleDays !== undefined && (!Array.isArray(payload.scheduleDays) || payload.scheduleDays.some((day) => typeof day !== "number" || day < 0 || day > 6))) {
+      return `${prefix}.scheduleDays must be an array of numbers from 0 to 6.`;
+    }
+    if (payload.scheduleMonthDays !== undefined && (!Array.isArray(payload.scheduleMonthDays) || payload.scheduleMonthDays.some((day) => typeof day !== "number" || day < 1 || day > 31))) {
+      return `${prefix}.scheduleMonthDays must be an array of numbers from 1 to 31.`;
+    }
+    if (payload.scheduleIntervalValue !== undefined && (typeof payload.scheduleIntervalValue !== "number" || !Number.isFinite(payload.scheduleIntervalValue))) {
+      return `${prefix}.scheduleIntervalValue must be a finite number.`;
+    }
+    if (payload.scheduleIntervalUnit !== undefined && (typeof payload.scheduleIntervalUnit !== "string" || !intervalUnits.includes(payload.scheduleIntervalUnit as IntervalUnit))) {
+      return `${prefix}.scheduleIntervalUnit must be one of: ${intervalUnits.join(", ")}.`;
+    }
+    return null;
+  }
+
+  private getMcpRawTaskPayloadError(payload: Record<string, unknown>): string | null {
+    if ("steps" in payload) return "Raw task payloads must not include workflow steps; use kind \"workflow\".";
+    const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
+    if (taskKind !== "opencode" && taskKind !== "code") return "payload.taskKind must be \"opencode\" or \"code\".";
+    if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw task payloads.";
+    if (taskKind === "code") {
+      const hasCode = typeof payload.code === "string" && payload.code.trim();
+      const hasPrompt = typeof payload.prompt === "string" && payload.prompt.trim();
+      if (!hasCode && !hasPrompt) return "payload.code or payload.prompt is required for raw code task payloads.";
+    } else if (typeof payload.prompt !== "string" || !payload.prompt.trim()) {
+      return "payload.prompt is required for raw task payloads.";
+    }
+    return this.getMcpScheduleValidationError("payload", payload);
+  }
+
+  private getMcpRawWorkflowPayloadError(payload: Record<string, unknown>): string | null {
+    if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw workflow payloads.";
+    if (!Array.isArray(payload.steps)) return "payload.steps must be a non-empty array for raw workflow payloads.";
+    if (payload.steps.length === 0) return "payload.steps must contain at least one step.";
+    const scheduleError = this.getMcpScheduleValidationError("payload", payload);
+    if (scheduleError) return scheduleError;
+
+    const stepIds = new Set<string>();
+    let hasTransitions = false;
+    for (let i = 0; i < payload.steps.length; i++) {
+      const step = payload.steps[i];
+      const prefix = `payload.steps[${i}]`;
+      if (!this.isMcpObject(step)) return `${prefix} must be an object.`;
+      if (typeof step.id === "string" && step.id.trim()) stepIds.add(step.id);
+      const stepKind = typeof step.stepKind === "string" ? step.stepKind : "task";
+      if (stepKind === "task") return "Raw workflow payload task steps are not supported; send a full AutoOC export with task mappings.";
+      if (stepKind !== "delay" && stepKind !== "code") return `${prefix}.stepKind must be \"delay\" or \"code\" for raw workflow payloads.`;
+      if (stepKind === "delay") {
+        if (step.delayValue !== undefined && (typeof step.delayValue !== "number" || !Number.isFinite(step.delayValue))) return `${prefix}.delayValue must be a finite number.`;
+        if (step.delayUnit !== undefined && (typeof step.delayUnit !== "string" || !["seconds", "minutes", "hours"].includes(step.delayUnit))) return `${prefix}.delayUnit must be one of: seconds, minutes, hours.`;
+      }
+      if (stepKind === "code" && (typeof step.code !== "string" || !step.code.trim())) return `${prefix}.code is required for raw code workflow steps.`;
+      if (step.transitions !== undefined) {
+        if (!Array.isArray(step.transitions)) return `${prefix}.transitions must be an array.`;
+        if (step.transitions.length > 0) hasTransitions = true;
+        for (let j = 0; j < step.transitions.length; j++) {
+          const transition = step.transitions[j];
+          const transitionPrefix = `${prefix}.transitions[${j}]`;
+          if (!this.isMcpObject(transition)) return `${transitionPrefix} must be an object.`;
+          if (typeof transition.toStepId !== "string" || !transition.toStepId.trim()) return `${transitionPrefix}.toStepId is required.`;
+          if (transition.mode !== "default" && transition.mode !== "force" && transition.mode !== "eval" && transition.mode !== "conditional") {
+            return `${transitionPrefix}.mode must be one of: default, force, eval, conditional.`;
+          }
+        }
+      }
+    }
+    if (hasTransitions) {
+      if (stepIds.size !== payload.steps.length) return "Raw workflow steps with transitions must each include a unique string id.";
+      for (let i = 0; i < payload.steps.length; i++) {
+        const step = payload.steps[i] as Record<string, unknown>;
+        for (const transition of (step.transitions as unknown[] | undefined) || []) {
+          const toStepId = (transition as { toStepId?: unknown }).toStepId;
+          if (typeof toStepId === "string" && !stepIds.has(toStepId)) return `payload.steps[${i}].transitions references unknown step id \"${toStepId}\".`;
+        }
+      }
+    }
+    return null;
+  }
+
+  private getMcpFullExportKindError(kind: "task" | "workflow", payload: Record<string, unknown>): string | null {
+    if (!Array.isArray(payload.tasks)) return "Full AutoOC exports must include a tasks array.";
+    if (!Array.isArray(payload.workflows)) return "Full AutoOC exports must include a workflows array.";
+    if (kind === "task") {
+      if (payload.tasks.length === 0) return "Full task exports must include at least one task.";
+      if (payload.workflows.length > 0) return "Full task exports must not include workflows; use kind \"workflow\" for workflow exports.";
+    } else {
+      if (payload.workflows.length === 0) return "Full workflow exports must include at least one workflow.";
+    }
+    return null;
+  }
+
+  private getMcpCreatePayloadError(kind: "task" | "workflow", payload: unknown): string | null {
+    if (!this.isMcpObject(payload)) return "Invalid payload: expected a JSON object.";
+    if ("autoOCExport" in payload) return this.getMcpFullExportKindError(kind, payload);
+    if (kind === "task") return this.getMcpRawTaskPayloadError(payload);
+    const referenceError = this.getMcpRawWorkflowReferenceError(payload);
+    return referenceError || this.getMcpRawWorkflowPayloadError(payload);
+  }
+
+  private getMcpWorkflowPlayError(workflow: Workflow): { status: number; body: object } | null {
+    const wf = this.settings.workflows.find((w) => w.id === workflow.id);
+    if (!wf) return { status: 404, body: { ok: false, error: "workflow not found" } };
+    if (wf.status === "running") {
+      return { status: 409, body: { ok: false, id: wf.id, name: wf.name, status: "conflict", error: `Workflow "${wf.name}" is already running.` } };
+    }
+    if (wf.steps.length === 0) {
+      return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" has no steps.` } };
+    }
+    const stepIds = new Set<string>();
+    for (let i = 0; i < wf.steps.length; i++) {
+      const step = wf.steps[i];
+      if (typeof step.id !== "string" || !step.id.trim()) {
+        return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" — step ${i + 1} must include a unique string id.` } };
+      }
+      if (stepIds.has(step.id)) {
+        return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" — step ${i + 1} duplicates step id "${step.id}".` } };
+      }
+      stepIds.add(step.id);
+      if (step.stepKind === "task" && !this.settings.tasks.find((task) => task.id === step.taskId)) {
+        return { status: 404, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" — step ${i + 1} references a deleted task.` } };
+      }
+    }
+    const incoming = new Set<string>();
+    for (let i = 0; i < wf.steps.length; i++) {
+      const step = wf.steps[i];
+      for (const transition of step.transitions || []) {
+        if (typeof transition.toStepId !== "string" || !transition.toStepId.trim()) {
+          return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" — step ${i + 1} has a transition with a missing target step id.` } };
+        }
+        if (!stepIds.has(transition.toStepId)) {
+          return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" — step ${i + 1} references unknown step id "${transition.toStepId}".` } };
+        }
+        incoming.add(transition.toStepId);
+      }
+    }
+    if (!wf.steps.some((step) => !incoming.has(step.id))) {
+      return { status: 400, body: { ok: false, id: wf.id, name: wf.name, status: "invalid", error: `Workflow "${wf.name}" has no reachable entry step.` } };
+    }
+    return null;
+  }
+
   private findWorkflowByIdOrName(idOrName: string): Workflow | undefined {
     return this.settings.workflows.find((workflow) => workflow.id === idOrName || workflow.name === idOrName);
   }
@@ -2270,9 +2484,15 @@ export default class AutoOCPlugin extends Plugin {
         }
         if (request.url === "/create") {
           if (kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
+          const createPayloadError = this.getMcpCreatePayloadError(kind, input.payload);
+          if (createPayloadError) return send(400, { ok: false, error: createPayloadError });
           const data = this.wrapMcpCreatePayload(kind, input.payload);
           if (!data) return send(400, { ok: false, error: "Invalid payload" });
-          return send(200, { ok: true, ...(await this.importFromData(data)) });
+          try {
+            return send(200, { ok: true, ...(await this.importFromData(data)) });
+          } catch (error) {
+            return send(400, { ok: false, error: error instanceof Error ? error.message : String(error) });
+          }
         }
         if (request.url === "/export") {
           if (kind !== "all" && kind !== "tasks" && kind !== "workflows" && kind !== "task" && kind !== "workflow") return send(400, { ok: false, error: "Invalid kind" });
@@ -2307,7 +2527,16 @@ export default class AutoOCPlugin extends Plugin {
         const item = kind === "task" ? this.findTaskByIdOrName(input.idOrName) : this.findWorkflowByIdOrName(input.idOrName);
         if (!item) return send(404, { ok: false, error: `${kind} not found` });
         if (request.url === "/play") {
-          if (kind === "task") void this.runTask(item as ScheduledTask); else void this.runWorkflow(item as Workflow);
+          if (kind === "task") {
+            if (this.isTaskActive(item as ScheduledTask)) {
+              return send(409, { ok: false, id: item.id, name: item.name, status: "conflict", error: `Task "${item.name}" is already running.` });
+            }
+            void this.runTask(item as ScheduledTask);
+          } else {
+            const workflowPlayError = this.getMcpWorkflowPlayError(item as Workflow);
+            if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
+            void this.runWorkflow(item as Workflow);
+          }
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
         }
         if (request.url === "/stop") {
@@ -2749,7 +2978,10 @@ export default class AutoOCPlugin extends Plugin {
     const bin = resolveOpencodeBin(this.settings.opencodePath);
     const agent = this.getEffectiveAgent(task.agent);
     // --dangerously-skip-permissions prevents opencode from blocking on tool-approval prompts
-    return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
+    const args = [bin, "run", "-m", task.model];
+    if (!task.forceModel) args.push("--agent", agent);
+    args.push("--dangerously-skip-permissions", "--", prompt);
+    return args;
   }
 
   // Human-readable command string for the preview modal
@@ -2767,10 +2999,19 @@ export default class AutoOCPlugin extends Plugin {
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       const outFile = path.join(tmpDir, `autooc-eval-${evalId}.txt`);
+      const pidFile = path.join(tmpDir, `autooc-eval-${evalId}.pid`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
       const secretEnv = this.getSecretsEnv();
+      let settled = false;
+      let hiddenProc: HiddenProcessHandle | null = null;
+      const cleanup = (removeScript = true) => {
+        hiddenProc?.cleanup(removeScript);
+        try { fs.unlinkSync(psFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+      };
 
       const psScript = [
         ...psUtf8Prelude(),
@@ -2785,7 +3026,7 @@ export default class AutoOCPlugin extends Plugin {
         `$errTmp = [System.IO.Path]::GetTempFileName()`,
         `$bin = ${psSingleQuoted(bin)}`,
         `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2>$null`,
+        `& $bin @argList > $outTmp 2> $errTmp`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
         `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
@@ -2796,21 +3037,24 @@ export default class AutoOCPlugin extends Plugin {
 
       const psFile = path.join(tmpDir, `autooc-eval-${evalId}.ps1`);
       writeUtf8BomFile(psFile, psScript);
-      launchHiddenPS(psFile);
+      hiddenProc = launchHiddenPS(psFile, pidFile);
 
       const startedAt = Date.now();
       const poll = setInterval(() => {
+        if (settled) return;
         if (Date.now() - startedAt > 180000) { // 3 min timeout
+          settled = true;
           clearInterval(poll);
-          try { fs.unlinkSync(psFile); } catch { /* ignore */ }
+          hiddenProc?.kill();
+          cleanup(true);
           resolve({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
         if (!fs.existsSync(outFile)) return;
+        settled = true;
         clearInterval(poll);
-        try { fs.unlinkSync(psFile); } catch { /* ignore */ }
         const raw = fs.readFileSync(outFile, "utf8");
-        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+        cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
@@ -2829,11 +3073,29 @@ export default class AutoOCPlugin extends Plugin {
   ) {
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
+    if (this.isTaskActive(this.settings.tasks[idx])) {
+      new Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
 
     if ((effectiveTask.taskKind || "opencode") === "code") {
       await this.runCodeTask(effectiveTask, onComplete);
       return;
+    }
+
+    if (effectiveTask.branch) {
+      const { isValidGitBranchName } = require("./import-utils");
+      if (!isValidGitBranchName(effectiveTask.branch)) {
+        this.settings.tasks[idx].status = "failed";
+        this.settings.tasks[idx].lastRun = new Date().toISOString();
+        this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
+        await this.saveSettings();
+        new Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+        return;
+      }
     }
 
     if (!effectiveTask.prompt?.trim()) {
@@ -2852,6 +3114,17 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new Notice(`AutoOC: "${task.name}" has no model selected.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = new Date().toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
+      await this.saveSettings();
+      new Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -2876,9 +3149,11 @@ export default class AutoOCPlugin extends Plugin {
         const bin = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, agent, prompt);
+          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt);
         } else {
-          const args = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt];
+          const args = ["-m", effectiveTask.model];
+          if (!effectiveTask.forceModel) args.push("--agent", agent);
+          args.push("--prompt", prompt);
           openOpencodeCli(bin, taskCwd, secretEnv, args);
         }
         current.status = "completed";
@@ -2961,11 +3236,11 @@ export default class AutoOCPlugin extends Plugin {
     // Git branch logic
     let gitCmds = "";
     if (effectiveTask.branch) {
-      const safeBranch = effectiveTask.branch.replace(/'/g, "''");
+      const safeBranch = psSingleQuoted(effectiveTask.branch);
       if (effectiveTask.createBranch) {
-        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
+        gitCmds = `$safeBranch = ${safeBranch}; $timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = $safeBranch + "-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout $safeBranch }`;
       } else {
-        gitCmds = `git checkout ${safeBranch}`;
+        gitCmds = `$safeBranch = ${safeBranch}; git checkout $safeBranch`;
       }
     }
 
@@ -2980,22 +3255,42 @@ export default class AutoOCPlugin extends Plugin {
         `Set-Location -LiteralPath '${safeCwd}'`,
         gitCmds ? gitCmds : "",
       `try {`,
-      `$psi = [System.Diagnostics.ProcessStartInfo]::new('cmd.exe')`,
-      `$psi.WorkingDirectory = ${psSingleQuoted(taskCwd)}`,
-      `$psi.RedirectStandardOutput = $false`,
-      `$psi.RedirectStandardError = $false`,
-      `$psi.UseShellExecute = $false`,
-      `$psi.CreateNoWindow = $true`,
-      `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
-      `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
-      `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
-      `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
-       `$outFile = ${psSingleQuoted(outFile)}`,
-       `$errFile = ${psSingleQuoted(errFile)}`,
-       `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
-       `$proc = [System.Diagnostics.Process]::Start($psi)`,
-       `$proc.WaitForExit()`,
-       `$exitCode = $proc.ExitCode`,
+      `$bin = ${psSingleQuoted(bin)}`,
+      `$binExt = [System.IO.Path]::GetExtension($bin)`,
+      `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
+      `$nodeScript = ''`,
+      `if ($psShim -and [System.IO.File]::Exists($psShim)) {`,
+      `$bin = $psShim`,
+      `} elseif ($binExt -ieq '.cmd') {`,
+      `$cmdText = Get-Content $bin -Raw -Encoding UTF8`,
+      `if ($cmdText -match '"([^"]+\\.exe)"\\s+%\\*') {`,
+      `$bin = $Matches[1]`,
+      `} elseif ($cmdText -match '"%_prog%"\\s+"%dp0%\\\\([^"]+)"\\s+%\\*') {`,
+      `$cmdDir = Split-Path -Parent $bin`,
+      `$nodeCandidate = Join-Path $cmdDir 'node.exe'`,
+      `$bin = if ([System.IO.File]::Exists($nodeCandidate)) { $nodeCandidate } else { 'node' }`,
+      `$nodeScript = Join-Path $cmdDir $Matches[1]`,
+      `} else {`,
+      `throw "Cannot safely parse npm command shim '$bin' for shell-sensitive prompt text."`,
+      `}`,
+      `}`,
+      `$model = ${psSingleQuoted(model)}`,
+      `$agent = ${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))}`,
+      `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
+      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
+      `$outFile = ${psSingleQuoted(outFile)}`,
+      `$errFile = ${psSingleQuoted(errFile)}`,
+      `$opencodeArgs = @()`,
+      `if ($nodeScript) {`,
+      `$opencodeArgs += $nodeScript`,
+      `}`,
+      `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
+      `if (-not $forceModel) {`,
+      `$opencodeArgs += @('--agent', $agent)`,
+      `}`,
+      `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
+       `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
+       `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
        `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
       `} catch {`,
       `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
@@ -3007,9 +3302,36 @@ export default class AutoOCPlugin extends Plugin {
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
 
-    // Launch completely silently via wscript.exe VBScript — zero window flash
-    launchHiddenPS(psScriptFile);
-    this.runningProcesses.set(task.id, { kill: () => { /* best-effort */ } } as any);
+    // Launch hidden as a direct child so cancellation can kill the process tree.
+    const hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    let settled = false;
+    let cancelled = false;
+    let pollHandle: ReturnType<typeof setInterval> | null = null;
+    const wasManuallyStopped = (current: ScheduledTask) => cancelled || current.output.includes("[task stopped manually]");
+    const shouldAbortBeforeFinalMutation = (current: ScheduledTask) => wasManuallyStopped(current) || current.status !== "running";
+    const cleanupTempFiles = () => {
+      hiddenProc.cleanup(true);
+      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(tmpFullPromptFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(errFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
+      try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
+    };
+    this.runningProcesses.set(task.id, {
+      kill: () => {
+        cancelled = true;
+        settled = true;
+        if (pollHandle) {
+          clearInterval(pollHandle);
+          pollHandle = null;
+        }
+        hiddenProc.kill();
+        cleanupTempFiles();
+        this.runningProcesses.delete(task.id);
+      },
+    });
 
     const timeoutSeconds = this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
@@ -3018,9 +3340,24 @@ export default class AutoOCPlugin extends Plugin {
     let timeoutWarned = false;
 
     // Poll the output file every 3 s
-    const pollHandle = setInterval(async () => {
+    pollHandle = setInterval(async () => {
+      if (settled || cancelled) return;
       const t = this.settings.tasks.find((x) => x.id === task.id);
-      if (!t) { clearInterval(pollHandle); return; }
+      if (!t) {
+        settled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        cleanupTempFiles();
+        this.runningProcesses.delete(task.id);
+        return;
+      }
+      if (t.status !== "running" && !this.runningProcesses.has(task.id)) {
+        cancelled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        cleanupTempFiles();
+        return;
+      }
 
       // Soft timeout: warn once, but keep polling because OpenCode may still finish successfully.
       if (timeoutEnabled && !timeoutWarned && Date.now() - startedAt > timeoutMs) {
@@ -3031,20 +3368,21 @@ export default class AutoOCPlugin extends Plugin {
       }
 
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 300_000) {
-        clearInterval(pollHandle);
+        if (shouldAbortBeforeFinalMutation(t)) return;
+        settled = true;
+        if (pollHandle) clearInterval(pollHandle);
+        pollHandle = null;
+        hiddenProc.kill();
         this.runningProcesses.delete(task.id);
-        try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(tmpFullPromptFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(outFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(errFile); } catch { /* ignore */ }
-        try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
+        cleanupTempFiles();
 
+        if (shouldAbortBeforeFinalMutation(t)) return;
         t.status = "failed";
         t.output += `\n[⏱ timed out after ${timeoutSeconds}s + 300s grace; no completion marker was written]`;
         this.view?.startGradualSink(task.id);
+        if (wasManuallyStopped(t)) return;
         await this.saveSettings();
+        if (wasManuallyStopped(t)) return;
         if (onComplete) await onComplete(t, -1);
         new Notice(`AutoOC: ⏱ "${task.name}" timed out.`);
         return;
@@ -3066,22 +3404,23 @@ export default class AutoOCPlugin extends Plugin {
       }
 
       // File exists — read result
-      clearInterval(pollHandle);
+      if (settled || shouldAbortBeforeFinalMutation(t)) return;
+      settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      pollHandle = null;
       this.runningProcesses.delete(task.id);
-      try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
-      try { fs.unlinkSync(promptFile); } catch { /* ignore */ }
-      try { fs.unlinkSync(fullPromptFile); } catch { /* ignore */ }
 
       const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
       const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
       const exitCodeRaw = fs.readFileSync(doneFile, "utf8").trim();
-      try { fs.unlinkSync(outFile); } catch { /* ignore */ }
-      try { fs.unlinkSync(errFile); } catch { /* ignore */ }
-      try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
+      cleanupTempFiles();
+
+      if (shouldAbortBeforeFinalMutation(t)) return;
 
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
       const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
 
+      if (shouldAbortBeforeFinalMutation(t)) return;
       t.output = normalized || "(no output)";
       if (exitCode !== 0) {
         t.status = "failed";
@@ -3093,12 +3432,14 @@ export default class AutoOCPlugin extends Plugin {
         new Notice(`AutoOC: ✅ "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
-        saveLogToFile(vaultBasePath, task.id, t.output);
-        cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
-        cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
-      }
-      await this.saveSettings();
+          saveLogToFile(vaultBasePath, task.id, t.output);
+          cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+          cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+        }
+        if (wasManuallyStopped(t)) return;
+        await this.saveSettings();
 
+      if (wasManuallyStopped(t)) return;
       if (onComplete) {
         await onComplete(t, exitCode);
       }
@@ -3518,6 +3859,7 @@ export default class AutoOCPlugin extends Plugin {
         model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
         agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
+        forceModel: importedTaskKind === "opencode" ? (et.forceModel ?? false) : false,
         scheduleType: et.scheduleType ?? "manual",
         scheduleTime: et.scheduleTime ?? nowTimeString(),
         scheduleDate: et.scheduleDate ?? "",
@@ -3553,11 +3895,10 @@ export default class AutoOCPlugin extends Plugin {
       // First pass: create all steps so we can resolve the transition targets in
       // a second pass (since the transition target references step ids, not
       // indices).
-      const legacySteps: WorkflowStep[] = [];
-      let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind: StepKind = (s as any).stepKind || "task";
         const importedTransitions = (s as { transitions?: unknown }).transitions;
+        const hasImportedTransitions = Object.prototype.hasOwnProperty.call(s, "transitions");
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
@@ -3576,57 +3917,23 @@ export default class AutoOCPlugin extends Plugin {
           codeAllowVault: (s as any).codeAllowVault,
           codeAllowFiles: (s as any).codeAllowFiles,
           codeAllowTerminal: (s as any).codeAllowTerminal,
-          transitions: Array.isArray(importedTransitions)
+          transitions: !hasImportedTransitions
+            ? undefined
+            : Array.isArray(importedTransitions)
             ? importedTransitions
             : importedTransitions && typeof importedTransitions === "object" && typeof (importedTransitions as { toStepId?: unknown }).toStepId === "string"
               ? [importedTransitions as WorkflowTransition]
               : [],
           position: (s as any).position,
         };
-        // Legacy: if no transitions are present but stepKind is "task", build
-        // a default linear transition to the next step.
-        if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
-          step.transitions = undefined; // resolved later
-          legacySteps.push(step);
-        } else {
-          steps.push(step);
-        }
+        steps.push(step);
         exportIdToStepId.set(step.id, step.id);
       }
 
-      // Resolve legacy linear transitions: each task step points to the next.
-      if (legacySteps.length > 0) {
-        for (let i = 0; i < legacySteps.length; i++) {
-          const cur = legacySteps[i];
-          const next = legacySteps[i + 1];
-          if (next) {
-            cur.transitions = [{
-              toStepId: next.id,
-              mode: (cur.transitionMode as TransitionMode) || "default",
-              evaluatePrompt: cur.evaluatePrompt,
-              forceContinue: cur.forceContinue,
-            }];
-          }
-          steps.push(cur);
-        }
-        // Steps need to be in DAG order: do a topological sort if transitions
-        // reference step ids. For now, just keep the original order if all
-        // transitions point forward.
-      }
-
-      // For delay/code steps without transitions, attempt to wire them to
-      // the next legacy step in order. This preserves the visual builder
-      // output where users have alternating task/delay/code steps.
-      if (steps.length > 0 && steps.every((s) => !s.transitions || s.transitions.length === 0)) {
-        for (let i = 0; i < steps.length - 1; i++) {
-          steps[i].transitions = [{
-            toStepId: steps[i + 1].id,
-            mode: (steps[i].transitionMode as TransitionMode) || "default",
-            evaluatePrompt: steps[i].evaluatePrompt,
-            forceContinue: steps[i].forceContinue,
-          }];
-        }
-      }
+      // Legacy exports omit transitions; fill only those gaps after every step
+      // has been retained in its original input position.
+      const { applyLegacyLinearTransitions } = require("./import-utils");
+      applyLegacyLinearTransitions(steps);
 
       if (steps.length === 0) continue;
 
@@ -4056,8 +4363,10 @@ export default class AutoOCPlugin extends Plugin {
         lastSucceeded,
         transitions
       );
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
 
       if (!nextStepId) {
+        if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         const failedByTask = !lastSucceeded;
         currentWf.status = failedByTask ? "failed" : "completed";
         completedTask.output += failedByTask
@@ -4076,14 +4385,17 @@ export default class AutoOCPlugin extends Plugin {
 
       const nextIdx = currentWf.steps.findIndex((s) => s.id === nextStepId);
       if (nextIdx === -1) {
+        if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         currentWf.status = "failed";
         new Notice(`AutoOC: ❌ Workflow "${currentWf.name}" — transition target ${nextStepId} not found.`);
         await this.saveSettings();
         return;
       }
 
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       currentWf.currentStep = nextIdx;
       await this.saveSettings();
+      if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       new Notice(`AutoOC: ⚡ Workflow "${currentWf.name}" → step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
         this.runWorkflowStepById(currentWf.id, nextStepId);
@@ -4774,6 +5086,7 @@ class AutoOCView extends ItemView {
   }
 
   private async resetSecretsPin(): Promise<void> {
+    if (!await this.ensureSecretsUnlocked()) return;
     const confirmed = await new ConfirmModal(
       this.app,
       "Reset Secrets PIN?",
@@ -5480,13 +5793,17 @@ class AutoOCView extends ItemView {
     };
 
     const configuredAreaNames = areaNames.filter((name) => name !== "No area");
+    const areaContentWeight = (areaWorkflows: Workflow[], looseTasks: ScheduledTask[]) => {
+      return looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
+        return sum + workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length;
+      }, 0);
+    };
     const topLevelItems: { key: string; size: number; maxPx?: number }[] = [];
     configuredAreaNames.forEach((name) => {
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
-        return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
-      }, 0);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
       const areaSize = areaSizeForContent(contentWeight);
       topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
     });
@@ -5503,9 +5820,11 @@ class AutoOCView extends ItemView {
     configuredAreaNames.forEach((name) => {
       const areaLayout = topLevelLayout.get(`area:${name}`);
       if (!areaLayout) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "running"))) {
         areaBubble.addClass("auto-oc-dashboard-has-running");
       }
@@ -5709,6 +6028,40 @@ class AutoOCView extends ItemView {
       text: task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
+    const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
+    btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
+    btnQuickRun.disabled = task.status === "running";
+    btnQuickRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runTask(task);
+    };
+    if (task.status === "running") {
+      const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
+      btnQuickStop.title = "Terminate process now";
+      btnQuickStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnQuickStop.disabled = true;
+        await this.plugin.killTask(task.id);
+      };
+    }
+    const btnQuickLog = quickActions.createEl("button", { text: "📄", cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output" });
+    btnQuickLog.title = task.status === "running" ? "Live log" : "Log";
+    btnQuickLog.disabled = !task.output && task.status !== "running";
+    btnQuickLog.onclick = (e) => {
+      e.stopPropagation();
+      new LiveLogModal(this.app, task, this.plugin).open();
+    };
+    const btnQuickHistory = quickActions.createEl("button", { text: "📜", cls: "auto-oc-btn-history" });
+    btnQuickHistory.title = "History";
+    btnQuickHistory.onclick = (e) => {
+      e.stopPropagation();
+      try {
+        new LogHistoryModal(this.app, task, this.plugin).open();
+      } catch (err) {
+        new Notice(`AutoOC: could not open history — ${String(err)}`);
+      }
+    };
     if (task.status === "failed") {
       badge.addClass("auto-oc-badge-clickable");
       badge.title = "Click to reset to pending (will run on next schedule, or hit ▶ Run now)";
@@ -6000,6 +6353,38 @@ class AutoOCView extends ItemView {
       text: workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
+    const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
+    btnQuickRun.title = workflow.status === "running" ? "Running" : "Run workflow";
+    btnQuickRun.disabled = workflow.status === "running";
+    btnQuickRun.onclick = (e) => {
+      e.stopPropagation();
+      this.plugin.runWorkflow(workflow);
+    };
+    if (workflow.status === "running") {
+      const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
+      btnQuickStop.title = "Stop workflow now";
+      btnQuickStop.onclick = async (e) => {
+        e.stopPropagation();
+        btnQuickStop.disabled = true;
+        await this.plugin.killWorkflow(workflow.id);
+      };
+    }
+    const currentTask = this.plugin.settings.tasks.find((task) => task.id === workflow.steps[workflow.currentStep]?.taskId);
+    const btnQuickLog = quickActions.createEl("button", { text: "📄", cls: "auto-oc-btn-output" });
+    btnQuickLog.title = "Current step log";
+    btnQuickLog.disabled = !currentTask || (!currentTask.output && currentTask.status !== "running");
+    btnQuickLog.onclick = (e) => {
+      e.stopPropagation();
+      if (currentTask) new LiveLogModal(this.app, currentTask, this.plugin).open();
+    };
+    const btnQuickHistory = quickActions.createEl("button", { text: "📜", cls: "auto-oc-btn-history" });
+    btnQuickHistory.title = "Current step history";
+    btnQuickHistory.disabled = !currentTask;
+    btnQuickHistory.onclick = (e) => {
+      e.stopPropagation();
+      if (currentTask) new LogHistoryModal(this.app, currentTask, this.plugin).open();
+    };
     if (workflow.status === "failed") {
       badge.addClass("auto-oc-badge-clickable");
       badge.title = "Click to reset to pending";
@@ -6539,6 +6924,7 @@ class VisualBuilderModal extends Modal {
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
         useRalphLoop: t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false),
+        forceModel: t.forceModel !== undefined ? !!t.forceModel : (existing?.forceModel ?? false),
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
@@ -6917,6 +7303,7 @@ class CreateTaskModal extends Modal {
             model: plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
             useRalphLoop: false,
+            forceModel: false,
             interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
@@ -7143,6 +7530,14 @@ class CreateTaskModal extends Modal {
           }
           dd.setValue(current || "");
           dd.onChange((v) => (this.draft.model = v));
+        });
+
+      new Setting(contentEl)
+        .setName("Force model")
+        .setDesc("Skip --agent so OpenCode uses exactly the selected model.")
+        .addToggle((tog) => {
+          tog.setValue(this.draft.forceModel ?? false);
+          tog.onChange((v) => (this.draft.forceModel = v));
         });
 
       new Setting(contentEl)
@@ -7389,6 +7784,7 @@ class CreateTaskModal extends Modal {
               area: this.draft.area ?? "",
               agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
+              forceModel: savingTaskKind === "opencode" ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? "",
@@ -9693,10 +10089,31 @@ class OpenCodeCliModal extends Modal {
 class DiagnosticModal extends Modal {
   private plugin: AutoOCPlugin;
   private logEl: HTMLPreElement | null = null;
+  private pollHandle: ReturnType<typeof setInterval> | null = null;
+  private hiddenProc: HiddenProcessHandle | null = null;
+  private tempFiles: string[] = [];
 
   constructor(app: App, plugin: AutoOCPlugin) {
     super(app);
     this.plugin = plugin;
+  }
+
+  private cleanupDiagnostics(killProcess = false) {
+    if (this.pollHandle) {
+      clearInterval(this.pollHandle);
+      this.pollHandle = null;
+    }
+    if (killProcess) {
+      this.hiddenProc?.kill();
+    } else {
+      this.hiddenProc?.cleanup(true);
+    }
+    this.hiddenProc = null;
+    const fs = require("fs");
+    for (const file of this.tempFiles) {
+      try { fs.unlinkSync(file); } catch { /* ignore */ }
+    }
+    this.tempFiles = [];
   }
 
   onOpen() {
@@ -9715,6 +10132,7 @@ class DiagnosticModal extends Modal {
 
     new Setting(contentEl).addButton((btn) =>
       btn.setButtonText("▶ Launch test: 'di hola'").setCta().onClick(() => {
+        this.cleanupDiagnostics(true);
         if (this.logEl) this.logEl.textContent = "[launching detached PowerShell process…]\n";
         const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
@@ -9726,7 +10144,9 @@ class DiagnosticModal extends Modal {
         const path = require("path");
         const osTmp = require("os").tmpdir();
         const outFile = path.join(osTmp, "autooc-diag.txt");
+        const pidFile = path.join(osTmp, "autooc-diag.pid");
         try { fs.unlinkSync(outFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
 
         const psScript = [
           ...psUtf8Prelude(),
@@ -9739,28 +10159,38 @@ class DiagnosticModal extends Modal {
           `$errTmp = [System.IO.Path]::GetTempFileName()`,
           `$bin = ${psSingleQuoted(bin)}`,
           `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-        `& $bin @argList > $outTmp 2>$null`,
+        `& $bin @argList > $outTmp 2> $errTmp`,
         `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
         `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+        `$err = (Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
           `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $out + "\nDONE:" + $exitCode)`,
+          `$combined = ($out + $(if($err){"\n" + $err}else{""})).Trim()`,
+          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:" + $exitCode)`,
         ].join("\n");
 
         const psFile = path.join(osTmp, "autooc-diag.ps1");
         writeUtf8BomFile(psFile, psScript);
+        this.tempFiles = [outFile, pidFile, psFile];
         if (this.logEl) this.logEl.textContent += `Script: ${psFile}\n\n`;
 
-        // Launch via wscript.exe VBScript — completely silent, no window
-        launchHiddenPS(psFile);
+        // Launch hidden as a direct child so diagnostics can be cancelled cleanly.
+        this.hiddenProc = launchHiddenPS(psFile, pidFile);
 
-        const poll = setInterval(() => {
+        const startedAt = Date.now();
+        this.pollHandle = setInterval(() => {
+          if (Date.now() - startedAt > 180000) {
+            this.cleanupDiagnostics(true);
+            if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
+            return;
+          }
           if (!fs.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
-          clearInterval(poll);
+          if (this.pollHandle) clearInterval(this.pollHandle);
+          this.pollHandle = null;
           const raw = fs.readFileSync(outFile, "utf8");
-          try { fs.unlinkSync(outFile); fs.unlinkSync(psFile); } catch { /* ignore */ }
+          this.cleanupDiagnostics(false);
           // Strip DONE sentinel, show clean output
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -9778,7 +10208,10 @@ class DiagnosticModal extends Modal {
     this.logEl.textContent = "(output will appear here…)";
   }
 
-  onClose() { this.contentEl.empty(); }
+  onClose() {
+    this.cleanupDiagnostics(true);
+    this.contentEl.empty();
+  }
 }
 
 // ─── Settings Tab ─────────────────────────────────────────────────────────────
