@@ -7,6 +7,9 @@ var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __esm = (fn, res) => function __init() {
   return fn && (res = (0, fn[__getOwnPropNames(fn)[0]])(fn = 0)), res;
 };
+var __commonJS = (cb, mod) => function __require() {
+  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+};
 var __export = (target, all) => {
   for (var name in all)
     __defProp(target, name, { get: all[name], enumerable: true });
@@ -2036,6 +2039,31 @@ var init_visualBuilderHtml_generated = __esm({
 </body>
 </html>
 `;
+  }
+});
+
+// import-utils.js
+var require_import_utils = __commonJS({
+  "import-utils.js"(exports, module2) {
+    function isValidGitBranchName(branch) {
+      if (typeof branch !== "string" || !branch || branch === "@" || branch.startsWith("-")) return false;
+      if (/[\x00-\x20~^:?*\[\\]/.test(branch)) return false;
+      if (branch.includes("..") || branch.includes("@{") || branch.startsWith("/") || branch.endsWith("/") || branch.endsWith(".")) return false;
+      return !branch.split("/").some((component) => !component || component === "." || component === ".." || component.startsWith(".") || component.endsWith(".lock"));
+    }
+    function applyLegacyLinearTransitions(steps) {
+      for (let index = 0; index < steps.length - 1; index++) {
+        const step = steps[index];
+        if (step.transitions !== void 0) continue;
+        step.transitions = [{
+          toStepId: steps[index + 1].id,
+          mode: step.transitionMode || "default",
+          evaluatePrompt: step.evaluatePrompt,
+          forceContinue: step.forceContinue
+        }];
+      }
+    }
+    module2.exports = { applyLegacyLinearTransitions, isValidGitBranchName };
   }
 });
 
@@ -4667,6 +4695,18 @@ DONE:" + $exitCode + "
       await this.runCodeTask(effectiveTask, onComplete);
       return;
     }
+    if (effectiveTask.branch) {
+      const { isValidGitBranchName } = require_import_utils();
+      if (!isValidGitBranchName(effectiveTask.branch)) {
+        this.settings.tasks[idx].status = "failed";
+        this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
+        this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
+        await this.saveSettings();
+        new import_obsidian.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+        return;
+      }
+    }
     if (!((_a = effectiveTask.prompt) == null ? void 0 : _a.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -4682,6 +4722,16 @@ DONE:" + $exitCode + "
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new import_obsidian.Notice(`AutoOC: "${task.name}" has no model selected.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -4792,11 +4842,11 @@ DONE:" + $exitCode + "
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
     if (effectiveTask.branch) {
-      const safeBranch = effectiveTask.branch.replace(/'/g, "''");
+      const safeBranch = psSingleQuoted(effectiveTask.branch);
       if (effectiveTask.createBranch) {
-        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
+        gitCmds = `$safeBranch = ${safeBranch}; $timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = $safeBranch + "-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout $safeBranch }`;
       } else {
-        gitCmds = `git checkout ${safeBranch}`;
+        gitCmds = `$safeBranch = ${safeBranch}; git checkout $safeBranch`;
       }
     }
     const psScript = [
@@ -5405,11 +5455,10 @@ DONE:" + $exitCode + "
     for (const ew of data.workflows || []) {
       const exportIdToStepId = /* @__PURE__ */ new Map();
       const steps = [];
-      const legacySteps = [];
-      let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind = s.stepKind || "task";
         const importedTransitions = s.transitions;
+        const hasImportedTransitions = Object.prototype.hasOwnProperty.call(s, "transitions");
         const step = {
           id: s.id || generateId(),
           stepKind,
@@ -5428,42 +5477,14 @@ DONE:" + $exitCode + "
           codeAllowVault: s.codeAllowVault,
           codeAllowFiles: s.codeAllowFiles,
           codeAllowTerminal: s.codeAllowTerminal,
-          transitions: Array.isArray(importedTransitions) ? importedTransitions : importedTransitions && typeof importedTransitions === "object" && typeof importedTransitions.toStepId === "string" ? [importedTransitions] : [],
+          transitions: !hasImportedTransitions ? void 0 : Array.isArray(importedTransitions) ? importedTransitions : importedTransitions && typeof importedTransitions === "object" && typeof importedTransitions.toStepId === "string" ? [importedTransitions] : [],
           position: s.position
         };
-        if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
-          step.transitions = void 0;
-          legacySteps.push(step);
-        } else {
-          steps.push(step);
-        }
+        steps.push(step);
         exportIdToStepId.set(step.id, step.id);
       }
-      if (legacySteps.length > 0) {
-        for (let i = 0; i < legacySteps.length; i++) {
-          const cur = legacySteps[i];
-          const next = legacySteps[i + 1];
-          if (next) {
-            cur.transitions = [{
-              toStepId: next.id,
-              mode: cur.transitionMode || "default",
-              evaluatePrompt: cur.evaluatePrompt,
-              forceContinue: cur.forceContinue
-            }];
-          }
-          steps.push(cur);
-        }
-      }
-      if (steps.length > 0 && steps.every((s) => !s.transitions || s.transitions.length === 0)) {
-        for (let i = 0; i < steps.length - 1; i++) {
-          steps[i].transitions = [{
-            toStepId: steps[i + 1].id,
-            mode: steps[i].transitionMode || "default",
-            evaluatePrompt: steps[i].evaluatePrompt,
-            forceContinue: steps[i].forceContinue
-          }];
-        }
-      }
+      const { applyLegacyLinearTransitions } = require_import_utils();
+      applyLegacyLinearTransitions(steps);
       if (steps.length === 0) continue;
       const workflow = {
         id: generateId(),

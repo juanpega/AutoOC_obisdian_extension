@@ -3085,6 +3085,19 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
 
+    if (effectiveTask.branch) {
+      const { isValidGitBranchName } = require("./import-utils");
+      if (!isValidGitBranchName(effectiveTask.branch)) {
+        this.settings.tasks[idx].status = "failed";
+        this.settings.tasks[idx].lastRun = new Date().toISOString();
+        this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
+        await this.saveSettings();
+        new Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+        return;
+      }
+    }
+
     if (!effectiveTask.prompt?.trim()) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = new Date().toISOString();
@@ -3101,6 +3114,17 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new Notice(`AutoOC: "${task.name}" has no model selected.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = new Date().toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
+      await this.saveSettings();
+      new Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -3212,11 +3236,11 @@ export default class AutoOCPlugin extends Plugin {
     // Git branch logic
     let gitCmds = "";
     if (effectiveTask.branch) {
-      const safeBranch = effectiveTask.branch.replace(/'/g, "''");
+      const safeBranch = psSingleQuoted(effectiveTask.branch);
       if (effectiveTask.createBranch) {
-        gitCmds = `$timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = "${safeBranch}-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout ${safeBranch} }`;
+        gitCmds = `$safeBranch = ${safeBranch}; $timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = $safeBranch + "-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout $safeBranch }`;
       } else {
-        gitCmds = `git checkout ${safeBranch}`;
+        gitCmds = `$safeBranch = ${safeBranch}; git checkout $safeBranch`;
       }
     }
 
@@ -3871,11 +3895,10 @@ export default class AutoOCPlugin extends Plugin {
       // First pass: create all steps so we can resolve the transition targets in
       // a second pass (since the transition target references step ids, not
       // indices).
-      const legacySteps: WorkflowStep[] = [];
-      let legacyNextIndex = 0;
       for (const s of ew.steps || []) {
         const stepKind: StepKind = (s as any).stepKind || "task";
         const importedTransitions = (s as { transitions?: unknown }).transitions;
+        const hasImportedTransitions = Object.prototype.hasOwnProperty.call(s, "transitions");
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
@@ -3894,57 +3917,23 @@ export default class AutoOCPlugin extends Plugin {
           codeAllowVault: (s as any).codeAllowVault,
           codeAllowFiles: (s as any).codeAllowFiles,
           codeAllowTerminal: (s as any).codeAllowTerminal,
-          transitions: Array.isArray(importedTransitions)
+          transitions: !hasImportedTransitions
+            ? undefined
+            : Array.isArray(importedTransitions)
             ? importedTransitions
             : importedTransitions && typeof importedTransitions === "object" && typeof (importedTransitions as { toStepId?: unknown }).toStepId === "string"
               ? [importedTransitions as WorkflowTransition]
               : [],
           position: (s as any).position,
         };
-        // Legacy: if no transitions are present but stepKind is "task", build
-        // a default linear transition to the next step.
-        if ((!step.transitions || step.transitions.length === 0) && stepKind === "task") {
-          step.transitions = undefined; // resolved later
-          legacySteps.push(step);
-        } else {
-          steps.push(step);
-        }
+        steps.push(step);
         exportIdToStepId.set(step.id, step.id);
       }
 
-      // Resolve legacy linear transitions: each task step points to the next.
-      if (legacySteps.length > 0) {
-        for (let i = 0; i < legacySteps.length; i++) {
-          const cur = legacySteps[i];
-          const next = legacySteps[i + 1];
-          if (next) {
-            cur.transitions = [{
-              toStepId: next.id,
-              mode: (cur.transitionMode as TransitionMode) || "default",
-              evaluatePrompt: cur.evaluatePrompt,
-              forceContinue: cur.forceContinue,
-            }];
-          }
-          steps.push(cur);
-        }
-        // Steps need to be in DAG order: do a topological sort if transitions
-        // reference step ids. For now, just keep the original order if all
-        // transitions point forward.
-      }
-
-      // For delay/code steps without transitions, attempt to wire them to
-      // the next legacy step in order. This preserves the visual builder
-      // output where users have alternating task/delay/code steps.
-      if (steps.length > 0 && steps.every((s) => !s.transitions || s.transitions.length === 0)) {
-        for (let i = 0; i < steps.length - 1; i++) {
-          steps[i].transitions = [{
-            toStepId: steps[i + 1].id,
-            mode: (steps[i].transitionMode as TransitionMode) || "default",
-            evaluatePrompt: steps[i].evaluatePrompt,
-            forceContinue: steps[i].forceContinue,
-          }];
-        }
-      }
+      // Legacy exports omit transitions; fill only those gaps after every step
+      // has been retained in its original input position.
+      const { applyLegacyLinearTransitions } = require("./import-utils");
+      applyLegacyLinearTransitions(steps);
 
       if (steps.length === 0) continue;
 
