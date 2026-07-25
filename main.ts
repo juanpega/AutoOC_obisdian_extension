@@ -125,11 +125,12 @@ function openOpencodeCliLongPromptWindows(
 
   const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
   const envScript = buildPowerShellEnvLines(env).join("; ");
+  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
   const command =
     `${envScript ? `${envScript}; ` : ""}` +
     `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ` +
     `$bin = ${psSingleQuoted(bin)}; ` +
-    `$argList = @("-m", ${psSingleQuoted(model)}, "--agent", ${psSingleQuoted(agent)}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
+    `$argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
     `& $bin @argList`;
   const launcher = spawn(
     "cmd.exe",
@@ -597,6 +598,7 @@ interface ScheduledTask {
   prompt: string;
   model: string;
   agent: string;
+  forceModel: boolean;
   useRalphLoop: boolean;
   scheduleType: ScheduleType;
   scheduleTime: string;    // "HH:MM"
@@ -672,10 +674,6 @@ function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workfl
   for (const workflow of settings.workflows) {
     const area = workflow.area?.trim();
     if (area) names.add(area);
-    for (const step of workflow.steps || []) {
-      const stepArea = step.area?.trim();
-      if (stepArea) names.add(stepArea);
-    }
   }
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 }
@@ -735,6 +733,7 @@ interface ExportTask {
   scheduleIntervalValue: number;
   scheduleIntervalUnit: IntervalUnit;
   useRalphLoop: boolean;
+  forceModel: boolean;
   agent: string;
   branch?: string;
   createBranch?: boolean;
@@ -1291,6 +1290,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     scheduleIntervalValue: task.scheduleIntervalValue ?? 10,
     scheduleIntervalUnit: task.scheduleIntervalUnit ?? "minutes",
     useRalphLoop: task.useRalphLoop,
+    forceModel: task.forceModel,
     agent: task.agent,
     branch: task.branch,
     createBranch: task.createBranch,
@@ -2749,7 +2749,10 @@ export default class AutoOCPlugin extends Plugin {
     const bin = resolveOpencodeBin(this.settings.opencodePath);
     const agent = this.getEffectiveAgent(task.agent);
     // --dangerously-skip-permissions prevents opencode from blocking on tool-approval prompts
-    return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
+    const args = [bin, "run", "-m", task.model];
+    if (!task.forceModel) args.push("--agent", agent);
+    args.push("--dangerously-skip-permissions", "--", prompt);
+    return args;
   }
 
   // Human-readable command string for the preview modal
@@ -2876,9 +2879,11 @@ export default class AutoOCPlugin extends Plugin {
         const bin = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, agent, prompt);
+          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt);
         } else {
-          const args = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt];
+          const args = ["-m", effectiveTask.model];
+          if (!effectiveTask.forceModel) args.push("--agent", agent);
+          args.push("--prompt", prompt);
           openOpencodeCli(bin, taskCwd, secretEnv, args);
         }
         current.status = "completed";
@@ -2989,10 +2994,12 @@ export default class AutoOCPlugin extends Plugin {
       `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
       `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
       `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
+      `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
       `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
-       `$outFile = ${psSingleQuoted(outFile)}`,
-       `$errFile = ${psSingleQuoted(errFile)}`,
-       `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
+      `$outFile = ${psSingleQuoted(outFile)}`,
+      `$errFile = ${psSingleQuoted(errFile)}`,
+      `$agentArg = if ($forceModel) { '' } else { ' --agent ' + $agent }`,
+      `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + $agentArg + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
        `$proc = [System.Diagnostics.Process]::Start($psi)`,
        `$proc.WaitForExit()`,
        `$exitCode = $proc.ExitCode`,
@@ -3518,6 +3525,7 @@ export default class AutoOCPlugin extends Plugin {
         model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
         agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
+        forceModel: importedTaskKind === "opencode" ? (et.forceModel ?? false) : false,
         scheduleType: et.scheduleType ?? "manual",
         scheduleTime: et.scheduleTime ?? nowTimeString(),
         scheduleDate: et.scheduleDate ?? "",
@@ -5480,13 +5488,17 @@ class AutoOCView extends ItemView {
     };
 
     const configuredAreaNames = areaNames.filter((name) => name !== "No area");
+    const areaContentWeight = (areaWorkflows: Workflow[], looseTasks: ScheduledTask[]) => {
+      return looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
+        return sum + workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length;
+      }, 0);
+    };
     const topLevelItems: { key: string; size: number; maxPx?: number }[] = [];
     configuredAreaNames.forEach((name) => {
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
-        return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
-      }, 0);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
       const areaSize = areaSizeForContent(contentWeight);
       topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
     });
@@ -5503,9 +5515,11 @@ class AutoOCView extends ItemView {
     configuredAreaNames.forEach((name) => {
       const areaLayout = topLevelLayout.get(`area:${name}`);
       if (!areaLayout) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "running"))) {
         areaBubble.addClass("auto-oc-dashboard-has-running");
       }
@@ -6605,6 +6619,7 @@ class VisualBuilderModal extends Modal {
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
         useRalphLoop: t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false),
+        forceModel: t.forceModel !== undefined ? !!t.forceModel : (existing?.forceModel ?? false),
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
@@ -6983,6 +6998,7 @@ class CreateTaskModal extends Modal {
             model: plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
             useRalphLoop: false,
+            forceModel: false,
             interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
@@ -7209,6 +7225,14 @@ class CreateTaskModal extends Modal {
           }
           dd.setValue(current || "");
           dd.onChange((v) => (this.draft.model = v));
+        });
+
+      new Setting(contentEl)
+        .setName("Forzar modelo")
+        .setDesc("Omite --agent para que OpenCode use exactamente el modelo seleccionado.")
+        .addToggle((tog) => {
+          tog.setValue(this.draft.forceModel ?? false);
+          tog.onChange((v) => (this.draft.forceModel = v));
         });
 
       new Setting(contentEl)
@@ -7455,6 +7479,7 @@ class CreateTaskModal extends Modal {
               area: this.draft.area ?? "",
               agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
+              forceModel: savingTaskKind === "opencode" ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? "",

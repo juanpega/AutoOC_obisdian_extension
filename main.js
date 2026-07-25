@@ -645,7 +645,7 @@ var init_visualBuilderHtml_generated = __esm({
     const defaultAgent = optionValue(meta.availableAgents[0]) || "build";
     return {
       id: uid(), name: "New task", prompt: "", model: defaultModel, agent: defaultAgent,
-      useRalphLoop: false, scheduleType: "manual", scheduleTime: "09:00",
+      useRalphLoop: false, forceModel: false, scheduleType: "manual", scheduleTime: "09:00",
       scheduleDate: "", scheduleDays: [], scheduleMonthDays: [],
       scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
       status: "pending", lastRun: "", output: "", createdAt: new Date().toISOString(),
@@ -1480,6 +1480,7 @@ var init_visualBuilderHtml_generated = __esm({
         <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">\u{1F504} Refresh Models</button></div>
         <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" />\${dataListHtml("dlAgents", agentOptions)}<div class="hint-inline">\${esc(agentHint)}</div><button type="button" class="tiny btn-refresh-agents">\u{1F504} Refresh Agents</button></div>
       </div>
+      <div class="field" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;padding:6px 10px;margin-top:-2px"><label class="checkbox-row" style="margin:0"><input type="checkbox" data-f="forceModel" \${t.forceModel ? "checked" : ""} style="width:auto" /> <strong style="color:var(--accent)">Forzar modelo</strong> <span class="hint-inline">omite --agent, usa exactamente el modelo seleccionado</span></label></div>
       <div class="row-2">
         <div class="field"><label>Icon</label><select data-f="icon">\${["\u26A1","\u2728","\u{1F9E0}","\u{1F4DD}","\u{1F50D}","\u{1F4A1}","\u{1F6E0}","\u{1F4CA}","\u{1F4E5}","\u{1F4E4}","\u{1F504}","\u{1F680}","\u{1F916}","\u{1F4DA}","\u{1F9EA}","\u{1F514}"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
         <div class="field"><label>Color</label><select data-f="color">\${["#4a7dff","#b07ad9","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (t.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">\u25CF ' + esc(c) + '</option>').join("")}</select></div>
@@ -1545,8 +1546,11 @@ var init_visualBuilderHtml_generated = __esm({
     let body = "";
     if (kind === "task") {
       const t = stepTask(s);
+      const currentModel = t ? esc(t.model || "(no model)") : "(no task selected)";
+      const checkedAttr = t && t.forceModel ? "checked" : "";
       body = \`
         <div class="field"><label>Task</label><select data-f="taskId">\${state.tasks.map(x => '<option value="' + x.id + '" ' + (x.id === s.taskId ? "selected" : "") + '>' + esc((x.icon || "\u26A1") + " " + (x.name || "(unnamed)")) + '</option>').join("")}</select></div>
+        \${t ? '<div class="field"><label class="checkbox-row" style="margin-top:2px"><input type="checkbox" class="chk-step-force-model" ' + checkedAttr + ' /> <strong>Forzar modelo</strong> <span class="hint-inline">modelo: ' + currentModel + '</span></label></div>' : ""}
         \${t ? '<div class="hint-inline">' + esc((t.prompt || "(no prompt)").slice(0, 200)) + ((t.prompt || "").length > 200 ? "\u2026" : "") + '</div>' : ""}
       \`;
     } else if (kind === "delay") {
@@ -1724,6 +1728,20 @@ var init_visualBuilderHtml_generated = __esm({
     });
     $$(".btn-refresh-models", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("models")));
     $$(".btn-refresh-agents", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("agents")));
+    const stepForceChk = body.querySelector(".chk-step-force-model");
+    if (stepForceChk) {
+      stepForceChk.addEventListener("change", function() {
+        if (sel.type !== "step") return;
+        const wf = findWorkflow(sel.ref.wfId);
+        const step = wf && wf.steps[sel.ref.idx];
+        if (!step) return;
+        const task = stepTask(step);
+        if (task) {
+          task.forceModel = this.checked;
+          isDirty = true;
+        }
+      });
+    }
   }
 
   function requestMetaRefresh(kind) {
@@ -2103,7 +2121,8 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
   }, 60 * 1e3);
   const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
   const envScript = buildPowerShellEnvLines(env).join("; ");
-  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}, "--agent", ${psSingleQuoted(agent)}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
+  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
+  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
   const launcher = (0, import_child_process.spawn)(
     "cmd.exe",
     ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
@@ -2506,7 +2525,7 @@ async function copyTextToClipboard(text) {
   textarea.remove();
 }
 function getConfiguredAreaNames(settings) {
-  var _a, _b, _c;
+  var _a, _b;
   const names = /* @__PURE__ */ new Set();
   for (const task of settings.tasks) {
     const area = (_a = task.area) == null ? void 0 : _a.trim();
@@ -2515,10 +2534,6 @@ function getConfiguredAreaNames(settings) {
   for (const workflow of settings.workflows) {
     const area = (_b = workflow.area) == null ? void 0 : _b.trim();
     if (area) names.add(area);
-    for (const step of workflow.steps || []) {
-      const stepArea = (_c = step.area) == null ? void 0 : _c.trim();
-      if (stepArea) names.add(stepArea);
-    }
   }
   return Array.from(names).sort((a, b) => a.localeCompare(b));
 }
@@ -2912,6 +2927,7 @@ function toExportTask(task, exportId) {
     scheduleIntervalValue: (_a = task.scheduleIntervalValue) != null ? _a : 10,
     scheduleIntervalUnit: (_b = task.scheduleIntervalUnit) != null ? _b : "minutes",
     useRalphLoop: task.useRalphLoop,
+    forceModel: task.forceModel,
     agent: task.agent,
     branch: task.branch,
     createBranch: task.createBranch,
@@ -4314,7 +4330,10 @@ Continue?`
     }
     const bin = resolveOpencodeBin(this.settings.opencodePath);
     const agent = this.getEffectiveAgent(task.agent);
-    return [bin, "run", "-m", task.model, "--agent", agent, "--dangerously-skip-permissions", "--", prompt];
+    const args = [bin, "run", "-m", task.model];
+    if (!task.forceModel) args.push("--agent", agent);
+    args.push("--dangerously-skip-permissions", "--", prompt);
+    return args;
   }
   // Human-readable command string for the preview modal
   buildCommand(task) {
@@ -4438,9 +4457,11 @@ DONE:" + $exitCode + "
         const bin2 = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, agent, prompt2);
+          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt2);
         } else {
-          const args2 = ["-m", effectiveTask.model, "--agent", agent, "--prompt", prompt2];
+          const args2 = ["-m", effectiveTask.model];
+          if (!effectiveTask.forceModel) args2.push("--agent", agent);
+          args2.push("--prompt", prompt2);
           openOpencodeCli(bin2, taskCwd, secretEnv, args2);
         }
         current.status = "completed";
@@ -4552,10 +4573,12 @@ DONE:" + $exitCode + "
       `$bin = ${psSingleQuoted(cmdQuotedArg(bin))}`,
       `$model = ${psSingleQuoted(cmdQuotedArg(model))}`,
       `$agent = ${psSingleQuoted(cmdQuotedArg(this.getEffectiveAgent(effectiveTask.agent)))}`,
+      `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
       `$prompt = '"' + (Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8).Replace('"', '""') + '"'`,
       `$outFile = ${psSingleQuoted(outFile)}`,
       `$errFile = ${psSingleQuoted(errFile)}`,
-      `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + ' --agent ' + $agent + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
+      `$agentArg = if ($forceModel) { '' } else { ' --agent ' + $agent }`,
+      `$psi.Arguments = '/d /s /c "' + $bin + ' run --print-logs --log-level INFO --auto -m ' + $model + $agentArg + ' --dangerously-skip-permissions -- ' + $prompt + ' 1>>"' + $outFile + '" 2>>"' + $errFile + '""'`,
       `$proc = [System.Diagnostics.Process]::Start($psi)`,
       `$proc.WaitForExit()`,
       `$exitCode = $proc.ExitCode`,
@@ -5042,7 +5065,7 @@ DONE:" + $exitCode + "
     return this.importFromData(data);
   }
   async importFromData(data) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v;
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
@@ -5063,13 +5086,14 @@ DONE:" + $exitCode + "
         model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
         agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
         useRalphLoop: importedTaskKind === "opencode" ? (_b = et.useRalphLoop) != null ? _b : false : false,
-        scheduleType: (_c = et.scheduleType) != null ? _c : "manual",
-        scheduleTime: (_d = et.scheduleTime) != null ? _d : nowTimeString(),
-        scheduleDate: (_e = et.scheduleDate) != null ? _e : "",
-        scheduleDays: (_f = et.scheduleDays) != null ? _f : [],
-        scheduleMonthDays: (_g = et.scheduleMonthDays) != null ? _g : [],
-        scheduleIntervalValue: (_h = et.scheduleIntervalValue) != null ? _h : 10,
-        scheduleIntervalUnit: (_i = et.scheduleIntervalUnit) != null ? _i : "minutes",
+        forceModel: importedTaskKind === "opencode" ? (_c = et.forceModel) != null ? _c : false : false,
+        scheduleType: (_d = et.scheduleType) != null ? _d : "manual",
+        scheduleTime: (_e = et.scheduleTime) != null ? _e : nowTimeString(),
+        scheduleDate: (_f = et.scheduleDate) != null ? _f : "",
+        scheduleDays: (_g = et.scheduleDays) != null ? _g : [],
+        scheduleMonthDays: (_h = et.scheduleMonthDays) != null ? _h : [],
+        scheduleIntervalValue: (_i = et.scheduleIntervalValue) != null ? _i : 10,
+        scheduleIntervalUnit: (_j = et.scheduleIntervalUnit) != null ? _j : "minutes",
         status: "pending",
         lastRun: "",
         output: "",
@@ -5077,7 +5101,7 @@ DONE:" + $exitCode + "
         workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "code" ? "" : et.branch,
         createBranch: importedTaskKind === "code" ? false : et.createBranch,
-        interactiveTerminal: importedTaskKind === "opencode" ? (_j = et.interactiveTerminal) != null ? _j : this.settings.defaultInteractiveTerminal : void 0,
+        interactiveTerminal: importedTaskKind === "opencode" ? (_k = et.interactiveTerminal) != null ? _k : this.settings.defaultInteractiveTerminal : void 0,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -5157,21 +5181,21 @@ DONE:" + $exitCode + "
       const workflow = {
         id: generateId(),
         name: this.ensureUniqueWorkflowName(ew.name),
-        area: (_k = ew.area) != null ? _k : "",
-        description: (_l = ew.description) != null ? _l : "",
+        area: (_l = ew.area) != null ? _l : "",
+        description: (_m = ew.description) != null ? _m : "",
         steps,
         status: "pending",
         currentStep: -1,
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-        handoffBranch: (_m = ew.handoffBranch) != null ? _m : false,
-        handoffOutput: (_n = ew.handoffOutput) != null ? _n : true,
-        scheduleType: (_o = ew.scheduleType) != null ? _o : "manual",
-        scheduleTime: (_p = ew.scheduleTime) != null ? _p : nowTimeString(),
-        scheduleDate: (_q = ew.scheduleDate) != null ? _q : "",
-        scheduleDays: (_r = ew.scheduleDays) != null ? _r : [],
-        scheduleMonthDays: (_s = ew.scheduleMonthDays) != null ? _s : [],
-        scheduleIntervalValue: (_t = ew.scheduleIntervalValue) != null ? _t : 10,
-        scheduleIntervalUnit: (_u = ew.scheduleIntervalUnit) != null ? _u : "minutes"
+        handoffBranch: (_n = ew.handoffBranch) != null ? _n : false,
+        handoffOutput: (_o = ew.handoffOutput) != null ? _o : true,
+        scheduleType: (_p = ew.scheduleType) != null ? _p : "manual",
+        scheduleTime: (_q = ew.scheduleTime) != null ? _q : nowTimeString(),
+        scheduleDate: (_r = ew.scheduleDate) != null ? _r : "",
+        scheduleDays: (_s = ew.scheduleDays) != null ? _s : [],
+        scheduleMonthDays: (_t = ew.scheduleMonthDays) != null ? _t : [],
+        scheduleIntervalValue: (_u = ew.scheduleIntervalValue) != null ? _u : 10,
+        scheduleIntervalUnit: (_v = ew.scheduleIntervalUnit) != null ? _v : "minutes"
       };
       this.settings.workflows.push(workflow);
       workflowsImported++;
@@ -6871,13 +6895,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
       clampBubbleToParent(taskBubble);
     };
     const configuredAreaNames = areaNames.filter((name) => name !== "No area");
+    const areaContentWeight = (areaWorkflows, looseTasks) => {
+      return looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
+        return sum + workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length;
+      }, 0);
+    };
     const topLevelItems = [];
     configuredAreaNames.forEach((name) => {
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
-        return sum + Math.max(1, workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length);
-      }, 0);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
       const areaSize = areaSizeForContent(contentWeight);
       topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
     });
@@ -6893,9 +6921,11 @@ var AutoOCView = class extends import_obsidian.ItemView {
     configuredAreaNames.forEach((name) => {
       const areaLayout = topLevelLayout.get(`area:${name}`);
       if (!areaLayout) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
       const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
+      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
+      if (contentWeight === 0) return;
+      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
       if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => {
         var _a;
         return ((_a = taskById.get(step.taskId || "")) == null ? void 0 : _a.status) === "running";
@@ -7860,7 +7890,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
     const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
     const oldWorkflowById = new Map(oldWorkflows.map((workflow) => [workflow.id, workflow]));
     const newTasks = state.tasks.map((t) => {
-      var _a2, _b, _c, _d;
+      var _a2, _b, _c, _d, _e;
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = existing ? t.id : t.id || generateId();
       const status = (existing == null ? void 0 : existing.status) || "pending";
@@ -7875,12 +7905,13 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         model: t.model || this.plugin.getEffectiveDefaultModel(),
         agent: t.agent || this.plugin.getEffectiveAgent(),
         useRalphLoop: t.useRalphLoop !== void 0 ? !!t.useRalphLoop : (_a2 = existing == null ? void 0 : existing.useRalphLoop) != null ? _a2 : false,
+        forceModel: t.forceModel !== void 0 ? !!t.forceModel : (_b = existing == null ? void 0 : existing.forceModel) != null ? _b : false,
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
         scheduleDays: Array.isArray(t.scheduleDays) ? t.scheduleDays : [],
         scheduleMonthDays: Array.isArray(t.scheduleMonthDays) ? t.scheduleMonthDays : [],
-        scheduleIntervalValue: typeof t.scheduleIntervalValue === "number" ? t.scheduleIntervalValue : (_b = existing == null ? void 0 : existing.scheduleIntervalValue) != null ? _b : 10,
+        scheduleIntervalValue: typeof t.scheduleIntervalValue === "number" ? t.scheduleIntervalValue : (_c = existing == null ? void 0 : existing.scheduleIntervalValue) != null ? _c : 10,
         scheduleIntervalUnit: t.scheduleIntervalUnit || (existing == null ? void 0 : existing.scheduleIntervalUnit) || "minutes",
         status,
         lastRun,
@@ -7888,9 +7919,9 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         createdAt: (existing == null ? void 0 : existing.createdAt) || t.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
         // Preserve classic-only fields when older Visual Builder payloads do
         // not send them.
-        workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_c = existing == null ? void 0 : existing.workingDirectory) != null ? _c : "",
+        workingDirectory: t.workingDirectory !== void 0 ? t.workingDirectory : (_d = existing == null ? void 0 : existing.workingDirectory) != null ? _d : "",
         branch: t.branch !== void 0 ? t.branch || "" : (existing == null ? void 0 : existing.branch) || "",
-        createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_d = existing == null ? void 0 : existing.createBranch) != null ? _d : false,
+        createBranch: t.createBranch !== void 0 ? !!t.createBranch : (_e = existing == null ? void 0 : existing.createBranch) != null ? _e : false,
         interactiveTerminal: t.interactiveTerminal !== void 0 ? !!t.interactiveTerminal : existing == null ? void 0 : existing.interactiveTerminal,
         code: t.code !== void 0 ? t.code : existing == null ? void 0 : existing.code,
         codeLang: t.codeLang !== void 0 ? t.codeLang : existing == null ? void 0 : existing.codeLang,
@@ -8212,6 +8243,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       model: plugin.getEffectiveDefaultModel(),
       agent: plugin.getEffectiveAgent(),
       useRalphLoop: false,
+      forceModel: false,
       interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
@@ -8384,6 +8416,11 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.model = v);
       });
+      new import_obsidian.Setting(contentEl).setName("Forzar modelo").setDesc("Omite --agent para que OpenCode use exactamente el modelo seleccionado.").addToggle((tog) => {
+        var _a2;
+        tog.setValue((_a2 = this.draft.forceModel) != null ? _a2 : false);
+        tog.onChange((v) => this.draft.forceModel = v);
+      });
       new import_obsidian.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Models").onClick(() => {
           this.plugin.refreshModels();
@@ -8505,7 +8542,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     }
     new import_obsidian.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
-        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r;
+        var _a2, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s;
         if (!((_a2 = this.draft.name) == null ? void 0 : _a2.trim())) {
           new import_obsidian.Notice("Name is required.");
           return;
@@ -8567,13 +8604,14 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             area: (_i = this.draft.area) != null ? _i : "",
             agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
             useRalphLoop: savingTaskKind === "opencode" ? (_j = this.draft.useRalphLoop) != null ? _j : false : false,
-            scheduleType: (_k = this.draft.scheduleType) != null ? _k : "manual",
-            scheduleTime: (_l = this.draft.scheduleTime) != null ? _l : nowTimeString(),
-            scheduleDate: (_m = this.draft.scheduleDate) != null ? _m : "",
-            scheduleDays: (_n = this.draft.scheduleDays) != null ? _n : [],
-            scheduleMonthDays: (_o = this.draft.scheduleMonthDays) != null ? _o : [],
-            scheduleIntervalValue: (_p = this.draft.scheduleIntervalValue) != null ? _p : 10,
-            scheduleIntervalUnit: (_q = this.draft.scheduleIntervalUnit) != null ? _q : "minutes",
+            forceModel: savingTaskKind === "opencode" ? (_k = this.draft.forceModel) != null ? _k : false : false,
+            scheduleType: (_l = this.draft.scheduleType) != null ? _l : "manual",
+            scheduleTime: (_m = this.draft.scheduleTime) != null ? _m : nowTimeString(),
+            scheduleDate: (_n = this.draft.scheduleDate) != null ? _n : "",
+            scheduleDays: (_o = this.draft.scheduleDays) != null ? _o : [],
+            scheduleMonthDays: (_p = this.draft.scheduleMonthDays) != null ? _p : [],
+            scheduleIntervalValue: (_q = this.draft.scheduleIntervalValue) != null ? _q : 10,
+            scheduleIntervalUnit: (_r = this.draft.scheduleIntervalUnit) != null ? _r : "minutes",
             status: "pending",
             lastRun: "",
             output: "",
@@ -8594,7 +8632,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         }
         await this.plugin.saveSettings(!this.editTask);
         if (updatedTask) {
-          if (areaChanged) (_r = this.plugin.view) == null ? void 0 : _r.render();
+          if (areaChanged) (_s = this.plugin.view) == null ? void 0 : _s.render();
           this.plugin.emitTaskUpdated(updatedTask);
         }
         new import_obsidian.Notice(`Task "${this.draft.name}" saved.`);
