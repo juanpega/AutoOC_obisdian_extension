@@ -29,6 +29,7 @@ Module._load = function(request, parent, isMain) {
 const AutoOCPlugin = require("../main.js").default;
 Module._load = originalLoad;
 const mainSource = fs.readFileSync(require.resolve("../main.js"), "utf8");
+const mainTypeScriptSource = fs.readFileSync(require.resolve("../main.ts"), "utf8");
 const psSingleQuotedSource = mainSource.match(/function psSingleQuoted\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
 const psSingleQuoted = new Function(`${psSingleQuotedSource}; return psSingleQuoted;`)();
 
@@ -161,6 +162,16 @@ test("runTask keeps malicious branch text literal in the launched script", async
   absentPlugin.buildArgs = () => { buildArgsCalls++; throw new Error("absent branch reached launch path"); };
   await assert.rejects(absentPlugin.runTask(absentTask), /absent branch reached launch path/);
   assert.equal(buildArgsCalls, 1);
+});
+
+test("resetSecretsPin requires unlocked secrets before resetting the PIN", () => {
+  const resetSecretsPin = mainTypeScriptSource.match(/private async resetSecretsPin\(\): Promise<void> \{[\s\S]*?\n  \}/)?.[0];
+
+  assert.ok(resetSecretsPin, "resetSecretsPin should exist in main.ts");
+  assert.match(
+    resetSecretsPin,
+    /if \(!await this\.ensureSecretsUnlocked\(\)\) return;[\s\S]*?this\.plugin\.secretStore\.resetPin\(\);/
+  );
 });
 
 test("importFromData retains step order and explicit terminal transitions", async () => {

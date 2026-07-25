@@ -6544,6 +6544,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     this.render();
   }
   async resetSecretsPin() {
+    if (!await this.ensureSecretsUnlocked()) return;
     const confirmed = await new ConfirmModal(
       this.app,
       "Reset Secrets PIN?",

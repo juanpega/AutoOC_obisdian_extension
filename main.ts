@@ -5086,6 +5086,7 @@ class AutoOCView extends ItemView {
   }
 
   private async resetSecretsPin(): Promise<void> {
+    if (!await this.ensureSecretsUnlocked()) return;
     const confirmed = await new ConfirmModal(
       this.app,
       "Reset Secrets PIN?",
