@@ -136,29 +136,23 @@ function openOpencodeCliLongPromptWindows(
   launcher.unref();
 }
 
-// Launch a PowerShell script hidden as a direct detached child so cancellation can
-// kill the actual process tree immediately, even before the PID file is written.
 type ProcessHandle = { kill: () => void };
 
-type HiddenProcessHandle = ProcessHandle & { cleanup: (removeScript?: boolean) => void };
+type HiddenProcessHandle = ProcessHandle & {
+  cleanup: (removeScript?: boolean) => void;
+  onError: (callback: (error: Error) => void) => void;
+};
 
 function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHandle {
   const fs   = require("fs");
-  const launcherFile = psScriptFile.replace(/\.ps1$/, ".launch.ps1");
+  const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
-  const launcherScript = [
-    `$PID | Set-Content -LiteralPath ${psSingleQuoted(effectivePidFile)} -Encoding ASCII`,
-    `& ${psSingleQuoted(psScriptFile)}`,
-  ].join("\r\n");
-  fs.writeFileSync(launcherFile, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(launcherScript, "utf8")]));
+  const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
+  const launcherScript = `Set sh = CreateObject("WScript.Shell")\r\n` +
+    `sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r\n`;
+  fs.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn } = require("child_process");
-  const child = spawn("powershell.exe", [
-    "-NoLogo",
-    "-NonInteractive",
-    "-ExecutionPolicy", "Bypass",
-    "-WindowStyle", "Hidden",
-    "-File", launcherFile,
-  ], { detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   // Clean up launcher files after PowerShell has had time to read them. This
   // also limits exposure for launch scripts that contain temporary env vars.
@@ -198,7 +192,22 @@ function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHa
     try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
   };
 
-  return { kill, cleanup };
+  const callbacks: Array<(error: Error) => void> = [];
+  let launchError: Error | null = null;
+  child.on?.("error", (error: Error) => {
+    launchError = error;
+    cleanup(true);
+    callbacks.forEach((callback) => callback(error));
+  });
+
+  return {
+    kill,
+    cleanup,
+    onError: (callback) => {
+      if (launchError) callback(launchError);
+      else callbacks.push(callback);
+    },
+  };
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -3085,6 +3094,17 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
 
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && typeof effectiveTask.branch !== "string") {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = new Date().toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a string when provided.";
+      await this.saveSettings();
+      new Notice(`AutoOC: "${task.name}" has an invalid branch.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+    if (!effectiveTask.branch?.trim()) delete effectiveTask.branch;
     if (effectiveTask.branch) {
       const { isValidGitBranchName } = require("./import-utils");
       if (!isValidGitBranchName(effectiveTask.branch)) {
@@ -3114,17 +3134,6 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new Notice(`AutoOC: "${task.name}" has no model selected.`);
-      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
-      return;
-    }
-
-    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
-    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
-      this.settings.tasks[idx].status = "failed";
-      this.settings.tasks[idx].lastRun = new Date().toISOString();
-      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
-      await this.saveSettings();
-      new Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -3245,6 +3254,8 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     const psScript = [
+      `try {`,
+      `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
       ...psUtf8Prelude(),
         `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
@@ -3252,9 +3263,8 @@ export default class AutoOCPlugin extends Plugin {
         `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
         `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         ...buildPowerShellEnvLines(secretEnv),
-        `Set-Location -LiteralPath '${safeCwd}'`,
+        `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
         gitCmds ? gitCmds : "",
-      `try {`,
       `$bin = ${psSingleQuoted(bin)}`,
       `$binExt = [System.IO.Path]::GetExtension($bin)`,
       `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
@@ -3302,8 +3312,19 @@ export default class AutoOCPlugin extends Plugin {
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
 
-    // Launch hidden as a direct child so cancellation can kill the process tree.
-    const hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    let hiddenProc: HiddenProcessHandle;
+    try {
+      hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    } catch (error) {
+      const current = this.settings.tasks[idx];
+      current.status = "failed";
+      current.lastRun = new Date().toISOString();
+      current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
+      await this.saveSettings();
+      new Notice(`AutoOC: could not launch "${task.name}".`);
+      if (onComplete) await onComplete(current, -1);
+      return;
+    }
     let settled = false;
     let cancelled = false;
     let pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -3331,6 +3352,21 @@ export default class AutoOCPlugin extends Plugin {
         cleanupTempFiles();
         this.runningProcesses.delete(task.id);
       },
+    });
+    hiddenProc.onError(async (error) => {
+      if (settled) return;
+      settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      const current = this.settings.tasks.find((candidate) => candidate.id === task.id);
+      if (!current || current.status !== "running") return;
+      current.status = "failed";
+      current.lastRun = new Date().toISOString();
+      current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
+      cleanupTempFiles();
+      this.runningProcesses.delete(task.id);
+      await this.saveSettings();
+      new Notice(`AutoOC: could not launch "${task.name}".`);
+      if (onComplete) await onComplete(current, -1);
     });
 
     const timeoutSeconds = this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
@@ -3394,9 +3430,8 @@ export default class AutoOCPlugin extends Plugin {
         const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
         if (normalized) {
           t.output = `${normalized}\n[running…]`;
-        } else {
-          // Still running — heartbeat dot
-          t.output += ".";
+        } else if (!t.output.includes("[running…]")) {
+          t.output += `${t.output ? "\n" : ""}[running…]`;
         }
         this.view?.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);

@@ -2156,25 +2156,17 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
   launcher.unref();
 }
 function launchHiddenPS(psScriptFile, pidFile) {
+  var _a;
   const fs2 = require("fs");
-  const launcherFile = psScriptFile.replace(/\.ps1$/, ".launch.ps1");
+  const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
-  const launcherScript = [
-    `$PID | Set-Content -LiteralPath ${psSingleQuoted(effectivePidFile)} -Encoding ASCII`,
-    `& ${psSingleQuoted(psScriptFile)}`
-  ].join("\r\n");
-  fs2.writeFileSync(launcherFile, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(launcherScript, "utf8")]));
+  const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
+  const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
+sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
+`;
+  fs2.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn2 } = require("child_process");
-  const child = spawn2("powershell.exe", [
-    "-NoLogo",
-    "-NonInteractive",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-WindowStyle",
-    "Hidden",
-    "-File",
-    launcherFile
-  ], { detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn2("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
@@ -2232,7 +2224,21 @@ function launchHiddenPS(psScriptFile, pidFile) {
     } catch (e) {
     }
   };
-  return { kill, cleanup };
+  const callbacks = [];
+  let launchError = null;
+  (_a = child.on) == null ? void 0 : _a.call(child, "error", (error) => {
+    launchError = error;
+    cleanup(true);
+    callbacks.forEach((callback) => callback(error));
+  });
+  return {
+    kill,
+    cleanup,
+    onError: (callback) => {
+      if (launchError) callback(launchError);
+      else callbacks.push(callback);
+    }
+  };
 }
 function writeUtf8BomFile(filePath, content) {
   fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
@@ -4682,7 +4688,7 @@ DONE:" + $exitCode + "
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   async runTask(task, onComplete, overrides = {}) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e, _f, _g;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     if (this.isTaskActive(this.settings.tasks[idx])) {
@@ -4695,6 +4701,17 @@ DONE:" + $exitCode + "
       await this.runCodeTask(effectiveTask, onComplete);
       return;
     }
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && typeof effectiveTask.branch !== "string") {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a string when provided.";
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+    if (!((_a = effectiveTask.branch) == null ? void 0 : _a.trim())) delete effectiveTask.branch;
     if (effectiveTask.branch) {
       const { isValidGitBranchName } = require_import_utils();
       if (!isValidGitBranchName(effectiveTask.branch)) {
@@ -4707,7 +4724,7 @@ DONE:" + $exitCode + "
         return;
       }
     }
-    if (!((_a = effectiveTask.prompt) == null ? void 0 : _a.trim())) {
+    if (!((_b = effectiveTask.prompt) == null ? void 0 : _b.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
@@ -4716,22 +4733,12 @@ DONE:" + $exitCode + "
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_b = effectiveTask.model) == null ? void 0 : _b.trim())) {
+    if (!((_c = effectiveTask.model) == null ? void 0 : _c.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new import_obsidian.Notice(`AutoOC: "${task.name}" has no model selected.`);
-      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
-      return;
-    }
-    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
-    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
-      this.settings.tasks[idx].status = "failed";
-      this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
-      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
-      await this.saveSettings();
-      new import_obsidian.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -4743,7 +4750,7 @@ DONE:" + $exitCode + "
       current.status = "running";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
-      (_c = this.view) == null ? void 0 : _c.resetDashboardTaskShift(task.id);
+      (_d = this.view) == null ? void 0 : _d.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       try {
         let prompt2 = effectiveTask.prompt;
@@ -4768,7 +4775,7 @@ DONE:" + $exitCode + "
       } catch (e) {
         current.status = "failed";
         current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
-        (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
+        (_e = this.view) == null ? void 0 : _e.startGradualSink(task.id);
         await this.saveSettings();
         new import_obsidian.Notice(`AutoOC: could not open CLI task "${task.name}".`);
         if (onComplete) await onComplete(current, -1);
@@ -4778,7 +4785,7 @@ DONE:" + $exitCode + "
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
+    (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -4850,6 +4857,8 @@ DONE:" + $exitCode + "
       }
     }
     const psScript = [
+      `try {`,
+      `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
       ...psUtf8Prelude(),
       `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
       `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
@@ -4857,9 +4866,8 @@ DONE:" + $exitCode + "
       `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
       `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
       ...buildPowerShellEnvLines(secretEnv),
-      `Set-Location -LiteralPath '${safeCwd}'`,
+      `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
       gitCmds ? gitCmds : "",
-      `try {`,
       `$bin = ${psSingleQuoted(bin)}`,
       `$binExt = [System.IO.Path]::GetExtension($bin)`,
       `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
@@ -4905,7 +4913,19 @@ DONE:" + $exitCode + "
     ].filter((line) => line !== "").join("\n");
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
-    const hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    let hiddenProc;
+    try {
+      hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    } catch (error) {
+      const current = this.settings.tasks[idx];
+      current.status = "failed";
+      current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: could not launch "${task.name}".`);
+      if (onComplete) await onComplete(current, -1);
+      return;
+    }
     let settled = false;
     let cancelled = false;
     let pollHandle = null;
@@ -4955,7 +4975,22 @@ DONE:" + $exitCode + "
         this.runningProcesses.delete(task.id);
       }
     });
-    const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
+    hiddenProc.onError(async (error) => {
+      if (settled) return;
+      settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      const current = this.settings.tasks.find((candidate) => candidate.id === task.id);
+      if (!current || current.status !== "running") return;
+      current.status = "failed";
+      current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
+      cleanupTempFiles();
+      this.runningProcesses.delete(task.id);
+      await this.saveSettings();
+      new import_obsidian.Notice(`AutoOC: could not launch "${task.name}".`);
+      if (onComplete) await onComplete(current, -1);
+    });
+    const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -5013,8 +5048,8 @@ DONE:" + $exitCode + "
         if (normalized2) {
           t.output = `${normalized2}
 [running\u2026]`;
-        } else {
-          t.output += ".";
+        } else if (!t.output.includes("[running\u2026]")) {
+          t.output += `${t.output ? "\n" : ""}[running\u2026]`;
         }
         (_b2 = this.view) == null ? void 0 : _b2.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);
