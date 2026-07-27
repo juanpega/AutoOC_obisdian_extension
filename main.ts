@@ -262,18 +262,20 @@ const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
-Required root format:
+Canonical complete export format:
 {
   "autoOCExport": {
     "schemaVersion": "1.4.0",
-    "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.9",
+    "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
+    "pluginVersion": "1.5.11",
     "name": "Package name",
     "description": "Short description"
   },
   "tasks": [],
   "workflows": []
 }
+
+For complete exports, schemaVersion must be exactly "1.0" or "1.4.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
@@ -289,7 +291,7 @@ Task fields:
 - taskKind: "opencode" by default, or "code" for a reusable JavaScript task.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
-- prompt: complete direct instruction for OpenCode. For code tasks, mirror the code here for compatibility.
+- prompt: required, non-empty complete direct instruction for OpenCode. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
 - interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
@@ -301,11 +303,12 @@ Task fields:
 - scheduleIntervalUnit: "seconds" | "minutes" | "hours", usually "minutes".
 - useRalphLoop: true only when the task may need iterations until completion.
 - agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
+- forceModel: true forces the selected model and does not apply the agent; otherwise false.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
 - workingDirectory: optional absolute path where this task should run.
 
-Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
+Do not include model or forceModel in importable tasks unless the user explicitly asks for them. AutoOC will use the system default model on import.
 
 Code steps and code tasks:
 Code runs with vm.runInContext and must always assign output.
@@ -330,7 +333,7 @@ Code fields:
 - codeAllowVault: true/false.
 - codeAllowFiles: true/false.
 - codeAllowTerminal: true/false.
-- transitions: array of transitions for workflow steps.
+- transitions: recommended canonical array of transitions for workflow steps. Use [] explicitly for a terminal step that must remain terminal after export and import.
 
 Always available in code:
 - input: string output from the previous step.
@@ -419,7 +422,9 @@ Task step example:
 taskExportId must match an existing task exportId.
 
 Transitions:
-Each step can have outgoing transitions.
+The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The MCP validator validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
+
+If transitions is missing, it is treated as legacy compatibility: the UI importer uses the legacy transitionMode, evaluatePrompt, and forceContinue fields and fills the missing links as a linear chain in input order.
 
 Fields:
 - toStepId
@@ -438,7 +443,7 @@ The condition must be a JavaScript expression without return.
 Correct: JSON.parse(input).FOUND === "YES"
 Incorrect: return JSON.parse(input).FOUND === "YES";
 
-Design rules:
+Generation recommendations for clear graphs (not restrictions enforced by the importer):
 1. Decide whether the user needs one task or a workflow.
 2. Use a workflow when there are multiple phases such as search -> filter -> AI -> write result.
 3. Use code steps before AI to save tokens.
@@ -472,7 +477,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.9",
+    "pluginVersion": "1.5.11",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -1385,7 +1390,7 @@ function toExportWorkflow(
       codeAllowVault: step.codeAllowVault,
       codeAllowFiles: step.codeAllowFiles,
       codeAllowTerminal: step.codeAllowTerminal,
-      transitions: step.transitions && step.transitions.length > 0
+      transitions: step.transitions !== undefined
         ? step.transitions.map((t) => ({
             toStepId: t.toStepId,
             mode: t.mode,

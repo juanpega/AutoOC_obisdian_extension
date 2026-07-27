@@ -330,3 +330,59 @@ test("importFromData retains step order and explicit terminal transitions", asyn
   assert.deepEqual(steps[1].transitions, []);
   assert.equal(steps[2].transitions, undefined);
 });
+
+test("workflow export preserves explicit terminal transitions without changing legacy steps", async () => {
+  const plugin = createPlugin(createTask());
+  plugin.ensureUniqueTaskName = (name) => name;
+  plugin.ensureUniqueWorkflowName = (name) => name;
+  plugin.getEffectiveDefaultModel = () => "test-model";
+  plugin.manifest = { version: "1.5.11" };
+  plugin.settings.workflows = [{
+    id: "workflow-1",
+    name: "Round-trip workflow",
+    steps: [
+      { id: "explicit-terminal", stepKind: "delay", transitions: [] },
+      { id: "legacy", stepKind: "delay" },
+    ],
+    status: "pending",
+    currentStep: -1,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    scheduleType: "manual",
+    scheduleTime: "09:00",
+    scheduleDate: "",
+    scheduleDays: [],
+    scheduleMonthDays: [],
+    scheduleIntervalValue: 10,
+    scheduleIntervalUnit: "minutes",
+  }];
+
+  const exported = JSON.parse(plugin.buildExportJson([], plugin.settings.workflows, "Round-trip export"));
+  const exportedSteps = exported.workflows[0].steps;
+  assert.deepEqual(exportedSteps[0].transitions, []);
+  assert.equal(Object.hasOwn(exportedSteps[1], "transitions"), false);
+
+  plugin.settings.workflows = [];
+  await plugin.importFromData(exported);
+
+  const importedSteps = plugin.settings.workflows[0].steps;
+  assert.deepEqual(importedSteps[0].transitions, []);
+  assert.equal(importedSteps[1].transitions, undefined);
+});
+
+test("workflow prompt documents the canonical export contract", () => {
+  const prompt = mainTypeScriptSource.match(/const AUTOOC_WORKFLOW_PROMPT = `([\s\S]*?)`;/)?.[1];
+
+  assert.ok(prompt, "AUTOOC_WORKFLOW_PROMPT should exist in main.ts");
+  assert.match(prompt, /"pluginVersion": "1\.5\.11"/);
+  assert.match(prompt, /schemaVersion must be exactly "1\.0" or "1\.4\.0"/);
+  assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
+  assert.match(prompt, /Every task must include it, including taskKind "code"/);
+  assert.match(prompt, /forceModel: true forces the selected model and does not apply the agent/);
+  assert.match(prompt, /transitions array is the recommended canonical form/);
+  assert.match(prompt, /MCP validator validates transitions when provided/);
+  assert.doesNotMatch(prompt, /required for MCP workflow payloads/);
+  assert.match(prompt, /single transition object only for legacy compatibility/);
+  assert.match(prompt, /missing, it is treated as legacy compatibility/);
+  assert.match(prompt, /fills the missing links as a linear chain/);
+  assert.match(prompt, /not restrictions enforced by the importer/);
+});
