@@ -136,29 +136,23 @@ function openOpencodeCliLongPromptWindows(
   launcher.unref();
 }
 
-// Launch a PowerShell script hidden as a direct detached child so cancellation can
-// kill the actual process tree immediately, even before the PID file is written.
 type ProcessHandle = { kill: () => void };
 
-type HiddenProcessHandle = ProcessHandle & { cleanup: (removeScript?: boolean) => void };
+type HiddenProcessHandle = ProcessHandle & {
+  cleanup: (removeScript?: boolean) => void;
+  onError: (callback: (error: Error) => void) => void;
+};
 
 function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHandle {
   const fs   = require("fs");
-  const launcherFile = psScriptFile.replace(/\.ps1$/, ".launch.ps1");
+  const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
-  const launcherScript = [
-    `$PID | Set-Content -LiteralPath ${psSingleQuoted(effectivePidFile)} -Encoding ASCII`,
-    `& ${psSingleQuoted(psScriptFile)}`,
-  ].join("\r\n");
-  fs.writeFileSync(launcherFile, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(launcherScript, "utf8")]));
+  const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
+  const launcherScript = `Set sh = CreateObject("WScript.Shell")\r\n` +
+    `sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r\n`;
+  fs.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn } = require("child_process");
-  const child = spawn("powershell.exe", [
-    "-NoLogo",
-    "-NonInteractive",
-    "-ExecutionPolicy", "Bypass",
-    "-WindowStyle", "Hidden",
-    "-File", launcherFile,
-  ], { detached: true, stdio: "ignore", windowsHide: true });
+  const child = spawn("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   // Clean up launcher files after PowerShell has had time to read them. This
   // also limits exposure for launch scripts that contain temporary env vars.
@@ -198,7 +192,22 @@ function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHa
     try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
   };
 
-  return { kill, cleanup };
+  const callbacks: Array<(error: Error) => void> = [];
+  let launchError: Error | null = null;
+  child.on?.("error", (error: Error) => {
+    launchError = error;
+    cleanup(true);
+    callbacks.forEach((callback) => callback(error));
+  });
+
+  return {
+    kill,
+    cleanup,
+    onError: (callback) => {
+      if (launchError) callback(launchError);
+      else callbacks.push(callback);
+    },
+  };
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -253,18 +262,20 @@ const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
-Required root format:
+Canonical complete export format:
 {
   "autoOCExport": {
     "schemaVersion": "1.4.0",
-    "exportedAt": "ISO timestamp",
-    "pluginVersion": "1.5.9",
+    "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
+    "pluginVersion": "1.5.11",
     "name": "Package name",
     "description": "Short description"
   },
   "tasks": [],
   "workflows": []
 }
+
+For complete exports, schemaVersion must be exactly "1.0" or "1.4.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
@@ -280,7 +291,7 @@ Task fields:
 - taskKind: "opencode" by default, or "code" for a reusable JavaScript task.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
-- prompt: complete direct instruction for OpenCode. For code tasks, mirror the code here for compatibility.
+- prompt: required, non-empty complete direct instruction for OpenCode. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
 - interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
@@ -292,11 +303,12 @@ Task fields:
 - scheduleIntervalUnit: "seconds" | "minutes" | "hours", usually "minutes".
 - useRalphLoop: true only when the task may need iterations until completion.
 - agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
+- forceModel: true forces the selected model and does not apply the agent; otherwise false.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
 - workingDirectory: optional absolute path where this task should run.
 
-Do not include model in importable tasks unless the user explicitly asks for it. AutoOC will use the system default model on import.
+Do not include model or forceModel in importable tasks unless the user explicitly asks for them. AutoOC will use the system default model on import.
 
 Code steps and code tasks:
 Code runs with vm.runInContext and must always assign output.
@@ -321,7 +333,7 @@ Code fields:
 - codeAllowVault: true/false.
 - codeAllowFiles: true/false.
 - codeAllowTerminal: true/false.
-- transitions: array of transitions for workflow steps.
+- transitions: recommended canonical array of transitions for workflow steps. Use [] explicitly for a terminal step that must remain terminal after export and import.
 
 Always available in code:
 - input: string output from the previous step.
@@ -410,7 +422,9 @@ Task step example:
 taskExportId must match an existing task exportId.
 
 Transitions:
-Each step can have outgoing transitions.
+The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The MCP validator validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
+
+If transitions is missing, it is treated as legacy compatibility: the UI importer uses the legacy transitionMode, evaluatePrompt, and forceContinue fields and fills the missing links as a linear chain in input order.
 
 Fields:
 - toStepId
@@ -429,7 +443,7 @@ The condition must be a JavaScript expression without return.
 Correct: JSON.parse(input).FOUND === "YES"
 Incorrect: return JSON.parse(input).FOUND === "YES";
 
-Design rules:
+Generation recommendations for clear graphs (not restrictions enforced by the importer):
 1. Decide whether the user needs one task or a workflow.
 2. Use a workflow when there are multiple phases such as search -> filter -> AI -> write result.
 3. Use code steps before AI to save tokens.
@@ -463,7 +477,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.4.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.9",
+    "pluginVersion": "1.5.11",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -1376,7 +1390,7 @@ function toExportWorkflow(
       codeAllowVault: step.codeAllowVault,
       codeAllowFiles: step.codeAllowFiles,
       codeAllowTerminal: step.codeAllowTerminal,
-      transitions: step.transitions && step.transitions.length > 0
+      transitions: step.transitions !== undefined
         ? step.transitions.map((t) => ({
             toStepId: t.toStepId,
             mode: t.mode,
@@ -3085,6 +3099,17 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
 
+    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
+    if (branchWasProvided && typeof effectiveTask.branch !== "string") {
+      this.settings.tasks[idx].status = "failed";
+      this.settings.tasks[idx].lastRun = new Date().toISOString();
+      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a string when provided.";
+      await this.saveSettings();
+      new Notice(`AutoOC: "${task.name}" has an invalid branch.`);
+      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      return;
+    }
+    if (!effectiveTask.branch?.trim()) delete effectiveTask.branch;
     if (effectiveTask.branch) {
       const { isValidGitBranchName } = require("./import-utils");
       if (!isValidGitBranchName(effectiveTask.branch)) {
@@ -3114,17 +3139,6 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
       new Notice(`AutoOC: "${task.name}" has no model selected.`);
-      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
-      return;
-    }
-
-    const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
-    if (branchWasProvided && (typeof effectiveTask.branch !== "string" || !effectiveTask.branch.trim())) {
-      this.settings.tasks[idx].status = "failed";
-      this.settings.tasks[idx].lastRun = new Date().toISOString();
-      this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a non-empty string when provided.";
-      await this.saveSettings();
-      new Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -3245,6 +3259,8 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     const psScript = [
+      `try {`,
+      `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
       ...psUtf8Prelude(),
         `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
@@ -3252,9 +3268,8 @@ export default class AutoOCPlugin extends Plugin {
         `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
         `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
         ...buildPowerShellEnvLines(secretEnv),
-        `Set-Location -LiteralPath '${safeCwd}'`,
+        `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
         gitCmds ? gitCmds : "",
-      `try {`,
       `$bin = ${psSingleQuoted(bin)}`,
       `$binExt = [System.IO.Path]::GetExtension($bin)`,
       `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
@@ -3302,8 +3317,19 @@ export default class AutoOCPlugin extends Plugin {
     const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
     writeUtf8BomFile(psScriptFile, psScript);
 
-    // Launch hidden as a direct child so cancellation can kill the process tree.
-    const hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    let hiddenProc: HiddenProcessHandle;
+    try {
+      hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+    } catch (error) {
+      const current = this.settings.tasks[idx];
+      current.status = "failed";
+      current.lastRun = new Date().toISOString();
+      current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
+      await this.saveSettings();
+      new Notice(`AutoOC: could not launch "${task.name}".`);
+      if (onComplete) await onComplete(current, -1);
+      return;
+    }
     let settled = false;
     let cancelled = false;
     let pollHandle: ReturnType<typeof setInterval> | null = null;
@@ -3331,6 +3357,21 @@ export default class AutoOCPlugin extends Plugin {
         cleanupTempFiles();
         this.runningProcesses.delete(task.id);
       },
+    });
+    hiddenProc.onError(async (error) => {
+      if (settled) return;
+      settled = true;
+      if (pollHandle) clearInterval(pollHandle);
+      const current = this.settings.tasks.find((candidate) => candidate.id === task.id);
+      if (!current || current.status !== "running") return;
+      current.status = "failed";
+      current.lastRun = new Date().toISOString();
+      current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
+      cleanupTempFiles();
+      this.runningProcesses.delete(task.id);
+      await this.saveSettings();
+      new Notice(`AutoOC: could not launch "${task.name}".`);
+      if (onComplete) await onComplete(current, -1);
     });
 
     const timeoutSeconds = this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS;
@@ -3394,9 +3435,8 @@ export default class AutoOCPlugin extends Plugin {
         const normalized = this.redactSecrets(formatTaskOutput(stdout, stderr));
         if (normalized) {
           t.output = `${normalized}\n[running…]`;
-        } else {
-          // Still running — heartbeat dot
-          t.output += ".";
+        } else if (!t.output.includes("[running…]")) {
+          t.output += `${t.output ? "\n" : ""}[running…]`;
         }
         this.view?.nudgeDashboardTask(task.id, "up");
         await this.saveSettings(false);
