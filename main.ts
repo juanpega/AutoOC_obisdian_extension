@@ -27,15 +27,31 @@ import * as http from "http";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const visualBuilderHtml: string = require("./visualBuilderHtml.generated").visualBuilderHtml;
 
-// Resolve the opencode binary: on Windows prefer .cmd so Electron finds it without PATH
+// Resolve the opencode binary. On Windows prefer .cmd so Electron finds it without
+// PATH. On macOS/Linux GUI apps (Obsidian) don't inherit the shell PATH, so probe the
+// common install locations explicitly before falling back to the bare command name.
 function resolveOpencodeBin(configured: string): string {
   if (configured && configured !== "opencode") return configured;
+  const candidates: string[] = [];
   if (os.platform() === "win32") {
-    // Try common npm global path
-    const candidate = `${process.env.APPDATA}\\npm\\opencode.cmd`;
+    // Common npm global path
+    candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
+  } else {
+    const home = process.env.HOME || "";
+    candidates.push(
+      `${home}/.bun/bin/opencode`,
+      `${home}/.local/bin/opencode`,
+      `${home}/.npm-global/bin/opencode`,
+      `${home}/bin/opencode`,
+      "/opt/homebrew/bin/opencode",
+      "/usr/local/bin/opencode",
+    );
+  }
+  const { accessSync, constants } = require("fs");
+  for (const candidate of candidates) {
     try {
-      const { existsSync } = require("fs");
-      if (existsSync(candidate)) return candidate;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
     } catch { /* ignore */ }
   }
   return configured || "opencode";

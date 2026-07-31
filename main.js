@@ -2084,11 +2084,25 @@ var http = __toESM(require("http"));
 var visualBuilderHtml2 = (init_visualBuilderHtml_generated(), __toCommonJS(visualBuilderHtml_generated_exports)).visualBuilderHtml;
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
+  const candidates = [];
   if (os.platform() === "win32") {
-    const candidate = `${process.env.APPDATA}\\npm\\opencode.cmd`;
+    candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
+  } else {
+    const home = process.env.HOME || "";
+    candidates.push(
+      `${home}/.bun/bin/opencode`,
+      `${home}/.local/bin/opencode`,
+      `${home}/.npm-global/bin/opencode`,
+      `${home}/bin/opencode`,
+      "/opt/homebrew/bin/opencode",
+      "/usr/local/bin/opencode"
+    );
+  }
+  const { accessSync, constants } = require("fs");
+  for (const candidate of candidates) {
     try {
-      const { existsSync: existsSync2 } = require("fs");
-      if (existsSync2(candidate)) return candidate;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
     } catch (e) {
     }
   }
