@@ -120,7 +120,10 @@ test("launchHiddenSh surfaces spawn errors through onError", () => {
 });
 
 test("resolveLinuxTerminal honors configured terminal, falls back through emulators", (t) => {
-  if (process.platform === "win32") t.skip("Linux terminal detection is POSIX-only");
+  if (process.platform === "win32") {
+    t.skip("Linux terminal detection is POSIX-only");
+    return;
+  }
 
   const start = mainSource.indexOf("LINUX_TERMINAL_CANDIDATES");
   assert.ok(start !== -1, "LINUX_TERMINAL_CANDIDATES should exist in main.js");

@@ -179,7 +179,10 @@ test("runTask launches legacy tasks with an empty or whitespace branch", async (
 });
 
 test("runTask launches non-interactive tasks via detached /bin/sh on POSIX", async (t) => {
-  if (isWindows) t.skip("POSIX launcher only");
+  if (isWindows) {
+    t.skip("POSIX launcher only");
+    return;
+  }
   const { scripts, spawnCalls } = await captureRunTaskScript(createTask(""));
   const shSpawn = spawnCalls.find((call) => call[0] === "/bin/sh");
   assert.ok(shSpawn, "expected a detached /bin/sh spawn");
