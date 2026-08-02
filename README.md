@@ -359,7 +359,7 @@ npm run pack:release
 
 ## Files to Publish to Your Repo
 
-- `package-release.ps1`: creates release zip with `manifest.json`, `main.js`, `styles.css`
+- `scripts/package-release.mjs`: cross-platform release zip (Windows, macOS, Linux) with `manifest.json`, `main.js`, `styles.css`
 - `RELEASE_NOTES_TEMPLATE.md`: template for release text
 - `PUBLISH_CHECKLIST.md`: end-to-end publication checklist
 
@@ -454,7 +454,7 @@ npm run pack:release
 
 ## Archivos para publicar en tu repo
 
-- `package-release.ps1`: crea zip de release con `manifest.json`, `main.js`, `styles.css`
+- `scripts/package-release.mjs`: crea zip de release multiplataforma (Windows, macOS, Linux) con `manifest.json`, `main.js`, `styles.css`
 - `RELEASE_NOTES_TEMPLATE.md`: plantilla para texto de release
 - `PUBLISH_CHECKLIST.md`: checklist de publicacion end-to-end
 
