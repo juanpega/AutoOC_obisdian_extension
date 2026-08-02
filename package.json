@@ -9,7 +9,7 @@
     "styles.css"
   ],
   "scripts": {
-    "test": "node --test",
+    "test": "node --test \"tests/*.test.js\"",
     "prebuild": "node scripts/inline-visual-builder.mjs",
     "predev": "node scripts/inline-visual-builder.mjs",
     "inline-vb": "node scripts/inline-visual-builder.mjs",
