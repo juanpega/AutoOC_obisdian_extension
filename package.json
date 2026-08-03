@@ -9,14 +9,14 @@
     "styles.css"
   ],
   "scripts": {
-    "test": "node --test",
+    "test": "node --test tests/pre-pr-regressions.test.js tests/posix-launcher.test.js",
     "prebuild": "node scripts/inline-visual-builder.mjs",
     "predev": "node scripts/inline-visual-builder.mjs",
     "inline-vb": "node scripts/inline-visual-builder.mjs",
     "dev": "node esbuild.config.mjs",
     "build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
     "deploy": "node esbuild.config.mjs production && node deploy.mjs",
-    "pack:release": "powershell -ExecutionPolicy Bypass -File .\\package-release.ps1 -Version %npm_package_version%"
+    "pack:release": "node scripts/package-release.mjs"
   },
   "keywords": [],
   "license": "MIT",

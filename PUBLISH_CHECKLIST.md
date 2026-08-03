@@ -10,7 +10,7 @@
 - [ ] Update README if needed
 
 ## Build release asset
-- [ ] `powershell -ExecutionPolicy Bypass -File .\\package-release.ps1 -Version 1.0.0`
+- [ ] `npm run pack:release` (cross-platform: `scripts/package-release.mjs`; uses version from `package.json`)
 - [ ] Confirm zip exists in `release/`
 - [ ] Save SHA256 checksum
 

@@ -52,8 +52,11 @@ const AutoOCPlugin = require("../main.js").default;
 Module._load = originalLoad;
 const mainSource = fs.readFileSync(require.resolve("../main.js"), "utf8");
 const mainTypeScriptSource = fs.readFileSync(require.resolve("../main.ts"), "utf8");
+const isWindows = process.platform === "win32";
 const psSingleQuotedSource = mainSource.match(/function psSingleQuoted\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
 const psSingleQuoted = new Function(`${psSingleQuotedSource}; return psSingleQuoted;`)();
+const shSingleQuotedSource = mainSource.match(/function shSingleQuoted\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
+const shSingleQuoted = new Function(`${shSingleQuotedSource}; return shSingleQuoted;`)();
 
 function generateHiddenLauncher(psScriptFile) {
   const start = mainSource.indexOf("function launchHiddenPS(");
@@ -123,7 +126,7 @@ async function captureRunTaskScript(task) {
   let poll;
   spawnCalls.length = 0;
   fs.writeFileSync = function(file, data, ...args) {
-    if (String(file).endsWith(".ps1")) {
+    if (String(file).endsWith(".ps1") || String(file).endsWith(".sh")) {
       scripts.push(String(data));
       return;
     }
@@ -143,6 +146,7 @@ async function captureRunTaskScript(task) {
   }
   return {
     script: scripts.find((script) => script.includes("git checkout")),
+    scripts,
     spawnCalls: [...spawnCalls],
     poll,
   };
@@ -174,6 +178,24 @@ test("runTask launches legacy tasks with an empty or whitespace branch", async (
   }
 });
 
+test("runTask launches non-interactive tasks via detached /bin/sh on POSIX", async (t) => {
+  if (isWindows) {
+    t.skip("POSIX launcher only");
+    return;
+  }
+  const { scripts, spawnCalls } = await captureRunTaskScript(createTask(""));
+  const shSpawn = spawnCalls.find((call) => call[0] === "/bin/sh");
+  assert.ok(shSpawn, "expected a detached /bin/sh spawn");
+  assert.equal(shSpawn[2].detached, true);
+  assert.equal(shSpawn[2].stdio, "ignore");
+
+  const script = scripts.find((candidate) => candidate.includes('"$bin" run "$@"'));
+  assert.ok(script, "expected a POSIX launch script");
+  assert.match(script, /echo \$\$ > '.*\.pid'/);
+  assert.match(script, /set -- --print-logs --log-level INFO --auto -m 'test-model' --agent 'build' --dangerously-skip-permissions -- "\$prompt"/);
+  assert.match(script, /printf '%s' "\$exit_code" > '.*\.done\.txt'/);
+});
+
 test("runTask polling preserves output and adds one running marker when no output is available", async () => {
   const task = createTask("");
   const { poll } = await captureRunTaskScript(task);
@@ -186,7 +208,10 @@ test("runTask polling preserves output and adds one running marker when no outpu
 });
 
 test("hidden launcher writes VBScript accepted by cscript with a quoted temporary PowerShell path", (t) => {
-  if (process.platform !== "win32") t.skip("cscript.exe is only available on Windows");
+  if (process.platform !== "win32") {
+    t.skip("cscript.exe is only available on Windows");
+    return;
+  }
 
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "autooc-vbs-"));
   const psScriptFile = path.join(tempDir, "innocuous script.ps1");
@@ -261,7 +286,7 @@ test("runTask rejects invalid branch names before launch", async () => {
 
 test("runTask assigns a quoted branch variable before every checkout", async () => {
   const branch = "feature/test";
-  const safeBranch = psSingleQuoted(branch);
+  const safeBranch = isWindows ? psSingleQuoted(branch) : shSingleQuoted(branch);
   const nonCreate = await captureRunTaskScript(createTask(branch));
   const createTaskWithFallback = createTask(branch);
   createTaskWithFallback.createBranch = true;
@@ -271,25 +296,35 @@ test("runTask assigns a quoted branch variable before every checkout", async () 
 
   assert.equal(nonCreate.spawnCalls.length, 1);
   assert.equal(create.spawnCalls.length, 1);
-  assert.match(nonCreateScript, new RegExp(`\\$safeBranch = ${safeBranch}; git checkout \\$safeBranch`));
-  assert.match(createScript, new RegExp(`\\$safeBranch = ${safeBranch};[\\s\\S]*else \\{ git checkout \\$safeBranch \\}`));
+  if (isWindows) {
+    assert.match(nonCreateScript, new RegExp(`\\$safeBranch = ${safeBranch}; git checkout \\$safeBranch`));
+    assert.match(createScript, new RegExp(`\\$safeBranch = ${safeBranch};[\\s\\S]*else \\{ git checkout \\$safeBranch \\}`));
+  } else {
+    assert.match(nonCreateScript, new RegExp(`git checkout ${safeBranch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+    assert.match(createScript, /git checkout -b "\$branch_name"/);
+    assert.match(createScript, /else git checkout "\$safe_branch"/);
+  }
   assert.doesNotMatch(nonCreateScript, /git checkout feature\/test/);
   assert.doesNotMatch(createScript, /git checkout feature\/test/);
 });
 
 test("runTask keeps malicious branch text literal in the launched script", async () => {
   const branch = "feature'quoted";
-  const safeBranch = psSingleQuoted(branch);
+  const safeBranch = isWindows ? psSingleQuoted(branch) : shSingleQuoted(branch);
   const { script, spawnCalls: launches } = await captureRunTaskScript(createTask(branch));
   assert.equal(launches.length, 1);
-  assert.equal(safeBranch, "'feature''quoted'");
-  assert.match(script, new RegExp(`\\$safeBranch = ${safeBranch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; git checkout \\$safeBranch`));
+  if (isWindows) {
+    assert.equal(safeBranch, "'feature''quoted'");
+    assert.match(script, new RegExp(`\\$safeBranch = ${safeBranch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}; git checkout \\$safeBranch`));
+  } else {
+    assert.equal(safeBranch, `'feature'\\''quoted'`);
+    assert.match(script, new RegExp(`git checkout ${safeBranch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  }
   assert.doesNotMatch(script, /git checkout feature'quoted/);
 
   const absentTask = createTask();
   const absentPlugin = createPlugin(absentTask);
   let buildArgsCalls = 0;
-  absentPlugin.buildArgs = () => { buildArgsCalls++; return ["C:\\tools\\opencode.cmd"]; };
   absentPlugin.buildArgs = () => { buildArgsCalls++; throw new Error("absent branch reached launch path"); };
   await assert.rejects(absentPlugin.runTask(absentTask), /absent branch reached launch path/);
   assert.equal(buildArgsCalls, 1);

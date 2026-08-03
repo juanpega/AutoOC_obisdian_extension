@@ -226,6 +226,21 @@ In plugin Settings:
 - Model list reload
 - Ralph Loop Assistant
 
+### OpenCode CLI path auto-detection
+
+Obsidian runs as a desktop (Electron) app and, on macOS/Linux, does not inherit the shell `PATH`. This means a bare `opencode` command can be "not found" even when it works in your terminal, leaving the model list empty.
+
+The plugin therefore auto-detects the binary at these common install locations:
+
+- `~/.bun/bin/opencode`
+- `~/.local/bin/opencode`
+- `~/.npm-global/bin/opencode`
+- `~/bin/opencode`
+- `/opt/homebrew/bin/opencode`
+- `/usr/local/bin/opencode`
+
+If your binary lives somewhere else, set its absolute path in `OpenCode CLI Path` (it always takes precedence over auto-detection). You can confirm the detected path under Diagnostics → "Detected binary".
+
 ## Diagnostics
 
 Palette command:
@@ -301,6 +316,7 @@ npm run build
 
 - Run the Diagnostic command.
 - Verify `OpenCode CLI Path`.
+- If the model list is empty (`0 models loaded`), open Diagnostics and check "Detected binary". On macOS/Linux, Obsidian does not inherit your shell `PATH`, so the binary may need to be set as an absolute path (or one of the auto-detected locations used).
 - Try in terminal:
 
 ```powershell
@@ -343,7 +359,7 @@ npm run pack:release
 
 ## Files to Publish to Your Repo
 
-- `package-release.ps1`: creates release zip with `manifest.json`, `main.js`, `styles.css`
+- `scripts/package-release.mjs`: cross-platform release zip (Windows, macOS, Linux) with `manifest.json`, `main.js`, `styles.css`
 - `RELEASE_NOTES_TEMPLATE.md`: template for release text
 - `PUBLISH_CHECKLIST.md`: end-to-end publication checklist
 
@@ -438,7 +454,7 @@ npm run pack:release
 
 ## Archivos para publicar en tu repo
 
-- `package-release.ps1`: crea zip de release con `manifest.json`, `main.js`, `styles.css`
+- `scripts/package-release.mjs`: crea zip de release multiplataforma (Windows, macOS, Linux) con `manifest.json`, `main.js`, `styles.css`
 - `RELEASE_NOTES_TEMPLATE.md`: plantilla para texto de release
 - `PUBLISH_CHECKLIST.md`: checklist de publicacion end-to-end
 
