@@ -6,7 +6,7 @@ This document covers the local development harness, contribution flow, and AI-as
 
 ## Development Tools
 
-The repo is a TypeScript Obsidian plugin managed with npm. Tests run with Node's built-in test runner through `npm test`; there is no separate test framework, lint config, formatter, or CI in this repo. Quality is enforced through tests, `tsc`/`esbuild`, and manual verification.
+The repo is a TypeScript Obsidian plugin managed with npm. Tests run with Node's built-in test runner through `npm test`; there is no separate test framework, lint config, or formatter. GitHub Actions runs build, tests, and release packaging on Windows, Ubuntu, and macOS.
 
 | Tool | Role |
 |------|------|
@@ -15,7 +15,7 @@ The repo is a TypeScript Obsidian plugin managed with npm. Tests run with Node's
 | TypeScript / `tsc` | Type checking with strict null checks |
 | esbuild | Bundles `main.ts` to `main.js` |
 | `scripts/inline-visual-builder.mjs` | Embeds `util/ui_workflow_builder/index.html` into `visualBuilderHtml.generated.ts` |
-| PowerShell | `package-release.ps1` produces release zips |
+| Node.js | `scripts/package-release.mjs` produces cross-platform release zips |
 | Obsidian | Manual verification target |
 | GitNexus | Required impact analysis before editing symbols |
 
@@ -28,7 +28,7 @@ The repo is a TypeScript Obsidian plugin managed with npm. Tests run with Node's
 | `npm run dev` | Run `node esbuild.config.mjs` for local development watch | While editing plugin code |
 | `npm run build` | Type-check with `tsc --noEmit --skipLibCheck`, then bundle for production | Before committing or packaging |
 | `npm run deploy` | Build production bundle, then run `node deploy.mjs` | Quick local deploy using the default deploy script behavior |
-| `npm run pack:release` | Package the existing `manifest.json`, `main.js`, and `styles.css` artifacts with `package-release.ps1` | Creating a release zip after `npm run build` |
+| `npm run pack:release` | Package the existing `manifest.json`, `main.js`, and `styles.css` artifacts with `scripts/package-release.mjs` | Creating a release zip after `npm run build` |
 | `node deploy.mjs "C:/path/to/your/vault"` | Copy plugin artifacts into an Obsidian vault for testing | Manual vault deployment |
 | `node .gitnexus/run.cjs analyze` | Re-analyze the repo for GitNexus | After meaningful code changes or stale index warnings |
 | `npx gitnexus analyze` | Fallback GitNexus analysis command | If `.gitnexus/run.cjs` is unavailable |
@@ -145,4 +145,4 @@ Before a change is considered ready:
 
 ## Harness Evolution
 
-This harness is intentionally minimal. If you add a separate test framework, linter, formatter, formatter config, or CI workflow, update this file and the Main Commands table so the next contributor knows the new gate.
+This harness is intentionally minimal. If you add a separate test framework, linter, formatter, or change the CI workflow, update this file and the Main Commands table so the next contributor knows the new gate.

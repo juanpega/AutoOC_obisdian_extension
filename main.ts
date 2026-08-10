@@ -27,15 +27,31 @@ import * as http from "http";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const visualBuilderHtml: string = require("./visualBuilderHtml.generated").visualBuilderHtml;
 
-// Resolve the opencode binary: on Windows prefer .cmd so Electron finds it without PATH
+// Resolve the opencode binary. On Windows prefer .cmd so Electron finds it without
+// PATH. On macOS/Linux GUI apps (Obsidian) don't inherit the shell PATH, so probe the
+// common install locations explicitly before falling back to the bare command name.
 function resolveOpencodeBin(configured: string): string {
   if (configured && configured !== "opencode") return configured;
+  const candidates: string[] = [];
   if (os.platform() === "win32") {
-    // Try common npm global path
-    const candidate = `${process.env.APPDATA}\\npm\\opencode.cmd`;
+    // Common npm global path
+    candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
+  } else {
+    const home = process.env.HOME || "";
+    candidates.push(
+      `${home}/.bun/bin/opencode`,
+      `${home}/.local/bin/opencode`,
+      `${home}/.npm-global/bin/opencode`,
+      `${home}/bin/opencode`,
+      "/opt/homebrew/bin/opencode",
+      "/usr/local/bin/opencode",
+    );
+  }
+  const { accessSync, constants } = require("fs");
+  for (const candidate of candidates) {
     try {
-      const { existsSync } = require("fs");
-      if (existsSync(candidate)) return candidate;
+      accessSync(candidate, constants.X_OK);
+      return candidate;
     } catch { /* ignore */ }
   }
   return configured || "opencode";
@@ -62,8 +78,91 @@ function buildPowerShellEnvLines(env: Record<string, string>): string[] {
 const HANDOFF_CONTEXT_LIMIT = 50000;
 const SAFE_CLI_PROMPT_LENGTH = 7500;
 
-function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> = {}, args: string[] = []): void {
-  if (process.platform === "win32") {
+function isWindows(): boolean {
+  return process.platform === "win32";
+}
+
+// Detached-script file extension for the current platform: PowerShell on
+// Windows, POSIX shell elsewhere.
+function scriptExt(): ".ps1" | ".sh" {
+  return isWindows() ? ".ps1" : ".sh";
+}
+
+// Environment exports for POSIX shell scripts. Values are single-quoted so
+// secrets and paths with shell metacharacters stay literal.
+function buildShEnvLines(env: Record<string, string>): string[] {
+  return Object.entries(env)
+    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map(([key, value]) => `export ${key}=${shSingleQuoted(value)}`);
+}
+
+// Builds a shell command with every token shell-quoted, so paths and values
+// that contain spaces, quotes, or shell metacharacters survive the trip into
+// an interactive terminal (previously `cd ${cwd}` failed on spaces on macOS).
+function buildPosixLaunchCommand(bin: string, cwd: string, env: Record<string, string>, args: string[]): string {
+  const envPrefix = Object.entries(env)
+    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
+    .map(([key, value]) => `${key}=${shSingleQuoted(value)}`)
+    .join(" ");
+  return `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
+}
+
+// AppleScript string literal quoting. The embedded command is already
+// shell-quoted by buildPosixLaunchCommand, so only backslashes and double
+// quotes need escaping for the AppleScript string itself.
+function appleScriptQuoted(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+const LINUX_TERMINAL_CANDIDATES: Array<{ cmd: string; args: string[] }> = [
+  { cmd: "x-terminal-emulator", args: ["-e"] },
+  { cmd: "gnome-terminal", args: ["--"] },
+  { cmd: "konsole", args: ["-e"] },
+  { cmd: "xfce4-terminal", args: ["-e"] },
+  { cmd: "lxterminal", args: ["-e"] },
+  { cmd: "alacritty", args: ["-e"] },
+  { cmd: "xterm", args: ["-e"] },
+];
+
+function commandExists(cmd: string): boolean {
+  try {
+    const { execSync } = require("child_process");
+    execSync(`command -v ${shSingleQuoted(cmd)}`, { stdio: "ignore", timeout: 5000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// First available terminal emulator on Linux. A user-configured command is
+// tried first, then common emulators, so x-terminal-emulator-only setups keep
+// working and distros without it fall back to gnome-terminal/konsole/xterm.
+function resolveLinuxTerminal(configured?: string): { cmd: string; args: string[] } | null {
+  if (configured && configured.trim()) {
+    const parts = configured.trim().split(/\s+/);
+    const cmd = parts.shift() as string;
+    if (commandExists(cmd)) return { cmd, args: [...parts, "-e"] };
+    return null;
+  }
+  for (const candidate of LINUX_TERMINAL_CANDIDATES) {
+    if (commandExists(candidate.cmd)) return candidate;
+  }
+  return null;
+}
+
+interface CliLaunchOptions {
+  onError?: (error: Error) => void;
+  linuxTerminal?: string;
+}
+
+function openOpencodeCli(
+  bin: string,
+  cwd: string,
+  env: Record<string, string> = {},
+  args: string[] = [],
+  options: CliLaunchOptions = {},
+): void {
+  if (isWindows()) {
     const envScript = buildPowerShellEnvLines(env).join("; ");
     const runCommand = args.length > 0
       ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList`
@@ -74,30 +173,33 @@ function openOpencodeCli(bin: string, cwd: string, env: Record<string, string> =
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
       { detached: true, stdio: "ignore", windowsHide: false },
     );
+    launcher.on?.("error", (error: Error) => options.onError?.(error));
     launcher.unref();
     return;
   }
+
+  const command = buildPosixLaunchCommand(bin, cwd, env, args);
 
   if (process.platform === "darwin") {
-    const escapedCwd = cwd.replace(/(["\\$`])/g, "\\$1");
-    const escapedCmd = [bin, ...args].map(shSingleQuoted).join(" ").replace(/(["\\$`])/g, "\\$1");
-    const envPrefix = Object.entries(env)
-      .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-      .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-      .join(" ");
-    const script = `tell application "Terminal" to do script "cd ${escapedCwd} && ${envPrefix ? `${envPrefix} ` : ""}${escapedCmd}"`;
+    const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
     const launcher = spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" });
+    launcher.on?.("error", (error: Error) => options.onError?.(error));
     launcher.unref();
     return;
   }
 
-  const envPrefix = Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `${key}=${JSON.stringify(value)}`)
-    .join(" ");
-  const command = `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
-  const launcher = spawn("x-terminal-emulator", ["-e", "sh", "-lc", command], { detached: true, stdio: "ignore" });
-  launcher.unref();
+  if (process.platform === "linux") {
+    const terminal = resolveLinuxTerminal(options.linuxTerminal);
+    if (!terminal) {
+      throw new Error(
+        "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)",
+      );
+    }
+    const launcher = spawn(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
+    launcher.on?.("error", (error: Error) => options.onError?.(error));
+    launcher.unref();
+    return;
+  }
 }
 
 function openOpencodeCliLongPromptWindows(
@@ -208,6 +310,75 @@ function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHa
       else callbacks.push(callback);
     },
   };
+}
+
+// POSIX equivalent of launchHiddenPS: runs a shell script fully detached so the
+// Electron sandbox does not kill the child. Output capture lives inside the
+// script (temp files polled by the caller); cancellation kills the whole process
+// group; cleanup removes the script (and pid file) after a timeout or on kill.
+function launchHiddenSh(shScriptFile: string, pidFile?: string): HiddenProcessHandle {
+  const fs = require("fs");
+  const { spawn } = require("child_process");
+  const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
+  try { fs.chmodSync(shScriptFile, 0o700); } catch { /* ignore */ }
+  // detached:true on POSIX puts the child in its own process group, so a single
+  // kill(-pid) reaches the shell and every process it spawned (opencode, git…).
+  const child = spawn("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
+  child.unref();
+  // ponytail: 10-minute fallback cleanup so the generated sh stays available for debugging.
+  const scriptTimer = setTimeout(() => { try { fs.unlinkSync(shScriptFile); } catch { /* ignore */ } }, 600000);
+
+  const cleanup = (removeScript = false) => {
+    clearTimeout(scriptTimer);
+    if (removeScript) {
+      try { fs.unlinkSync(shScriptFile); } catch { /* ignore */ }
+    }
+  };
+
+  const kill = () => {
+    let killedChildTree = false;
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+        killedChildTree = true;
+      } catch { /* ignore */ }
+    }
+    if (!killedChildTree) {
+      try { child.kill("SIGKILL"); } catch { /* ignore */ }
+    }
+    try {
+      const pid = fs.existsSync(effectivePidFile) ? String(fs.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
+        try { process.kill(-Number(pid), "SIGKILL"); } catch { /* ignore */ }
+        try { process.kill(Number(pid), "SIGKILL"); } catch { /* ignore */ }
+      }
+    } catch { /* ignore */ }
+    cleanup(true);
+    try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
+  };
+
+  const callbacks: Array<(error: Error) => void> = [];
+  let launchError: Error | null = null;
+  child.on?.("error", (error: Error) => {
+    launchError = error;
+    cleanup(true);
+    callbacks.forEach((callback) => callback(error));
+  });
+
+  return {
+    kill,
+    cleanup,
+    onError: (callback) => {
+      if (launchError) callback(launchError);
+      else callbacks.push(callback);
+    },
+  };
+}
+
+// Cross-platform hidden launcher: PowerShell/VBScript on Windows, detached
+// /bin/sh on macOS/Linux.
+function launchHidden(scriptFile: string, pidFile?: string): HiddenProcessHandle {
+  return isWindows() ? launchHiddenPS(scriptFile, pidFile) : launchHiddenSh(scriptFile, pidFile);
 }
 
 function writeUtf8BomFile(filePath: string, content: string): void {
@@ -718,6 +889,7 @@ interface AutoOCSettings {
   libraryUrl: string;
   dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
   dashboardTaskBubbleSize: "sm" | "md" | "lg" | "xl";
+  linuxTerminal?: string;
 }
 
 function getConfiguredAreaNames(settings: Pick<AutoOCSettings, "tasks" | "workflows">): string[] {
@@ -1158,6 +1330,7 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
   dashboardPositions: {},
   dashboardTaskBubbleSize: "md",
+  linuxTerminal: "",
 };
 
 export const VIEW_TYPE = "auto-oc-view";
@@ -3022,36 +3195,61 @@ export default class AutoOCPlugin extends Plugin {
       let hiddenProc: HiddenProcessHandle | null = null;
       const cleanup = (removeScript = true) => {
         hiddenProc?.cleanup(removeScript);
-        try { fs.unlinkSync(psFile); } catch { /* ignore */ }
+        try { fs.unlinkSync(scriptFile); } catch { /* ignore */ }
         try { fs.unlinkSync(outFile); } catch { /* ignore */ }
         try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
       };
 
-      const psScript = [
-        ...psUtf8Prelude(),
-        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
-        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
-        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
-        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-        ...buildPowerShellEnvLines(secretEnv),
-        `Set-Location -LiteralPath '${safeCwd}'`,
-        `$outTmp = [System.IO.Path]::GetTempFileName()`,
-        `$errTmp = [System.IO.Path]::GetTempFileName()`,
-        `$bin = ${psSingleQuoted(bin)}`,
-        `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
-        `& $bin @argList > $outTmp 2> $errTmp`,
-        `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-        `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
-        `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
-        `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-        `$combined = ($stdout + $(if($stderr){"\n" + $stderr}else{""})).Trim()`,
-        `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', "\nDONE:" + $exitCode + "\n" + $combined)`,
-      ].join("\n");
+      let launchScript: string;
+      if (isWindows()) {
+        launchScript = [
+          ...psUtf8Prelude(),
+          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          ...buildPowerShellEnvLines(secretEnv),
+          `Set-Location -LiteralPath '${safeCwd}'`,
+          `$outTmp = [System.IO.Path]::GetTempFileName()`,
+          `$errTmp = [System.IO.Path]::GetTempFileName()`,
+          `$bin = ${psSingleQuoted(bin)}`,
+          `$argList = @('run','-m',${psSingleQuoted(model)},'--agent',${psSingleQuoted(agent)},'--dangerously-skip-permissions','--',${psSingleQuoted(prompt)})`,
+          `& $bin @argList > $outTmp 2> $errTmp`,
+          `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+          `$stdout = Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
+          `$stderr = Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue`,
+          `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
+          `$combined = ($stdout + $(if($stderr){"\n" + $stderr}else{""})).Trim()`,
+          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', "\nDONE:" + $exitCode + "\n" + $combined)`,
+        ].join("\n");
+      } else {
+        const shEnv: Record<string, string> = {
+          ...secretEnv,
+          HOME: process.env.HOME || process.env.USERPROFILE || "",
+          PATH: process.env.PATH || "",
+        };
+        launchScript = [
+          `echo $$ > ${shSingleQuoted(pidFile)}`,
+          ...buildShEnvLines(shEnv),
+          `cd ${shSingleQuoted(cwd)} || exit 1`,
+          `bin=${shSingleQuoted(bin)}`,
+          `out_tmp="$(mktemp)"`,
+          `err_tmp="$(mktemp)"`,
+          `"$bin" run -m ${shSingleQuoted(model)} --agent ${shSingleQuoted(agent)} --dangerously-skip-permissions -- ${shSingleQuoted(prompt)} > "$out_tmp" 2> "$err_tmp"`,
+          `exit_code=$?`,
+          `stdout="$(cat "$out_tmp" 2>/dev/null)"`,
+          `stderr="$(cat "$err_tmp" 2>/dev/null)"`,
+          `rm -f "$out_tmp" "$err_tmp"`,
+          `if [ -n "$stderr" ]; then combined="$(printf '%s\n%s' "$stdout" "$stderr")"; else combined="$stdout"; fi`,
+          `printf '\nDONE:%s\n%s' "$exit_code" "$combined" > ${shSingleQuoted(outFile)}`,
+        ].join("\n");
+      }
 
-      const psFile = path.join(tmpDir, `autooc-eval-${evalId}.ps1`);
-      writeUtf8BomFile(psFile, psScript);
-      hiddenProc = launchHiddenPS(psFile, pidFile);
+      const scriptFile = path.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
+      if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
+      else fs.writeFileSync(scriptFile, launchScript, "utf8");
+      hiddenProc = launchHidden(scriptFile, pidFile);
 
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -3162,13 +3360,27 @@ export default class AutoOCPlugin extends Plugin {
         }
         const bin = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
+        const reportInteractiveFailure = async (error: Error) => {
+          const t = this.settings.tasks.find((candidate) => candidate.id === task.id);
+          if (!t) return;
+          t.status = "failed";
+          t.lastRun = new Date().toISOString();
+          t.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`;
+          this.view?.startGradualSink(task.id);
+          await this.saveSettings();
+          new Notice(`AutoOC: could not open CLI task "${task.name}".`);
+          if (onComplete) await onComplete(t, -1);
+        };
         if (process.platform === "win32") {
           openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt);
         } else {
           const args = ["-m", effectiveTask.model];
           if (!effectiveTask.forceModel) args.push("--agent", agent);
           args.push("--prompt", prompt);
-          openOpencodeCli(bin, taskCwd, secretEnv, args);
+          openOpencodeCli(bin, taskCwd, secretEnv, args, {
+            onError: reportInteractiveFailure,
+            linuxTerminal: this.settings.linuxTerminal,
+          });
         }
         current.status = "completed";
         current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
@@ -3243,83 +3455,116 @@ export default class AutoOCPlugin extends Plugin {
       fs.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
 
-    // PS script: Start-Process in ONE line (multi-line breaks PS argument parsing)
     // Resolve working directory: Task override -> Global Setting -> Vault Path
     const safeCwd = taskCwd.replace(/'/g, "''");
 
-    // Git branch logic
+    // Git branch logic (platform-specific shell)
     let gitCmds = "";
     if (effectiveTask.branch) {
-      const safeBranch = psSingleQuoted(effectiveTask.branch);
-      if (effectiveTask.createBranch) {
-        gitCmds = `$safeBranch = ${safeBranch}; $timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = $safeBranch + "-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout $safeBranch }`;
+      if (isWindows()) {
+        const safeBranch = psSingleQuoted(effectiveTask.branch);
+        if (effectiveTask.createBranch) {
+          gitCmds = `$safeBranch = ${safeBranch}; $timestamp = Get-Date -Format "yyyyMMdd-HHmm"; $branchName = $safeBranch + "-$timestamp"; git checkout -b $branchName 2>$null; if ($?) { echo "Created branch $branchName" } else { git checkout $safeBranch }`;
+        } else {
+          gitCmds = `$safeBranch = ${safeBranch}; git checkout $safeBranch`;
+        }
       } else {
-        gitCmds = `$safeBranch = ${safeBranch}; git checkout $safeBranch`;
+        const safeBranch = shSingleQuoted(effectiveTask.branch);
+        if (effectiveTask.createBranch) {
+          gitCmds = `safe_branch=${safeBranch}\nbranch_name="$safe_branch-$(date +%Y%m%d-%H%M)"\ngit checkout -b "$branch_name" 2>/dev/null\nif [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$safe_branch"; fi`;
+        } else {
+          gitCmds = `git checkout ${safeBranch}`;
+        }
       }
     }
 
-    const psScript = [
-      `try {`,
-      `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
-      ...psUtf8Prelude(),
-        `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-        `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
-        `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
-        `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
-        `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-        ...buildPowerShellEnvLines(secretEnv),
-        `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
-        gitCmds ? gitCmds : "",
-      `$bin = ${psSingleQuoted(bin)}`,
-      `$binExt = [System.IO.Path]::GetExtension($bin)`,
-      `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
-      `$nodeScript = ''`,
-      `if ($psShim -and [System.IO.File]::Exists($psShim)) {`,
-      `$bin = $psShim`,
-      `} elseif ($binExt -ieq '.cmd') {`,
-      `$cmdText = Get-Content $bin -Raw -Encoding UTF8`,
-      `if ($cmdText -match '"([^"]+\\.exe)"\\s+%\\*') {`,
-      `$bin = $Matches[1]`,
-      `} elseif ($cmdText -match '"%_prog%"\\s+"%dp0%\\\\([^"]+)"\\s+%\\*') {`,
-      `$cmdDir = Split-Path -Parent $bin`,
-      `$nodeCandidate = Join-Path $cmdDir 'node.exe'`,
-      `$bin = if ([System.IO.File]::Exists($nodeCandidate)) { $nodeCandidate } else { 'node' }`,
-      `$nodeScript = Join-Path $cmdDir $Matches[1]`,
-      `} else {`,
-      `throw "Cannot safely parse npm command shim '$bin' for shell-sensitive prompt text."`,
-      `}`,
-      `}`,
-      `$model = ${psSingleQuoted(model)}`,
-      `$agent = ${psSingleQuoted(this.getEffectiveAgent(effectiveTask.agent))}`,
-      `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
-      `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
-      `$outFile = ${psSingleQuoted(outFile)}`,
-      `$errFile = ${psSingleQuoted(errFile)}`,
-      `$opencodeArgs = @()`,
-      `if ($nodeScript) {`,
-      `$opencodeArgs += $nodeScript`,
-      `}`,
-      `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
-      `if (-not $forceModel) {`,
-      `$opencodeArgs += @('--agent', $agent)`,
-      `}`,
-      `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
-       `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
-       `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
-       `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
-      `} catch {`,
-      `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
-      `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
-      `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
-      `}`,
-    ].filter(line => line !== "").join("\n");
+    const effectiveAgent = this.getEffectiveAgent(effectiveTask.agent);
 
-    const psScriptFile = require("path").join(tmpDir, `autooc-${task.id}.ps1`);
-    writeUtf8BomFile(psScriptFile, psScript);
+    let launchScript: string;
+    if (isWindows()) {
+      launchScript = [
+        `try {`,
+        `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
+        ...psUtf8Prelude(),
+          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+          ...buildPowerShellEnvLines(secretEnv),
+          `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
+          gitCmds ? gitCmds : "",
+        `$bin = ${psSingleQuoted(bin)}`,
+        `$binExt = [System.IO.Path]::GetExtension($bin)`,
+        `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
+        `$nodeScript = ''`,
+        `if ($psShim -and [System.IO.File]::Exists($psShim)) {`,
+        `$bin = $psShim`,
+        `} elseif ($binExt -ieq '.cmd') {`,
+        `$cmdText = Get-Content $bin -Raw -Encoding UTF8`,
+        `if ($cmdText -match '"([^"]+\\.exe)"\\s+%\\*') {`,
+        `$bin = $Matches[1]`,
+        `} elseif ($cmdText -match '"%_prog%"\\s+"%dp0%\\\\([^"]+)"\\s+%\\*') {`,
+        `$cmdDir = Split-Path -Parent $bin`,
+        `$nodeCandidate = Join-Path $cmdDir 'node.exe'`,
+        `$bin = if ([System.IO.File]::Exists($nodeCandidate)) { $nodeCandidate } else { 'node' }`,
+        `$nodeScript = Join-Path $cmdDir $Matches[1]`,
+        `} else {`,
+        `throw "Cannot safely parse npm command shim '$bin' for shell-sensitive prompt text."`,
+        `}`,
+        `}`,
+        `$model = ${psSingleQuoted(model)}`,
+        `$agent = ${psSingleQuoted(effectiveAgent)}`,
+        `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
+        `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
+        `$outFile = ${psSingleQuoted(outFile)}`,
+        `$errFile = ${psSingleQuoted(errFile)}`,
+        `$opencodeArgs = @()`,
+        `if ($nodeScript) {`,
+        `$opencodeArgs += $nodeScript`,
+        `}`,
+        `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
+        `if (-not $forceModel) {`,
+        `$opencodeArgs += @('--agent', $agent)`,
+        `}`,
+        `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
+         `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
+         `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
+         `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
+        `} catch {`,
+        `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
+        `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
+        `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
+        `}`,
+      ].filter(line => line !== "").join("\n");
+    } else {
+      const shEnv: Record<string, string> = {
+        ...secretEnv,
+        HOME: process.env.HOME || process.env.USERPROFILE || "",
+        PATH: process.env.PATH || "",
+      };
+      const agentArg = effectiveTask.forceModel ? "" : ` --agent ${shSingleQuoted(effectiveAgent)}`;
+      launchScript = [
+        `echo $$ > ${shSingleQuoted(pidFile)}`,
+        ...buildShEnvLines(shEnv),
+        `cd ${shSingleQuoted(taskCwd)} || { printf '%s' '-1' > ${shSingleQuoted(doneFile)}; printf '%s' 'cd failed' > ${shSingleQuoted(errFile)}; exit 1; }`,
+        gitCmds ? gitCmds : "",
+        `bin=${shSingleQuoted(bin)}`,
+        `prompt="$(cat ${shSingleQuoted(promptFile)} 2>/dev/null)"`,
+        `set -- --print-logs --log-level INFO --auto -m ${shSingleQuoted(model)}${agentArg} --dangerously-skip-permissions -- "$prompt"`,
+        `"$bin" run "$@" >> ${shSingleQuoted(outFile)} 2>> ${shSingleQuoted(errFile)}`,
+        `exit_code=$?`,
+        `printf '%s' "$exit_code" > ${shSingleQuoted(doneFile)}`,
+      ].filter(line => line !== "").join("\n");
+    }
+
+    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}${scriptExt()}`);
+    if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
+    else fs.writeFileSync(scriptFile, launchScript, "utf8");
 
     let hiddenProc: HiddenProcessHandle;
     try {
-      hiddenProc = launchHiddenPS(psScriptFile, pidFile);
+      hiddenProc = launchHidden(scriptFile, pidFile);
     } catch (error) {
       const current = this.settings.tasks[idx];
       current.status = "failed";
@@ -10094,7 +10339,10 @@ class OpenCodeCliModal extends Modal {
   private launch(cwd: string) {
     try {
       const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      openOpencodeCli(bin, cwd, this.plugin.getSecretsEnv());
+      openOpencodeCli(bin, cwd, this.plugin.getSecretsEnv(), [], {
+        onError: (error) => new Notice(`AutoOC: could not open OpenCode CLI: ${String(error)}`),
+        linuxTerminal: this.plugin.settings.linuxTerminal,
+      });
       new Notice(`AutoOC: opened OpenCode CLI in ${cwd}`);
       this.close();
     } catch (e) {
@@ -10173,7 +10421,7 @@ class DiagnosticModal extends Modal {
     new Setting(contentEl).addButton((btn) =>
       btn.setButtonText("▶ Launch test: 'di hola'").setCta().onClick(() => {
         this.cleanupDiagnostics(true);
-        if (this.logEl) this.logEl.textContent = "[launching detached PowerShell process…]\n";
+        if (this.logEl) this.logEl.textContent = "[launching detached process…]\n";
         const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
         if (!model) {
@@ -10188,33 +10436,56 @@ class DiagnosticModal extends Modal {
         try { fs.unlinkSync(outFile); } catch { /* ignore */ }
         try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
 
-        const psScript = [
-          ...psUtf8Prelude(),
-          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
-          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
-          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
-          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-          `$outTmp = [System.IO.Path]::GetTempFileName()`,
-          `$errTmp = [System.IO.Path]::GetTempFileName()`,
-          `$bin = ${psSingleQuoted(bin)}`,
-          `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
-        `& $bin @argList > $outTmp 2> $errTmp`,
-        `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
-        `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
-        `$err = (Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
-          `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
-          `$combined = ($out + $(if($err){"\n" + $err}else{""})).Trim()`,
-          `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:" + $exitCode)`,
-        ].join("\n");
+        let launchScript: string;
+        if (isWindows()) {
+          launchScript = [
+            ...psUtf8Prelude(),
+            `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+            `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
+            `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
+            `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
+            `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
+            `$outTmp = [System.IO.Path]::GetTempFileName()`,
+            `$errTmp = [System.IO.Path]::GetTempFileName()`,
+            `$bin = ${psSingleQuoted(bin)}`,
+            `$argList = @('run','-m',${psSingleQuoted(model)},'--dangerously-skip-permissions','--','di hola')`,
+          `& $bin @argList > $outTmp 2> $errTmp`,
+          `$exitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }`,
+          `$out = (Get-Content $outTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+          `$err = (Get-Content $errTmp -Raw -Encoding UTF8 -ErrorAction SilentlyContinue).Trim()`,
+            `Remove-Item $outTmp,$errTmp -ErrorAction SilentlyContinue`,
+            `$combined = ($out + $(if($err){"\n" + $err}else{""})).Trim()`,
+            `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', $combined + "\nDONE:" + $exitCode)`,
+          ].join("\n");
+        } else {
+          const shEnv: Record<string, string> = {
+            HOME: process.env.HOME || process.env.USERPROFILE || "",
+            PATH: process.env.PATH || "",
+          };
+          launchScript = [
+            `echo $$ > ${shSingleQuoted(pidFile)}`,
+            ...buildShEnvLines(shEnv),
+            `bin=${shSingleQuoted(bin)}`,
+            `out_tmp="$(mktemp)"`,
+            `err_tmp="$(mktemp)"`,
+            `"$bin" run -m ${shSingleQuoted(model)} --dangerously-skip-permissions -- 'di hola' > "$out_tmp" 2> "$err_tmp"`,
+            `exit_code=$?`,
+            `stdout="$(cat "$out_tmp" 2>/dev/null)"`,
+            `stderr="$(cat "$err_tmp" 2>/dev/null)"`,
+            `rm -f "$out_tmp" "$err_tmp"`,
+            `if [ -n "$stderr" ]; then combined="$(printf '%s\n%s' "$stdout" "$stderr")"; else combined="$stdout"; fi`,
+            `printf '%s\nDONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`,
+          ].join("\n");
+        }
 
-        const psFile = path.join(osTmp, "autooc-diag.ps1");
-        writeUtf8BomFile(psFile, psScript);
-        this.tempFiles = [outFile, pidFile, psFile];
-        if (this.logEl) this.logEl.textContent += `Script: ${psFile}\n\n`;
+        const scriptFile = path.join(osTmp, `autooc-diag${scriptExt()}`);
+        if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
+        else fs.writeFileSync(scriptFile, launchScript, "utf8");
+        this.tempFiles = [outFile, pidFile, scriptFile];
+        if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}\n\n`;
 
         // Launch hidden as a direct child so diagnostics can be cancelled cleanly.
-        this.hiddenProc = launchHiddenPS(psFile, pidFile);
+        this.hiddenProc = launchHidden(scriptFile, pidFile);
 
         const startedAt = Date.now();
         this.pollHandle = setInterval(() => {
@@ -10345,6 +10616,23 @@ class AutoOCSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           })
       );
+
+    if (process.platform === "linux") {
+      new Setting(containerEl)
+        .setName("Linux terminal emulator")
+        .setDesc(
+          "Command used to open the interactive OpenCode CLI. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("auto-detect (e.g. konsole)")
+            .setValue(this.plugin.settings.linuxTerminal || "")
+            .onChange(async (v) => {
+              this.plugin.settings.linuxTerminal = v.trim();
+              await this.plugin.saveSettings();
+            })
+        );
+    }
 
     new Setting(containerEl)
       .setName("Shared Library URL")

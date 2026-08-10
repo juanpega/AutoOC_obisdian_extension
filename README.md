@@ -17,7 +17,7 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode CLI
 
 - Obsidian Desktop with Community plugins enabled.
 - OpenCode installed locally and available as `opencode`, or configured in AutoOC settings.
-- Windows for the current background task launcher.
+- Windows, macOS, or Linux.
 - `uv` only when using the optional local `autooc-mcp` helper.
 
 ## Install

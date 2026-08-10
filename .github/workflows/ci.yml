@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build & Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check & build
+        run: npm run build
+
+      - name: Run tests
+        run: npm test
+
+      - name: Verify release packaging
+        run: npm run pack:release
+
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-oc-release-${{ matrix.os }}
+          path: release/auto-oc-*.zip
+          if-no-files-found: error
