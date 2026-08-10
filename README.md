@@ -82,7 +82,7 @@ npm run build
 
 `npm test` runs the repository's Node test suite. The build first inlines the Visual Builder, type-checks TypeScript, and bundles the Obsidian plugin. The primary source is `main.ts`; edit `util/ui_workflow_builder/index.html` for the standalone builder. Its generated embed is refreshed by the development and build scripts.
 
-The commands in this README are the authoritative command reference. See the [development harness](docs/development-harness.md) for implementation and contributor-workflow architecture, including generated-file relationships and quality gates.
+The commands in this README are the authoritative command reference for implementation, contributor workflow, generated-file relationships, and quality gates.
 
 ## Release Artifacts
 
@@ -104,7 +104,7 @@ Contributions, bug reports, and workflow ideas are welcome. Preserve these invar
 - Regenerate Visual Builder output and release assets when their sources change.
 - Run `npm test` and `npm run build` before submitting changes.
 
-Start with the [architecture](docs/architecture.md) and the [development harness](docs/development-harness.md), which describes contributor workflow architecture rather than replacing this README's command reference.
+Start with the [architecture](docs/architecture.md).
 
 ## License
 

@@ -19,3 +19,11 @@ Thumbs.db
 *.pid
 *.ps1
 *.vbs
+
+# Personal agent workflow configuration
+/.opencode/
+/.opencode.backup-*/
+/.claude/skills/gitnexus/
+/docs/development-harness.md
+/AGENTS.md
+/CLAUDE.md
