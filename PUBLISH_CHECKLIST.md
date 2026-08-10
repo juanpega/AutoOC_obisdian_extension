@@ -1,26 +1,26 @@
-# Publish Checklist (v1.0.0)
+# Publish Checklist (<version>)
 
 ## Pre-release
 - [ ] `npm install`
+- [ ] Update `manifest.json` and `package.json` to the same `<version>`
+- [ ] `npm test`
 - [ ] `npm run build`
 - [ ] Verify plugin works in Obsidian
 - [ ] Run diagnostic command in plugin UI
-- [ ] Update `manifest.json` version
-- [ ] Update `package.json` version
 - [ ] Update README if needed
 
 ## Build release asset
-- [ ] `npm run pack:release` (cross-platform: `scripts/package-release.mjs`; uses version from `package.json`)
-- [ ] Confirm zip exists in `release/`
+- [ ] `npm run pack:release` (after `npm run build`; packages existing `manifest.json`, `main.js`, and `styles.css`)
+- [ ] Confirm `release/auto-oc-<version>.zip` exists
 - [ ] Save SHA256 checksum
 
 ## Repository
 - [ ] Commit all source files
-- [ ] Create tag `v1.0.0`
+- [ ] Create tag `v<version>`
 - [ ] Push tag to remote
 
 ## GitHub Release
-- [ ] Create release from tag `v1.0.0`
+- [ ] Create release from tag `v<version>`
 - [ ] Attach zip from `release/`
 - [ ] Add release notes (from template)
 - [ ] Publish release

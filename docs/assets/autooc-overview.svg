@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="620" viewBox="0 0 1200 620" role="img" aria-labelledby="title desc">
+  <title id="title">AutoOC workflow overview</title>
+  <desc id="desc">A four-stage flow from an Obsidian vault through AutoOC and OpenCode CLI to local Git repositories.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101827"/>
+      <stop offset="1" stop-color="#172554"/>
+    </linearGradient>
+    <linearGradient id="autooc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#38bdf8"/>
+      <stop offset="1" stop-color="#6366f1"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#020617" flood-opacity=".32"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="620" rx="28" fill="url(#background)"/>
+  <circle cx="1085" cy="72" r="170" fill="#312e81" opacity=".32"/>
+  <circle cx="110" cy="540" r="150" fill="#0369a1" opacity=".2"/>
+  <text x="600" y="94" text-anchor="middle" fill="#f8fafc" font-family="Arial, sans-serif" font-size="48" font-weight="700">AutoOC</text>
+  <text x="600" y="132" text-anchor="middle" fill="#bae6fd" font-family="Arial, sans-serif" font-size="21">From notes to reproducible agentic workflows.</text>
+  <path d="M258 355 H332 M538 355 H612 M818 355 H892" fill="none" stroke="#7dd3fc" stroke-width="5" stroke-linecap="round"/>
+  <path d="M322 345 L342 355 L322 365 M602 345 L622 355 L602 365 M882 345 L902 355 L882 365" fill="none" stroke="#7dd3fc" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <g filter="url(#shadow)">
+    <rect x="58" y="250" width="200" height="210" rx="22" fill="#f8fafc"/>
+    <path d="M102 294 H170 L204 328 V407 H102 Z" fill="#e0f2fe" stroke="#0284c7" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M170 294 V328 H204 M122 354 H182 M122 378 H182 M122 402 H160" fill="none" stroke="#0284c7" stroke-width="5" stroke-linecap="round"/>
+    <text x="158" y="502" text-anchor="middle" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="22" font-weight="700">Obsidian Vault</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="338" y="250" width="200" height="210" rx="22" fill="url(#autooc)"/>
+    <circle cx="438" cy="351" r="55" fill="#e0f2fe" opacity=".95"/>
+    <path d="M438 316 V351 L462 365" fill="none" stroke="#2563eb" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="438" cy="351" r="35" fill="none" stroke="#2563eb" stroke-width="7"/>
+    <text x="438" y="502" text-anchor="middle" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="22" font-weight="700">AutoOC</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="618" y="250" width="200" height="210" rx="22" fill="#f8fafc"/>
+    <rect x="657" y="299" width="122" height="105" rx="10" fill="#0f172a"/>
+    <path d="M680 327 L699 344 L680 361 M711 365 H750" fill="none" stroke="#67e8f9" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="718" y="502" text-anchor="middle" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="22" font-weight="700">OpenCode CLI</text>
+  </g>
+  <g filter="url(#shadow)">
+    <rect x="898" y="250" width="244" height="210" rx="22" fill="#f8fafc"/>
+    <path d="M944 326 H1018 L1037 345 H1096 V402 H944 Z" fill="#dbeafe" stroke="#2563eb" stroke-width="5" stroke-linejoin="round"/>
+    <path d="M972 363 H1068 M972 383 H1034" fill="none" stroke="#2563eb" stroke-width="5" stroke-linecap="round"/>
+    <circle cx="1085" cy="318" r="22" fill="#22c55e"/>
+    <path d="M1074 318 L1082 326 L1097 309" fill="none" stroke="#f0fdf4" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1020" y="502" text-anchor="middle" fill="#e2e8f0" font-family="Arial, sans-serif" font-size="22" font-weight="700">Local Git Repos</text>
+  </g>
+  <text x="600" y="572" text-anchor="middle" fill="#94a3b8" font-family="Arial, sans-serif" font-size="16">Plan in your vault. Orchestrate locally. Keep work in your repositories.</text>
+</svg>
