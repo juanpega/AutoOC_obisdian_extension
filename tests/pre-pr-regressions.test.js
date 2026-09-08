@@ -52,6 +52,7 @@ const AutoOCPlugin = require("../main.js").default;
 Module._load = originalLoad;
 const mainSource = fs.readFileSync(require.resolve("../main.js"), "utf8");
 const mainTypeScriptSource = fs.readFileSync(require.resolve("../main.ts"), "utf8");
+const visualBuilderSource = fs.readFileSync(path.resolve(__dirname, "..", "util", "ui_workflow_builder", "index.html"), "utf8");
 const isWindows = process.platform === "win32";
 const psSingleQuotedSource = mainSource.match(/function psSingleQuoted\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
 const psSingleQuoted = new Function(`${psSingleQuotedSource}; return psSingleQuoted;`)();
@@ -90,12 +91,19 @@ function createPlugin(task) {
     workflows: [],
     workingDirectory: "C:\\workspace",
     defaultInteractiveTerminal: false,
+    codexPath: "codex",
+    defaultAiEngine: "opencode",
+    defaultCodexModel: "gpt-test",
+    defaultCodexReasoningEffort: "medium",
   };
   plugin.app = { vault: { adapter: { basePath: "C:\\vault" } } };
   plugin.runningProcesses = new Map();
+  plugin.runningCodexClients = new Map();
   plugin.isTaskActive = () => false;
   plugin.getSecretsEnv = () => ({});
   plugin.getEffectiveAgent = () => "build";
+  plugin.getEffectiveDefaultModel = () => "test-model";
+  plugin.getEffectiveCodexModel = () => "gpt-test";
   plugin.buildArgs = () => ["C:\\tools\\opencode.cmd"];
   plugin.saveSettings = async () => {};
   return plugin;
@@ -409,9 +417,13 @@ test("workflow prompt documents the canonical export contract", () => {
 
   assert.ok(prompt, "AUTOOC_WORKFLOW_PROMPT should exist in main.ts");
   assert.match(prompt, /"pluginVersion": "1\.5\.11"/);
-  assert.match(prompt, /schemaVersion must be exactly "1\.0" or "1\.4\.0"/);
+  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", or "1\.5\.0"/);
   assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
   assert.match(prompt, /Every task must include it, including taskKind "code"/);
+  assert.match(prompt, /"codex" for Codex in ChatGPT/);
+  assert.match(prompt, /reasoningEffort: optional for taskKind "codex"/);
+  assert.match(prompt, /ChatGPT\/Codex app for taskKind "codex"/);
+  assert.match(prompt, /workflow may mix both engines/);
   assert.match(prompt, /forceModel: true forces the selected model and does not apply the agent/);
   assert.match(prompt, /transitions array is the recommended canonical form/);
   assert.match(prompt, /MCP validator validates transitions when provided/);
@@ -420,4 +432,151 @@ test("workflow prompt documents the canonical export contract", () => {
   assert.match(prompt, /missing, it is treated as legacy compatibility/);
   assert.match(prompt, /fills the missing links as a linear chain/);
   assert.match(prompt, /not restrictions enforced by the importer/);
+});
+
+test("task editors expose interactive OpenCode and ChatGPT modes without losing Automatic Codex selection", () => {
+  assert.match(mainTypeScriptSource, /addOption\("codex-app", "ChatGPT \/ Codex task"\)/);
+  assert.match(mainTypeScriptSource, /this\.draft\.model \?\? this\.plugin\.settings\.defaultCodexModel/);
+  assert.match(visualBuilderSource, /value="opencode-cli"/);
+  assert.match(visualBuilderSource, /value="codex-app"/);
+});
+
+test("Codex tasks round-trip through schema 1.5 without exporting runtime thread ids", async () => {
+  const task = createTask("");
+  task.taskKind = "codex";
+  task.model = "gpt-test";
+  task.agent = "";
+  task.reasoningEffort = "high";
+  task.interactiveTerminal = true;
+  task.lastCodexThreadId = "thread-private";
+  task.lastCodexTurnId = "turn-private";
+  const plugin = createPlugin(task);
+  plugin.manifest = { version: "1.5.11" };
+  plugin.ensureUniqueTaskName = (name) => name;
+  plugin.ensureUniqueWorkflowName = (name) => name;
+
+  const exported = JSON.parse(plugin.buildExportJson([task], [], "Codex export"));
+  assert.equal(exported.autoOCExport.schemaVersion, "1.5.0");
+  assert.equal(exported.tasks[0].taskKind, "codex");
+  assert.equal(exported.tasks[0].reasoningEffort, "high");
+  assert.equal(exported.tasks[0].interactiveTerminal, true);
+  assert.equal(Object.hasOwn(exported.tasks[0], "lastCodexThreadId"), false);
+  assert.equal(Object.hasOwn(exported.tasks[0], "lastCodexTurnId"), false);
+
+  plugin.settings.tasks = [];
+  await plugin.importFromData(exported);
+  assert.equal(plugin.settings.tasks[0].taskKind, "codex");
+  assert.equal(plugin.settings.tasks[0].model, "gpt-test");
+  assert.equal(plugin.settings.tasks[0].reasoningEffort, "high");
+  assert.equal(plugin.settings.tasks[0].interactiveTerminal, true);
+});
+
+test("legacy imports still default missing taskKind to OpenCode", async () => {
+  const plugin = createPlugin(createTask());
+  plugin.ensureUniqueTaskName = (name) => name;
+  plugin.ensureUniqueWorkflowName = (name) => name;
+  plugin.settings.tasks = [];
+  await plugin.importFromData({
+    autoOCExport: { schemaVersion: "1.0" },
+    tasks: [{
+      exportId: "legacy-task",
+      name: "Legacy",
+      prompt: "Do the work",
+      scheduleType: "manual",
+    }],
+    workflows: [],
+  });
+  assert.equal(plugin.settings.tasks[0].taskKind, "opencode");
+  assert.equal(plugin.settings.tasks[0].model, "test-model");
+});
+
+test("imports reject reasoning effort outside Codex tasks", async () => {
+  const plugin = createPlugin(createTask());
+  plugin.ensureUniqueTaskName = (name) => name;
+  plugin.ensureUniqueWorkflowName = (name) => name;
+  await assert.rejects(plugin.importFromData({
+    autoOCExport: { schemaVersion: "1.5.0" },
+    tasks: [{ exportId: "bad", name: "Bad", taskKind: "opencode", prompt: "x", reasoningEffort: "high" }],
+    workflows: [],
+  }), /reasoningEffort outside a Codex task/);
+});
+
+test("runCodexTask captures output, opens interactive ChatGPT tasks, and resets recurring tasks", async () => {
+  const task = createTask("");
+  task.taskKind = "codex";
+  task.agent = "";
+  task.reasoningEffort = "high";
+  task.interactiveTerminal = true;
+  task.scheduleType = "daily";
+  const plugin = createPlugin(task);
+  plugin.settings.logsEnabled = false;
+  plugin.settings.defaultCodexReasoningEffort = "medium";
+  plugin.view = { resetDashboardTaskShift() {}, nudgeDashboardTask() {}, startGradualSink() {} };
+  plugin.emitTaskUpdated = () => {};
+  spawnCalls.length = 0;
+  let callbacks;
+  plugin.createCodexClient = (_cwd, suppliedCallbacks) => {
+    callbacks = suppliedCallbacks;
+    return {
+      async run() {
+        callbacks.onStarted({ threadId: "thread-1", turnId: "turn-1" });
+        callbacks.onOutput("Implemented successfully");
+        return { output: "Implemented successfully", threadId: "thread-1", turnId: "turn-1", status: "completed" };
+      },
+      dispose() {},
+      async interrupt() {},
+      resolveApproval() { return true; },
+    };
+  };
+  let completion;
+  await plugin.runCodexTask(task, async (completed, exitCode) => { completion = { completed, exitCode }; });
+
+  assert.equal(task.status, "pending");
+  assert.equal(task.lastCodexThreadId, "thread-1");
+  assert.equal(task.lastCodexTurnId, "turn-1");
+  assert.match(task.output, /Implemented successfully/);
+  assert.doesNotMatch(task.output, /\[engine: codex\]/);
+  assert.equal(completion.exitCode, 0);
+  assert.ok(spawnCalls.some(([, args]) => args[0] === "app" && args[1] === "C:\\workspace"));
+});
+
+test("runCodexTask writes Codex metadata to history without polluting workflow output", async () => {
+  const vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "autooc-codex-log-"));
+  try {
+    const task = createTask("");
+    task.taskKind = "codex";
+    task.agent = "";
+    task.reasoningEffort = "low";
+    const plugin = createPlugin(task);
+    plugin.app.vault.adapter.basePath = vaultDir;
+    plugin.settings.logsEnabled = true;
+    plugin.settings.maxLogsPerTask = 10;
+    plugin.settings.logRetentionDays = 30;
+    plugin.settings.defaultCodexReasoningEffort = "medium";
+    plugin.view = { resetDashboardTaskShift() {}, nudgeDashboardTask() {}, startGradualSink() {} };
+    plugin.emitTaskUpdated = () => {};
+    plugin.createCodexClient = (_cwd, callbacks) => ({
+      async run() {
+        callbacks.onStarted({ threadId: "thread-log", turnId: "turn-log" });
+        callbacks.onOutput("Workflow-ready output");
+        return { output: "Workflow-ready output", threadId: "thread-log", turnId: "turn-log", status: "completed" };
+      },
+      getIds() { return { threadId: "thread-log", turnId: "turn-log" }; },
+      dispose() {},
+      async interrupt() {},
+      resolveApproval() { return true; },
+    });
+
+    await plugin.runCodexTask(task);
+    const logDir = path.join(vaultDir, ".opencode", "logs", task.id);
+    const logFile = fs.readdirSync(logDir).find((name) => name.endsWith(".log"));
+    const log = fs.readFileSync(path.join(logDir, logFile), "utf8");
+    assert.equal(task.output, "Workflow-ready output");
+    assert.match(log, /\[engine: codex\]/);
+    assert.match(log, /\[thread: thread-log\]/);
+    assert.match(log, /\[started: /);
+    assert.match(log, /Workflow-ready output/);
+  } finally {
+    fs.rmSync(vaultDir, { recursive: true, force: true });
+  }
 });

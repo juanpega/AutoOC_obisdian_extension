@@ -15,6 +15,14 @@ import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
 import * as http from "http";
+import {
+  CodexAppServerClient,
+  type CodexApprovalRequest,
+  type CodexModelOption,
+  openCodexApp,
+  openCodexNewThread,
+  resolveCodexBin,
+} from "./codex-client";
 // The visual builder is shipped as a self-contained HTML file under
 // `util/ui_workflow_builder/index.html`. A pre-build step
 // (scripts/inline-visual-builder.mjs) reads the file at build time and
@@ -429,14 +437,14 @@ function renderCodePreview(parent: HTMLElement, code: string, maxChars = 600): v
   if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
 }
 
-const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode CLI tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode and Codex tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
 Canonical complete export format:
 {
   "autoOCExport": {
-    "schemaVersion": "1.4.0",
+    "schemaVersion": "1.5.0",
     "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
     "pluginVersion": "1.5.11",
     "name": "Package name",
@@ -446,11 +454,11 @@ Canonical complete export format:
   "workflows": []
 }
 
-For complete exports, schemaVersion must be exactly "1.0" or "1.4.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
+For complete exports, schemaVersion must be exactly "1.0", "1.4.0", or "1.5.0". New exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
-1. task: runs an OpenCode task prompt.
+1. task: runs an OpenCode or Codex task prompt. A workflow may mix both engines.
 2. code: runs JavaScript in a sandbox.
 3. delay: pauses the workflow.
 
@@ -459,11 +467,12 @@ A task is reusable and can be referenced by workflows.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" by default, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, or "code" for a reusable JavaScript task.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
-- prompt: required, non-empty complete direct instruction for OpenCode. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
-- interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
+- prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
+- interactiveTerminal: true opens the interactive client for an AI task: OpenCode CLI for taskKind "opencode", or the ChatGPT/Codex app for taskKind "codex".
+- reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -646,7 +655,7 @@ Final output requirements:
 Minimal valid workflow example:
 {
   "autoOCExport": {
-    "schemaVersion": "1.4.0",
+    "schemaVersion": "1.5.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
     "pluginVersion": "1.5.11",
     "name": "Example package",
@@ -765,7 +774,8 @@ async function copyTextToClipboard(text: string): Promise<void> {
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 type IntervalUnit = "seconds" | "minutes" | "hours";
-type TaskKind = "opencode" | "code";
+type TaskKind = "opencode" | "codex" | "code";
+type DefaultAiEngine = "opencode" | "codex";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
 // Workflows are no longer strictly linear — each step declares its outgoing
@@ -848,6 +858,14 @@ interface ScheduledTask {
   codeAllowFiles?: boolean;
   codeAllowTerminal?: boolean;
   interactiveTerminal?: boolean;
+  reasoningEffort?: string;
+  lastCodexThreadId?: string;
+  lastCodexTurnId?: string;
+  pendingCodexApproval?: {
+    requestId: string | number;
+    kind: CodexApprovalRequest["kind"];
+    summary: string;
+  };
 }
 
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
@@ -877,7 +895,11 @@ interface AutoOCSettings {
   tasks: ScheduledTask[];
   workflows: Workflow[];
   opencodePath: string;
+  codexPath: string;
+  defaultAiEngine: DefaultAiEngine;
   defaultModel: string;
+  defaultCodexModel: string;
+  defaultCodexReasoningEffort: string;
   defaultAgent: string;
   workingDirectory: string;
   cmdTemplate: string;
@@ -952,6 +974,7 @@ interface ExportTask {
   codeAllowFiles?: boolean;
   codeAllowTerminal?: boolean;
   interactiveTerminal?: boolean;
+  reasoningEffort?: string;
   scheduleType: ScheduleType;
   scheduleTime: string;
   scheduleDate: string;
@@ -1317,7 +1340,11 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   tasks: [],
   workflows: [],
   opencodePath: "opencode",
+  codexPath: "codex",
+  defaultAiEngine: "opencode",
   defaultModel: "",
+  defaultCodexModel: "",
+  defaultCodexReasoningEffort: "medium",
   defaultAgent: "build",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
@@ -1510,6 +1537,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     codeAllowFiles: task.codeAllowFiles,
     codeAllowTerminal: task.codeAllowTerminal,
     interactiveTerminal: task.interactiveTerminal,
+    reasoningEffort: task.reasoningEffort,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -2287,11 +2315,13 @@ export default class AutoOCPlugin extends Plugin {
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
+  availableCodexModels: CodexModelOption[] = [];
   private visualBuilders = new Set<VisualBuilderModal>();
   private taskUpdatedCallbacks = new Set<(task: ScheduledTask) => void>();
   private workflowUpdatedCallbacks = new Set<(workflow: Workflow) => void>();
   // Map taskId -> child process, so we can kill running tasks
   private runningProcesses = new Map<string, ProcessHandle>();
+  private runningCodexClients = new Map<string, CodexAppServerClient>();
   private dueCheckInProgress = false;
   // Workflows that have been manually stopped; checked in step callbacks to abort chaining
   private stoppingWorkflows = new Set<string>();
@@ -2311,6 +2341,7 @@ export default class AutoOCPlugin extends Plugin {
     setTimeout(() => {
       this.refreshModels();
       this.refreshAgents();
+      void this.refreshCodexModels();
     }, 2000);
 
     this.registerView(VIEW_TYPE, (leaf) => {
@@ -2336,8 +2367,14 @@ export default class AutoOCPlugin extends Plugin {
 
     this.addCommand({
       id: "create-task",
-      name: "Create new OpenCode task",
+      name: "Create new AI task",
       callback: () => new CreateTaskModal(this.app, this).open(),
+    });
+
+    this.addCommand({
+      id: "open-chatgpt-codex",
+      name: "Open ChatGPT / Codex in project folder",
+      callback: () => new CodexAppModal(this.app, this).open(),
     });
 
     this.addCommand({
@@ -2393,6 +2430,8 @@ export default class AutoOCPlugin extends Plugin {
       proc.kill();
     }
     this.runningProcesses.clear();
+    for (const [, client] of this.runningCodexClients) client.dispose();
+    this.runningCodexClients.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
   }
 
@@ -2494,7 +2533,12 @@ export default class AutoOCPlugin extends Plugin {
   private getMcpRawTaskPayloadError(payload: Record<string, unknown>): string | null {
     if ("steps" in payload) return "Raw task payloads must not include workflow steps; use kind \"workflow\".";
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (taskKind !== "opencode" && taskKind !== "code") return "payload.taskKind must be \"opencode\" or \"code\".";
+    if (taskKind !== "opencode" && taskKind !== "codex" && taskKind !== "code") return "payload.taskKind must be \"opencode\", \"codex\", or \"code\".";
+    if (payload.reasoningEffort !== undefined && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
+      return "payload.reasoningEffort is only valid as a non-empty string for taskKind \"codex\".";
+    }
+    if (payload.interactiveTerminal !== undefined && typeof payload.interactiveTerminal !== "boolean") return "payload.interactiveTerminal must be a boolean when provided.";
+    if (taskKind === "code" && payload.interactiveTerminal === true) return "Code tasks cannot use interactiveTerminal.";
     if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw task payloads.";
     if (taskKind === "code") {
       const hasCode = typeof payload.code === "string" && payload.code.trim();
@@ -2625,7 +2669,7 @@ export default class AutoOCPlugin extends Plugin {
     if (!payload || typeof payload !== "object") return null;
     if ("autoOCExport" in payload) return payload as AutoOCExportFile;
     const autoOCExport = {
-      schemaVersion: "1.4.0",
+      schemaVersion: "1.5.0",
       exportedAt: new Date().toISOString(),
       pluginVersion: this.manifest.version,
     };
@@ -2750,6 +2794,43 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
+  async refreshCodexModels(showNotice = false): Promise<void> {
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const cwd = this.settings.workingDirectory || vaultBasePath;
+    const client = new CodexAppServerClient(resolveCodexBin(this.settings.codexPath), cwd);
+    try {
+      const models = await client.listModels();
+      this.availableCodexModels = models;
+      const preferred = models.find((model) => model.isDefault) || models[0];
+      if (!this.settings.defaultCodexModel || !models.some((model) => model.value === this.settings.defaultCodexModel)) {
+        this.settings.defaultCodexModel = preferred?.value || "";
+      }
+      const selected = models.find((model) => model.value === this.settings.defaultCodexModel) || preferred;
+      if (selected?.supportedReasoningEfforts.length && !selected.supportedReasoningEfforts.includes(this.settings.defaultCodexReasoningEffort)) {
+        this.settings.defaultCodexReasoningEffort = selected.defaultReasoningEffort || selected.supportedReasoningEfforts[0];
+      }
+      await this.saveSettings(false);
+      this.view?.refresh();
+      this.syncVisualBuilders();
+      if (showNotice) new Notice(`AutoOC: ${models.length} Codex models loaded.`);
+    } catch (error) {
+      if (showNotice) new Notice(`AutoOC: could not connect to Codex — ${String(error)}`);
+    } finally {
+      client.dispose();
+    }
+  }
+
+  getEffectiveCodexModel(model?: string): string {
+    return model || this.settings.defaultCodexModel || this.availableCodexModels.find((entry) => entry.isDefault)?.value || this.availableCodexModels[0]?.value || "";
+  }
+
+  getCodexReasoningEfforts(model?: string): string[] {
+    const selected = this.availableCodexModels.find((entry) => entry.value === (model || this.settings.defaultCodexModel));
+    return selected?.supportedReasoningEfforts.length
+      ? selected.supportedReasoningEfforts
+      : ["minimal", "low", "medium", "high", "xhigh"];
+  }
+
   getAgentsForDirectory(cwd?: string): { value: string; label: string }[] {
     return fetchAgentsSync(this.settings.opencodePath || "opencode", cwd);
   }
@@ -2859,6 +2940,10 @@ export default class AutoOCPlugin extends Plugin {
         task.output = `${task.output || ""}\n[stale running state cleared on plugin load]`;
         changed = true;
       }
+      if (task.pendingCodexApproval) {
+        delete task.pendingCodexApproval;
+        changed = true;
+      }
       if (!Array.isArray(task.scheduleMonthDays)) {
         task.scheduleMonthDays = [];
         changed = true;
@@ -2929,6 +3014,10 @@ export default class AutoOCPlugin extends Plugin {
     }
     if (!this.settings.defaultModel) {
       this.settings.defaultModel = this.availableModels[0]?.value ?? "";
+      changed = true;
+    }
+    if (this.settings.defaultAiEngine !== "codex" && this.settings.defaultAiEngine !== "opencode") {
+      this.settings.defaultAiEngine = "opencode";
       changed = true;
     }
     if (this.settings.taskTimeoutSeconds === undefined || (this.settings.taskTimeoutSeconds > 0 && this.settings.taskTimeoutSeconds < 1800)) {
@@ -3294,6 +3383,11 @@ export default class AutoOCPlugin extends Plugin {
 
     if ((effectiveTask.taskKind || "opencode") === "code") {
       await this.runCodeTask(effectiveTask, onComplete);
+      return;
+    }
+
+    if (effectiveTask.taskKind === "codex") {
+      void this.runCodexTask(effectiveTask, onComplete);
       return;
     }
 
@@ -3731,6 +3825,169 @@ export default class AutoOCPlugin extends Plugin {
     }, 3000);
   }
 
+  async runCodexTask(
+    task: ScheduledTask,
+    onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+  ): Promise<void> {
+    const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
+    if (idx === -1) return;
+    const current = this.settings.tasks[idx];
+    if (!task.prompt?.trim()) {
+      current.status = "failed";
+      current.lastRun = new Date().toISOString();
+      current.output = "[AutoOC] Codex task not launched: prompt is empty.";
+      await this.saveSettings();
+      if (onComplete) await onComplete(current, -1);
+      return;
+    }
+
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const taskCwd = task.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const model = this.getEffectiveCodexModel(task.model);
+    const reasoningEffort = task.reasoningEffort || this.settings.defaultCodexReasoningEffort || "medium";
+    const startedAt = new Date().toISOString();
+    let cancelled = false;
+    let saveTimer: ReturnType<typeof setTimeout> | null = null;
+    let codexLogOutput = "";
+
+    current.status = "running";
+    current.lastRun = startedAt;
+    current.output = "[starting Codex task…]\n";
+    delete current.pendingCodexApproval;
+    this.view?.resetDashboardTaskShift(task.id);
+    await this.saveSettings();
+    new Notice(`AutoOC: running Codex task "${task.name}"…`);
+
+    const scheduleSave = () => {
+      if (saveTimer) return;
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        void this.saveSettings(false);
+      }, 750);
+    };
+    const client = this.createCodexClient(taskCwd, {
+      onStarted: ({ threadId, turnId }) => {
+        current.lastCodexThreadId = threadId;
+        current.lastCodexTurnId = turnId;
+        if (task.interactiveTerminal) {
+          const bin = resolveCodexBin(this.settings.codexPath);
+          openCodexApp(bin, taskCwd, (error) => {
+            new Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
+          });
+          new Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
+        }
+        scheduleSave();
+      },
+      onOutput: (output) => {
+        if (cancelled || current.status !== "running") return;
+        current.output = this.redactSecrets(output || "[Codex is working…]");
+        this.view?.nudgeDashboardTask(task.id, "up");
+        this.emitTaskUpdated(current);
+        scheduleSave();
+      },
+      onApproval: (approval) => {
+        if (cancelled || current.status !== "running") return;
+        current.pendingCodexApproval = {
+          requestId: approval.requestId,
+          kind: approval.kind,
+          summary: approval.summary,
+        };
+        current.output += `${current.output ? "\n" : ""}[waiting for approval: ${approval.summary}]`;
+        void this.saveSettings(false);
+        this.emitTaskUpdated(current);
+        new Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
+      },
+    });
+    this.runningCodexClients.set(task.id, client);
+    this.runningProcesses.set(task.id, {
+      kill: () => {
+        cancelled = true;
+        if (saveTimer) clearTimeout(saveTimer);
+        void client.interrupt();
+        this.runningCodexClients.delete(task.id);
+        this.runningProcesses.delete(task.id);
+      },
+    });
+
+    let exitCode = -1;
+    try {
+      const result = await client.run(task.prompt, model || undefined, reasoningEffort || undefined);
+      if (cancelled || current.status !== "running") return;
+      current.lastCodexThreadId = result.threadId;
+      current.lastCodexTurnId = result.turnId;
+      delete current.pendingCodexApproval;
+      const successful = result.status === "completed";
+      exitCode = successful ? 0 : -1;
+      const finalOutput = this.redactSecrets(result.output || result.error || "(no output)");
+      const metadata = [
+        `[engine: codex]`,
+        `[model: ${model || "default"}]`,
+        `[reasoning: ${reasoningEffort || "default"}]`,
+        `[thread: ${result.threadId}]`,
+        `[turn: ${result.turnId}]`,
+      ].join("\n");
+      current.output = finalOutput;
+      if (successful) {
+        current.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
+        new Notice(`AutoOC: ✅ Codex task "${task.name}" completed.`);
+      } else {
+        current.status = "failed";
+        current.output += `\n[Codex status: ${result.status}]`;
+        this.view?.startGradualSink(task.id);
+        new Notice(`AutoOC: ❌ Codex task "${task.name}" failed.`);
+      }
+      codexLogOutput = `${metadata}\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${current.output}`;
+    } catch (error) {
+      if (cancelled || current.output.includes("[task stopped manually]")) return;
+      current.status = "failed";
+      delete current.pendingCodexApproval;
+      current.output = `${current.output || ""}\n[Codex error: ${String(error)}]`.trim();
+      const ids = client.getIds();
+      codexLogOutput = `[engine: codex]\n[model: ${model || "default"}]\n[reasoning: ${reasoningEffort || "default"}]\n[thread: ${ids.threadId || "unavailable"}]\n[turn: ${ids.turnId || "unavailable"}]\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${current.output}`;
+      this.view?.startGradualSink(task.id);
+      new Notice(`AutoOC: ❌ Codex task "${task.name}" failed.`);
+    } finally {
+      if (saveTimer) clearTimeout(saveTimer);
+      this.runningCodexClients.delete(task.id);
+      this.runningProcesses.delete(task.id);
+      client.dispose();
+    }
+
+    if (this.settings.logsEnabled) {
+      saveLogToFile(vaultBasePath, task.id, codexLogOutput || current.output);
+      cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+      cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+    }
+    await this.saveSettings();
+    this.emitTaskUpdated(current);
+    if (onComplete) await onComplete(current, exitCode);
+  }
+
+  createCodexClient(
+    cwd: string,
+    callbacks: ConstructorParameters<typeof CodexAppServerClient>[2],
+  ): CodexAppServerClient {
+    return new CodexAppServerClient(resolveCodexBin(this.settings.codexPath), cwd, callbacks);
+  }
+
+  async resolveCodexApproval(taskId: string, approved: boolean): Promise<void> {
+    const task = this.settings.tasks.find((candidate) => candidate.id === taskId);
+    const client = this.runningCodexClients.get(taskId);
+    const approval = task?.pendingCodexApproval;
+    if (!task || !client || !approval) {
+      new Notice("AutoOC: this Codex approval is no longer active.");
+      return;
+    }
+    if (!client.resolveApproval(approval.requestId, approved)) {
+      new Notice("AutoOC: could not answer the Codex approval.");
+      return;
+    }
+    task.output += `\n[approval ${approved ? "accepted" : "rejected"}]`;
+    delete task.pendingCodexApproval;
+    await this.saveSettings(false);
+    this.emitTaskUpdated(task);
+  }
+
   async runCodeTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
@@ -3943,6 +4200,9 @@ export default class AutoOCPlugin extends Plugin {
       lastRun: "",
       output: "",
       createdAt: new Date().toISOString(),
+      lastCodexThreadId: undefined,
+      lastCodexTurnId: undefined,
+      pendingCodexApproval: undefined,
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
@@ -4040,7 +4300,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const data: AutoOCExportFile = {
       autoOCExport: {
-        schemaVersion: "1.4.0",
+        schemaVersion: "1.5.0",
         exportedAt: new Date().toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -4124,9 +4384,9 @@ export default class AutoOCPlugin extends Plugin {
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
-    // Accept both 1.0 (legacy) and 1.4.x (current) schema versions.
+    // Accept legacy schemas and the Codex-aware 1.5 schema.
     const sv = data.autoOCExport.schemaVersion;
-    if (sv !== "1.0" && sv !== "1.4.0") {
+    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0") {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
@@ -4135,14 +4395,24 @@ export default class AutoOCPlugin extends Plugin {
 
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
+      if (importedTaskKind !== "opencode" && importedTaskKind !== "codex" && importedTaskKind !== "code") {
+        throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
+      }
+      if (et.reasoningEffort !== undefined && (importedTaskKind !== "codex" || typeof et.reasoningEffort !== "string" || !et.reasoningEffort.trim())) {
+        throw new Error(`Task "${et.name}" has reasoningEffort outside a Codex task.`);
+      }
+      if (importedTaskKind === "code" && et.interactiveTerminal === true) {
+        throw new Error(`Task "${et.name}" cannot combine Code with interactiveTerminal.`);
+      }
       const task: ScheduledTask = {
         id: generateId(),
         taskKind: importedTaskKind,
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
         prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
-        model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
-        agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
+        model: importedTaskKind === "code" ? "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        agent: importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
+        reasoningEffort: importedTaskKind === "codex" ? (et.reasoningEffort || this.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
         forceModel: importedTaskKind === "opencode" ? (et.forceModel ?? false) : false,
         scheduleType: et.scheduleType ?? "manual",
@@ -4157,9 +4427,11 @@ export default class AutoOCPlugin extends Plugin {
         output: "",
         createdAt: new Date().toISOString(),
         workingDirectory: et.workingDirectory,
-        branch: importedTaskKind === "code" ? "" : et.branch,
-        createBranch: importedTaskKind === "code" ? false : et.createBranch,
-        interactiveTerminal: importedTaskKind === "opencode" ? (et.interactiveTerminal ?? this.settings.defaultInteractiveTerminal) : undefined,
+        branch: importedTaskKind === "opencode" ? et.branch : "",
+        createBranch: importedTaskKind === "opencode" ? et.createBranch : false,
+        interactiveTerminal: importedTaskKind === "code"
+          ? undefined
+          : (et.interactiveTerminal ?? (importedTaskKind === "opencode" ? this.settings.defaultInteractiveTerminal : false)),
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -5178,6 +5450,10 @@ class AutoOCView extends ItemView {
     new OpenCodeCliModal(this.app, this.plugin).open();
   }
 
+  private openCodex() {
+    new CodexAppModal(this.app, this.plugin).open();
+  }
+
   private openTaskInList(task: ScheduledTask) {
     this.currentTab = "tasks";
     this.filterText = "";
@@ -5268,6 +5544,13 @@ class AutoOCView extends ItemView {
       cls: "auto-oc-tab-btn",
     });
     btnCli.onclick = () => this.openCli();
+
+    const btnCodex = navRow.createEl("button", {
+      text: "✦ ChatGPT / Codex",
+      cls: "auto-oc-tab-btn",
+    });
+    btnCodex.title = "Open ChatGPT/Codex in the project or a selected folder";
+    btnCodex.onclick = () => this.openCodex();
 
     // Row 2: creation button (left) + spacer + import/export (right).
     // The creation button is contextual to the active tab.
@@ -6308,9 +6591,17 @@ class AutoOCView extends ItemView {
     // Summary Bar (Always Visible)
     const summary = card.createDiv("auto-oc-card-summary");
     const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
+    summary.createEl("span", {
+      text: (task.taskKind || "opencode") === "code"
+        ? "Code"
+        : task.taskKind === "codex"
+          ? (task.interactiveTerminal ? "ChatGPT / Codex" : "Codex")
+          : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
+      cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`,
+    });
     
     const badge = summary.createEl("span", {
-      text: task.status,
+      text: task.pendingCodexApproval ? "waiting approval" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -6329,6 +6620,14 @@ class AutoOCView extends ItemView {
         btnQuickStop.disabled = true;
         await this.plugin.killTask(task.id);
       };
+    }
+    if (task.pendingCodexApproval) {
+      const btnApprove = quickActions.createEl("button", { text: "✓", cls: "auto-oc-btn-run" });
+      btnApprove.title = task.pendingCodexApproval.summary;
+      btnApprove.onclick = async (e) => { e.stopPropagation(); await this.plugin.resolveCodexApproval(task.id, true); };
+      const btnReject = quickActions.createEl("button", { text: "✕", cls: "auto-oc-btn-stop" });
+      btnReject.title = `Reject: ${task.pendingCodexApproval.summary}`;
+      btnReject.onclick = async (e) => { e.stopPropagation(); await this.plugin.resolveCodexApproval(task.id, false); };
     }
     const btnQuickLog = quickActions.createEl("button", { text: "📄", cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output" });
     btnQuickLog.title = task.status === "running" ? "Live log" : "Log";
@@ -6365,12 +6664,19 @@ class AutoOCView extends ItemView {
     details.style.display = isExpanded ? "block" : "none";
 
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
+    const modelLabel = task.taskKind === "codex"
+      ? this.plugin.availableCodexModels.find((m) => m.value === task.model)?.label ?? task.model ?? "Automatic"
+      : this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🗂 ${task.area?.trim() || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
+    } else if (task.taskKind === "codex") {
+      meta.createEl("span", { text: `✦ Codex · ${modelLabel || "Automatic"}` });
+      if (task.interactiveTerminal) meta.createEl("span", { text: "ChatGPT app task" });
+      meta.createEl("span", { text: `🧠 ${task.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort}` });
     } else {
       if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
+      else meta.createEl("span", { text: "OpenCode" });
       meta.createEl("span", { text: `🤖 ${modelLabel}` });
       meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -6436,6 +6742,14 @@ class AutoOCView extends ItemView {
         btnStop.textContent = "Stopping…";
         await this.plugin.killTask(task.id);
       };
+    }
+    if (task.pendingCodexApproval) {
+      const approval = actions.createDiv("auto-oc-codex-approval");
+      approval.createEl("span", { text: `Approval needed: ${task.pendingCodexApproval.summary}` });
+      const approve = approval.createEl("button", { text: "✓ Approve", cls: "auto-oc-btn-run" });
+      approve.onclick = async (e) => { e.stopPropagation(); await this.plugin.resolveCodexApproval(task.id, true); };
+      const reject = approval.createEl("button", { text: "✕ Reject", cls: "auto-oc-btn-stop" });
+      reject.onclick = async (e) => { e.stopPropagation(); await this.plugin.resolveCodexApproval(task.id, false); };
     }
 
     const btnLog = actions.createEl("button", {
@@ -7106,6 +7420,8 @@ class VisualBuilderModal extends Modal {
         this.plugin.refreshModels();
         new Notice("AutoOC: models updated.");
         this.sendMeta();
+      } else if (data.type === "refresh-codex-models") {
+        void this.plugin.refreshCodexModels(true).then(() => this.sendMeta());
       } else if (data.type === "log") {
         // eslint-disable-next-line no-console
         console.log("[VisualBuilder]", data.message);
@@ -7140,6 +7456,10 @@ class VisualBuilderModal extends Modal {
         meta: {
           availableAgents: this.plugin.availableAgents,
           availableModels: this.plugin.availableModels,
+          availableCodexModels: this.plugin.availableCodexModels,
+          defaultAiEngine: this.plugin.settings.defaultAiEngine,
+          defaultCodexModel: this.plugin.settings.defaultCodexModel,
+          defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
           pluginVersion: this.plugin.manifest.version,
         },
       },
@@ -7159,6 +7479,10 @@ class VisualBuilderModal extends Modal {
       meta: {
         availableAgents: this.plugin.availableAgents,
         availableModels: this.plugin.availableModels,
+        availableCodexModels: this.plugin.availableCodexModels,
+        defaultAiEngine: this.plugin.settings.defaultAiEngine,
+        defaultCodexModel: this.plugin.settings.defaultCodexModel,
+        defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
         pluginVersion: this.plugin.manifest.version,
       },
     };
@@ -7194,6 +7518,7 @@ class VisualBuilderModal extends Modal {
     const newTasks: ScheduledTask[] = state.tasks.map((t: any) => {
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = (existing ? t.id : t.id || generateId());
+      const taskKind = (t.taskKind || existing?.taskKind || "opencode") as TaskKind;
       // Editing should never launch a task by making an already-completed
       // one-shot item pending again. Preserve runtime state; Play or the next
       // real schedule tick is responsible for execution.
@@ -7202,14 +7527,15 @@ class VisualBuilderModal extends Modal {
       const output = existing?.output || "";
       return {
         id,
-        taskKind: t.taskKind || existing?.taskKind || "opencode",
+        taskKind,
         name: t.name || "Unnamed",
         area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
         prompt: t.prompt || "",
-        model: t.model || this.plugin.getEffectiveDefaultModel(),
-        agent: t.agent || this.plugin.getEffectiveAgent(),
-        useRalphLoop: t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false),
-        forceModel: t.forceModel !== undefined ? !!t.forceModel : (existing?.forceModel ?? false),
+        model: t.model !== undefined ? t.model : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
+        agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
+        reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
+        useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
+        forceModel: taskKind === "opencode" && (t.forceModel !== undefined ? !!t.forceModel : (existing?.forceModel ?? false)),
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
@@ -7220,6 +7546,9 @@ class VisualBuilderModal extends Modal {
         status,
         lastRun,
         output,
+        lastCodexThreadId: existing?.lastCodexThreadId,
+        lastCodexTurnId: existing?.lastCodexTurnId,
+        pendingCodexApproval: existing?.pendingCodexApproval,
         createdAt: existing?.createdAt || t.createdAt || new Date().toISOString(),
         // Preserve classic-only fields when older Visual Builder payloads do
         // not send them.
@@ -7574,6 +7903,7 @@ class CreateTaskModal extends Modal {
   private plugin: AutoOCPlugin;
   private editTask?: ScheduledTask;
   private draft: Partial<ScheduledTask>;
+  private focusNameOnNextOpen = true;
 
   constructor(app: App, plugin: AutoOCPlugin, editTask?: ScheduledTask) {
     super(app);
@@ -7583,13 +7913,16 @@ class CreateTaskModal extends Modal {
       ? { ...editTask }
       : {
             name: "",
-            taskKind: "opencode",
+            taskKind: plugin.settings.defaultAiEngine,
             prompt: "",
-            model: plugin.getEffectiveDefaultModel(),
+            model: plugin.settings.defaultAiEngine === "codex"
+              ? plugin.getEffectiveCodexModel()
+              : plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
+            reasoningEffort: plugin.settings.defaultCodexReasoningEffort,
             useRalphLoop: false,
             forceModel: false,
-            interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
+            interactiveTerminal: plugin.settings.defaultAiEngine === "opencode" && plugin.settings.defaultInteractiveTerminal,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
             scheduleDate: todayString(),
@@ -7606,26 +7939,40 @@ class CreateTaskModal extends Modal {
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 900);
     preventBackdropClose(this);
+    const shouldFocusName = this.focusNameOnNextOpen;
+    this.focusNameOnNextOpen = false;
 
     // Header with X button
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = (this.draft.taskKind || "opencode") as TaskKind;
-    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind;
+    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal
+      ? "cli"
+      : taskKind === "codex" && this.draft.interactiveTerminal
+        ? "codex-app"
+        : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task",
     });
 
     new Setting(contentEl)
       .setName("Task type")
-      .setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.")
+      .setDesc("Choose OpenCode, Codex in ChatGPT, an interactive OpenCode CLI, or local JavaScript.")
       .addDropdown((dd) => {
         dd.addOption("opencode", "OpenCode task");
+        dd.addOption("codex", "Codex task");
+        dd.addOption("codex-app", "ChatGPT / Codex task");
         dd.addOption("code", "Code task");
-        dd.addOption("cli", "CLI task");
+        dd.addOption("cli", "OpenCode CLI task");
         dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v === "code" ? "code" : "opencode";
-          this.draft.interactiveTerminal = v === "cli";
+          this.draft.taskKind = v === "code" ? "code" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
+          this.draft.interactiveTerminal = v === "cli" || v === "codex-app";
+          if (v === "codex" || v === "codex-app") {
+            this.draft.model = "";
+            this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
+          } else if (v === "opencode" || v === "cli") {
+            this.draft.model = this.plugin.getEffectiveDefaultModel();
+          }
           if (v === "code" && !this.draft.code) {
             this.draft.code = "// Set output to pass data forward\noutput = input;";
           }
@@ -7641,7 +7988,7 @@ class CreateTaskModal extends Modal {
         text
           .setValue(this.draft.name ?? "")
           .onChange((v) => (this.draft.name = v));
-        window.setTimeout(() => text.inputEl.focus(), 50);
+        if (shouldFocusName) window.setTimeout(() => text.inputEl.focus(), 50);
       });
 
     new Setting(contentEl)
@@ -7687,10 +8034,10 @@ class CreateTaskModal extends Modal {
       promptNotice.style.display = "none";
       new Setting(contentEl)
         .setName("Prompt / Goal")
-        .setDesc("Text to send to OpenCode")
+        .setDesc(`Text to send to ${taskKind === "codex" ? "Codex" : "OpenCode"}`)
         .addTextArea((ta) => {
           const updatePromptNotice = (value: string) => {
-            if (this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
+            if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
               ta.inputEl.addClass("auto-oc-prompt-too-long");
               promptNotice.setText(
                 `CLI prompts over ${SAFE_CLI_PROMPT_LENGTH} characters are saved to a temporary workspace file, the OpenCode TUI is instructed to read it, and the file is deleted after 1 minute.`,
@@ -7714,7 +8061,7 @@ class CreateTaskModal extends Modal {
         });
     }
 
-    contentEl.createDiv("auto-oc-modal-section-title").setText("📂 Workspace & Git");
+    contentEl.createDiv("auto-oc-modal-section-title").setText(taskKind === "opencode" ? "📂 Workspace & Git" : "📂 Workspace");
 
     new Setting(contentEl)
       .setName("Project Path")
@@ -7854,7 +8201,39 @@ class CreateTaskModal extends Modal {
             }
           })
         );
+    } else if (taskKind === "codex") {
+      new Setting(contentEl)
+        .setName("Codex model")
+        .setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.")
+        .addDropdown((dd) => {
+          dd.addOption("", "Automatic");
+          this.plugin.availableCodexModels.forEach((entry) => dd.addOption(entry.value, entry.label));
+          const current = this.draft.model ?? this.plugin.settings.defaultCodexModel ?? "";
+          if (current && !this.plugin.availableCodexModels.some((entry) => entry.value === current)) dd.addOption(current, current);
+          dd.setValue(current);
+          dd.onChange((value) => {
+            this.draft.model = value;
+            const efforts = this.plugin.getCodexReasoningEfforts(value);
+            if (!efforts.includes(this.draft.reasoningEffort || "")) this.draft.reasoningEffort = efforts[0];
+            this.onOpen();
+          });
+        })
+        .addButton((btn) => btn.setButtonText("🔄 Refresh").onClick(async () => {
+          await this.plugin.refreshCodexModels(true);
+          this.onOpen();
+        }));
 
+      new Setting(contentEl)
+        .setName("Reasoning effort")
+        .setDesc("How much reasoning Codex should use for this task.")
+        .addDropdown((dd) => {
+          const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
+          efforts.forEach((effort) => dd.addOption(effort, effort));
+          const current = this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
+          if (current && !efforts.includes(current)) dd.addOption(current, current);
+          dd.setValue(current || "");
+          dd.onChange((value) => (this.draft.reasoningEffort = value));
+        });
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new Setting(contentEl)
@@ -8002,7 +8381,7 @@ class CreateTaskModal extends Modal {
             return;
           }
           const savingTaskKind = (this.draft.taskKind || "opencode") as TaskKind;
-          if (savingTaskKind === "opencode" && !this.draft.prompt?.trim()) {
+          if (savingTaskKind !== "code" && !this.draft.prompt?.trim()) {
             new Notice("Prompt is required.");
             return;
           }
@@ -8051,7 +8430,8 @@ class CreateTaskModal extends Modal {
                 ...(this.draft as ScheduledTask),
                 prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
                 taskKind: savingTaskKind,
-                interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : undefined,
+                interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
+                reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : undefined,
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,
@@ -8067,7 +8447,8 @@ class CreateTaskModal extends Modal {
               prompt: savingTaskKind === "code" ? (this.draft.code || "") : this.draft.prompt!,
               model: savingTaskKind === "code" ? "" : this.draft.model!,
               area: this.draft.area ?? "",
-              agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
+              agent: savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
+              reasoningEffort: savingTaskKind === "codex" ? (this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
               forceModel: savingTaskKind === "opencode" ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
@@ -8084,7 +8465,7 @@ class CreateTaskModal extends Modal {
               workingDirectory: this.draft.workingDirectory,
               branch: savingTaskKind === "opencode" ? this.draft.branch : "",
               createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
-              interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : undefined,
+              interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
               code: savingTaskKind === "code" ? this.draft.code : undefined,
               codeLang: savingTaskKind === "code" ? "javascript" : undefined,
               codeInputVar: savingTaskKind === "code" ? (this.draft.codeInputVar || "input") : undefined,
@@ -9663,7 +10044,7 @@ class ImportModal extends Modal {
       return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
     }
     const sv = data.autoOCExport.schemaVersion;
-    const SUPPORTED = ["1.0", "1.4.0"];
+    const SUPPORTED = ["1.0", "1.4.0", "1.5.0"];
     if (!sv) {
       errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
     } else if (!SUPPORTED.includes(sv)) {
@@ -9700,6 +10081,18 @@ class ImportModal extends Modal {
         }
         if (typeof t.prompt !== "string" || !t.prompt.trim()) {
           errors.push(where + ".prompt is missing or empty.");
+        }
+        const taskKind = t.taskKind || "opencode";
+        if (!["opencode", "codex", "code"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, codex, or code.");
+        }
+        if (t.reasoningEffort !== undefined && (taskKind !== "codex" || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
+          errors.push(where + ".reasoningEffort is only valid for Codex tasks.");
+        }
+        if (t.interactiveTerminal !== undefined && typeof t.interactiveTerminal !== "boolean") {
+          errors.push(where + ".interactiveTerminal must be a boolean.");
+        } else if (taskKind === "code" && t.interactiveTerminal === true) {
+          errors.push(where + ": Code tasks cannot set interactiveTerminal.");
         }
         const validSchedules = ["manual", "once", "daily", "weekly", "monthly", "interval"];
         if (t.scheduleType && !validSchedules.includes(t.scheduleType)) {
@@ -10372,6 +10765,81 @@ class OpenCodeCliModal extends Modal {
   }
 }
 
+// ─── ChatGPT / Codex Launcher Modal ─────────────────────────────────────────
+
+class CodexAppModal extends Modal {
+  constructor(app: App, private readonly plugin: AutoOCPlugin) {
+    super(app);
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-cli-modal");
+    setupModalX(this);
+    contentEl.createEl("h3", { text: "ChatGPT / Codex" });
+    contentEl.createEl("p", {
+      text: "Choose the project folder to open in the ChatGPT Codex workspace.",
+      cls: "setting-item-description",
+    });
+    const vaultCwd = (this.app.vault.adapter as any).basePath || ".";
+    const defaultCwd = this.plugin.settings.workingDirectory || vaultCwd;
+    const buttons = contentEl.createDiv("auto-oc-cli-modal-buttons");
+    const openDefault = buttons.createEl("button", { text: "📂 Open project / vault", cls: "auto-oc-btn-primary" });
+    openDefault.onclick = () => this.launch(defaultCwd);
+    contentEl.createEl("p", { text: defaultCwd, cls: "setting-item-description auto-oc-cli-path" });
+    const choose = buttons.createEl("button", { text: "🗀 Choose folder…", cls: "auto-oc-btn-secondary" });
+    choose.onclick = async () => {
+      const cwd = await this.chooseFolder();
+      if (cwd) this.launch(cwd);
+    };
+    const cancel = buttons.createEl("button", { text: "Cancel", cls: "auto-oc-btn-secondary" });
+    cancel.onclick = () => this.close();
+  }
+
+  private async launch(cwd: string): Promise<void> {
+    try {
+      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error(`Folder does not exist: ${cwd}`);
+      openCodexNewThread(cwd, (error) => void this.fallbackOpen(error, cwd));
+      new Notice(`AutoOC: opening a new ChatGPT / Codex conversation in ${cwd}`);
+      this.close();
+    } catch (error) {
+      void this.fallbackOpen(error as Error, cwd);
+    }
+  }
+
+  private async fallbackOpen(error: Error, cwd: string): Promise<void> {
+    try { await copyTextToClipboard(cwd); } catch { /* clipboard is best effort */ }
+    if (isWindows()) {
+      try {
+        const script = "$app = Get-StartApps | Where-Object { $_.Name -match 'ChatGPT|Codex' } | Select-Object -First 1; if ($app) { Start-Process ('shell:AppsFolder\\' + $app.AppID) } else { exit 1 }";
+        const launcher = spawn("powershell.exe", ["-NoLogo", "-NonInteractive", "-Command", script], { detached: true, stdio: "ignore", windowsHide: true });
+        launcher.unref();
+      } catch { /* notice below remains actionable */ }
+    }
+    new Notice(`AutoOC: could not open the selected folder directly (${String(error)}). ChatGPT was opened when possible and the path was copied: ${cwd}`, 10_000);
+    this.close();
+  }
+
+  private async chooseFolder(): Promise<string | null> {
+    try {
+      // @ts-ignore — Electron API available on desktop Obsidian
+      const electron = window.require("electron");
+      const result = await electron.remote.dialog.showOpenDialog({
+        properties: ["openDirectory"],
+        title: "Select folder for ChatGPT / Codex",
+      });
+      return !result.canceled && result.filePaths.length > 0 ? result.filePaths[0] : null;
+    } catch (error) {
+      new Notice(`AutoOC: folder picker failed — ${String(error)}`);
+      return null;
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
 // ─── Diagnostic Modal ─────────────────────────────────────────────────────────
 
 class DiagnosticModal extends Modal {
@@ -10554,6 +11022,76 @@ class AutoOCSettingTab extends PluginSettingTab {
         }));
 
     new Setting(containerEl)
+      .setName("Default AI engine")
+      .setDesc("Engine selected for new AI tasks.")
+      .addDropdown((dropdown) => dropdown
+        .addOption("opencode", "OpenCode")
+        .addOption("codex", "Codex / ChatGPT")
+        .setValue(this.plugin.settings.defaultAiEngine)
+        .onChange(async (value) => {
+          if (value === "opencode" || value === "codex") {
+            this.plugin.settings.defaultAiEngine = value;
+            await this.plugin.saveSettings();
+          }
+        }));
+
+    containerEl.createEl("h3", { text: "Codex / ChatGPT" });
+    new Setting(containerEl)
+      .setName("Codex executable path")
+      .setDesc(`Absolute path or \"codex\" for auto-detection. Detected: ${resolveCodexBin(this.plugin.settings.codexPath)}`)
+      .addText((text) => text
+        .setPlaceholder("codex")
+        .setValue(this.plugin.settings.codexPath)
+        .onChange(async (value) => {
+          this.plugin.settings.codexPath = value.trim() || "codex";
+          await this.plugin.saveSettings();
+        }))
+      .addButton((button) => button.setButtonText("🔍 Detect & test").onClick(async () => {
+        this.plugin.settings.codexPath = resolveCodexBin("codex");
+        await this.plugin.saveSettings(false);
+        await this.plugin.refreshCodexModels(true);
+        this.display();
+      }));
+
+    new Setting(containerEl)
+      .setName("Default Codex model")
+      .setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`)
+      .addDropdown((dropdown) => {
+        dropdown.addOption("", "Automatic");
+        this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
+        const current = this.plugin.settings.defaultCodexModel || "";
+        if (current && !this.plugin.availableCodexModels.some((model) => model.value === current)) dropdown.addOption(current, current);
+        dropdown.setValue(current).onChange(async (value) => {
+          this.plugin.settings.defaultCodexModel = value;
+          const efforts = this.plugin.getCodexReasoningEfforts(value);
+          if (!efforts.includes(this.plugin.settings.defaultCodexReasoningEffort)) {
+            this.plugin.settings.defaultCodexReasoningEffort = efforts[0];
+          }
+          await this.plugin.saveSettings();
+          this.display();
+        });
+      })
+      .addButton((button) => button.setButtonText("🔄 Reload").onClick(async () => {
+        await this.plugin.refreshCodexModels(true);
+        this.display();
+      }));
+
+    new Setting(containerEl)
+      .setName("Default Codex reasoning")
+      .addDropdown((dropdown) => {
+        const efforts = this.plugin.getCodexReasoningEfforts();
+        efforts.forEach((effort) => dropdown.addOption(effort, effort));
+        const current = this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
+        if (current && !efforts.includes(current)) dropdown.addOption(current, current);
+        dropdown.setValue(current || "").onChange(async (value) => {
+          this.plugin.settings.defaultCodexReasoningEffort = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    containerEl.createEl("h3", { text: "OpenCode" });
+
+    new Setting(containerEl)
       .setName("OpenCode CLI Path")
       .setDesc(
         `Absolute path to executable. Empty = auto-detect.\nDetected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
@@ -10593,7 +11131,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Working Directory")
       .setDesc(
-        "Directory from which to launch OpenCode (empty = vault's current directory)"
+        "Directory from which to launch OpenCode or Codex (empty = vault's current directory)"
       )
       .addText((text) =>
         text
@@ -10809,7 +11347,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     });
 
     new Setting(containerEl)
-      .setName("Default Model")
+      .setName("Default OpenCode Model")
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));

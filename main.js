@@ -589,7 +589,7 @@ var init_visualBuilderHtml_generated = __esm({
 
   // \u2500\u2500 State \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
   const state = { tasks: [], workflows: [] };
-  const meta = { availableAgents: [], availableModels: [] };
+  const meta = { availableAgents: [], availableModels: [], availableCodexModels: [], defaultAiEngine: "opencode", defaultCodexModel: "", defaultCodexReasoningEffort: "medium" };
   let ui = {
     activeWorkflowId: null,
     selection: { type: null, ref: null }, // { type: "task"|"step"|"edge"|"workflow", ref }
@@ -644,10 +644,12 @@ var init_visualBuilderHtml_generated = __esm({
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   function defaultTask() {
-    const defaultModel = optionValue(meta.availableModels[0]) || "";
+    const taskKind = meta.defaultAiEngine === "codex" ? "codex" : "opencode";
+    const defaultModel = taskKind === "codex" ? (meta.defaultCodexModel || optionValue(meta.availableCodexModels[0]) || "") : (optionValue(meta.availableModels[0]) || "");
     const defaultAgent = optionValue(meta.availableAgents[0]) || "build";
     return {
-      id: uid(), name: "New task", prompt: "", model: defaultModel, agent: defaultAgent,
+      id: uid(), taskKind, name: "New task", prompt: "", model: defaultModel, agent: defaultAgent,
+      reasoningEffort: meta.defaultCodexReasoningEffort || "medium",
       useRalphLoop: false, forceModel: false, scheduleType: "manual", scheduleTime: "09:00",
       scheduleDate: "", scheduleDays: [], scheduleMonthDays: [],
       scheduleIntervalValue: 10, scheduleIntervalUnit: "minutes",
@@ -728,6 +730,10 @@ var init_visualBuilderHtml_generated = __esm({
         state.workflows = (data.state.workflows || []).map(migrateWorkflow);
         meta.availableAgents = (data.state.meta && data.state.meta.availableAgents) || [];
         meta.availableModels = (data.state.meta && data.state.meta.availableModels) || [];
+        meta.availableCodexModels = (data.state.meta && data.state.meta.availableCodexModels) || [];
+        meta.defaultAiEngine = (data.state.meta && data.state.meta.defaultAiEngine) || "opencode";
+        meta.defaultCodexModel = (data.state.meta && data.state.meta.defaultCodexModel) || "";
+        meta.defaultCodexReasoningEffort = (data.state.meta && data.state.meta.defaultCodexReasoningEffort) || "medium";
         // Ensure all steps have an id and a position.
         for (const w of state.workflows) {
           for (let i = 0; i < w.steps.length; i++) {
@@ -752,6 +758,10 @@ var init_visualBuilderHtml_generated = __esm({
       } else if (data.type === "meta") {
         meta.availableAgents = (data.meta && data.meta.availableAgents) || [];
         meta.availableModels = (data.meta && data.meta.availableModels) || [];
+        meta.availableCodexModels = (data.meta && data.meta.availableCodexModels) || [];
+        meta.defaultAiEngine = (data.meta && data.meta.defaultAiEngine) || meta.defaultAiEngine;
+        meta.defaultCodexModel = (data.meta && data.meta.defaultCodexModel) || "";
+        meta.defaultCodexReasoningEffort = (data.meta && data.meta.defaultCodexReasoningEffort) || "medium";
         renderPanel();
         renderStatus();
         toast("Model/agent lists updated", "ok");
@@ -923,8 +933,9 @@ var init_visualBuilderHtml_generated = __esm({
           <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">\${esc(t.name || "(unnamed)")}</span>
         </div>
         <div class="lib-meta">
-          <span class="chip">\${esc(t.agent || "build")}</span>
-          \${t.useRalphLoop ? '<span class="chip" style="color:var(--warn)">ralph</span>' : ""}
+          <span class="chip">\${t.taskKind === "code" ? "Code" : t.taskKind === "codex" ? (t.interactiveTerminal ? "ChatGPT / Codex" : "Codex") : (t.interactiveTerminal ? "OpenCode CLI" : "OpenCode")}</span>
+          \${t.taskKind === "code" ? "" : t.taskKind === "codex" ? '<span class="chip">' + esc(t.reasoningEffort || "medium") + '</span>' : '<span class="chip">' + esc(t.agent || "build") + '</span>'}
+          \${t.taskKind === "opencode" && t.useRalphLoop ? '<span class="chip" style="color:var(--warn)">ralph</span>' : ""}
         </div>
       </div>
     \`).join("");
@@ -991,8 +1002,9 @@ var init_visualBuilderHtml_generated = __esm({
         <div class="node-body">
           <div class="node-detail">\${t ? esc((t.prompt || "(no prompt)").slice(0, 90)) + ((t.prompt || "").length > 90 ? "\u2026" : "") : '<span class="empty">(task missing)</span>'}</div>
           <div class="node-meta">
-            <span class="chip">\${esc((t && t.agent) || "build")}</span>
-            \${(t && t.useRalphLoop) ? '<span class="chip" style="color:var(--warn)">ralph</span>' : ""}
+            <span class="chip">\${t && t.taskKind === "code" ? "Code" : t && t.taskKind === "codex" ? (t.interactiveTerminal ? "ChatGPT / Codex" : "Codex") : (t && t.interactiveTerminal ? "OpenCode CLI" : "OpenCode")}</span>
+            \${(t && t.taskKind === "code") ? "" : (t && t.taskKind === "codex") ? '<span class="chip">' + esc(t.reasoningEffort || "medium") + '</span>' : '<span class="chip">' + esc((t && t.agent) || "build") + '</span>'}
+            \${(t && t.taskKind === "opencode" && t.useRalphLoop) ? '<span class="chip" style="color:var(--warn)">ralph</span>' : ""}
           </div>
         </div>
       \`;
@@ -1472,23 +1484,37 @@ var init_visualBuilderHtml_generated = __esm({
   }
 
   function editorTaskHtml(t) {
-    const modelOptions = uniqueOptions(meta.availableModels, MODEL_PRESETS, t.model);
+    const isCodex = t.taskKind === "codex";
+    const isCode = t.taskKind === "code";
+    const taskMode = isCode ? "code" : isCodex ? (t.interactiveTerminal ? "codex-app" : "codex") : (t.interactiveTerminal ? "opencode-cli" : "opencode");
+    const modelOptions = uniqueOptions(isCodex ? meta.availableCodexModels : meta.availableModels, isCodex ? [] : MODEL_PRESETS, t.model);
     const agentOptions = uniqueOptions(meta.availableAgents, AGENT_PRESETS, t.agent);
-    const modelHint = meta.availableModels.length ? meta.availableModels.length + " model(s) loaded from AutoOC" : "No discovered models loaded yet";
+    const modelSource = isCodex ? meta.availableCodexModels : meta.availableModels;
+    const modelHint = modelSource.length ? modelSource.length + " model(s) loaded from AutoOC" : "No discovered models loaded yet";
     const agentHint = meta.availableAgents.length ? meta.availableAgents.length + " agent(s) loaded from AutoOC" : "No discovered agents loaded yet";
-    return \`
-      <div class="field"><label>Name *</label><input data-f="name" value="\${esc(t.name)}" /></div>
-      <div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">\${esc(t.prompt)}</textarea></div>
+    const engineFields = isCode ? \`
+      <div class="field"><label>JavaScript code</label><textarea data-f="code" rows="8">\${esc(t.code || t.prompt || "")}</textarea><div class="hint-inline">Code tasks run locally with their configured permissions.</div></div>\` : isCodex ? \`
       <div class="row-2">
-        <div class="field"><label>Model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">\u{1F504} Refresh Models</button></div>
+        <div class="field"><label>Codex model</label><input data-f="model" list="dlModels" value="\${esc(t.model || "")}" placeholder="Automatic" />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-codex-models">\u{1F504} Refresh Codex Models</button></div>
+        <div class="field"><label>Reasoning effort</label><select data-f="reasoningEffort">\${["minimal","low","medium","high","xhigh","max","ultra"].map(e => '<option value="' + e + '" ' + ((t.reasoningEffort || meta.defaultCodexReasoningEffort) === e ? "selected" : "") + '>' + e + '</option>').join("")}</select></div>
+      </div>
+      <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="interactiveTerminal" \${t.interactiveTerminal ? "checked" : ""} /> Open ChatGPT / Codex when this task starts</label></div>\` : \`
+      <div class="row-2">
+        <div class="field"><label>OpenCode model</label><input data-f="model" list="dlModels" value="\${esc(t.model)}" placeholder="opencode/..." />\${dataListHtml("dlModels", modelOptions)}<div class="hint-inline">\${esc(modelHint)}</div><button type="button" class="tiny btn-refresh-models">\u{1F504} Refresh Models</button></div>
         <div class="field"><label>Agent</label><input data-f="agent" list="dlAgents" value="\${esc(t.agent)}" />\${dataListHtml("dlAgents", agentOptions)}<div class="hint-inline">\${esc(agentHint)}</div><button type="button" class="tiny btn-refresh-agents">\u{1F504} Refresh Agents</button></div>
       </div>
       <div class="field" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;padding:6px 10px;margin-top:-2px"><label class="checkbox-row" style="margin:0"><input type="checkbox" data-f="forceModel" \${t.forceModel ? "checked" : ""} style="width:auto" /> <strong style="color:var(--accent)">Force model</strong> <span class="hint-inline">skip --agent; use exactly the selected model</span></label></div>
+      <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="interactiveTerminal" \${t.interactiveTerminal ? "checked" : ""} /> Open as an interactive OpenCode CLI task</label></div>
+      <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="useRalphLoop" \${t.useRalphLoop ? "checked" : ""} /> Use Ralph Loop</label></div>\`;
+    return \`
+      <div class="field"><label>Name *</label><input data-f="name" value="\${esc(t.name)}" /></div>
+      <div class="field"><label>Task type</label><select data-f="taskMode"><option value="opencode" \${taskMode === "opencode" ? "selected" : ""}>OpenCode</option><option value="opencode-cli" \${taskMode === "opencode-cli" ? "selected" : ""}>OpenCode CLI</option><option value="codex" \${taskMode === "codex" ? "selected" : ""}>Codex (background)</option><option value="codex-app" \${taskMode === "codex-app" ? "selected" : ""}>ChatGPT / Codex</option><option value="code" \${taskMode === "code" ? "selected" : ""}>Local JavaScript</option></select></div>
+      \${isCode ? "" : '<div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">' + esc(t.prompt) + '</textarea></div>'}
+      \${engineFields}
       <div class="row-2">
         <div class="field"><label>Icon</label><select data-f="icon">\${["\u26A1","\u2728","\u{1F9E0}","\u{1F4DD}","\u{1F50D}","\u{1F4A1}","\u{1F6E0}","\u{1F4CA}","\u{1F4E5}","\u{1F4E4}","\u{1F504}","\u{1F680}","\u{1F916}","\u{1F4DA}","\u{1F9EA}","\u{1F514}"].map(i => '<option value="' + esc(i) + '" ' + (t.icon === i ? "selected" : "") + '>' + esc(i) + '</option>').join("")}</select></div>
         <div class="field"><label>Color</label><select data-f="color">\${["#4a7dff","#b07ad9","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (t.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">\u25CF ' + esc(c) + '</option>').join("")}</select></div>
       </div>
-      <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="useRalphLoop" \${t.useRalphLoop ? "checked" : ""} /> Use Ralph Loop</label></div>
       <div class="section">
         <h4>Schedule</h4>
         <div class="row-2">
@@ -1503,8 +1529,7 @@ var init_visualBuilderHtml_generated = __esm({
       <div class="section">
         <h4>Git</h4>
         <div class="field"><label>Project path</label><input data-f="workingDirectory" value="\${esc(t.workingDirectory || "")}" placeholder="Empty = global setting / vault root" /></div>
-        <div class="field"><label>Branch</label><input data-f="branch" value="\${esc(t.branch)}" /></div>
-        <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="createBranch" \${t.createBranch ? "checked" : ""} /> Create branch if missing</label></div>
+        \${isCodex ? '<div class="hint-inline">Codex uses the branch currently checked out in this folder.</div>' : isCode ? "" : '<div class="field"><label>Branch</label><input data-f="branch" value="' + esc(t.branch) + '" /></div><div class="field"><label class="checkbox-row"><input type="checkbox" data-f="createBranch" ' + (t.createBranch ? "checked" : "") + ' /> Create branch if missing</label></div>'}
       </div>
       <div class="section">
         <h4>Usage</h4>
@@ -1658,8 +1683,35 @@ var init_visualBuilderHtml_generated = __esm({
         target.scheduleDays.sort((a, b) => a - b);
       } else if (f === "scheduleMonthDays" && typeof v === "string") {
         target.scheduleMonthDays = v.split(/[;,\\s]+/).map(x => parseInt(x, 10)).filter(x => !isNaN(x) && x >= 1 && x <= 31);
-      } else {
+      } else if (f !== "taskMode") {
         target[f] = v;
+      }
+      if (f === "code" && target.taskKind === "code") target.prompt = String(v);
+      if (f === "taskMode" && sel.type === "task") {
+        target.taskKind = v === "code" ? "code" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
+        target.interactiveTerminal = v === "opencode-cli" || v === "codex-app";
+        if (target.taskKind === "codex") {
+          target.model = "";
+          target.agent = "";
+          target.forceModel = false;
+          target.useRalphLoop = false;
+          target.reasoningEffort = meta.defaultCodexReasoningEffort || "medium";
+          target.branch = "";
+          target.createBranch = false;
+        } else if (target.taskKind === "opencode") {
+          target.model = optionValue(meta.availableModels[0]) || "";
+          target.agent = optionValue(meta.availableAgents[0]) || "build";
+          delete target.reasoningEffort;
+        } else {
+          target.model = "";
+          target.agent = "";
+          target.code = target.code || target.prompt || "// Set output to pass data forward\\noutput = input;";
+          target.prompt = target.code;
+          target.forceModel = false;
+          target.useRalphLoop = false;
+          target.interactiveTerminal = false;
+          delete target.reasoningEffort;
+        }
       }
       if (f === "scheduleType") {
         body.querySelectorAll(".sched-once, .sched-weekly, .sched-monthly, .sched-interval").forEach(el => el.style.display = "none");
@@ -1676,7 +1728,7 @@ var init_visualBuilderHtml_generated = __esm({
         if (desc) desc.textContent = (TRANSITION_MODES.find(m => m.v === mode) || {}).desc || "";
       }
       isDirty = true;
-      if (sel.type === "step" || sel.type === "edge" || f === "name" || f === "icon" || f === "color" || f === "taskId") renderAll();
+      if (sel.type === "step" || sel.type === "edge" || f === "name" || f === "icon" || f === "color" || f === "taskId" || f === "taskMode") renderAll();
       else renderCanvas();
     }
     function getTarget() {
@@ -1730,6 +1782,7 @@ var init_visualBuilderHtml_generated = __esm({
       ]);
     });
     $$(".btn-refresh-models", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("models")));
+    $$(".btn-refresh-codex-models", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("codex-models")));
     $$(".btn-refresh-agents", body).forEach(b => b.addEventListener("click", () => requestMetaRefresh("agents")));
     const stepForceChk = body.querySelector(".chk-step-force-model");
     if (stepForceChk) {
@@ -1753,7 +1806,8 @@ var init_visualBuilderHtml_generated = __esm({
       return;
     }
     try {
-      window.parent.postMessage({ type: kind === "agents" ? "refresh-agents" : "refresh-models" }, "*");
+      const type = kind === "agents" ? "refresh-agents" : kind === "codex-models" ? "refresh-codex-models" : "refresh-models";
+      window.parent.postMessage({ type }, "*");
       toast("Refreshing " + kind + "\u2026", "ok");
     } catch (e) {
       toast("Could not refresh " + kind + ": " + e.message, "error");
@@ -2075,17 +2129,437 @@ __export(main_exports, {
 });
 module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
-var import_child_process = require("child_process");
-var os = __toESM(require("os"));
-var fs = __toESM(require("fs"));
-var path = __toESM(require("path"));
+var import_child_process2 = require("child_process");
+var os2 = __toESM(require("os"));
+var fs2 = __toESM(require("fs"));
+var path2 = __toESM(require("path"));
 var crypto = __toESM(require("crypto"));
 var http = __toESM(require("http"));
+
+// codex-client.ts
+var import_child_process = require("child_process");
+var fs = __toESM(require("fs"));
+var os = __toESM(require("os"));
+var path = __toESM(require("path"));
+var JsonLineRpcPeer = class {
+  constructor(writeLine, onMessage) {
+    this.writeLine = writeLine;
+    this.onMessage = onMessage;
+    this.buffer = "";
+    this.nextId = 1;
+    this.pending = /* @__PURE__ */ new Map();
+  }
+  feed(chunk) {
+    var _a;
+    this.buffer += chunk.toString();
+    while (true) {
+      const newline = this.buffer.indexOf("\n");
+      if (newline < 0) return;
+      const raw = this.buffer.slice(0, newline).trim();
+      this.buffer = this.buffer.slice(newline + 1);
+      if (!raw) continue;
+      let message;
+      try {
+        message = JSON.parse(raw);
+      } catch (e) {
+        continue;
+      }
+      if (message.id !== void 0 && !message.method && (message.result !== void 0 || message.error)) {
+        const pending = this.pending.get(message.id);
+        if (!pending) continue;
+        this.pending.delete(message.id);
+        clearTimeout(pending.timer);
+        if (message.error) {
+          pending.reject(new Error(message.error.message || `Codex RPC error ${(_a = message.error.code) != null ? _a : "unknown"}`));
+        } else {
+          pending.resolve(message.result);
+        }
+        continue;
+      }
+      this.onMessage(message);
+    }
+  }
+  request(method, params = {}, timeoutMs = 3e4) {
+    const id = this.nextId++;
+    return new Promise((resolve2, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Codex RPC request timed out: ${method}`));
+      }, timeoutMs);
+      this.pending.set(id, { resolve: resolve2, reject, timer });
+      this.writeLine(JSON.stringify({ id, method, params }) + "\n");
+    });
+  }
+  notify(method, params = {}) {
+    this.writeLine(JSON.stringify({ method, params }) + "\n");
+  }
+  respond(id, result) {
+    this.writeLine(JSON.stringify({ id, result }) + "\n");
+  }
+  rejectAll(error) {
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(error);
+    }
+    this.pending.clear();
+  }
+};
+function resolveCodexBin(configured = "codex") {
+  if (configured.trim() && configured.trim() !== "codex") return configured.trim();
+  const candidates = [];
+  if (os.platform() === "win32") {
+    const localAppData = process.env.LOCALAPPDATA || "";
+    const desktopBinRoot = path.join(localAppData, "OpenAI", "Codex", "bin");
+    try {
+      const versionDirs = fs.readdirSync(desktopBinRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path.join(desktopBinRoot, entry.name, "codex.exe")).filter((candidate) => fs.existsSync(candidate)).sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
+      candidates.push(...versionDirs);
+    } catch (e) {
+    }
+    candidates.push(
+      path.join(localAppData, "OpenAI", "Codex", "codex.exe"),
+      path.join(process.env.APPDATA || "", "npm", "codex.cmd")
+    );
+  } else {
+    const userHome = process.env.HOME || "";
+    candidates.push(
+      path.join(userHome, ".local", "bin", "codex"),
+      path.join(userHome, ".npm-global", "bin", "codex"),
+      "/opt/homebrew/bin/codex",
+      "/usr/local/bin/codex"
+    );
+  }
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || configured || "codex";
+}
+function openCodexApp(bin, cwd, onError) {
+  const child = (0, import_child_process.spawn)(bin, ["app", cwd], {
+    cwd,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: false
+  });
+  child.on("error", (error) => onError == null ? void 0 : onError(error));
+  child.unref();
+}
+function buildCodexNewThreadUrl(cwd) {
+  const url = new URL("codex://threads/new");
+  url.searchParams.set("path", cwd);
+  return url.toString();
+}
+function buildCodexOpenProjectArg(cwd) {
+  return `--open-project=${cwd}`;
+}
+function openCodexNewThread(cwd, onError) {
+  if (process.platform === "win32") {
+    const script = [
+      "$ErrorActionPreference = 'Stop'",
+      "$package = Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1",
+      "if (-not $package) { throw 'The ChatGPT/Codex Windows app is not installed.' }",
+      "$exe = Join-Path $package.InstallLocation 'app\\ChatGPT.exe'",
+      "if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'ChatGPT.exe was not found in the installed Codex package.' }",
+      "$profileRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'AutoOC\\ChatGPT'))",
+      "$profile = Join-Path $profileRoot ([Guid]::NewGuid().ToString('N'))",
+      "[void](New-Item -ItemType Directory -Path $profile -Force)",
+      `$native = @'
+using System;
+using System.Runtime.InteropServices;
+public static class AutoOCChatGPTWindow {
+  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
+  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr hWnd, int command);
+  [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
+  [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
+  [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
+  [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint first, uint second, bool attach);
+  [DllImport("user32.dll")] private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
+  public static IntPtr FindVisibleWindow(uint targetProcessId) {
+    IntPtr result = IntPtr.Zero;
+    EnumWindows((window, unused) => { uint processId; GetWindowThreadProcessId(window, out processId); if (processId == targetProcessId && IsWindowVisible(window)) { result = window; return false; } return true; }, IntPtr.Zero);
+    return result;
+  }
+  public static bool Focus(IntPtr window) {
+    ShowWindowAsync(window, 9);
+    uint ignored;
+    uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out ignored);
+    uint currentThread = GetCurrentThreadId();
+    AttachThreadInput(currentThread, foregroundThread, true);
+    keybd_event(0x12, 0, 0, UIntPtr.Zero);
+    keybd_event(0x12, 0, 2, UIntPtr.Zero);
+    BringWindowToTop(window);
+    SetForegroundWindow(window);
+    AttachThreadInput(currentThread, foregroundThread, false);
+    return GetForegroundWindow() == window;
+  }
+}
+'@`,
+      "Add-Type -TypeDefinition $native",
+      '$process = Start-Process -FilePath $exe -ArgumentList @(("--user-data-dir={0}" -f $profile), $env:AUTOOC_CODEX_OPEN_PROJECT) -PassThru',
+      "$window = [IntPtr]::Zero",
+      "for ($i = 0; $i -lt 80 -and $window -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 250; $window = [AutoOCChatGPTWindow]::FindVisibleWindow([uint32]$process.Id) }",
+      "if ($window -eq [IntPtr]::Zero) { throw 'A separate ChatGPT window did not appear.' }",
+      "$focused = $false",
+      "for ($i = 0; $i -lt 10 -and -not $focused; $i++) { $focused = [AutoOCChatGPTWindow]::Focus($window); if (-not $focused) { Start-Sleep -Milliseconds 200 } }",
+      "if (-not $focused) { throw 'The new ChatGPT window could not be focused.' }",
+      "Start-Sleep -Milliseconds 750",
+      "$shell = New-Object -ComObject WScript.Shell",
+      "$shell.SendKeys('^n')",
+      `$cleanupProfile = $profile.Replace("'", "''")`,
+      `$cleanupRoot = $profileRoot.Replace("'", "''")`,
+      "$cleanup = \"`$profile = '$cleanupProfile'; `$root = '$cleanupRoot'; `$mainPid = $($process.Id); Start-Sleep -Seconds 30; while ((`$main = Get-Process -Id `$mainPid -ErrorAction SilentlyContinue) -and `$main.MainWindowHandle -ne 0) { Start-Sleep -Seconds 5 }; Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq 'ChatGPT.exe' -and `$_.CommandLine -like ('*' + `$profile + '*') } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }; `$resolved = [IO.Path]::GetFullPath(`$profile); if (`$resolved.StartsWith(`$root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath `$resolved)) { Remove-Item -LiteralPath `$resolved -Recurse -Force }\"",
+      "$encodedCleanup = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanup))",
+      "Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCleanup) -WindowStyle Hidden | Out-Null"
+    ].join("\n");
+    const child2 = (0, import_child_process.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, AUTOOC_CODEX_OPEN_PROJECT: buildCodexOpenProjectArg(cwd) }
+    });
+    let reported = false;
+    child2.once("error", (error) => {
+      reported = true;
+      onError == null ? void 0 : onError(error);
+    });
+    child2.once("exit", (code) => {
+      if (!reported && code !== 0) onError == null ? void 0 : onError(new Error(`ChatGPT/Codex launcher exited with code ${code != null ? code : "unknown"}`));
+    });
+    child2.unref();
+    return;
+  }
+  const url = buildCodexNewThreadUrl(cwd);
+  const launcher = process.platform === "darwin" ? { bin: "open", args: [url] } : { bin: "xdg-open", args: [url] };
+  const child = (0, import_child_process.spawn)(launcher.bin, launcher.args, {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.on("error", (error) => onError == null ? void 0 : onError(error));
+  child.unref();
+}
+var CodexAppServerClient = class {
+  constructor(bin, cwd, callbacks = {}) {
+    this.bin = bin;
+    this.cwd = cwd;
+    this.callbacks = callbacks;
+    this.child = null;
+    this.peer = null;
+    this.initialized = false;
+    this.disposed = false;
+    this.stderr = "";
+    this.output = "";
+    this.threadId = "";
+    this.turnId = "";
+    this.approvals = /* @__PURE__ */ new Map();
+  }
+  async initialize() {
+    if (this.initialized) return;
+    this.child = (0, import_child_process.spawn)(this.bin, ["app-server"], {
+      cwd: this.cwd,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true
+    });
+    this.peer = new JsonLineRpcPeer(
+      (line) => {
+        var _a;
+        return (_a = this.child) == null ? void 0 : _a.stdin.write(line);
+      },
+      (message) => void this.handleMessage(message)
+    );
+    this.child.stdout.on("data", (chunk) => {
+      var _a;
+      return (_a = this.peer) == null ? void 0 : _a.feed(chunk);
+    });
+    this.child.stderr.on("data", (chunk) => {
+      var _a, _b;
+      this.stderr = (this.stderr + chunk.toString()).slice(-2e4);
+      (_b = (_a = this.callbacks).onDiagnostic) == null ? void 0 : _b.call(_a, chunk.toString());
+    });
+    this.child.on("error", (error) => this.fail(error));
+    this.child.on("exit", (code, signal) => {
+      if (!this.disposed) {
+        const detail = this.stderr.trim();
+        this.fail(new Error(`Codex App Server exited (${signal || (code != null ? code : "unknown")})${detail ? `: ${detail}` : ""}`));
+      }
+    });
+    await this.peer.request("initialize", {
+      clientInfo: { name: "auto-oc", title: "AutoOC", version: "1.5.11" },
+      capabilities: {}
+    }, 15e3);
+    this.peer.notify("initialized");
+    this.initialized = true;
+  }
+  async listModels() {
+    await this.initialize();
+    const response = await this.peer.request("model/list", { limit: 100, includeHidden: false });
+    return ((response == null ? void 0 : response.data) || []).map((model) => ({
+      value: model.model || model.id,
+      label: model.displayName || model.model || model.id,
+      defaultReasoningEffort: model.defaultReasoningEffort,
+      supportedReasoningEfforts: (model.supportedReasoningEfforts || []).map((entry) => entry.reasoningEffort || entry.value || entry),
+      isDefault: !!model.isDefault
+    }));
+  }
+  async createThread() {
+    var _a;
+    await this.initialize();
+    const response = await this.peer.request("thread/start", {
+      cwd: this.cwd,
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      ephemeral: false,
+      serviceName: "AutoOC"
+    });
+    const threadId = ((_a = response == null ? void 0 : response.thread) == null ? void 0 : _a.id) || "";
+    if (!threadId) throw new Error("Codex did not return a thread id");
+    return threadId;
+  }
+  async run(prompt, model, effort) {
+    var _a, _b, _c, _d;
+    await this.initialize();
+    this.output = "";
+    const threadResponse = await this.peer.request("thread/start", {
+      cwd: this.cwd,
+      model: model || null,
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      ephemeral: false,
+      serviceName: "AutoOC"
+    });
+    this.threadId = ((_a = threadResponse == null ? void 0 : threadResponse.thread) == null ? void 0 : _a.id) || "";
+    if (!this.threadId) throw new Error("Codex did not return a thread id");
+    const completion = new Promise((resolve2, reject) => {
+      this.completionResolve = resolve2;
+      this.completionReject = reject;
+    });
+    let turnResponse;
+    try {
+      turnResponse = await this.peer.request("turn/start", {
+        threadId: this.threadId,
+        input: [{ type: "text", text: prompt }],
+        model: model || null,
+        effort: effort || null,
+        approvalPolicy: "on-request",
+        cwd: this.cwd
+      });
+    } catch (error) {
+      this.completionResolve = void 0;
+      this.completionReject = void 0;
+      throw error;
+    }
+    this.turnId = ((_b = turnResponse == null ? void 0 : turnResponse.turn) == null ? void 0 : _b.id) || "";
+    if (!this.turnId) throw new Error("Codex did not return a turn id");
+    (_d = (_c = this.callbacks).onStarted) == null ? void 0 : _d.call(_c, { threadId: this.threadId, turnId: this.turnId });
+    return completion;
+  }
+  getIds() {
+    return { threadId: this.threadId, turnId: this.turnId };
+  }
+  resolveApproval(requestId, approved) {
+    const approval = this.approvals.get(requestId);
+    if (!approval || !this.peer) return false;
+    this.approvals.delete(requestId);
+    if (approval.kind === "permissions") {
+      this.peer.respond(requestId, {
+        permissions: approved ? approval.params.permissions || {} : {},
+        scope: "turn"
+      });
+    } else {
+      this.peer.respond(requestId, { decision: approved ? "accept" : "decline" });
+    }
+    return true;
+  }
+  async interrupt() {
+    if (this.peer && this.threadId && this.turnId) {
+      try {
+        await this.peer.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId }, 5e3);
+      } catch (e) {
+      }
+    }
+    this.dispose();
+  }
+  dispose() {
+    var _a, _b, _c;
+    if (this.disposed) return;
+    this.disposed = true;
+    (_a = this.peer) == null ? void 0 : _a.rejectAll(new Error("Codex client closed"));
+    (_b = this.completionReject) == null ? void 0 : _b.call(this, new Error("Codex client closed"));
+    this.completionReject = void 0;
+    this.completionResolve = void 0;
+    (_c = this.child) == null ? void 0 : _c.kill();
+    this.child = null;
+  }
+  handleMessage(message) {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    if (message.id !== void 0 && message.method) {
+      const approval = this.toApproval(message);
+      if (approval) {
+        this.approvals.set(message.id, approval);
+        (_b = (_a = this.callbacks).onApproval) == null ? void 0 : _b.call(_a, approval);
+      } else {
+        (_c = this.peer) == null ? void 0 : _c.respond(message.id, {});
+      }
+      return;
+    }
+    if (message.method === "item/agentMessage/delta") {
+      const delta = String(((_d = message.params) == null ? void 0 : _d.delta) || "");
+      if (delta) {
+        this.output += delta;
+        (_f = (_e = this.callbacks).onOutput) == null ? void 0 : _f.call(_e, this.output);
+      }
+      return;
+    }
+    if (message.method === "item/completed" && !this.output) {
+      const item = (_g = message.params) == null ? void 0 : _g.item;
+      if ((item == null ? void 0 : item.type) === "agentMessage" && typeof item.text === "string") {
+        this.output = item.text;
+        (_i = (_h = this.callbacks).onOutput) == null ? void 0 : _i.call(_h, this.output);
+      }
+      return;
+    }
+    if (message.method === "turn/completed") {
+      const turn = ((_j = message.params) == null ? void 0 : _j.turn) || {};
+      const status = String(turn.status || "completed");
+      const error = ((_k = turn.error) == null ? void 0 : _k.message) || ((_l = turn.error) == null ? void 0 : _l.additionalDetails) || void 0;
+      (_m = this.completionResolve) == null ? void 0 : _m.call(this, {
+        output: this.output.trim(),
+        threadId: this.threadId,
+        turnId: turn.id || this.turnId,
+        status,
+        error
+      });
+      this.completionResolve = void 0;
+      this.completionReject = void 0;
+    }
+  }
+  toApproval(message) {
+    const method = message.method || "";
+    const params = message.params || {};
+    let kind;
+    if (method === "item/commandExecution/requestApproval") kind = "command";
+    else if (method === "item/fileChange/requestApproval") kind = "file-change";
+    else if (method === "item/permissions/requestApproval") kind = "permissions";
+    else return null;
+    const summary = String(params.reason || params.command || (kind === "command" ? "Codex wants to run a command" : kind === "file-change" ? "Codex wants to change files" : "Codex requests additional permissions"));
+    return { requestId: message.id, method, kind, summary, params };
+  }
+  fail(error) {
+    var _a, _b;
+    (_a = this.peer) == null ? void 0 : _a.rejectAll(error);
+    (_b = this.completionReject) == null ? void 0 : _b.call(this, error);
+    this.completionReject = void 0;
+    this.completionResolve = void 0;
+  }
+};
+
+// main.ts
 var visualBuilderHtml2 = (init_visualBuilderHtml_generated(), __toCommonJS(visualBuilderHtml_generated_exports)).visualBuilderHtml;
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
   const candidates = [];
-  if (os.platform() === "win32") {
+  if (os2.platform() === "win32") {
     candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
   } else {
     const home = process.env.HOME || "";
@@ -2174,7 +2648,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
     const envScript = buildPowerShellEnvLines(env).join("; ");
     const runCommand = args.length > 0 ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList` : `& ${psSingleQuoted(bin)}`;
     const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
-    const launcher = (0, import_child_process.spawn)(
+    const launcher = (0, import_child_process2.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
       { detached: true, stdio: "ignore", windowsHide: false }
@@ -2189,7 +2663,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   const command = buildPosixLaunchCommand(bin, cwd, env, args);
   if (process.platform === "darwin") {
     const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
-    const launcher = (0, import_child_process.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process2.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     (_b = launcher.on) == null ? void 0 : _b.call(launcher, "error", (error) => {
       var _a2;
       return (_a2 = options.onError) == null ? void 0 : _a2.call(options, error);
@@ -2204,7 +2678,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
         "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)"
       );
     }
-    const launcher = (0, import_child_process.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process2.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
     (_c = launcher.on) == null ? void 0 : _c.call(launcher, "error", (error) => {
       var _a2;
       return (_a2 = options.onError) == null ? void 0 : _a2.call(options, error);
@@ -2214,11 +2688,11 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   }
 }
 function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
-  const promptFile = path.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
-  fs.writeFileSync(promptFile, prompt, "utf8");
+  const promptFile = path2.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
+  fs2.writeFileSync(promptFile, prompt, "utf8");
   setTimeout(() => {
     try {
-      fs.unlinkSync(promptFile);
+      fs2.unlinkSync(promptFile);
     } catch (e) {
     }
   }, 60 * 1e3);
@@ -2226,7 +2700,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
   const envScript = buildPowerShellEnvLines(env).join("; ");
   const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
   const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
-  const launcher = (0, import_child_process.spawn)(
+  const launcher = (0, import_child_process2.spawn)(
     "cmd.exe",
     ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
     { detached: true, stdio: "ignore", windowsHide: false }
@@ -2235,26 +2709,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt) {
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
-  const fs2 = require("fs");
+  const fs3 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs2.writeFileSync(launcherFile, launcherScript, "utf8");
-  const { spawn: spawn2 } = require("child_process");
-  const child = spawn2("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
+  fs3.writeFileSync(launcherFile, launcherScript, "utf8");
+  const { spawn: spawn3 } = require("child_process");
+  const child = spawn3("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs2.unlinkSync(launcherFile);
+      fs3.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs2.unlinkSync(psScriptFile);
+      fs3.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -2262,12 +2736,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs2.unlinkSync(launcherFile);
+      fs3.unlinkSync(launcherFile);
     } catch (e) {
     }
     if (removeScript) {
       try {
-        fs2.unlinkSync(psScriptFile);
+        fs3.unlinkSync(psScriptFile);
       } catch (e) {
       }
     }
@@ -2276,7 +2750,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     let killedChildTree = false;
     if (child.pid) {
       try {
-        const killer = spawn2("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        const killer = spawn3("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
         killedChildTree = true;
       } catch (e) {
@@ -2289,16 +2763,16 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs2.existsSync(effectivePidFile) ? String(fs2.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs3.existsSync(effectivePidFile) ? String(fs3.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
-        const killer = spawn2("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
+        const killer = spawn3("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
       }
     } catch (e) {
     }
     cleanup(true);
     try {
-      fs2.unlinkSync(effectivePidFile);
+      fs3.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -2320,18 +2794,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
 }
 function launchHiddenSh(shScriptFile, pidFile) {
   var _a;
-  const fs2 = require("fs");
-  const { spawn: spawn2 } = require("child_process");
+  const fs3 = require("fs");
+  const { spawn: spawn3 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs2.chmodSync(shScriptFile, 448);
+    fs3.chmodSync(shScriptFile, 448);
   } catch (e) {
   }
-  const child = spawn2("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
+  const child = spawn3("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs2.unlinkSync(shScriptFile);
+      fs3.unlinkSync(shScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -2339,7 +2813,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs2.unlinkSync(shScriptFile);
+        fs3.unlinkSync(shScriptFile);
       } catch (e) {
       }
     }
@@ -2360,7 +2834,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs2.existsSync(effectivePidFile) ? String(fs2.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs3.existsSync(effectivePidFile) ? String(fs3.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -2375,7 +2849,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs2.unlinkSync(effectivePidFile);
+      fs3.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -2399,7 +2873,7 @@ function launchHidden(scriptFile, pidFile) {
   return isWindows() ? launchHiddenPS(scriptFile, pidFile) : launchHiddenSh(scriptFile, pidFile);
 }
 function writeUtf8BomFile(filePath, content) {
-  fs.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
+  fs2.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
 }
 function psUtf8Prelude() {
   return [
@@ -2443,14 +2917,14 @@ function renderCodePreview(parent, code, maxChars = 600) {
   if (last < src.length) codeEl.appendChild(document.createTextNode(src.slice(last)));
   if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
 }
-var AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode CLI tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+var AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode and Codex tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
 Canonical complete export format:
 {
   "autoOCExport": {
-    "schemaVersion": "1.4.0",
+    "schemaVersion": "1.5.0",
     "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
     "pluginVersion": "1.5.11",
     "name": "Package name",
@@ -2460,11 +2934,11 @@ Canonical complete export format:
   "workflows": []
 }
 
-For complete exports, schemaVersion must be exactly "1.0" or "1.4.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
+For complete exports, schemaVersion must be exactly "1.0", "1.4.0", or "1.5.0". New exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
-1. task: runs an OpenCode task prompt.
+1. task: runs an OpenCode or Codex task prompt. A workflow may mix both engines.
 2. code: runs JavaScript in a sandbox.
 3. delay: pauses the workflow.
 
@@ -2473,11 +2947,12 @@ A task is reusable and can be referenced by workflows.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" by default, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, or "code" for a reusable JavaScript task.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
-- prompt: required, non-empty complete direct instruction for OpenCode. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
-- interactiveTerminal: true only for CLI tasks. CLI tasks are taskKind "opencode" with interactiveTerminal true.
+- prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
+- interactiveTerminal: true opens the interactive client for an AI task: OpenCode CLI for taskKind "opencode", or the ChatGPT/Codex app for taskKind "codex".
+- reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -2660,7 +3135,7 @@ Final output requirements:
 Minimal valid workflow example:
 {
   "autoOCExport": {
-    "schemaVersion": "1.4.0",
+    "schemaVersion": "1.5.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
     "pluginVersion": "1.5.11",
     "name": "Example package",
@@ -2838,15 +3313,15 @@ var SecretStore = class {
     this.unlockedUntil = 0;
   }
   get filePath() {
-    return path.join(this.vaultBasePath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
+    return path2.join(this.vaultBasePath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
   }
   load() {
     const file = this.filePath;
-    if (!fs.existsSync(file)) {
+    if (!fs2.existsSync(file)) {
       this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
       return;
     }
-    const raw = fs.readFileSync(file, "utf8");
+    const raw = fs2.readFileSync(file, "utf8");
     const parsed = raw.trim() ? JSON.parse(raw) : {};
     this.vault = {
       schemaVersion: parsed.schemaVersion || SECRETS_SCHEMA_VERSION,
@@ -2856,8 +3331,8 @@ var SecretStore = class {
   }
   save() {
     const file = this.filePath;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}
+    fs2.mkdirSync(path2.dirname(file), { recursive: true });
+    fs2.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}
 `, "utf8");
   }
   isSecureStorageAvailable() {
@@ -3010,7 +3485,11 @@ var DEFAULT_SETTINGS = {
   tasks: [],
   workflows: [],
   opencodePath: "opencode",
+  codexPath: "codex",
+  defaultAiEngine: "opencode",
   defaultModel: "",
+  defaultCodexModel: "",
+  defaultCodexReasoningEffort: "medium",
   defaultAgent: "build",
   workingDirectory: "",
   // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
@@ -3169,6 +3648,7 @@ function toExportTask(task, exportId) {
     codeAllowFiles: task.codeAllowFiles,
     codeAllowTerminal: task.codeAllowTerminal,
     interactiveTerminal: task.interactiveTerminal,
+    reasoningEffort: task.reasoningEffort,
     scheduleType: task.scheduleType,
     scheduleTime: task.scheduleTime,
     scheduleDate: task.scheduleDate,
@@ -3455,19 +3935,19 @@ function decodeCommandBuffer(bytes) {
   return countReplacementChars(win1252) <= countReplacementChars(cp850) ? win1252 : cp850;
 }
 function getOpencodeConfigPath() {
-  return path.join(os.homedir(), ".config", "opencode", "opencode.json");
+  return path2.join(os2.homedir(), ".config", "opencode", "opencode.json");
 }
 function getUvCandidates() {
   return [
-    path.join(os.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
-    path.join(os.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
-    path.join(os.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
+    path2.join(os2.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
+    path2.join(os2.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
+    path2.join(os2.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
   ];
 }
 function resolveUvBin() {
   for (const candidate of getUvCandidates()) {
     try {
-      if (fs.existsSync(candidate)) return candidate;
+      if (fs2.existsSync(candidate)) return candidate;
     } catch (e) {
     }
   }
@@ -3745,10 +4225,10 @@ if __name__ == "__main__":
 `;
 }
 function getRalphStateFilePath(vaultBasePath) {
-  return path.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
+  return path2.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
 }
 function getTaskLogDir(vaultBasePath, taskId) {
-  return path.join(vaultBasePath, ".opencode", "logs", taskId);
+  return path2.join(vaultBasePath, ".opencode", "logs", taskId);
 }
 function formatTimestampForLog() {
   const now = /* @__PURE__ */ new Date();
@@ -3765,15 +4245,15 @@ function saveLogToFile(vaultBasePath, taskId, output) {
   if (!output || !output.trim()) return null;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    fs.mkdirSync(logDir, { recursive: true });
+    fs2.mkdirSync(logDir, { recursive: true });
   } catch (e) {
   }
   const timestamp = formatTimestampForLog();
-  const logFile = path.join(logDir, `${timestamp}.log`);
+  const logFile = path2.join(logDir, `${timestamp}.log`);
   try {
-    fs.writeFileSync(logFile, output, "utf8");
-    const latestFile = path.join(logDir, "latest.log");
-    fs.writeFileSync(latestFile, output, "utf8");
+    fs2.writeFileSync(logFile, output, "utf8");
+    const latestFile = path2.join(logDir, "latest.log");
+    fs2.writeFileSync(latestFile, output, "utf8");
     return logFile;
   } catch (e) {
     return null;
@@ -3782,10 +4262,10 @@ function saveLogToFile(vaultBasePath, taskId, output) {
 function getLogHistory(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs.existsSync(logDir)) return [];
-    const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    if (!fs2.existsSync(logDir)) return [];
+    const files = fs2.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
     return files.map((f) => ({
-      file: path.join(logDir, f),
+      file: path2.join(logDir, f),
       timestamp: formatLogFilenameTimestamp(f)
     }));
   } catch (e) {
@@ -3794,7 +4274,7 @@ function getLogHistory(vaultBasePath, taskId) {
 }
 function readLogFile(filePath) {
   try {
-    return formatLogContent(fs.readFileSync(filePath, "utf8"));
+    return formatLogContent(fs2.readFileSync(filePath, "utf8"));
   } catch (e) {
     return "(error reading log file)";
   }
@@ -3803,13 +4283,13 @@ function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
   if (maxLogs <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs.existsSync(logDir)) return;
-    const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    if (!fs2.existsSync(logDir)) return;
+    const files = fs2.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
     while (files.length > maxLogs) {
       const oldFile = files.shift();
       if (oldFile) {
         try {
-          fs.unlinkSync(path.join(logDir, oldFile));
+          fs2.unlinkSync(path2.join(logDir, oldFile));
         } catch (e) {
         }
       }
@@ -3821,9 +4301,9 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
   if (retentionDays <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs.existsSync(logDir)) return;
+    if (!fs2.existsSync(logDir)) return;
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
-    const files = fs.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    const files = fs2.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
     for (const f of files) {
       const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
       if (match) {
@@ -3831,7 +4311,7 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
         const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
         if (fileDate.getTime() < cutoff) {
           try {
-            fs.unlinkSync(path.join(logDir, f));
+            fs2.unlinkSync(path2.join(logDir, f));
           } catch (e) {
           }
         }
@@ -3843,31 +4323,31 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
 function clearTaskLogs(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs.existsSync(logDir)) return;
-    const files = fs.readdirSync(logDir);
+    if (!fs2.existsSync(logDir)) return;
+    const files = fs2.readdirSync(logDir);
     for (const f of files) {
       try {
-        fs.unlinkSync(path.join(logDir, f));
+        fs2.unlinkSync(path2.join(logDir, f));
       } catch (e) {
       }
     }
     try {
-      fs.rmdirSync(logDir);
+      fs2.rmdirSync(logDir);
     } catch (e) {
     }
   } catch (e) {
   }
 }
 function clearAllLogs(vaultBasePath) {
-  const logsDir = path.join(vaultBasePath, ".opencode", "logs");
+  const logsDir = path2.join(vaultBasePath, ".opencode", "logs");
   try {
-    if (!fs.existsSync(logsDir)) return;
-    const dirs = fs.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs2.existsSync(logsDir)) return;
+    const dirs = fs2.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of dirs) {
       clearTaskLogs(vaultBasePath, dir);
     }
     try {
-      fs.rmdirSync(logsDir);
+      fs2.rmdirSync(logsDir);
     } catch (e) {
     }
   } catch (e) {
@@ -3875,7 +4355,7 @@ function clearAllLogs(vaultBasePath) {
 }
 function deleteSingleLogFile(filePath) {
   try {
-    fs.unlinkSync(filePath);
+    fs2.unlinkSync(filePath);
   } catch (e) {
   }
 }
@@ -3948,11 +4428,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
+    this.availableCodexModels = [];
     this.visualBuilders = /* @__PURE__ */ new Set();
     this.taskUpdatedCallbacks = /* @__PURE__ */ new Set();
     this.workflowUpdatedCallbacks = /* @__PURE__ */ new Set();
     // Map taskId -> child process, so we can kill running tasks
     this.runningProcesses = /* @__PURE__ */ new Map();
+    this.runningCodexClients = /* @__PURE__ */ new Map();
     this.dueCheckInProgress = false;
     // Workflows that have been manually stopped; checked in step callbacks to abort chaining
     this.stoppingWorkflows = /* @__PURE__ */ new Set();
@@ -3969,6 +4451,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     setTimeout(() => {
       this.refreshModels();
       this.refreshAgents();
+      void this.refreshCodexModels();
     }, 2e3);
     this.registerView(VIEW_TYPE, (leaf) => {
       this.view = new AutoOCView(leaf, this);
@@ -3989,8 +4472,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     });
     this.addCommand({
       id: "create-task",
-      name: "Create new OpenCode task",
+      name: "Create new AI task",
       callback: () => new CreateTaskModal(this.app, this).open()
+    });
+    this.addCommand({
+      id: "open-chatgpt-codex",
+      name: "Open ChatGPT / Codex in project folder",
+      callback: () => new CodexAppModal(this.app, this).open()
     });
     this.addCommand({
       id: "check-tasks-now",
@@ -4031,11 +4519,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       proc.kill();
     }
     this.runningProcesses.clear();
+    for (const [, client] of this.runningCodexClients) client.dispose();
+    this.runningCodexClients.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
   }
   getMcpBridgePath() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
-    return path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
+    return path2.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
   }
   async startMcpBridge() {
     await this.stopMcpBridge();
@@ -4055,8 +4545,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     try {
       const bridgePath = this.getMcpBridgePath();
-      fs.mkdirSync(path.dirname(bridgePath), { recursive: true });
-      fs.writeFileSync(bridgePath, JSON.stringify({ url: `http://127.0.0.1:${address.port}`, token: this.mcpBridgeToken }), "utf8");
+      fs2.mkdirSync(path2.dirname(bridgePath), { recursive: true });
+      fs2.writeFileSync(bridgePath, JSON.stringify({ url: `http://127.0.0.1:${address.port}`, token: this.mcpBridgeToken }), "utf8");
       this.mcpBridgeServer = server;
     } catch (error) {
       await new Promise((resolve2) => server.close(() => resolve2()));
@@ -4068,7 +4558,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.mcpBridgeServer = void 0;
     this.mcpBridgeToken = "";
     try {
-      fs.unlinkSync(this.getMcpBridgePath());
+      fs2.unlinkSync(this.getMcpBridgePath());
     } catch (e) {
     }
     if (server) await new Promise((resolve2) => server.close(() => resolve2()));
@@ -4122,7 +4612,12 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   getMcpRawTaskPayloadError(payload) {
     if ("steps" in payload) return 'Raw task payloads must not include workflow steps; use kind "workflow".';
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (taskKind !== "opencode" && taskKind !== "code") return 'payload.taskKind must be "opencode" or "code".';
+    if (taskKind !== "opencode" && taskKind !== "codex" && taskKind !== "code") return 'payload.taskKind must be "opencode", "codex", or "code".';
+    if (payload.reasoningEffort !== void 0 && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
+      return 'payload.reasoningEffort is only valid as a non-empty string for taskKind "codex".';
+    }
+    if (payload.interactiveTerminal !== void 0 && typeof payload.interactiveTerminal !== "boolean") return "payload.interactiveTerminal must be a boolean when provided.";
+    if (taskKind === "code" && payload.interactiveTerminal === true) return "Code tasks cannot use interactiveTerminal.";
     if (typeof payload.name !== "string" || !payload.name.trim()) return "payload.name is required for raw task payloads.";
     if (taskKind === "code") {
       const hasCode = typeof payload.code === "string" && payload.code.trim();
@@ -4246,7 +4741,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     if (!payload || typeof payload !== "object") return null;
     if ("autoOCExport" in payload) return payload;
     const autoOCExport = {
-      schemaVersion: "1.4.0",
+      schemaVersion: "1.5.0",
       exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
       pluginVersion: this.manifest.version
     };
@@ -4367,6 +4862,40 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       (_a = this.view) == null ? void 0 : _a.refresh();
     }
   }
+  async refreshCodexModels(showNotice = false) {
+    var _a;
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    const cwd = this.settings.workingDirectory || vaultBasePath;
+    const client = new CodexAppServerClient(resolveCodexBin(this.settings.codexPath), cwd);
+    try {
+      const models = await client.listModels();
+      this.availableCodexModels = models;
+      const preferred = models.find((model) => model.isDefault) || models[0];
+      if (!this.settings.defaultCodexModel || !models.some((model) => model.value === this.settings.defaultCodexModel)) {
+        this.settings.defaultCodexModel = (preferred == null ? void 0 : preferred.value) || "";
+      }
+      const selected = models.find((model) => model.value === this.settings.defaultCodexModel) || preferred;
+      if ((selected == null ? void 0 : selected.supportedReasoningEfforts.length) && !selected.supportedReasoningEfforts.includes(this.settings.defaultCodexReasoningEffort)) {
+        this.settings.defaultCodexReasoningEffort = selected.defaultReasoningEffort || selected.supportedReasoningEfforts[0];
+      }
+      await this.saveSettings(false);
+      (_a = this.view) == null ? void 0 : _a.refresh();
+      this.syncVisualBuilders();
+      if (showNotice) new import_obsidian.Notice(`AutoOC: ${models.length} Codex models loaded.`);
+    } catch (error) {
+      if (showNotice) new import_obsidian.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
+    } finally {
+      client.dispose();
+    }
+  }
+  getEffectiveCodexModel(model) {
+    var _a, _b;
+    return model || this.settings.defaultCodexModel || ((_a = this.availableCodexModels.find((entry) => entry.isDefault)) == null ? void 0 : _a.value) || ((_b = this.availableCodexModels[0]) == null ? void 0 : _b.value) || "";
+  }
+  getCodexReasoningEfforts(model) {
+    const selected = this.availableCodexModels.find((entry) => entry.value === (model || this.settings.defaultCodexModel));
+    return (selected == null ? void 0 : selected.supportedReasoningEfforts.length) ? selected.supportedReasoningEfforts : ["minimal", "low", "medium", "high", "xhigh"];
+  }
   getAgentsForDirectory(cwd) {
     return fetchAgentsSync(this.settings.opencodePath || "opencode", cwd);
   }
@@ -4467,6 +4996,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
 [stale running state cleared on plugin load]`;
         changed = true;
       }
+      if (task.pendingCodexApproval) {
+        delete task.pendingCodexApproval;
+        changed = true;
+      }
       if (!Array.isArray(task.scheduleMonthDays)) {
         task.scheduleMonthDays = [];
         changed = true;
@@ -4544,6 +5077,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       this.settings.defaultModel = (_b = (_a = this.availableModels[0]) == null ? void 0 : _a.value) != null ? _b : "";
       changed = true;
     }
+    if (this.settings.defaultAiEngine !== "codex" && this.settings.defaultAiEngine !== "opencode") {
+      this.settings.defaultAiEngine = "opencode";
+      changed = true;
+    }
     if (this.settings.taskTimeoutSeconds === void 0 || this.settings.taskTimeoutSeconds > 0 && this.settings.taskTimeoutSeconds < 1800) {
       this.settings.taskTimeoutSeconds = DEFAULT_TASK_TIMEOUT_SECONDS;
       changed = true;
@@ -4562,9 +5099,9 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   isRalphLoopEnabled() {
     const configPath = getOpencodeConfigPath();
-    if (!fs.existsSync(configPath)) return false;
+    if (!fs2.existsSync(configPath)) return false;
     try {
-      const raw = fs.readFileSync(configPath, "utf8");
+      const raw = fs2.readFileSync(configPath, "utf8");
       const data = JSON.parse(raw);
       return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
     } catch (e) {
@@ -4573,14 +5110,14 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   async ensureRalphLoopPluginEnabled() {
     const configPath = getOpencodeConfigPath();
-    const configDir = path.dirname(configPath);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
+    const configDir = path2.dirname(configPath);
+    if (!fs2.existsSync(configDir)) {
+      fs2.mkdirSync(configDir, { recursive: true });
     }
     let data = {};
-    if (fs.existsSync(configPath)) {
+    if (fs2.existsSync(configPath)) {
       try {
-        const raw = fs.readFileSync(configPath, "utf8");
+        const raw = fs2.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -4592,7 +5129,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     plugins.push("opencode-ralph-loop");
     data.plugin = plugins;
-    fs.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+    fs2.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     return { changed: true, configPath };
   }
@@ -4600,7 +5137,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     return {
       vaultBasePath,
-      mcpPath: path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
+      mcpPath: path2.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
     };
   }
   getAutoOcMcpConfigBlock(requireAvailableUv = false) {
@@ -4617,21 +5154,21 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   ensureAutoOcMcpServerFile() {
     const { mcpPath } = this.getAutoOcMcpPaths();
-    fs.mkdirSync(path.dirname(mcpPath), { recursive: true });
-    fs.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    fs2.mkdirSync(path2.dirname(mcpPath), { recursive: true });
+    fs2.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
     return mcpPath;
   }
   async ensureAutoOcMcpEnabled() {
     const configPath = getOpencodeConfigPath();
-    const configDir = path.dirname(configPath);
-    if (!fs.existsSync(configDir)) {
-      fs.mkdirSync(configDir, { recursive: true });
+    const configDir = path2.dirname(configPath);
+    if (!fs2.existsSync(configDir)) {
+      fs2.mkdirSync(configDir, { recursive: true });
     }
     const mcpPath = this.ensureAutoOcMcpServerFile();
     let data = {};
-    if (fs.existsSync(configPath)) {
+    if (fs2.existsSync(configPath)) {
       try {
-        const raw = fs.readFileSync(configPath, "utf8");
+        const raw = fs2.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -4645,7 +5182,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       mcp["autooc-mcp"] = nextBlock;
       data.mcp = mcp;
       if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-      fs.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+      fs2.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     }
     return { changed, configPath, mcpPath };
@@ -4771,12 +5308,12 @@ Continue?`
   // transition validation prompts.
   async evaluateWithOpencode(prompt, model, cwd) {
     return new Promise((resolve2) => {
-      const fs2 = require("fs");
-      const path2 = require("path");
+      const fs3 = require("fs");
+      const path3 = require("path");
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const outFile = path2.join(tmpDir, `autooc-eval-${evalId}.txt`);
-      const pidFile = path2.join(tmpDir, `autooc-eval-${evalId}.pid`);
+      const outFile = path3.join(tmpDir, `autooc-eval-${evalId}.txt`);
+      const pidFile = path3.join(tmpDir, `autooc-eval-${evalId}.pid`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
@@ -4786,15 +5323,15 @@ Continue?`
       const cleanup = (removeScript = true) => {
         hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
         try {
-          fs2.unlinkSync(scriptFile);
+          fs3.unlinkSync(scriptFile);
         } catch (e) {
         }
         try {
-          fs2.unlinkSync(outFile);
+          fs3.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs2.unlinkSync(pidFile);
+          fs3.unlinkSync(pidFile);
         } catch (e) {
         }
       };
@@ -4849,9 +5386,9 @@ DONE:%s
 %s' "$exit_code" "$combined" > ${shSingleQuoted(outFile)}`
         ].join("\n");
       }
-      const scriptFile = path2.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
+      const scriptFile = path3.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
       if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-      else fs2.writeFileSync(scriptFile, launchScript, "utf8");
+      else fs3.writeFileSync(scriptFile, launchScript, "utf8");
       hiddenProc = launchHidden(scriptFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -4864,10 +5401,10 @@ DONE:%s
           resolve2({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
-        if (!fs2.existsSync(outFile)) return;
+        if (!fs3.existsSync(outFile)) return;
         settled = true;
         clearInterval(poll);
-        const raw = fs2.readFileSync(outFile, "utf8");
+        const raw = fs3.readFileSync(outFile, "utf8");
         cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
@@ -4891,6 +5428,10 @@ DONE:%s
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
     if ((effectiveTask.taskKind || "opencode") === "code") {
       await this.runCodeTask(effectiveTask, onComplete);
+      return;
+    }
+    if (effectiveTask.taskKind === "codex") {
+      void this.runCodexTask(effectiveTask, onComplete);
       return;
     }
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
@@ -5011,47 +5552,47 @@ DONE:%s
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
     const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
     let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
-    const fs2 = require("fs");
+    const fs3 = require("fs");
     try {
-      fs2.unlinkSync(outFile);
+      fs3.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs2.unlinkSync(errFile);
+      fs3.unlinkSync(errFile);
     } catch (e) {
     }
     try {
-      fs2.unlinkSync(doneFile);
+      fs3.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
-      fs2.unlinkSync(pidFile);
+      fs3.unlinkSync(pidFile);
     } catch (e) {
     }
     try {
-      fs2.unlinkSync(promptFile);
+      fs3.unlinkSync(promptFile);
     } catch (e) {
     }
     try {
-      fs2.unlinkSync(fullPromptFile);
+      fs3.unlinkSync(fullPromptFile);
     } catch (e) {
     }
     try {
-      fs2.unlinkSync(tmpFullPromptFile);
+      fs3.unlinkSync(tmpFullPromptFile);
     } catch (e) {
     }
     if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
       try {
-        fs2.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs3.writeFileSync(fullPromptFile, prompt, "utf8");
       } catch (e) {
         fullPromptFile = tmpFullPromptFile;
-        fs2.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs3.writeFileSync(fullPromptFile, prompt, "utf8");
       }
       const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
       const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
-      fs2.writeFileSync(promptFile, shortPrompt, "utf8");
+      fs3.writeFileSync(promptFile, shortPrompt, "utf8");
     } else {
-      fs2.writeFileSync(promptFile, preparedPrompt, "utf8");
+      fs3.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
@@ -5155,7 +5696,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     }
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-    else fs2.writeFileSync(scriptFile, launchScript, "utf8");
+    else fs3.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
     try {
       hiddenProc = launchHidden(scriptFile, pidFile);
@@ -5177,31 +5718,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
       try {
-        fs2.unlinkSync(promptFile);
+        fs3.unlinkSync(promptFile);
       } catch (e) {
       }
       try {
-        fs2.unlinkSync(fullPromptFile);
+        fs3.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       try {
-        fs2.unlinkSync(tmpFullPromptFile);
+        fs3.unlinkSync(tmpFullPromptFile);
       } catch (e) {
       }
       try {
-        fs2.unlinkSync(outFile);
+        fs3.unlinkSync(outFile);
       } catch (e) {
       }
       try {
-        fs2.unlinkSync(errFile);
+        fs3.unlinkSync(errFile);
       } catch (e) {
       }
       try {
-        fs2.unlinkSync(doneFile);
+        fs3.unlinkSync(doneFile);
       } catch (e) {
       }
       try {
-        fs2.unlinkSync(pidFile);
+        fs3.unlinkSync(pidFile);
       } catch (e) {
       }
     };
@@ -5284,9 +5825,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
-      if (!fs2.existsSync(doneFile)) {
-        const stdout2 = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
-        const stderr2 = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
+      if (!fs3.existsSync(doneFile)) {
+        const stdout2 = fs3.existsSync(outFile) ? decodeCommandBuffer(fs3.readFileSync(outFile)) : "";
+        const stderr2 = fs3.existsSync(errFile) ? decodeCommandBuffer(fs3.readFileSync(errFile)) : "";
         const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
         if (normalized2) {
           t.output = `${normalized2}
@@ -5303,9 +5844,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
       this.runningProcesses.delete(task.id);
-      const stdout = fs2.existsSync(outFile) ? decodeCommandBuffer(fs2.readFileSync(outFile)) : "";
-      const stderr = fs2.existsSync(errFile) ? decodeCommandBuffer(fs2.readFileSync(errFile)) : "";
-      const exitCodeRaw = fs2.readFileSync(doneFile, "utf8").trim();
+      const stdout = fs3.existsSync(outFile) ? decodeCommandBuffer(fs3.readFileSync(outFile)) : "";
+      const stderr = fs3.existsSync(errFile) ? decodeCommandBuffer(fs3.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs3.readFileSync(doneFile, "utf8").trim();
       cleanupTempFiles();
       if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
@@ -5335,6 +5876,172 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       }
     }, 3e3);
   }
+  async runCodexTask(task, onComplete) {
+    var _a, _b, _c, _d;
+    const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
+    if (idx === -1) return;
+    const current = this.settings.tasks[idx];
+    if (!((_a = task.prompt) == null ? void 0 : _a.trim())) {
+      current.status = "failed";
+      current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
+      current.output = "[AutoOC] Codex task not launched: prompt is empty.";
+      await this.saveSettings();
+      if (onComplete) await onComplete(current, -1);
+      return;
+    }
+    const vaultBasePath = this.app.vault.adapter.basePath || ".";
+    const taskCwd = task.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const model = this.getEffectiveCodexModel(task.model);
+    const reasoningEffort = task.reasoningEffort || this.settings.defaultCodexReasoningEffort || "medium";
+    const startedAt = (/* @__PURE__ */ new Date()).toISOString();
+    let cancelled = false;
+    let saveTimer = null;
+    let codexLogOutput = "";
+    current.status = "running";
+    current.lastRun = startedAt;
+    current.output = "[starting Codex task\u2026]\n";
+    delete current.pendingCodexApproval;
+    (_b = this.view) == null ? void 0 : _b.resetDashboardTaskShift(task.id);
+    await this.saveSettings();
+    new import_obsidian.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
+    const scheduleSave = () => {
+      if (saveTimer) return;
+      saveTimer = setTimeout(() => {
+        saveTimer = null;
+        void this.saveSettings(false);
+      }, 750);
+    };
+    const client = this.createCodexClient(taskCwd, {
+      onStarted: ({ threadId, turnId }) => {
+        current.lastCodexThreadId = threadId;
+        current.lastCodexTurnId = turnId;
+        if (task.interactiveTerminal) {
+          const bin = resolveCodexBin(this.settings.codexPath);
+          openCodexApp(bin, taskCwd, (error) => {
+            new import_obsidian.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
+          });
+          new import_obsidian.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
+        }
+        scheduleSave();
+      },
+      onOutput: (output) => {
+        var _a2;
+        if (cancelled || current.status !== "running") return;
+        current.output = this.redactSecrets(output || "[Codex is working\u2026]");
+        (_a2 = this.view) == null ? void 0 : _a2.nudgeDashboardTask(task.id, "up");
+        this.emitTaskUpdated(current);
+        scheduleSave();
+      },
+      onApproval: (approval) => {
+        if (cancelled || current.status !== "running") return;
+        current.pendingCodexApproval = {
+          requestId: approval.requestId,
+          kind: approval.kind,
+          summary: approval.summary
+        };
+        current.output += `${current.output ? "\n" : ""}[waiting for approval: ${approval.summary}]`;
+        void this.saveSettings(false);
+        this.emitTaskUpdated(current);
+        new import_obsidian.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
+      }
+    });
+    this.runningCodexClients.set(task.id, client);
+    this.runningProcesses.set(task.id, {
+      kill: () => {
+        cancelled = true;
+        if (saveTimer) clearTimeout(saveTimer);
+        void client.interrupt();
+        this.runningCodexClients.delete(task.id);
+        this.runningProcesses.delete(task.id);
+      }
+    });
+    let exitCode = -1;
+    try {
+      const result = await client.run(task.prompt, model || void 0, reasoningEffort || void 0);
+      if (cancelled || current.status !== "running") return;
+      current.lastCodexThreadId = result.threadId;
+      current.lastCodexTurnId = result.turnId;
+      delete current.pendingCodexApproval;
+      const successful = result.status === "completed";
+      exitCode = successful ? 0 : -1;
+      const finalOutput = this.redactSecrets(result.output || result.error || "(no output)");
+      const metadata = [
+        `[engine: codex]`,
+        `[model: ${model || "default"}]`,
+        `[reasoning: ${reasoningEffort || "default"}]`,
+        `[thread: ${result.threadId}]`,
+        `[turn: ${result.turnId}]`
+      ].join("\n");
+      current.output = finalOutput;
+      if (successful) {
+        current.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
+        new import_obsidian.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
+      } else {
+        current.status = "failed";
+        current.output += `
+[Codex status: ${result.status}]`;
+        (_c = this.view) == null ? void 0 : _c.startGradualSink(task.id);
+        new import_obsidian.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+      }
+      codexLogOutput = `${metadata}
+[started: ${startedAt}]
+[finished: ${(/* @__PURE__ */ new Date()).toISOString()}]
+
+${current.output}`;
+    } catch (error) {
+      if (cancelled || current.output.includes("[task stopped manually]")) return;
+      current.status = "failed";
+      delete current.pendingCodexApproval;
+      current.output = `${current.output || ""}
+[Codex error: ${String(error)}]`.trim();
+      const ids = client.getIds();
+      codexLogOutput = `[engine: codex]
+[model: ${model || "default"}]
+[reasoning: ${reasoningEffort || "default"}]
+[thread: ${ids.threadId || "unavailable"}]
+[turn: ${ids.turnId || "unavailable"}]
+[started: ${startedAt}]
+[finished: ${(/* @__PURE__ */ new Date()).toISOString()}]
+
+${current.output}`;
+      (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
+      new import_obsidian.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+    } finally {
+      if (saveTimer) clearTimeout(saveTimer);
+      this.runningCodexClients.delete(task.id);
+      this.runningProcesses.delete(task.id);
+      client.dispose();
+    }
+    if (this.settings.logsEnabled) {
+      saveLogToFile(vaultBasePath, task.id, codexLogOutput || current.output);
+      cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+      cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+    }
+    await this.saveSettings();
+    this.emitTaskUpdated(current);
+    if (onComplete) await onComplete(current, exitCode);
+  }
+  createCodexClient(cwd, callbacks) {
+    return new CodexAppServerClient(resolveCodexBin(this.settings.codexPath), cwd, callbacks);
+  }
+  async resolveCodexApproval(taskId, approved) {
+    const task = this.settings.tasks.find((candidate) => candidate.id === taskId);
+    const client = this.runningCodexClients.get(taskId);
+    const approval = task == null ? void 0 : task.pendingCodexApproval;
+    if (!task || !client || !approval) {
+      new import_obsidian.Notice("AutoOC: this Codex approval is no longer active.");
+      return;
+    }
+    if (!client.resolveApproval(approval.requestId, approved)) {
+      new import_obsidian.Notice("AutoOC: could not answer the Codex approval.");
+      return;
+    }
+    task.output += `
+[approval ${approved ? "accepted" : "rejected"}]`;
+    delete task.pendingCodexApproval;
+    await this.saveSettings(false);
+    this.emitTaskUpdated(task);
+  }
   async runCodeTask(task, onComplete) {
     var _a, _b;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
@@ -5363,17 +6070,17 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       const outputVar = current.codeOutputVar || "output";
       const defaultCwd = current.workingDirectory || this.settings.workingDirectory || vaultBasePath;
       const resolveInVault = (p) => {
-        const resolved = path.resolve(vaultBasePath, p || ".");
-        const root = path.resolve(vaultBasePath);
-        if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+        const resolved = path2.resolve(vaultBasePath, p || ".");
+        const root = path2.resolve(vaultBasePath);
+        if (resolved !== root && !resolved.startsWith(root + path2.sep)) {
           throw new Error(`Path escapes vault: ${p}`);
         }
         return resolved;
       };
-      const readText = (p) => fs.readFileSync(p, "utf8");
+      const readText = (p) => fs2.readFileSync(p, "utf8");
       const writeText = (p, content) => {
-        fs.mkdirSync(path.dirname(p), { recursive: true });
-        fs.writeFileSync(p, String(content), "utf8");
+        fs2.mkdirSync(path2.dirname(p), { recursive: true });
+        fs2.writeFileSync(p, String(content), "utf8");
         return p;
       };
       const sandbox = {
@@ -5398,33 +6105,33 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
           write: (p, content) => writeText(resolveInVault(p), content),
           append: (p, content) => {
             const f = resolveInVault(p);
-            fs.mkdirSync(path.dirname(f), { recursive: true });
-            fs.appendFileSync(f, String(content), "utf8");
+            fs2.mkdirSync(path2.dirname(f), { recursive: true });
+            fs2.appendFileSync(f, String(content), "utf8");
             return f;
           },
-          exists: (p) => fs.existsSync(resolveInVault(p)),
-          list: (p = ".") => fs.readdirSync(resolveInVault(p))
+          exists: (p) => fs2.existsSync(resolveInVault(p)),
+          list: (p = ".") => fs2.readdirSync(resolveInVault(p))
         };
       }
       if (current.codeAllowFiles) {
         sandbox.files = {
-          read: (p) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-          write: (p, content) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
+          read: (p) => readText(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p)),
+          write: (p, content) => writeText(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p), content),
           append: (p, content) => {
-            const f = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p);
-            fs.mkdirSync(path.dirname(f), { recursive: true });
-            fs.appendFileSync(f, String(content), "utf8");
+            const f = path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p);
+            fs2.mkdirSync(path2.dirname(f), { recursive: true });
+            fs2.appendFileSync(f, String(content), "utf8");
             return f;
           },
-          exists: (p) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-          list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p))
+          exists: (p) => fs2.existsSync(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p)),
+          list: (p = ".") => fs2.readdirSync(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p))
         };
       }
       if (current.codeAllowTerminal) {
         const { execSync } = require("child_process");
         sandbox.terminal = {
           run: (command, options = {}) => execSync(String(command), {
-            cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
+            cwd: options.cwd ? path2.isAbsolute(options.cwd) ? options.cwd : path2.resolve(defaultCwd, options.cwd) : defaultCwd,
             timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 6e5),
             encoding: "utf8"
           })
@@ -5544,7 +6251,10 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       status: "pending",
       lastRun: "",
       output: "",
-      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
+      lastCodexThreadId: void 0,
+      lastCodexTurnId: void 0,
+      pendingCodexApproval: void 0
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
@@ -5627,7 +6337,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     );
     const data = {
       autoOCExport: {
-        schemaVersion: "1.4.0",
+        schemaVersion: "1.5.0",
         exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -5648,7 +6358,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         title: "Export AutoOC tasks and workflows"
       });
       if (result.canceled || !result.filePath) return;
-      fs.writeFileSync(result.filePath, json, "utf8");
+      fs2.writeFileSync(result.filePath, json, "utf8");
       new import_obsidian.Notice(
         `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
       );
@@ -5675,7 +6385,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     };
   }
   async importFromFile(filePath) {
-    const raw = fs.readFileSync(filePath, "utf8");
+    const raw = fs2.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
     return this.importFromData(data);
   }
@@ -5685,21 +6395,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
     const sv = data.autoOCExport.schemaVersion;
-    if (sv !== "1.0" && sv !== "1.4.0") {
+    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0") {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
     const exportIdToTaskId = /* @__PURE__ */ new Map();
     let tasksImported = 0;
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
+      if (importedTaskKind !== "opencode" && importedTaskKind !== "codex" && importedTaskKind !== "code") {
+        throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
+      }
+      if (et.reasoningEffort !== void 0 && (importedTaskKind !== "codex" || typeof et.reasoningEffort !== "string" || !et.reasoningEffort.trim())) {
+        throw new Error(`Task "${et.name}" has reasoningEffort outside a Codex task.`);
+      }
+      if (importedTaskKind === "code" && et.interactiveTerminal === true) {
+        throw new Error(`Task "${et.name}" cannot combine Code with interactiveTerminal.`);
+      }
       const task = {
         id: generateId(),
         taskKind: importedTaskKind,
         name: this.ensureUniqueTaskName(et.name),
         area: (_a = et.area) != null ? _a : "",
         prompt: importedTaskKind === "code" ? et.code || et.prompt || "" : et.prompt,
-        model: importedTaskKind === "code" ? "" : this.getEffectiveDefaultModel(),
-        agent: importedTaskKind === "code" ? "" : this.getEffectiveAgent(et.agent),
+        model: importedTaskKind === "code" ? "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        agent: importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
+        reasoningEffort: importedTaskKind === "codex" ? et.reasoningEffort || this.settings.defaultCodexReasoningEffort : void 0,
         useRalphLoop: importedTaskKind === "opencode" ? (_b = et.useRalphLoop) != null ? _b : false : false,
         forceModel: importedTaskKind === "opencode" ? (_c = et.forceModel) != null ? _c : false : false,
         scheduleType: (_d = et.scheduleType) != null ? _d : "manual",
@@ -5714,9 +6434,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         output: "",
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         workingDirectory: et.workingDirectory,
-        branch: importedTaskKind === "code" ? "" : et.branch,
-        createBranch: importedTaskKind === "code" ? false : et.createBranch,
-        interactiveTerminal: importedTaskKind === "opencode" ? (_k = et.interactiveTerminal) != null ? _k : this.settings.defaultInteractiveTerminal : void 0,
+        branch: importedTaskKind === "opencode" ? et.branch : "",
+        createBranch: importedTaskKind === "opencode" ? et.createBranch : false,
+        interactiveTerminal: importedTaskKind === "code" ? void 0 : (_k = et.interactiveTerminal) != null ? _k : importedTaskKind === "opencode" ? this.settings.defaultInteractiveTerminal : false,
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -6011,17 +6731,17 @@ Reply ONLY with YES or NO.`;
     const vaultBase = this.app.vault.adapter.basePath || ".";
     const defaultCwd = this.settings.workingDirectory || vaultBase;
     const resolveInVault = (p) => {
-      const resolved = path.resolve(vaultBase, p || ".");
-      const root = path.resolve(vaultBase);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
+      const resolved = path2.resolve(vaultBase, p || ".");
+      const root = path2.resolve(vaultBase);
+      if (resolved !== root && !resolved.startsWith(root + path2.sep)) {
         throw new Error(`Path escapes vault: ${p}`);
       }
       return resolved;
     };
-    const readText = (p) => fs.readFileSync(p, "utf8");
+    const readText = (p) => fs2.readFileSync(p, "utf8");
     const writeText = (p, content) => {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, String(content), "utf8");
+      fs2.mkdirSync(path2.dirname(p), { recursive: true });
+      fs2.writeFileSync(p, String(content), "utf8");
       return p;
     };
     const sandbox = {
@@ -6047,35 +6767,35 @@ Reply ONLY with YES or NO.`;
         write: (p, content) => writeText(resolveInVault(p), content),
         append: (p, content) => {
           const full = resolveInVault(p);
-          fs.mkdirSync(path.dirname(full), { recursive: true });
-          fs.appendFileSync(full, String(content), "utf8");
+          fs2.mkdirSync(path2.dirname(full), { recursive: true });
+          fs2.appendFileSync(full, String(content), "utf8");
           return full;
         },
-        exists: (p) => fs.existsSync(resolveInVault(p)),
-        list: (p = ".") => fs.readdirSync(resolveInVault(p))
+        exists: (p) => fs2.existsSync(resolveInVault(p)),
+        list: (p = ".") => fs2.readdirSync(resolveInVault(p))
       };
     }
     if (step.codeAllowFiles) {
       sandbox.files = {
         cwd: defaultCwd,
-        resolve: (p) => path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p || "."),
-        read: (p) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        write: (p, content) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
+        resolve: (p) => path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p || "."),
+        read: (p) => readText(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p)),
+        write: (p, content) => writeText(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p), content),
         append: (p, content) => {
-          const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p);
-          fs.mkdirSync(path.dirname(full), { recursive: true });
-          fs.appendFileSync(full, String(content), "utf8");
+          const full = path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p);
+          fs2.mkdirSync(path2.dirname(full), { recursive: true });
+          fs2.appendFileSync(full, String(content), "utf8");
           return full;
         },
-        exists: (p) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p))
+        exists: (p) => fs2.existsSync(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p)),
+        list: (p = ".") => fs2.readdirSync(path2.isAbsolute(p) ? path2.resolve(p) : path2.resolve(defaultCwd, p))
       };
     }
     if (step.codeAllowTerminal) {
       const { execSync } = require("child_process");
       sandbox.terminal = {
         run: (command, options = {}) => execSync(String(command), {
-          cwd: options.cwd ? path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd) : defaultCwd,
+          cwd: options.cwd ? path2.isAbsolute(options.cwd) ? options.cwd : path2.resolve(defaultCwd, options.cwd) : defaultCwd,
           timeout: Math.min(Math.max(options.timeoutMs || 3e4, 1e3), 6e5),
           encoding: "utf8"
         })
@@ -6649,6 +7369,9 @@ var AutoOCView = class extends import_obsidian.ItemView {
   openCli() {
     new OpenCodeCliModal(this.app, this.plugin).open();
   }
+  openCodex() {
+    new CodexAppModal(this.app, this.plugin).open();
+  }
   openTaskInList(task) {
     this.currentTab = "tasks";
     this.filterText = "";
@@ -6733,6 +7456,12 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: "auto-oc-tab-btn"
     });
     btnCli.onclick = () => this.openCli();
+    const btnCodex = navRow.createEl("button", {
+      text: "\u2726 ChatGPT / Codex",
+      cls: "auto-oc-tab-btn"
+    });
+    btnCodex.title = "Open ChatGPT/Codex in the project or a selected folder";
+    btnCodex.onclick = () => this.openCodex();
     const toolsRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-tools");
     if (this.currentTab === "tasks") {
       const btnNewTask = toolsRow.createEl("button", {
@@ -7702,13 +8431,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
     renderTaskResults(resultsRoot);
   }
   renderTaskCard(parent, task) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
     card.setAttr("data-auto-oc-task-id", task.id);
     const summary = card.createDiv("auto-oc-card-summary");
     const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
+    summary.createEl("span", {
+      text: (task.taskKind || "opencode") === "code" ? "Code" : task.taskKind === "codex" ? task.interactiveTerminal ? "ChatGPT / Codex" : "Codex" : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
+      cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`
+    });
     const badge = summary.createEl("span", {
-      text: task.status,
+      text: task.pendingCodexApproval ? "waiting approval" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -7726,6 +8459,20 @@ var AutoOCView = class extends import_obsidian.ItemView {
         e.stopPropagation();
         btnQuickStop.disabled = true;
         await this.plugin.killTask(task.id);
+      };
+    }
+    if (task.pendingCodexApproval) {
+      const btnApprove = quickActions.createEl("button", { text: "\u2713", cls: "auto-oc-btn-run" });
+      btnApprove.title = task.pendingCodexApproval.summary;
+      btnApprove.onclick = async (e) => {
+        e.stopPropagation();
+        await this.plugin.resolveCodexApproval(task.id, true);
+      };
+      const btnReject = quickActions.createEl("button", { text: "\u2715", cls: "auto-oc-btn-stop" });
+      btnReject.title = `Reject: ${task.pendingCodexApproval.summary}`;
+      btnReject.onclick = async (e) => {
+        e.stopPropagation();
+        await this.plugin.resolveCodexApproval(task.id, false);
       };
     }
     const btnQuickLog = quickActions.createEl("button", { text: "\u{1F4C4}", cls: task.status === "running" ? "auto-oc-btn-log-live" : "auto-oc-btn-output" });
@@ -7760,12 +8507,17 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const isExpanded = this.expandedTasks.has(task.id);
     details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = (_b = (_a = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model;
-    meta.createEl("span", { text: `\u{1F5C2} ${((_c = task.area) == null ? void 0 : _c.trim()) || "No area"}` });
+    const modelLabel = task.taskKind === "codex" ? (_c = (_b = (_a = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model) != null ? _c : "Automatic" : (_e = (_d = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _d.label) != null ? _e : task.model;
+    meta.createEl("span", { text: `\u{1F5C2} ${((_f = task.area) == null ? void 0 : _f.trim()) || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
+    } else if (task.taskKind === "codex") {
+      meta.createEl("span", { text: `\u2726 Codex \xB7 ${modelLabel || "Automatic"}` });
+      if (task.interactiveTerminal) meta.createEl("span", { text: "ChatGPT app task" });
+      meta.createEl("span", { text: `\u{1F9E0} ${task.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort}` });
     } else {
       if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
+      else meta.createEl("span", { text: "OpenCode" });
       meta.createEl("span", { text: `\u{1F916} ${modelLabel}` });
       meta.createEl("span", { text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -7780,8 +8532,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     } else if (task.scheduleType === "interval") {
-      const value = (_d = task.scheduleIntervalValue) != null ? _d : 10;
-      const unit = (_e = task.scheduleIntervalUnit) != null ? _e : "minutes";
+      const value = (_g = task.scheduleIntervalValue) != null ? _g : 10;
+      const unit = (_h = task.scheduleIntervalUnit) != null ? _h : "minutes";
       scheduleText = `\u{1F501} Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
@@ -7823,6 +8575,20 @@ var AutoOCView = class extends import_obsidian.ItemView {
         btnStop.disabled = true;
         btnStop.textContent = "Stopping\u2026";
         await this.plugin.killTask(task.id);
+      };
+    }
+    if (task.pendingCodexApproval) {
+      const approval = actions.createDiv("auto-oc-codex-approval");
+      approval.createEl("span", { text: `Approval needed: ${task.pendingCodexApproval.summary}` });
+      const approve = approval.createEl("button", { text: "\u2713 Approve", cls: "auto-oc-btn-run" });
+      approve.onclick = async (e) => {
+        e.stopPropagation();
+        await this.plugin.resolveCodexApproval(task.id, true);
+      };
+      const reject = approval.createEl("button", { text: "\u2715 Reject", cls: "auto-oc-btn-stop" });
+      reject.onclick = async (e) => {
+        e.stopPropagation();
+        await this.plugin.resolveCodexApproval(task.id, false);
       };
     }
     const btnLog = actions.createEl("button", {
@@ -8406,6 +9172,8 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         this.plugin.refreshModels();
         new import_obsidian.Notice("AutoOC: models updated.");
         this.sendMeta();
+      } else if (data.type === "refresh-codex-models") {
+        void this.plugin.refreshCodexModels(true).then(() => this.sendMeta());
       } else if (data.type === "log") {
         console.log("[VisualBuilder]", data.message);
       }
@@ -8434,6 +9202,10 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         meta: {
           availableAgents: this.plugin.availableAgents,
           availableModels: this.plugin.availableModels,
+          availableCodexModels: this.plugin.availableCodexModels,
+          defaultAiEngine: this.plugin.settings.defaultAiEngine,
+          defaultCodexModel: this.plugin.settings.defaultCodexModel,
+          defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
           pluginVersion: this.plugin.manifest.version
         }
       }
@@ -8451,6 +9223,10 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       meta: {
         availableAgents: this.plugin.availableAgents,
         availableModels: this.plugin.availableModels,
+        availableCodexModels: this.plugin.availableCodexModels,
+        defaultAiEngine: this.plugin.settings.defaultAiEngine,
+        defaultCodexModel: this.plugin.settings.defaultCodexModel,
+        defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
         pluginVersion: this.plugin.manifest.version
       }
     };
@@ -8485,19 +9261,21 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       var _a2, _b, _c, _d, _e;
       const existing = oldTasks.find((x) => x.id === t.id);
       const id = existing ? t.id : t.id || generateId();
+      const taskKind = t.taskKind || (existing == null ? void 0 : existing.taskKind) || "opencode";
       const status = (existing == null ? void 0 : existing.status) || "pending";
       const lastRun = (existing == null ? void 0 : existing.lastRun) || "";
       const output = (existing == null ? void 0 : existing.output) || "";
       return {
         id,
-        taskKind: t.taskKind || (existing == null ? void 0 : existing.taskKind) || "opencode",
+        taskKind,
         name: t.name || "Unnamed",
         area: t.area !== void 0 ? t.area || "" : (existing == null ? void 0 : existing.area) || "",
         prompt: t.prompt || "",
-        model: t.model || this.plugin.getEffectiveDefaultModel(),
-        agent: t.agent || this.plugin.getEffectiveAgent(),
-        useRalphLoop: t.useRalphLoop !== void 0 ? !!t.useRalphLoop : (_a2 = existing == null ? void 0 : existing.useRalphLoop) != null ? _a2 : false,
-        forceModel: t.forceModel !== void 0 ? !!t.forceModel : (_b = existing == null ? void 0 : existing.forceModel) != null ? _b : false,
+        model: t.model !== void 0 ? t.model : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing == null ? void 0 : existing.model) : this.plugin.getEffectiveDefaultModel(),
+        agent: taskKind === "opencode" ? t.agent || this.plugin.getEffectiveAgent() : "",
+        reasoningEffort: taskKind === "codex" ? t.reasoningEffort || (existing == null ? void 0 : existing.reasoningEffort) || this.plugin.settings.defaultCodexReasoningEffort : void 0,
+        useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== void 0 ? !!t.useRalphLoop : (_a2 = existing == null ? void 0 : existing.useRalphLoop) != null ? _a2 : false),
+        forceModel: taskKind === "opencode" && (t.forceModel !== void 0 ? !!t.forceModel : (_b = existing == null ? void 0 : existing.forceModel) != null ? _b : false),
         scheduleType: t.scheduleType || "manual",
         scheduleTime: t.scheduleTime || "09:00",
         scheduleDate: t.scheduleDate || "",
@@ -8508,6 +9286,9 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
         status,
         lastRun,
         output,
+        lastCodexThreadId: existing == null ? void 0 : existing.lastCodexThreadId,
+        lastCodexTurnId: existing == null ? void 0 : existing.lastCodexTurnId,
+        pendingCodexApproval: existing == null ? void 0 : existing.pendingCodexApproval,
         createdAt: (existing == null ? void 0 : existing.createdAt) || t.createdAt || (/* @__PURE__ */ new Date()).toISOString(),
         // Preserve classic-only fields when older Visual Builder payloads do
         // not send them.
@@ -8826,17 +9607,19 @@ var SecretRevealModal = class extends import_obsidian.Modal {
 var CreateTaskModal = class extends import_obsidian.Modal {
   constructor(app, plugin, editTask) {
     super(app);
+    this.focusNameOnNextOpen = true;
     this.plugin = plugin;
     this.editTask = editTask;
     this.draft = editTask ? { ...editTask } : {
       name: "",
-      taskKind: "opencode",
+      taskKind: plugin.settings.defaultAiEngine,
       prompt: "",
-      model: plugin.getEffectiveDefaultModel(),
+      model: plugin.settings.defaultAiEngine === "codex" ? plugin.getEffectiveCodexModel() : plugin.getEffectiveDefaultModel(),
       agent: plugin.getEffectiveAgent(),
+      reasoningEffort: plugin.settings.defaultCodexReasoningEffort,
       useRalphLoop: false,
       forceModel: false,
-      interactiveTerminal: plugin.settings.defaultInteractiveTerminal,
+      interactiveTerminal: plugin.settings.defaultAiEngine === "opencode" && plugin.settings.defaultInteractiveTerminal,
       scheduleType: "manual",
       scheduleTime: nowTimeString(),
       scheduleDate: todayString(),
@@ -8853,20 +9636,30 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 900);
     preventBackdropClose(this);
+    const shouldFocusName = this.focusNameOnNextOpen;
+    this.focusNameOnNextOpen = false;
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = this.draft.taskKind || "opencode";
-    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind;
+    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind === "codex" && this.draft.interactiveTerminal ? "codex-app" : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
-    new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose whether this task asks OpenCode to work, or runs local JavaScript directly.").addDropdown((dd) => {
+    new import_obsidian.Setting(contentEl).setName("Task type").setDesc("Choose OpenCode, Codex in ChatGPT, an interactive OpenCode CLI, or local JavaScript.").addDropdown((dd) => {
       dd.addOption("opencode", "OpenCode task");
+      dd.addOption("codex", "Codex task");
+      dd.addOption("codex-app", "ChatGPT / Codex task");
       dd.addOption("code", "Code task");
-      dd.addOption("cli", "CLI task");
+      dd.addOption("cli", "OpenCode CLI task");
       dd.setValue(taskType);
       dd.onChange((v) => {
-        this.draft.taskKind = v === "code" ? "code" : "opencode";
-        this.draft.interactiveTerminal = v === "cli";
+        this.draft.taskKind = v === "code" ? "code" : v === "codex" || v === "codex-app" ? "codex" : "opencode";
+        this.draft.interactiveTerminal = v === "cli" || v === "codex-app";
+        if (v === "codex" || v === "codex-app") {
+          this.draft.model = "";
+          this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
+        } else if (v === "opencode" || v === "cli") {
+          this.draft.model = this.plugin.getEffectiveDefaultModel();
+        }
         if (v === "code" && !this.draft.code) {
           this.draft.code = "// Set output to pass data forward\noutput = input;";
         }
@@ -8877,7 +9670,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a2 = this.draft.name) != null ? _a2 : "").onChange((v) => this.draft.name = v);
-      window.setTimeout(() => text.inputEl.focus(), 50);
+      if (shouldFocusName) window.setTimeout(() => text.inputEl.focus(), 50);
     });
     new import_obsidian.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a2;
@@ -8906,10 +9699,10 @@ var CreateTaskModal = class extends import_obsidian.Modal {
     } else {
       const promptNotice = contentEl.createDiv("auto-oc-prompt-notice");
       promptNotice.style.display = "none";
-      new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc("Text to send to OpenCode").addTextArea((ta) => {
+      new import_obsidian.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
         var _a2, _b;
         const updatePromptNotice = (value) => {
-          if (this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
+          if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
             ta.inputEl.addClass("auto-oc-prompt-too-long");
             promptNotice.setText(
               `CLI prompts over ${SAFE_CLI_PROMPT_LENGTH} characters are saved to a temporary workspace file, the OpenCode TUI is instructed to read it, and the file is deleted after 1 minute.`
@@ -8932,7 +9725,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
         updatePromptNotice((_b = this.draft.prompt) != null ? _b : "");
       });
     }
-    contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4C2} Workspace & Git");
+    contentEl.createDiv("auto-oc-modal-section-title").setText(taskKind === "opencode" ? "\u{1F4C2} Workspace & Git" : "\u{1F4C2} Workspace");
     new import_obsidian.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
@@ -9035,6 +9828,32 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           }
         })
       );
+    } else if (taskKind === "codex") {
+      new import_obsidian.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
+        var _a2, _b;
+        dd.addOption("", "Automatic");
+        this.plugin.availableCodexModels.forEach((entry) => dd.addOption(entry.value, entry.label));
+        const current = (_b = (_a2 = this.draft.model) != null ? _a2 : this.plugin.settings.defaultCodexModel) != null ? _b : "";
+        if (current && !this.plugin.availableCodexModels.some((entry) => entry.value === current)) dd.addOption(current, current);
+        dd.setValue(current);
+        dd.onChange((value) => {
+          this.draft.model = value;
+          const efforts = this.plugin.getCodexReasoningEfforts(value);
+          if (!efforts.includes(this.draft.reasoningEffort || "")) this.draft.reasoningEffort = efforts[0];
+          this.onOpen();
+        });
+      }).addButton((btn) => btn.setButtonText("\u{1F504} Refresh").onClick(async () => {
+        await this.plugin.refreshCodexModels(true);
+        this.onOpen();
+      }));
+      new import_obsidian.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
+        const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
+        efforts.forEach((effort) => dd.addOption(effort, effort));
+        const current = this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
+        if (current && !efforts.includes(current)) dd.addOption(current, current);
+        dd.setValue(current || "");
+        dd.onChange((value) => this.draft.reasoningEffort = value);
+      });
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new import_obsidian.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
@@ -9140,7 +9959,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           return;
         }
         const savingTaskKind = this.draft.taskKind || "opencode";
-        if (savingTaskKind === "opencode" && !((_b = this.draft.prompt) == null ? void 0 : _b.trim())) {
+        if (savingTaskKind !== "code" && !((_b = this.draft.prompt) == null ? void 0 : _b.trim())) {
           new import_obsidian.Notice("Prompt is required.");
           return;
         }
@@ -9178,7 +9997,8 @@ var CreateTaskModal = class extends import_obsidian.Modal {
               ...this.draft,
               prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt || "",
               taskKind: savingTaskKind,
-              interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : void 0,
+              interactiveTerminal: savingTaskKind === "code" ? void 0 : !!this.draft.interactiveTerminal,
+              reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : void 0,
               status: existing.status,
               lastRun: existing.lastRun,
               output: existing.output
@@ -9194,7 +10014,8 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt,
             model: savingTaskKind === "code" ? "" : this.draft.model,
             area: (_i = this.draft.area) != null ? _i : "",
-            agent: savingTaskKind === "code" ? "" : this.plugin.getEffectiveAgent(this.draft.agent),
+            agent: savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
+            reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort : void 0,
             useRalphLoop: savingTaskKind === "opencode" ? (_j = this.draft.useRalphLoop) != null ? _j : false : false,
             forceModel: savingTaskKind === "opencode" ? (_k = this.draft.forceModel) != null ? _k : false : false,
             scheduleType: (_l = this.draft.scheduleType) != null ? _l : "manual",
@@ -9211,7 +10032,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
             workingDirectory: this.draft.workingDirectory,
             branch: savingTaskKind === "opencode" ? this.draft.branch : "",
             createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
-            interactiveTerminal: savingTaskKind === "opencode" ? !!this.draft.interactiveTerminal : void 0,
+            interactiveTerminal: savingTaskKind === "code" ? void 0 : !!this.draft.interactiveTerminal,
             code: savingTaskKind === "code" ? this.draft.code : void 0,
             codeLang: savingTaskKind === "code" ? "javascript" : void 0,
             codeInputVar: savingTaskKind === "code" ? this.draft.codeInputVar || "input" : void 0,
@@ -10459,7 +11280,7 @@ var ImportModal = class extends import_obsidian.Modal {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
-      const raw = fs.readFileSync(this.filePath, "utf8");
+      const raw = fs2.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
       const result = this.validateExport(data);
@@ -10540,7 +11361,7 @@ var ImportModal = class extends import_obsidian.Modal {
       return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
     }
     const sv = data.autoOCExport.schemaVersion;
-    const SUPPORTED = ["1.0", "1.4.0"];
+    const SUPPORTED = ["1.0", "1.4.0", "1.5.0"];
     if (!sv) {
       errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
     } else if (!SUPPORTED.includes(sv)) {
@@ -10578,6 +11399,18 @@ var ImportModal = class extends import_obsidian.Modal {
         }
         if (typeof t.prompt !== "string" || !t.prompt.trim()) {
           errors.push(where + ".prompt is missing or empty.");
+        }
+        const taskKind = t.taskKind || "opencode";
+        if (!["opencode", "codex", "code"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, codex, or code.");
+        }
+        if (t.reasoningEffort !== void 0 && (taskKind !== "codex" || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
+          errors.push(where + ".reasoningEffort is only valid for Codex tasks.");
+        }
+        if (t.interactiveTerminal !== void 0 && typeof t.interactiveTerminal !== "boolean") {
+          errors.push(where + ".interactiveTerminal must be a boolean.");
+        } else if (taskKind === "code" && t.interactiveTerminal === true) {
+          errors.push(where + ": Code tasks cannot set interactiveTerminal.");
         }
         const validSchedules = ["manual", "once", "daily", "weekly", "monthly", "interval"];
         if (t.scheduleType && !validSchedules.includes(t.scheduleType)) {
@@ -11146,6 +11979,77 @@ var OpenCodeCliModal = class extends import_obsidian.Modal {
     this.contentEl.empty();
   }
 };
+var CodexAppModal = class extends import_obsidian.Modal {
+  constructor(app, plugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.addClass("auto-oc-cli-modal");
+    setupModalX(this);
+    contentEl.createEl("h3", { text: "ChatGPT / Codex" });
+    contentEl.createEl("p", {
+      text: "Choose the project folder to open in the ChatGPT Codex workspace.",
+      cls: "setting-item-description"
+    });
+    const vaultCwd = this.app.vault.adapter.basePath || ".";
+    const defaultCwd = this.plugin.settings.workingDirectory || vaultCwd;
+    const buttons = contentEl.createDiv("auto-oc-cli-modal-buttons");
+    const openDefault = buttons.createEl("button", { text: "\u{1F4C2} Open project / vault", cls: "auto-oc-btn-primary" });
+    openDefault.onclick = () => this.launch(defaultCwd);
+    contentEl.createEl("p", { text: defaultCwd, cls: "setting-item-description auto-oc-cli-path" });
+    const choose = buttons.createEl("button", { text: "\u{1F5C0} Choose folder\u2026", cls: "auto-oc-btn-secondary" });
+    choose.onclick = async () => {
+      const cwd = await this.chooseFolder();
+      if (cwd) this.launch(cwd);
+    };
+    const cancel = buttons.createEl("button", { text: "Cancel", cls: "auto-oc-btn-secondary" });
+    cancel.onclick = () => this.close();
+  }
+  async launch(cwd) {
+    try {
+      if (!fs2.existsSync(cwd) || !fs2.statSync(cwd).isDirectory()) throw new Error(`Folder does not exist: ${cwd}`);
+      openCodexNewThread(cwd, (error) => void this.fallbackOpen(error, cwd));
+      new import_obsidian.Notice(`AutoOC: opening a new ChatGPT / Codex conversation in ${cwd}`);
+      this.close();
+    } catch (error) {
+      void this.fallbackOpen(error, cwd);
+    }
+  }
+  async fallbackOpen(error, cwd) {
+    try {
+      await copyTextToClipboard(cwd);
+    } catch (e) {
+    }
+    if (isWindows()) {
+      try {
+        const script = "$app = Get-StartApps | Where-Object { $_.Name -match 'ChatGPT|Codex' } | Select-Object -First 1; if ($app) { Start-Process ('shell:AppsFolder\\' + $app.AppID) } else { exit 1 }";
+        const launcher = (0, import_child_process2.spawn)("powershell.exe", ["-NoLogo", "-NonInteractive", "-Command", script], { detached: true, stdio: "ignore", windowsHide: true });
+        launcher.unref();
+      } catch (e) {
+      }
+    }
+    new import_obsidian.Notice(`AutoOC: could not open the selected folder directly (${String(error)}). ChatGPT was opened when possible and the path was copied: ${cwd}`, 1e4);
+    this.close();
+  }
+  async chooseFolder() {
+    try {
+      const electron = window.require("electron");
+      const result = await electron.remote.dialog.showOpenDialog({
+        properties: ["openDirectory"],
+        title: "Select folder for ChatGPT / Codex"
+      });
+      return !result.canceled && result.filePaths.length > 0 ? result.filePaths[0] : null;
+    } catch (error) {
+      new import_obsidian.Notice(`AutoOC: folder picker failed \u2014 ${String(error)}`);
+      return null;
+    }
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
 var DiagnosticModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
@@ -11167,10 +12071,10 @@ var DiagnosticModal = class extends import_obsidian.Modal {
       (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
     }
     this.hiddenProc = null;
-    const fs2 = require("fs");
+    const fs3 = require("fs");
     for (const file of this.tempFiles) {
       try {
-        fs2.unlinkSync(file);
+        fs3.unlinkSync(file);
       } catch (e) {
       }
     }
@@ -11197,17 +12101,17 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           new import_obsidian.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
-        const fs2 = require("fs");
-        const path2 = require("path");
+        const fs3 = require("fs");
+        const path3 = require("path");
         const osTmp = require("os").tmpdir();
-        const outFile = path2.join(osTmp, "autooc-diag.txt");
-        const pidFile = path2.join(osTmp, "autooc-diag.pid");
+        const outFile = path3.join(osTmp, "autooc-diag.txt");
+        const pidFile = path3.join(osTmp, "autooc-diag.pid");
         try {
-          fs2.unlinkSync(outFile);
+          fs3.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs2.unlinkSync(pidFile);
+          fs3.unlinkSync(pidFile);
         } catch (e) {
         }
         let launchScript;
@@ -11255,9 +12159,9 @@ DONE:" + $exitCode)`
 DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
           ].join("\n");
         }
-        const scriptFile = path2.join(osTmp, `autooc-diag${scriptExt()}`);
+        const scriptFile = path3.join(osTmp, `autooc-diag${scriptExt()}`);
         if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-        else fs2.writeFileSync(scriptFile, launchScript, "utf8");
+        else fs3.writeFileSync(scriptFile, launchScript, "utf8");
         this.tempFiles = [outFile, pidFile, scriptFile];
         if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}
 
@@ -11270,13 +12174,13 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
             if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
             return;
           }
-          if (!fs2.existsSync(outFile)) {
+          if (!fs3.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           if (this.pollHandle) clearInterval(this.pollHandle);
           this.pollHandle = null;
-          const raw = fs2.readFileSync(outFile, "utf8");
+          const raw = fs3.readFileSync(outFile, "utf8");
           this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -11314,6 +12218,51 @@ var AutoOCSettingTab = class extends import_obsidian.PluginSettingTab {
         await this.plugin.saveSettings();
       }
     }));
+    new import_obsidian.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode").addOption("codex", "Codex / ChatGPT").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
+      if (value === "opencode" || value === "codex") {
+        this.plugin.settings.defaultAiEngine = value;
+        await this.plugin.saveSettings();
+      }
+    }));
+    containerEl.createEl("h3", { text: "Codex / ChatGPT" });
+    new import_obsidian.Setting(containerEl).setName("Codex executable path").setDesc(`Absolute path or "codex" for auto-detection. Detected: ${resolveCodexBin(this.plugin.settings.codexPath)}`).addText((text) => text.setPlaceholder("codex").setValue(this.plugin.settings.codexPath).onChange(async (value) => {
+      this.plugin.settings.codexPath = value.trim() || "codex";
+      await this.plugin.saveSettings();
+    })).addButton((button) => button.setButtonText("\u{1F50D} Detect & test").onClick(async () => {
+      this.plugin.settings.codexPath = resolveCodexBin("codex");
+      await this.plugin.saveSettings(false);
+      await this.plugin.refreshCodexModels(true);
+      this.display();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
+      dropdown.addOption("", "Automatic");
+      this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
+      const current = this.plugin.settings.defaultCodexModel || "";
+      if (current && !this.plugin.availableCodexModels.some((model) => model.value === current)) dropdown.addOption(current, current);
+      dropdown.setValue(current).onChange(async (value) => {
+        this.plugin.settings.defaultCodexModel = value;
+        const efforts = this.plugin.getCodexReasoningEfforts(value);
+        if (!efforts.includes(this.plugin.settings.defaultCodexReasoningEffort)) {
+          this.plugin.settings.defaultCodexReasoningEffort = efforts[0];
+        }
+        await this.plugin.saveSettings();
+        this.display();
+      });
+    }).addButton((button) => button.setButtonText("\u{1F504} Reload").onClick(async () => {
+      await this.plugin.refreshCodexModels(true);
+      this.display();
+    }));
+    new import_obsidian.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
+      const efforts = this.plugin.getCodexReasoningEfforts();
+      efforts.forEach((effort) => dropdown.addOption(effort, effort));
+      const current = this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
+      if (current && !efforts.includes(current)) dropdown.addOption(current, current);
+      dropdown.setValue(current || "").onChange(async (value) => {
+        this.plugin.settings.defaultCodexReasoningEffort = value;
+        await this.plugin.saveSettings();
+      });
+    });
+    containerEl.createEl("h3", { text: "OpenCode" });
     new import_obsidian.Setting(containerEl).setName("OpenCode CLI Path").setDesc(
       `Absolute path to executable. Empty = auto-detect.
 Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
@@ -11325,14 +12274,14 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
       return text;
     }).addButton(
       (btn) => btn.setButtonText("\u{1F50D} Auto-detect").onClick(async () => {
-        const { existsSync: existsSync2 } = require("fs");
+        const { existsSync: existsSync3 } = require("fs");
         const candidates = [
           `${process.env.APPDATA}\\npm\\opencode.cmd`,
           `${process.env.APPDATA}\\npm\\opencode`,
           `${process.env.LOCALAPPDATA}\\npm\\opencode.cmd`,
           `${process.env.ProgramFiles}\\nodejs\\opencode.cmd`
         ].filter(Boolean);
-        const found = candidates.find((c) => existsSync2(c));
+        const found = candidates.find((c) => existsSync3(c));
         if (found) {
           this.plugin.settings.opencodePath = found;
           await this.plugin.saveSettings();
@@ -11344,7 +12293,7 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
       })
     );
     new import_obsidian.Setting(containerEl).setName("Working Directory").setDesc(
-      "Directory from which to launch OpenCode (empty = vault's current directory)"
+      "Directory from which to launch OpenCode or Codex (empty = vault's current directory)"
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
         this.plugin.settings.workingDirectory = v;
@@ -11496,7 +12445,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = agentsBody.createEl("tr");
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
-    new import_obsidian.Setting(containerEl).setName("Default Model").addDropdown((dd) => {
+    new import_obsidian.Setting(containerEl).setName("Default OpenCode Model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
       const current = this.plugin.getEffectiveDefaultModel();

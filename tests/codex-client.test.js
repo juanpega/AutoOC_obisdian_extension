@@ -1,0 +1,159 @@
+const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const Module = require("node:module");
+const path = require("node:path");
+const test = require("node:test");
+const ts = require("typescript");
+
+function requireTypeScript(file) {
+  const source = fs.readFileSync(file, "utf8");
+  const compiled = ts.transpileModule(source, {
+    compilerOptions: {
+      module: ts.ModuleKind.CommonJS,
+      target: ts.ScriptTarget.ES2020,
+      esModuleInterop: true,
+    },
+    fileName: file,
+  }).outputText;
+  const mod = new Module(file, module);
+  mod.filename = file;
+  mod.paths = Module._nodeModulePaths(path.dirname(file));
+  mod._compile(compiled, file);
+  return mod.exports;
+}
+
+const {
+  buildCodexNewThreadUrl,
+  buildCodexOpenProjectArg,
+  CodexAppServerClient,
+  JsonLineRpcPeer,
+  openCodexNewThread,
+  resolveCodexBin,
+} = requireTypeScript(path.resolve(__dirname, "..", "codex-client.ts"));
+
+test("Codex desktop new-thread link preserves an absolute folder with spaces", () => {
+  const url = new URL(buildCodexNewThreadUrl("C:\\project with spaces"));
+  assert.equal(url.protocol, "codex:");
+  assert.equal(url.host, "threads");
+  assert.equal(url.pathname, "/new");
+  assert.equal(url.searchParams.get("path"), "C:\\project with spaces");
+});
+
+test("Codex Windows launcher passes the project folder as one open-project argument", () => {
+  assert.equal(
+    buildCodexOpenProjectArg("C:\\project with spaces"),
+    "--open-project=C:\\project with spaces",
+  );
+  assert.match(openCodexNewThread.toString(), /--user-data-dir/);
+  assert.match(openCodexNewThread.toString(), /FindVisibleWindow/);
+  assert.match(openCodexNewThread.toString(), /SendKeys\(['"]\^n['"]\)/);
+});
+
+test("JsonLineRpcPeer parses fragmented JSON lines and correlates responses", async () => {
+  const writes = [];
+  const notifications = [];
+  const peer = new JsonLineRpcPeer((line) => writes.push(line), (message) => notifications.push(message));
+  const pending = peer.request("model/list", { limit: 10 });
+  const request = JSON.parse(writes[0]);
+
+  peer.feed('{"method":"turn/started","params":{"turn":');
+  peer.feed('{"id":"turn-1"}}}\n{"id":' + request.id + ',"result":{"data":[]}}\n');
+
+  assert.equal(notifications[0].method, "turn/started");
+  assert.deepEqual(await pending, { data: [] });
+});
+
+test("JsonLineRpcPeer rejects an RPC error and ignores malformed lines", async () => {
+  const writes = [];
+  const notifications = [];
+  const peer = new JsonLineRpcPeer((line) => writes.push(line), (message) => notifications.push(message));
+  const pending = peer.request("thread/start");
+  const request = JSON.parse(writes[0]);
+  peer.feed('not-json\n{"id":' + request.id + ',"error":{"code":-1,"message":"not signed in"}}\n');
+  await assert.rejects(pending, /not signed in/);
+  assert.deepEqual(notifications, []);
+});
+
+test("Codex client accumulates final output and resolves turn completion", async () => {
+  const snapshots = [];
+  const client = new CodexAppServerClient("codex", process.cwd(), { onOutput: (output) => snapshots.push(output) });
+  client.threadId = "thread-1";
+  client.turnId = "turn-1";
+  const completed = new Promise((resolve, reject) => {
+    client.completionResolve = resolve;
+    client.completionReject = reject;
+  });
+  client.handleMessage({ method: "item/agentMessage/delta", params: { delta: "Hello " } });
+  client.handleMessage({ method: "item/agentMessage/delta", params: { delta: "world" } });
+  client.handleMessage({ method: "turn/completed", params: { turn: { id: "turn-1", status: "completed" } } });
+
+  assert.deepEqual(snapshots, ["Hello ", "Hello world"]);
+  assert.deepEqual(await completed, {
+    output: "Hello world",
+    threadId: "thread-1",
+    turnId: "turn-1",
+    status: "completed",
+    error: undefined,
+  });
+});
+
+test("Codex client creates a persistent empty thread for the desktop launcher", async () => {
+  const requests = [];
+  const client = new CodexAppServerClient("codex", "C:\\project with spaces");
+  client.initialized = true;
+  client.peer = {
+    request: async (method, params) => {
+      requests.push({ method, params });
+      return { thread: { id: "thread-new" } };
+    },
+  };
+
+  assert.equal(await client.createThread(), "thread-new");
+  assert.deepEqual(requests, [{
+    method: "thread/start",
+    params: {
+      cwd: "C:\\project with spaces",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+      ephemeral: false,
+      serviceName: "AutoOC",
+    },
+  }]);
+});
+
+test("Codex approval requests can be accepted or rejected", () => {
+  const responses = [];
+  const approvals = [];
+  const client = new CodexAppServerClient("codex", process.cwd(), { onApproval: (approval) => approvals.push(approval) });
+  client.peer = { respond: (id, result) => responses.push({ id, result }) };
+  client.handleMessage({ id: 41, method: "item/commandExecution/requestApproval", params: { command: "npm test" } });
+  client.handleMessage({ id: 42, method: "item/fileChange/requestApproval", params: { reason: "edit file" } });
+
+  assert.equal(approvals.length, 2);
+  assert.equal(client.resolveApproval(41, true), true);
+  assert.equal(client.resolveApproval(42, false), true);
+  assert.deepEqual(responses, [
+    { id: 41, result: { decision: "accept" } },
+    { id: 42, result: { decision: "decline" } },
+  ]);
+});
+
+test("Codex interrupt uses thread and turn identifiers before disposal", async () => {
+  const requests = [];
+  let killed = false;
+  const client = new CodexAppServerClient("codex", process.cwd());
+  client.threadId = "thread-1";
+  client.turnId = "turn-1";
+  client.peer = {
+    request: async (method, params) => requests.push({ method, params }),
+    rejectAll() {},
+  };
+  client.child = { kill: () => { killed = true; } };
+  await client.interrupt();
+  assert.deepEqual(requests, [{ method: "turn/interrupt", params: { threadId: "thread-1", turnId: "turn-1" } }]);
+  assert.equal(killed, true);
+});
+
+test("Codex auto-detection prefers the configured path", () => {
+  assert.equal(resolveCodexBin("C:\\tools\\codex.exe"), "C:\\tools\\codex.exe");
+});
