@@ -160,68 +160,54 @@ export function buildCodexNewThreadUrl(cwd: string): string {
   return url.toString();
 }
 
-export function buildCodexOpenProjectArg(cwd: string): string {
-  return `--open-project=${cwd}`;
+export function buildCodexThreadUrl(threadId: string): string {
+  return `codex://threads/${encodeURIComponent(threadId)}`;
+}
+
+function openCodexUrl(url: string): Promise<void> {
+  const launcher = process.platform === "win32"
+    ? {
+        bin: "powershell.exe",
+        args: [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-EncodedCommand",
+          Buffer.from("$ErrorActionPreference = 'Stop'\nStart-Process -FilePath $env:AUTOOC_CODEX_URL", "utf16le").toString("base64"),
+        ],
+        env: { ...process.env, AUTOOC_CODEX_URL: url },
+      }
+    : process.platform === "darwin"
+      ? { bin: "open", args: [url], env: process.env }
+      : { bin: "xdg-open", args: [url], env: process.env };
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(launcher.bin, launcher.args, {
+      detached: false,
+      stdio: "ignore",
+      windowsHide: true,
+      env: launcher.env,
+    });
+    let settled = false;
+    child.once("error", (error) => {
+      settled = true;
+      reject(error);
+    });
+    child.once("close", (code) => {
+      if (settled) return;
+      if (code === 0) resolve();
+      else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code ?? "unknown"}`));
+    });
+  });
 }
 
 export function openCodexNewThread(cwd: string, onError?: (error: Error) => void): void {
-  if (process.platform === "win32") {
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      "$package = Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1",
-      "if (-not $package) { throw 'The ChatGPT/Codex Windows app is not installed.' }",
-      "$exe = Join-Path $package.InstallLocation 'app\\ChatGPT.exe'",
-      "if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'ChatGPT.exe was not found in the installed Codex package.' }",
-      "$profileRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'AutoOC\\ChatGPT'))",
-      "$profile = Join-Path $profileRoot ([Guid]::NewGuid().ToString('N'))",
-      "[void](New-Item -ItemType Directory -Path $profile -Force)",
-      "$native = @'\nusing System;\nusing System.Runtime.InteropServices;\npublic static class AutoOCChatGPTWindow {\n  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);\n  [DllImport(\"user32.dll\")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);\n  [DllImport(\"user32.dll\")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);\n  [DllImport(\"user32.dll\")] private static extern bool IsWindowVisible(IntPtr hWnd);\n  [DllImport(\"user32.dll\")] private static extern bool ShowWindowAsync(IntPtr hWnd, int command);\n  [DllImport(\"user32.dll\")] private static extern bool BringWindowToTop(IntPtr hWnd);\n  [DllImport(\"user32.dll\")] private static extern bool SetForegroundWindow(IntPtr hWnd);\n  [DllImport(\"user32.dll\")] private static extern IntPtr GetForegroundWindow();\n  [DllImport(\"user32.dll\")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);\n  [DllImport(\"kernel32.dll\")] private static extern uint GetCurrentThreadId();\n  [DllImport(\"user32.dll\")] private static extern bool AttachThreadInput(uint first, uint second, bool attach);\n  [DllImport(\"user32.dll\")] private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);\n  public static IntPtr FindVisibleWindow(uint targetProcessId) {\n    IntPtr result = IntPtr.Zero;\n    EnumWindows((window, unused) => { uint processId; GetWindowThreadProcessId(window, out processId); if (processId == targetProcessId && IsWindowVisible(window)) { result = window; return false; } return true; }, IntPtr.Zero);\n    return result;\n  }\n  public static bool Focus(IntPtr window) {\n    ShowWindowAsync(window, 9);\n    uint ignored;\n    uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out ignored);\n    uint currentThread = GetCurrentThreadId();\n    AttachThreadInput(currentThread, foregroundThread, true);\n    keybd_event(0x12, 0, 0, UIntPtr.Zero);\n    keybd_event(0x12, 0, 2, UIntPtr.Zero);\n    BringWindowToTop(window);\n    SetForegroundWindow(window);\n    AttachThreadInput(currentThread, foregroundThread, false);\n    return GetForegroundWindow() == window;\n  }\n}\n'@",
-      "Add-Type -TypeDefinition $native",
-      "$process = Start-Process -FilePath $exe -ArgumentList @((\"--user-data-dir={0}\" -f $profile), $env:AUTOOC_CODEX_OPEN_PROJECT) -PassThru",
-      "$window = [IntPtr]::Zero",
-      "for ($i = 0; $i -lt 80 -and $window -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 250; $window = [AutoOCChatGPTWindow]::FindVisibleWindow([uint32]$process.Id) }",
-      "if ($window -eq [IntPtr]::Zero) { throw 'A separate ChatGPT window did not appear.' }",
-      "$focused = $false",
-      "for ($i = 0; $i -lt 10 -and -not $focused; $i++) { $focused = [AutoOCChatGPTWindow]::Focus($window); if (-not $focused) { Start-Sleep -Milliseconds 200 } }",
-      "if (-not $focused) { throw 'The new ChatGPT window could not be focused.' }",
-      "Start-Sleep -Milliseconds 750",
-      "$shell = New-Object -ComObject WScript.Shell",
-      "$shell.SendKeys('^n')",
-      "$cleanupProfile = $profile.Replace(\"'\", \"''\")",
-      "$cleanupRoot = $profileRoot.Replace(\"'\", \"''\")",
-      "$cleanup = \"`$profile = '$cleanupProfile'; `$root = '$cleanupRoot'; `$mainPid = $($process.Id); Start-Sleep -Seconds 30; while ((`$main = Get-Process -Id `$mainPid -ErrorAction SilentlyContinue) -and `$main.MainWindowHandle -ne 0) { Start-Sleep -Seconds 5 }; Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq 'ChatGPT.exe' -and `$_.CommandLine -like ('*' + `$profile + '*') } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }; `$resolved = [IO.Path]::GetFullPath(`$profile); if (`$resolved.StartsWith(`$root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath `$resolved)) { Remove-Item -LiteralPath `$resolved -Recurse -Force }\"",
-      "$encodedCleanup = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanup))",
-      "Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCleanup) -WindowStyle Hidden | Out-Null",
-    ].join("\n");
-    const child = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true,
-      env: { ...process.env, AUTOOC_CODEX_OPEN_PROJECT: buildCodexOpenProjectArg(cwd) },
-    });
-    let reported = false;
-    child.once("error", (error) => {
-      reported = true;
-      onError?.(error);
-    });
-    child.once("exit", (code) => {
-      if (!reported && code !== 0) onError?.(new Error(`ChatGPT/Codex launcher exited with code ${code ?? "unknown"}`));
-    });
-    child.unref();
-    return;
-  }
-
-  const url = buildCodexNewThreadUrl(cwd);
-  const launcher = process.platform === "darwin"
-    ? { bin: "open", args: [url] }
-    : { bin: "xdg-open", args: [url] };
-  const child = spawn(launcher.bin, launcher.args, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.on("error", (error) => onError?.(error));
-  child.unref();
+  const client = new CodexAppServerClient(resolveCodexBin(), cwd);
+  const threadName = path.basename(path.resolve(cwd)) || cwd;
+  void client.createThread(threadName)
+    .then((threadId) => openCodexUrl(buildCodexThreadUrl(threadId)))
+    .catch((error) => onError?.(error instanceof Error ? error : new Error(String(error))))
+    .finally(() => client.dispose());
 }
 
 export class CodexAppServerClient {
@@ -291,7 +277,7 @@ export class CodexAppServerClient {
     }));
   }
 
-  async createThread(): Promise<string> {
+  async createThread(name?: string): Promise<string> {
     await this.initialize();
     const response = await this.peer!.request("thread/start", {
       cwd: this.cwd,
@@ -302,6 +288,17 @@ export class CodexAppServerClient {
     });
     const threadId = response?.thread?.id || "";
     if (!threadId) throw new Error("Codex did not return a thread id");
+    if (name) {
+      await this.peer!.request("thread/inject_items", {
+        threadId,
+        items: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "" }],
+        }],
+      });
+      await this.peer!.request("thread/name/set", { threadId, name });
+    }
     return threadId;
   }
 

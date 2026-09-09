@@ -24,7 +24,7 @@ function requireTypeScript(file) {
 
 const {
   buildCodexNewThreadUrl,
-  buildCodexOpenProjectArg,
+  buildCodexThreadUrl,
   CodexAppServerClient,
   JsonLineRpcPeer,
   openCodexNewThread,
@@ -39,14 +39,14 @@ test("Codex desktop new-thread link preserves an absolute folder with spaces", (
   assert.equal(url.searchParams.get("path"), "C:\\project with spaces");
 });
 
-test("Codex Windows launcher passes the project folder as one open-project argument", () => {
+test("Codex desktop thread link targets the exact persistent task", () => {
   assert.equal(
-    buildCodexOpenProjectArg("C:\\project with spaces"),
-    "--open-project=C:\\project with spaces",
+    buildCodexThreadUrl("thread/new with spaces"),
+    "codex://threads/thread%2Fnew%20with%20spaces",
   );
-  assert.match(openCodexNewThread.toString(), /--user-data-dir/);
-  assert.match(openCodexNewThread.toString(), /FindVisibleWindow/);
-  assert.match(openCodexNewThread.toString(), /SendKeys\(['"]\^n['"]\)/);
+  assert.doesNotMatch(openCodexNewThread.toString(), /--open-project|--user-data-dir|SendKeys/);
+  assert.match(openCodexNewThread.toString(), /client\.createThread\(threadName\)/);
+  assert.doesNotMatch(openCodexNewThread.toString(), /verificationPrompt|read-only command/);
 });
 
 test("JsonLineRpcPeer parses fragmented JSON lines and correlates responses", async () => {
@@ -108,17 +108,34 @@ test("Codex client creates a persistent empty thread for the desktop launcher", 
     },
   };
 
-  assert.equal(await client.createThread(), "thread-new");
-  assert.deepEqual(requests, [{
-    method: "thread/start",
-    params: {
-      cwd: "C:\\project with spaces",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-      ephemeral: false,
-      serviceName: "AutoOC",
+  assert.equal(await client.createThread("project with spaces"), "thread-new");
+  assert.deepEqual(requests, [
+    {
+      method: "thread/start",
+      params: {
+        cwd: "C:\\project with spaces",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+        ephemeral: false,
+        serviceName: "AutoOC",
+      },
     },
-  }]);
+    {
+      method: "thread/inject_items",
+      params: {
+        threadId: "thread-new",
+        items: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "" }],
+        }],
+      },
+    },
+    {
+      method: "thread/name/set",
+      params: { threadId: "thread-new", name: "project with spaces" },
+    },
+  ]);
 });
 
 test("Codex approval requests can be accepted or rejected", () => {

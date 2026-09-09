@@ -2181,12 +2181,12 @@ var JsonLineRpcPeer = class {
   }
   request(method, params = {}, timeoutMs = 3e4) {
     const id = this.nextId++;
-    return new Promise((resolve2, reject) => {
+    return new Promise((resolve3, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex RPC request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve2, reject, timer });
+      this.pending.set(id, { resolve: resolve3, reject, timer });
       this.writeLine(JSON.stringify({ id, method, params }) + "\n");
     });
   }
@@ -2240,104 +2240,44 @@ function openCodexApp(bin, cwd, onError) {
   child.on("error", (error) => onError == null ? void 0 : onError(error));
   child.unref();
 }
-function buildCodexNewThreadUrl(cwd) {
-  const url = new URL("codex://threads/new");
-  url.searchParams.set("path", cwd);
-  return url.toString();
+function buildCodexThreadUrl(threadId) {
+  return `codex://threads/${encodeURIComponent(threadId)}`;
 }
-function buildCodexOpenProjectArg(cwd) {
-  return `--open-project=${cwd}`;
-}
-function openCodexNewThread(cwd, onError) {
-  if (process.platform === "win32") {
-    const script = [
-      "$ErrorActionPreference = 'Stop'",
-      "$package = Get-AppxPackage -Name OpenAI.Codex | Sort-Object Version -Descending | Select-Object -First 1",
-      "if (-not $package) { throw 'The ChatGPT/Codex Windows app is not installed.' }",
-      "$exe = Join-Path $package.InstallLocation 'app\\ChatGPT.exe'",
-      "if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw 'ChatGPT.exe was not found in the installed Codex package.' }",
-      "$profileRoot = [IO.Path]::GetFullPath((Join-Path ([IO.Path]::GetTempPath()) 'AutoOC\\ChatGPT'))",
-      "$profile = Join-Path $profileRoot ([Guid]::NewGuid().ToString('N'))",
-      "[void](New-Item -ItemType Directory -Path $profile -Force)",
-      `$native = @'
-using System;
-using System.Runtime.InteropServices;
-public static class AutoOCChatGPTWindow {
-  public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
-  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint processId);
-  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hWnd);
-  [DllImport("user32.dll")] private static extern bool ShowWindowAsync(IntPtr hWnd, int command);
-  [DllImport("user32.dll")] private static extern bool BringWindowToTop(IntPtr hWnd);
-  [DllImport("user32.dll")] private static extern bool SetForegroundWindow(IntPtr hWnd);
-  [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hWnd, IntPtr processId);
-  [DllImport("kernel32.dll")] private static extern uint GetCurrentThreadId();
-  [DllImport("user32.dll")] private static extern bool AttachThreadInput(uint first, uint second, bool attach);
-  [DllImport("user32.dll")] private static extern void keybd_event(byte virtualKey, byte scanCode, uint flags, UIntPtr extraInfo);
-  public static IntPtr FindVisibleWindow(uint targetProcessId) {
-    IntPtr result = IntPtr.Zero;
-    EnumWindows((window, unused) => { uint processId; GetWindowThreadProcessId(window, out processId); if (processId == targetProcessId && IsWindowVisible(window)) { result = window; return false; } return true; }, IntPtr.Zero);
-    return result;
-  }
-  public static bool Focus(IntPtr window) {
-    ShowWindowAsync(window, 9);
-    uint ignored;
-    uint foregroundThread = GetWindowThreadProcessId(GetForegroundWindow(), out ignored);
-    uint currentThread = GetCurrentThreadId();
-    AttachThreadInput(currentThread, foregroundThread, true);
-    keybd_event(0x12, 0, 0, UIntPtr.Zero);
-    keybd_event(0x12, 0, 2, UIntPtr.Zero);
-    BringWindowToTop(window);
-    SetForegroundWindow(window);
-    AttachThreadInput(currentThread, foregroundThread, false);
-    return GetForegroundWindow() == window;
-  }
-}
-'@`,
-      "Add-Type -TypeDefinition $native",
-      '$process = Start-Process -FilePath $exe -ArgumentList @(("--user-data-dir={0}" -f $profile), $env:AUTOOC_CODEX_OPEN_PROJECT) -PassThru',
-      "$window = [IntPtr]::Zero",
-      "for ($i = 0; $i -lt 80 -and $window -eq [IntPtr]::Zero; $i++) { Start-Sleep -Milliseconds 250; $window = [AutoOCChatGPTWindow]::FindVisibleWindow([uint32]$process.Id) }",
-      "if ($window -eq [IntPtr]::Zero) { throw 'A separate ChatGPT window did not appear.' }",
-      "$focused = $false",
-      "for ($i = 0; $i -lt 10 -and -not $focused; $i++) { $focused = [AutoOCChatGPTWindow]::Focus($window); if (-not $focused) { Start-Sleep -Milliseconds 200 } }",
-      "if (-not $focused) { throw 'The new ChatGPT window could not be focused.' }",
-      "Start-Sleep -Milliseconds 750",
-      "$shell = New-Object -ComObject WScript.Shell",
-      "$shell.SendKeys('^n')",
-      `$cleanupProfile = $profile.Replace("'", "''")`,
-      `$cleanupRoot = $profileRoot.Replace("'", "''")`,
-      "$cleanup = \"`$profile = '$cleanupProfile'; `$root = '$cleanupRoot'; `$mainPid = $($process.Id); Start-Sleep -Seconds 30; while ((`$main = Get-Process -Id `$mainPid -ErrorAction SilentlyContinue) -and `$main.MainWindowHandle -ne 0) { Start-Sleep -Seconds 5 }; Get-CimInstance Win32_Process | Where-Object { `$_.Name -eq 'ChatGPT.exe' -and `$_.CommandLine -like ('*' + `$profile + '*') } | ForEach-Object { Stop-Process -Id `$_.ProcessId -Force -ErrorAction SilentlyContinue }; `$resolved = [IO.Path]::GetFullPath(`$profile); if (`$resolved.StartsWith(`$root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -and (Test-Path -LiteralPath `$resolved)) { Remove-Item -LiteralPath `$resolved -Recurse -Force }\"",
-      "$encodedCleanup = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($cleanup))",
-      "Start-Process -FilePath 'powershell.exe' -ArgumentList @('-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', $encodedCleanup) -WindowStyle Hidden | Out-Null"
-    ].join("\n");
-    const child2 = (0, import_child_process.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script], {
-      detached: true,
+function openCodexUrl(url) {
+  const launcher = process.platform === "win32" ? {
+    bin: "powershell.exe",
+    args: [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from("$ErrorActionPreference = 'Stop'\nStart-Process -FilePath $env:AUTOOC_CODEX_URL", "utf16le").toString("base64")
+    ],
+    env: { ...process.env, AUTOOC_CODEX_URL: url }
+  } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
+  return new Promise((resolve3, reject) => {
+    const child = (0, import_child_process.spawn)(launcher.bin, launcher.args, {
+      detached: false,
       stdio: "ignore",
       windowsHide: true,
-      env: { ...process.env, AUTOOC_CODEX_OPEN_PROJECT: buildCodexOpenProjectArg(cwd) }
+      env: launcher.env
     });
-    let reported = false;
-    child2.once("error", (error) => {
-      reported = true;
-      onError == null ? void 0 : onError(error);
+    let settled = false;
+    child.once("error", (error) => {
+      settled = true;
+      reject(error);
     });
-    child2.once("exit", (code) => {
-      if (!reported && code !== 0) onError == null ? void 0 : onError(new Error(`ChatGPT/Codex launcher exited with code ${code != null ? code : "unknown"}`));
+    child.once("close", (code) => {
+      if (settled) return;
+      if (code === 0) resolve3();
+      else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code != null ? code : "unknown"}`));
     });
-    child2.unref();
-    return;
-  }
-  const url = buildCodexNewThreadUrl(cwd);
-  const launcher = process.platform === "darwin" ? { bin: "open", args: [url] } : { bin: "xdg-open", args: [url] };
-  const child = (0, import_child_process.spawn)(launcher.bin, launcher.args, {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true
   });
-  child.on("error", (error) => onError == null ? void 0 : onError(error));
-  child.unref();
+}
+function openCodexNewThread(cwd, onError) {
+  const client = new CodexAppServerClient(resolveCodexBin(), cwd);
+  const threadName = path.basename(path.resolve(cwd)) || cwd;
+  void client.createThread(threadName).then((threadId) => openCodexUrl(buildCodexThreadUrl(threadId))).catch((error) => onError == null ? void 0 : onError(error instanceof Error ? error : new Error(String(error)))).finally(() => client.dispose());
 }
 var CodexAppServerClient = class {
   constructor(bin, cwd, callbacks = {}) {
@@ -2402,7 +2342,7 @@ var CodexAppServerClient = class {
       isDefault: !!model.isDefault
     }));
   }
-  async createThread() {
+  async createThread(name) {
     var _a;
     await this.initialize();
     const response = await this.peer.request("thread/start", {
@@ -2414,6 +2354,17 @@ var CodexAppServerClient = class {
     });
     const threadId = ((_a = response == null ? void 0 : response.thread) == null ? void 0 : _a.id) || "";
     if (!threadId) throw new Error("Codex did not return a thread id");
+    if (name) {
+      await this.peer.request("thread/inject_items", {
+        threadId,
+        items: [{
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "" }]
+        }]
+      });
+      await this.peer.request("thread/name/set", { threadId, name });
+    }
     return threadId;
   }
   async run(prompt, model, effort) {
@@ -2430,8 +2381,8 @@ var CodexAppServerClient = class {
     });
     this.threadId = ((_a = threadResponse == null ? void 0 : threadResponse.thread) == null ? void 0 : _a.id) || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
-    const completion = new Promise((resolve2, reject) => {
-      this.completionResolve = resolve2;
+    const completion = new Promise((resolve3, reject) => {
+      this.completionResolve = resolve3;
       this.completionReject = reject;
     });
     let turnResponse;
@@ -3535,7 +3486,7 @@ function parseMonthDays(input) {
   return [...new Set(days)].sort((a, b) => a - b);
 }
 function delay(ms) {
-  return new Promise((resolve2) => window.setTimeout(resolve2, ms));
+  return new Promise((resolve3) => window.setTimeout(resolve3, ms));
 }
 function preventBackdropClose(modal) {
   const contentEl = modal.contentEl;
@@ -4531,11 +4482,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     await this.stopMcpBridge();
     this.mcpBridgeToken = crypto.randomBytes(24).toString("hex");
     const server = http.createServer((request, response) => void this.handleMcpBridgeRequest(request, response));
-    await new Promise((resolve2, reject) => {
+    await new Promise((resolve3, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => {
         server.off("error", reject);
-        resolve2();
+        resolve3();
       });
     });
     const address = server.address();
@@ -4549,7 +4500,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       fs2.writeFileSync(bridgePath, JSON.stringify({ url: `http://127.0.0.1:${address.port}`, token: this.mcpBridgeToken }), "utf8");
       this.mcpBridgeServer = server;
     } catch (error) {
-      await new Promise((resolve2) => server.close(() => resolve2()));
+      await new Promise((resolve3) => server.close(() => resolve3()));
       throw error;
     }
   }
@@ -4561,7 +4512,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       fs2.unlinkSync(this.getMcpBridgePath());
     } catch (e) {
     }
-    if (server) await new Promise((resolve2) => server.close(() => resolve2()));
+    if (server) await new Promise((resolve3) => server.close(() => resolve3()));
   }
   findTaskByIdOrName(idOrName) {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
@@ -5307,7 +5258,7 @@ Continue?`
   // Quick evaluation via same detached PS + polling mechanism. Used for workflow
   // transition validation prompts.
   async evaluateWithOpencode(prompt, model, cwd) {
-    return new Promise((resolve2) => {
+    return new Promise((resolve3) => {
       const fs3 = require("fs");
       const path3 = require("path");
       const tmpDir = require("os").tmpdir();
@@ -5398,7 +5349,7 @@ DONE:%s
           clearInterval(poll);
           hiddenProc == null ? void 0 : hiddenProc.kill();
           cleanup(true);
-          resolve2({ output: "evaluation timeout", exitCode: -1 });
+          resolve3({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
         if (!fs3.existsSync(outFile)) return;
@@ -5409,7 +5360,7 @@ DONE:%s
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
-        resolve2({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
+        resolve3({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
       }, 2e3);
     });
   }
@@ -6717,7 +6668,7 @@ Reply ONLY with YES or NO.`;
       await this.completeStep(wf, step, stepIndex, true, "[delay skipped: workflow stopped]");
       return;
     }
-    await new Promise((resolve2) => setTimeout(resolve2, ms));
+    await new Promise((resolve3) => setTimeout(resolve3, ms));
     await this.completeStep(wf, step, stepIndex, true, `[delay ${value} ${unit}]`);
   }
   async runCodeStep(wf, step, stepIndex) {
@@ -9386,8 +9337,8 @@ var ConfirmModal = class extends import_obsidian.Modal {
   }
   openAndWait() {
     this.open();
-    return new Promise((resolve2) => {
-      this.resolve = resolve2;
+    return new Promise((resolve3) => {
+      this.resolve = resolve3;
     });
   }
   onOpen() {
@@ -9425,8 +9376,8 @@ var SecretsPinModal = class extends import_obsidian.Modal {
   }
   openAndWait() {
     this.open();
-    return new Promise((resolve2) => {
-      this.resolve = resolve2;
+    return new Promise((resolve3) => {
+      this.resolve = resolve3;
     });
   }
   finish(value) {
@@ -11830,8 +11781,8 @@ var BranchSelectorModal = class extends import_obsidian.Modal {
     this.branches = branches;
   }
   async open() {
-    return new Promise((resolve2) => {
-      this.resolveSelection = resolve2;
+    return new Promise((resolve3) => {
+      this.resolveSelection = resolve3;
       super.open();
     });
   }
