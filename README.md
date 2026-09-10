@@ -2,7 +2,7 @@
 
 ![AutoOC workflow overview](docs/assets/autooc-overview.svg)
 
-AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode CLI tasks and visual workflows from an Obsidian vault.
+AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Codex, and GitHub Copilot CLI tasks and visual workflows from an Obsidian vault.
 
 ## What It Does
 
@@ -16,7 +16,7 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode CLI
 ## Requirements
 
 - Obsidian Desktop with Community plugins enabled.
-- OpenCode installed locally and available as `opencode`, or configured in AutoOC settings.
+- The CLI for your chosen engine installed and authenticated: OpenCode, Codex, or GitHub Copilot CLI.
 - Windows, macOS, or Linux.
 - `uv` only when using the optional local `autooc-mcp` helper.
 
@@ -52,6 +52,20 @@ npm run dev
 4. Review output and logs in the panel; use **Stop** to cancel an active task.
 
 AutoOC runs OpenCode as a local external process. Tasks and workflows are saved through Obsidian's plugin data in the vault; optional secrets are stored separately in the plugin folder. See the [architecture](docs/architecture.md) for runtime and data-flow details.
+
+### GitHub Copilot CLI
+
+1. Install [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli) and sign in from a terminal using `copilot login`. Your account and organization must permit Copilot CLI access.
+2. In AutoOC settings, use **Copilot executable path → Detect & test**. The default `copilot` detects the local installation, including the native executable bundled by npm on Windows. You can also specify an absolute executable path. This check verifies the installation; account access is checked when a task runs.
+3. Create a **GitHub Copilot CLI task** in the classic editor or Visual Builder. Enter its prompt, project folder and schedule. Optionally enter a model ID available to your account (`/model` in Copilot lists them). Empty uses AutoOC's **Default Copilot model**, then the CLI default.
+4. Tasks expose only file reading and search tools by default. Enable **Allow tools automatically** on a task to let Copilot edit files and run commands without asking. Folder and URL permissions still follow Copilot's policy. This permission is included in exported packages, so review it before running imported tasks.
+5. Run the task and follow its output in AutoOC. **Stop**, timeouts, recurring schedules, saved logs, and workflow output handoff are supported. Copilot tasks can share a workflow with OpenCode, Codex and JavaScript steps.
+
+Copilot tasks run in the background using the selected folder's currently checked-out branch. They do not open an interactive terminal, use OpenCode agents/Ralph Loop, or change branches automatically. AI-evaluated workflow transitions still use the existing OpenCode evaluator. Long prompts use a temporary UTF-8 instruction file that is removed when the task ends. AutoOC injects its configured secrets into the child process and redacts known secret values from displayed and saved output.
+
+Exports containing Copilot tasks use schema `1.6.0` and `taskKind: "copilot"`; older schemas remain supported. As with other engines, exported packages use the importing system's default model. See the included [Copilot example](library/copilot-code-review.json).
+
+If a task reports **Access denied by policy settings**, check your [Copilot account settings](https://github.com/settings/copilot) and organization policy. AutoOC cannot override GitHub's access restrictions.
 
 ## Visual Builder
 

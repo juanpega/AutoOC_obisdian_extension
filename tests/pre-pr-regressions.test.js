@@ -417,13 +417,13 @@ test("workflow prompt documents the canonical export contract", () => {
 
   assert.ok(prompt, "AUTOOC_WORKFLOW_PROMPT should exist in main.ts");
   assert.match(prompt, /"pluginVersion": "1\.5\.11"/);
-  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", or "1\.5\.0"/);
+  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", "1\.5\.0", or "1\.6\.0"/);
   assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
   assert.match(prompt, /Every task must include it, including taskKind "code"/);
   assert.match(prompt, /"codex" for Codex in ChatGPT/);
   assert.match(prompt, /reasoningEffort: optional for taskKind "codex"/);
   assert.match(prompt, /ChatGPT\/Codex app for taskKind "codex"/);
-  assert.match(prompt, /workflow may mix both engines/);
+  assert.match(prompt, /workflow may mix all three engines/);
   assert.match(prompt, /forceModel: true forces the selected model and does not apply the agent/);
   assert.match(prompt, /transitions array is the recommended canonical form/);
   assert.match(prompt, /MCP validator validates transitions when provided/);

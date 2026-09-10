@@ -23,6 +23,7 @@ import {
   openCodexNewThread,
   resolveCodexBin,
 } from "./codex-client";
+import { CopilotCliClient, checkCopilotInstallation, resolveCopilotBin } from "./copilot-client";
 // The visual builder is shipped as a self-contained HTML file under
 // `util/ui_workflow_builder/index.html`. A pre-build step
 // (scripts/inline-visual-builder.mjs) reads the file at build time and
@@ -437,7 +438,7 @@ function renderCodePreview(parent: HTMLElement, code: string, maxChars = 600): v
   if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
 }
 
-const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode and Codex tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
@@ -454,11 +455,11 @@ Canonical complete export format:
   "workflows": []
 }
 
-For complete exports, schemaVersion must be exactly "1.0", "1.4.0", or "1.5.0". New exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
+For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", or "1.6.0". Exports containing Copilot tasks must use "1.6.0"; other new exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
-1. task: runs an OpenCode or Codex task prompt. A workflow may mix both engines.
+1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
 2. code: runs JavaScript in a sandbox.
 3. delay: pauses the workflow.
 
@@ -467,7 +468,8 @@ A task is reusable and can be referenced by workflows.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
@@ -774,8 +776,8 @@ async function copyTextToClipboard(text: string): Promise<void> {
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 type IntervalUnit = "seconds" | "minutes" | "hours";
-type TaskKind = "opencode" | "codex" | "code";
-type DefaultAiEngine = "opencode" | "codex";
+type TaskKind = "opencode" | "codex" | "copilot" | "code";
+type DefaultAiEngine = "opencode" | "codex" | "copilot";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
 // Workflows are no longer strictly linear — each step declares its outgoing
@@ -859,6 +861,7 @@ interface ScheduledTask {
   codeAllowTerminal?: boolean;
   interactiveTerminal?: boolean;
   reasoningEffort?: string;
+  copilotAllowAllTools?: boolean;
   lastCodexThreadId?: string;
   lastCodexTurnId?: string;
   pendingCodexApproval?: {
@@ -896,6 +899,8 @@ interface AutoOCSettings {
   workflows: Workflow[];
   opencodePath: string;
   codexPath: string;
+  copilotPath: string;
+  defaultCopilotModel: string;
   defaultAiEngine: DefaultAiEngine;
   defaultModel: string;
   defaultCodexModel: string;
@@ -963,6 +968,7 @@ function renderAreaSuggestions(
 interface ExportTask {
   exportId: string;
   taskKind?: TaskKind;
+  copilotAllowAllTools?: boolean;
   name: string;
   area?: string;
   prompt: string;
@@ -997,6 +1003,53 @@ interface ExportWorkflowTransition {
   condition?: string;
   conditionLang?: "javascript";
   forceContinue?: boolean;
+}
+
+function getCopilotTaskValidationError(task: { taskKind?: unknown; copilotAllowAllTools?: unknown; interactiveTerminal?: unknown }): string | null {
+  if (task.copilotAllowAllTools !== undefined && (task.taskKind !== "copilot" || typeof task.copilotAllowAllTools !== "boolean")) {
+    return "copilotAllowAllTools must be a boolean and is only valid for Copilot tasks.";
+  }
+  if (task.taskKind === "copilot" && task.interactiveTerminal === true) {
+    return "Copilot tasks run in the background; interactiveTerminal must be false.";
+  }
+  return null;
+}
+
+function addCopilotTaskSettings(container: HTMLElement, draft: Partial<ScheduledTask>, defaultModel: string): void {
+  new Setting(container)
+    .setName("Copilot model")
+    .setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.")
+    .addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "")
+      .onChange((value) => { draft.model = value.trim(); }));
+  new Setting(container)
+    .setName("Allow tools automatically")
+    .setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.")
+    .addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true)
+      .onChange((value) => { draft.copilotAllowAllTools = value; }));
+}
+
+function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin): void {
+  container.createEl("h3", { text: "GitHub Copilot CLI" });
+  new Setting(container)
+    .setName("Copilot executable path")
+    .setDesc("Use copilot for auto-detection, or the absolute executable path. Sign in with copilot login in your terminal first.")
+    .addText((text) => text.setPlaceholder("copilot").setValue(plugin.settings.copilotPath || "copilot")
+      .onChange(async (value) => { plugin.settings.copilotPath = value.trim() || "copilot"; await plugin.saveSettings(); }))
+    .addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
+      try {
+        const bin = resolveCopilotBin(plugin.settings.copilotPath);
+        const cwd = plugin.settings.workingDirectory || (plugin.app.vault.adapter as any).basePath || ".";
+        const version = await checkCopilotInstallation(bin, cwd);
+        new Notice(`AutoOC: ${version}\n${bin}\nCLI detected. Account access is checked when a task runs.`, 10000);
+      } catch (error) {
+        new Notice(`AutoOC: could not start GitHub Copilot CLI — ${String(error)}`, 10000);
+      }
+    }));
+  new Setting(container)
+    .setName("Default Copilot model")
+    .setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.")
+    .addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "")
+      .onChange(async (value) => { plugin.settings.defaultCopilotModel = value.trim(); await plugin.saveSettings(); }));
 }
 
 interface ExportWorkflowStep {
@@ -1341,6 +1394,8 @@ const DEFAULT_SETTINGS: AutoOCSettings = {
   workflows: [],
   opencodePath: "opencode",
   codexPath: "codex",
+  copilotPath: "copilot",
+  defaultCopilotModel: "",
   defaultAiEngine: "opencode",
   defaultModel: "",
   defaultCodexModel: "",
@@ -1526,6 +1581,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
   return {
     exportId,
     taskKind: task.taskKind,
+    copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : undefined,
     name: task.name,
     area: task.area,
     prompt: task.prompt,
@@ -2533,7 +2589,9 @@ export default class AutoOCPlugin extends Plugin {
   private getMcpRawTaskPayloadError(payload: Record<string, unknown>): string | null {
     if ("steps" in payload) return "Raw task payloads must not include workflow steps; use kind \"workflow\".";
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (taskKind !== "opencode" && taskKind !== "codex" && taskKind !== "code") return "payload.taskKind must be \"opencode\", \"codex\", or \"code\".";
+    if (!["opencode", "codex", "copilot", "code"].includes(taskKind)) return "payload.taskKind must be opencode, codex, copilot, or code.";
+    const copilotError = getCopilotTaskValidationError(payload);
+    if (copilotError) return copilotError;
     if (payload.reasoningEffort !== undefined && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
       return "payload.reasoningEffort is only valid as a non-empty string for taskKind \"codex\".";
     }
@@ -2669,7 +2727,7 @@ export default class AutoOCPlugin extends Plugin {
     if (!payload || typeof payload !== "object") return null;
     if ("autoOCExport" in payload) return payload as AutoOCExportFile;
     const autoOCExport = {
-      schemaVersion: "1.5.0",
+      schemaVersion: (payload as ScheduledTask).taskKind === "copilot" ? "1.6.0" : "1.5.0",
       exportedAt: new Date().toISOString(),
       pluginVersion: this.manifest.version,
     };
@@ -3016,7 +3074,7 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.defaultModel = this.availableModels[0]?.value ?? "";
       changed = true;
     }
-    if (this.settings.defaultAiEngine !== "codex" && this.settings.defaultAiEngine !== "opencode") {
+    if (!["codex", "opencode", "copilot"].includes(this.settings.defaultAiEngine)) {
       this.settings.defaultAiEngine = "opencode";
       changed = true;
     }
@@ -3388,6 +3446,11 @@ export default class AutoOCPlugin extends Plugin {
 
     if (effectiveTask.taskKind === "codex") {
       void this.runCodexTask(effectiveTask, onComplete);
+      return;
+    }
+
+    if (effectiveTask.taskKind === "copilot") {
+      void this.runCopilotTask(effectiveTask, onComplete);
       return;
     }
 
@@ -3823,6 +3886,92 @@ export default class AutoOCPlugin extends Plugin {
         await onComplete(t, exitCode);
       }
     }, 3000);
+  }
+
+  async runCopilotTask(
+    task: ScheduledTask,
+    onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+  ): Promise<void> {
+    const findCurrent = () => this.settings.tasks.find((candidate) => candidate.id === task.id);
+    let current = findCurrent();
+    if (!current) return;
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const cwd = task.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const model = task.model?.trim() || this.settings.defaultCopilotModel || "";
+    const startedAt = new Date().toISOString();
+    let cancelled = false;
+    let client: CopilotCliClient | undefined;
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let exitCode = -1;
+    const controller = { kill: () => { cancelled = true; client?.dispose(); } };
+    current.status = "running";
+    current.lastRun = startedAt;
+    current.output = "[starting GitHub Copilot CLI task…]\n";
+    this.runningProcesses.set(task.id, controller);
+    this.view?.resetDashboardTaskShift(task.id);
+    try {
+      await this.saveSettings();
+      if (cancelled) return;
+      const validationError = getCopilotTaskValidationError(task);
+      if (validationError) throw new Error(validationError);
+      if (!task.prompt?.trim()) throw new Error("Copilot task prompt is empty.");
+      client = this.createCopilotClient(cwd, (output) => {
+        const active = findCurrent();
+        if (cancelled || !active || active.status !== "running") return;
+        active.output = this.redactSecrets(output);
+        if (!saveTimer) {
+          saveTimer = setTimeout(() => {
+            saveTimer = undefined;
+            const activeTask = findCurrent();
+            if (cancelled || !activeTask || activeTask.status !== "running") return;
+            this.emitTaskUpdated(activeTask);
+            void this.saveSettings(false);
+          }, 750);
+        }
+      });
+      const result = await client.run(task.prompt, {
+        model,
+        allowAllTools: task.copilotAllowAllTools === true,
+        timeoutMs: Math.max(0, this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS) * 1000,
+        env: this.getSecretsEnv(),
+      });
+      current = findCurrent();
+      if (cancelled || !current || current.status !== "running") return;
+      exitCode = result.exitCode;
+      current.output = this.redactSecrets(result.output || (result.exitCode === 0 ? "(no output)" : ""));
+      if (result.exitCode !== 0) {
+        current.output += `\n[Copilot error: ${this.redactSecrets(result.error || `exit code ${result.exitCode}`)}]`;
+      }
+      current.status = exitCode === 0
+        ? (["daily", "weekly", "monthly", "interval"].includes(task.scheduleType) ? "pending" : "completed")
+        : "failed";
+    } catch (error) {
+      current = findCurrent();
+      if (cancelled || !current) return;
+      current.status = "failed";
+      current.output = `${current.output || ""}\n[Copilot error: ${this.redactSecrets(String(error))}]`;
+    } finally {
+      if (saveTimer) clearTimeout(saveTimer);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
+      client?.dispose();
+    }
+    current = findCurrent();
+    if (!current || cancelled) return;
+    if (current.status === "failed") this.view?.startGradualSink(task.id);
+    if (this.settings.logsEnabled) {
+      const metadata = `[engine: copilot]\n[model: ${this.redactSecrets(model || "default")}]\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]`;
+      saveLogToFile(vaultBasePath, task.id, `${metadata}\n\n${current.output}`);
+      cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+      cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+    }
+    await this.saveSettings();
+    this.emitTaskUpdated(current);
+    new Notice(`AutoOC: ${exitCode === 0 ? "✅" : "❌"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
+    if (onComplete) await onComplete(current, exitCode);
+  }
+
+  createCopilotClient(cwd: string, onOutput: (output: string) => void): CopilotCliClient {
+    return new CopilotCliClient(resolveCopilotBin(this.settings.copilotPath), cwd, onOutput);
   }
 
   async runCodexTask(
@@ -4300,7 +4449,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const data: AutoOCExportFile = {
       autoOCExport: {
-        schemaVersion: "1.5.0",
+        schemaVersion: tasks.some((task) => task.taskKind === "copilot") ? "1.6.0" : "1.5.0",
         exportedAt: new Date().toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -4384,9 +4533,9 @@ export default class AutoOCPlugin extends Plugin {
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
-    // Accept legacy schemas and the Codex-aware 1.5 schema.
+    // Accept legacy schemas, Codex 1.5 and Copilot 1.6 packages.
     const sv = data.autoOCExport.schemaVersion;
-    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0") {
+    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0" && sv !== "1.6.0") {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
@@ -4395,9 +4544,11 @@ export default class AutoOCPlugin extends Plugin {
 
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
-      if (importedTaskKind !== "opencode" && importedTaskKind !== "codex" && importedTaskKind !== "code") {
+      if (!["opencode", "codex", "copilot", "code"].includes(importedTaskKind)) {
         throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
       }
+      const copilotError = getCopilotTaskValidationError(et);
+      if (copilotError) throw new Error(`Task "${et.name}": ${copilotError}`);
       if (et.reasoningEffort !== undefined && (importedTaskKind !== "codex" || typeof et.reasoningEffort !== "string" || !et.reasoningEffort.trim())) {
         throw new Error(`Task "${et.name}" has reasoningEffort outside a Codex task.`);
       }
@@ -4410,7 +4561,8 @@ export default class AutoOCPlugin extends Plugin {
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
         prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
-        model: importedTaskKind === "code" ? "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        model: importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        copilotAllowAllTools: importedTaskKind === "copilot" ? et.copilotAllowAllTools === true : undefined,
         agent: importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
         reasoningEffort: importedTaskKind === "codex" ? (et.reasoningEffort || this.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
@@ -6596,7 +6748,7 @@ class AutoOCView extends ItemView {
         ? "Code"
         : task.taskKind === "codex"
           ? (task.interactiveTerminal ? "ChatGPT / Codex" : "Codex")
-          : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
+          : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`,
     });
     
@@ -6666,7 +6818,8 @@ class AutoOCView extends ItemView {
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = task.taskKind === "codex"
       ? this.plugin.availableCodexModels.find((m) => m.value === task.model)?.label ?? task.model ?? "Automatic"
-      : this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
+      : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic"
+        : this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🗂 ${task.area?.trim() || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
@@ -6674,6 +6827,9 @@ class AutoOCView extends ItemView {
       meta.createEl("span", { text: `✦ Codex · ${modelLabel || "Automatic"}` });
       if (task.interactiveTerminal) meta.createEl("span", { text: "ChatGPT app task" });
       meta.createEl("span", { text: `🧠 ${task.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort}` });
+    } else if (task.taskKind === "copilot") {
+      meta.createEl("span", { text: `GitHub Copilot CLI · ${modelLabel}` });
+      meta.createEl("span", { text: task.copilotAllowAllTools ? "Tools allowed automatically" : "Read-only tools" });
     } else {
       if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
       else meta.createEl("span", { text: "OpenCode" });
@@ -7458,6 +7614,7 @@ class VisualBuilderModal extends Modal {
           availableModels: this.plugin.availableModels,
           availableCodexModels: this.plugin.availableCodexModels,
           defaultAiEngine: this.plugin.settings.defaultAiEngine,
+          defaultCopilotModel: this.plugin.settings.defaultCopilotModel,
           defaultCodexModel: this.plugin.settings.defaultCodexModel,
           defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
           pluginVersion: this.plugin.manifest.version,
@@ -7481,6 +7638,7 @@ class VisualBuilderModal extends Modal {
         availableModels: this.plugin.availableModels,
         availableCodexModels: this.plugin.availableCodexModels,
         defaultAiEngine: this.plugin.settings.defaultAiEngine,
+        defaultCopilotModel: this.plugin.settings.defaultCopilotModel,
         defaultCodexModel: this.plugin.settings.defaultCodexModel,
         defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
         pluginVersion: this.plugin.manifest.version,
@@ -7511,6 +7669,10 @@ class VisualBuilderModal extends Modal {
       new Notice("Visual Builder: invalid state payload.");
       return;
     }
+    for (const task of state.tasks) {
+      const error = getCopilotTaskValidationError(task);
+      if (error) { new Notice(`Visual Builder: ${error}`); return; }
+    }
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
     const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
@@ -7531,7 +7693,8 @@ class VisualBuilderModal extends Modal {
         name: t.name || "Unnamed",
         area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
         prompt: t.prompt || "",
-        model: t.model !== undefined ? t.model : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
+        model: t.model !== undefined ? t.model : taskKind === "copilot" ? existing?.model ?? this.plugin.settings.defaultCopilotModel ?? "" : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
+        copilotAllowAllTools: taskKind === "copilot" ? (t.copilotAllowAllTools ?? existing?.copilotAllowAllTools) === true : undefined,
         agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
         reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
@@ -7917,7 +8080,7 @@ class CreateTaskModal extends Modal {
             prompt: "",
             model: plugin.settings.defaultAiEngine === "codex"
               ? plugin.getEffectiveCodexModel()
-              : plugin.getEffectiveDefaultModel(),
+              : plugin.settings.defaultAiEngine === "copilot" ? plugin.settings.defaultCopilotModel || "" : plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
             reasoningEffort: plugin.settings.defaultCodexReasoningEffort,
             useRalphLoop: false,
@@ -7956,20 +8119,29 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl)
       .setName("Task type")
-      .setDesc("Choose OpenCode, Codex in ChatGPT, an interactive OpenCode CLI, or local JavaScript.")
+      .setDesc("Choose OpenCode, Codex in ChatGPT, GitHub Copilot CLI, an interactive OpenCode CLI, or local JavaScript.")
       .addDropdown((dd) => {
         dd.addOption("opencode", "OpenCode task");
         dd.addOption("codex", "Codex task");
         dd.addOption("codex-app", "ChatGPT / Codex task");
+        dd.addOption("copilot", "GitHub Copilot CLI task");
         dd.addOption("code", "Code task");
         dd.addOption("cli", "OpenCode CLI task");
         dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v === "code" ? "code" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
+          this.draft.taskKind = v === "code" ? "code" : v === "copilot" ? "copilot" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
           this.draft.interactiveTerminal = v === "cli" || v === "codex-app";
           if (v === "codex" || v === "codex-app") {
             this.draft.model = "";
             this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
+          } else if (v === "copilot") {
+            this.draft.model = this.plugin.settings.defaultCopilotModel || "";
+            this.draft.agent = "";
+            this.draft.reasoningEffort = undefined;
+            this.draft.useRalphLoop = false;
+            this.draft.forceModel = false;
+            this.draft.branch = "";
+            this.draft.createBranch = false;
           } else if (v === "opencode" || v === "cli") {
             this.draft.model = this.plugin.getEffectiveDefaultModel();
           }
@@ -8034,7 +8206,7 @@ class CreateTaskModal extends Modal {
       promptNotice.style.display = "none";
       new Setting(contentEl)
         .setName("Prompt / Goal")
-        .setDesc(`Text to send to ${taskKind === "codex" ? "Codex" : "OpenCode"}`)
+        .setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`)
         .addTextArea((ta) => {
           const updatePromptNotice = (value: string) => {
             if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
@@ -8234,6 +8406,8 @@ class CreateTaskModal extends Modal {
           dd.setValue(current || "");
           dd.onChange((value) => (this.draft.reasoningEffort = value));
         });
+    } else if (taskKind === "copilot") {
+      addCopilotTaskSettings(contentEl, this.draft, this.plugin.settings.defaultCopilotModel);
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new Setting(contentEl)
@@ -8432,6 +8606,7 @@ class CreateTaskModal extends Modal {
                 taskKind: savingTaskKind,
                 interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
                 reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : undefined,
+                copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,
@@ -8449,6 +8624,7 @@ class CreateTaskModal extends Modal {
               area: this.draft.area ?? "",
               agent: savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
               reasoningEffort: savingTaskKind === "codex" ? (this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
+              copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
               forceModel: savingTaskKind === "opencode" ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
@@ -10044,7 +10220,7 @@ class ImportModal extends Modal {
       return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
     }
     const sv = data.autoOCExport.schemaVersion;
-    const SUPPORTED = ["1.0", "1.4.0", "1.5.0"];
+    const SUPPORTED = ["1.0", "1.4.0", "1.5.0", "1.6.0"];
     if (!sv) {
       errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
     } else if (!SUPPORTED.includes(sv)) {
@@ -10083,9 +10259,11 @@ class ImportModal extends Modal {
           errors.push(where + ".prompt is missing or empty.");
         }
         const taskKind = t.taskKind || "opencode";
-        if (!["opencode", "codex", "code"].includes(taskKind)) {
-          errors.push(where + ".taskKind is invalid. Expected opencode, codex, or code.");
+        if (!["opencode", "codex", "copilot", "code"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, codex, copilot, or code.");
         }
+        const copilotError = getCopilotTaskValidationError(t);
+        if (copilotError) errors.push(where + ": " + copilotError);
         if (t.reasoningEffort !== undefined && (taskKind !== "codex" || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
           errors.push(where + ".reasoningEffort is only valid for Codex tasks.");
         }
@@ -11027,13 +11205,16 @@ class AutoOCSettingTab extends PluginSettingTab {
       .addDropdown((dropdown) => dropdown
         .addOption("opencode", "OpenCode")
         .addOption("codex", "Codex / ChatGPT")
+        .addOption("copilot", "GitHub Copilot CLI")
         .setValue(this.plugin.settings.defaultAiEngine)
         .onChange(async (value) => {
-          if (value === "opencode" || value === "codex") {
+          if (value === "opencode" || value === "codex" || value === "copilot") {
             this.plugin.settings.defaultAiEngine = value;
             await this.plugin.saveSettings();
           }
         }));
+
+    addCopilotGlobalSettings(containerEl, this.plugin);
 
     containerEl.createEl("h3", { text: "Codex / ChatGPT" });
     new Setting(containerEl)
@@ -11131,7 +11312,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Working Directory")
       .setDesc(
-        "Directory from which to launch OpenCode or Codex (empty = vault's current directory)"
+        "Directory from which to launch OpenCode, Codex or GitHub Copilot CLI (empty = vault's current directory)"
       )
       .addText((text) =>
         text

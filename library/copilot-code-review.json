@@ -1,0 +1,21 @@
+{
+  "autoOCExport": {
+    "schemaVersion": "1.6.0",
+    "exportedAt": "2026-09-10T00:00:00.000Z",
+    "pluginVersion": "1.6.0",
+    "name": "Copilot code review",
+    "description": "A manual read-only review using GitHub Copilot CLI. Set the project folder after importing."
+  },
+  "tasks": [
+    {
+      "exportId": "copilot-review",
+      "taskKind": "copilot",
+      "name": "copilot-code-review",
+      "prompt": "Read the project source files and identify up to five concrete correctness bugs. For each finding, include the file, the relevant code and an explanation of the failure. Do not modify files or run commands. If no concrete bugs are found, say so.",
+      "copilotAllowAllTools": false,
+      "interactiveTerminal": false,
+      "scheduleType": "manual"
+    }
+  ],
+  "workflows": []
+}

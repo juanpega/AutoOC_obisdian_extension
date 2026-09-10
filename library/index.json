@@ -2,6 +2,11 @@
   "schemaVersion": "1.0",
   "library": [
     {
+      "name": "Copilot Code Review",
+      "description": "Read-only project review with GitHub Copilot CLI. Set the project folder after importing.",
+      "file": "copilot-code-review.json"
+    },
+    {
       "name": "bidirectional-skill-sync-github-opencode",
       "description": "Detects missing skills between .github and .opencode and adapts them in both directions.",
       "file": "bidirectional-skill-sync-github-opencode.json"
