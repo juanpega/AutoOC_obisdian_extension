@@ -2408,14 +2408,14 @@ var CodexAppServerClient = class {
     }
     return threadId;
   }
-  async run(prompt, model, effort) {
+  async run(prompt, model, effort, approvalPolicy = "on-request") {
     var _a, _b, _c, _d;
     await this.initialize();
     this.output = "";
     const threadResponse = await this.peer.request("thread/start", {
       cwd: this.cwd,
       model: model || null,
-      approvalPolicy: "on-request",
+      approvalPolicy,
       sandbox: "workspace-write",
       ephemeral: false,
       serviceName: "AutoOC"
@@ -2433,7 +2433,7 @@ var CodexAppServerClient = class {
         input: [{ type: "text", text: prompt }],
         model: model || null,
         effort: effort || null,
-        approvalPolicy: "on-request",
+        approvalPolicy,
         cwd: this.cwd
       });
     } catch (error) {
@@ -6272,7 +6272,12 @@ ${current.output}`);
     });
     let exitCode = -1;
     try {
-      const result = await client.run(task.prompt, model || void 0, reasoningEffort || void 0);
+      const result = await client.run(
+        task.prompt,
+        model || void 0,
+        reasoningEffort || void 0,
+        task.interactiveTerminal ? "on-request" : "never"
+      );
       if (cancelled || current.status !== "running") return;
       current.lastCodexThreadId = result.threadId;
       current.lastCodexTurnId = result.turnId;

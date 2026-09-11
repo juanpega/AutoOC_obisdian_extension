@@ -302,13 +302,18 @@ export class CodexAppServerClient {
     return threadId;
   }
 
-  async run(prompt: string, model?: string, effort?: string): Promise<CodexRunResult> {
+  async run(
+    prompt: string,
+    model?: string,
+    effort?: string,
+    approvalPolicy: "on-request" | "never" = "on-request",
+  ): Promise<CodexRunResult> {
     await this.initialize();
     this.output = "";
     const threadResponse = await this.peer!.request("thread/start", {
       cwd: this.cwd,
       model: model || null,
-      approvalPolicy: "on-request",
+      approvalPolicy,
       sandbox: "workspace-write",
       ephemeral: false,
       serviceName: "AutoOC",
@@ -327,7 +332,7 @@ export class CodexAppServerClient {
         input: [{ type: "text", text: prompt }],
         model: model || null,
         effort: effort || null,
-        approvalPolicy: "on-request",
+        approvalPolicy,
         cwd: this.cwd,
       });
     } catch (error) {

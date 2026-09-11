@@ -138,6 +138,28 @@ test("Codex client creates a persistent empty thread for the desktop launcher", 
   ]);
 });
 
+test("Codex run applies the requested approval policy to thread and turn", async () => {
+  const requests = [];
+  const client = new CodexAppServerClient("codex", process.cwd());
+  client.initialized = true;
+  client.peer = {
+    request: async (method, params) => {
+      requests.push({ method, params });
+      if (method === "thread/start") return { thread: { id: "thread-background" } };
+      if (method === "turn/start") return { turn: { id: "turn-background" } };
+      return {};
+    },
+  };
+
+  const completion = client.run("background task", "gpt-test", "medium", "never");
+  await new Promise((resolve) => setImmediate(resolve));
+  client.handleMessage({ method: "turn/completed", params: { turn: { id: "turn-background", status: "completed" } } });
+  await completion;
+
+  assert.equal(requests[0].params.approvalPolicy, "never");
+  assert.equal(requests[1].params.approvalPolicy, "never");
+});
+
 test("Codex approval requests can be accepted or rejected", () => {
   const responses = [];
   const approvals = [];

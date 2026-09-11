@@ -4060,7 +4060,12 @@ export default class AutoOCPlugin extends Plugin {
 
     let exitCode = -1;
     try {
-      const result = await client.run(task.prompt, model || undefined, reasoningEffort || undefined);
+      const result = await client.run(
+        task.prompt,
+        model || undefined,
+        reasoningEffort || undefined,
+        task.interactiveTerminal ? "on-request" : "never",
+      );
       if (cancelled || current.status !== "running") return;
       current.lastCodexThreadId = result.threadId;
       current.lastCodexTurnId = result.turnId;
