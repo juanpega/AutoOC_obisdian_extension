@@ -234,7 +234,7 @@ test("hidden launcher writes VBScript accepted by cscript with a quoted temporar
 
     const result = childProcess.spawnSync("cscript.exe", ["//Nologo", launcherFile], { encoding: "utf8", windowsHide: true });
     assert.equal(result.error, undefined, result.error?.message);
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, [result.stdout,result.stderr].filter(Boolean).join("\n"));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }

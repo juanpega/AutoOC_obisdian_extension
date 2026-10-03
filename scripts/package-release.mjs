@@ -14,6 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { copyReleaseArtifacts, validateReleaseArtifacts } from "./release-artifacts.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -31,9 +32,14 @@ if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(version)) {
 }
 
 const outDir = argValue("--out") ? path.resolve(argValue("--out")) : path.join(root, "release");
+validateReleaseArtifacts(root);
 fs.mkdirSync(outDir, { recursive: true });
 
 const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
+const builtVersion=JSON.parse(execFileSync(process.execPath,[path.join(root,"autooc-cli.cjs"),"version"],{encoding:"utf8"})).version;
+if (version !== manifest.version || version !== builtVersion || version !== pkg.version) {
+  throw new Error("Release version must match package.json, manifest.json and the built CLI. Update versions and rebuild before packaging.");
+}
 manifest.version = version;
 
 const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), "autooc-release-"));
@@ -41,20 +47,13 @@ const zipName = `auto-oc-${version}.zip`;
 const zipPath = path.join(outDir, zipName);
 
 try {
-  for (const file of ["main.js", "manifest.json", "styles.css"]) {
-    const src = path.join(root, file);
-    if (!fs.existsSync(src)) {
-      console.error(`Missing required file: ${file} (run npm run build first)`);
-      process.exit(1);
-    }
-    fs.copyFileSync(src, path.join(buildDir, file));
-  }
+  copyReleaseArtifacts(root,buildDir);
   fs.writeFileSync(path.join(buildDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
   if (process.platform === "win32") {
     execFileSync(
       "powershell.exe",
-      ["-NoProfile", "-Command", `Compress-Archive -Path '${buildDir}\\*' -DestinationPath '${zipPath}' -Force`],
+      ["-NoProfile", "-Command", `Compress-Archive -Path '${buildDir.replace(/'/g,"''")}\\*' -DestinationPath '${zipPath.replace(/'/g,"''")}' -Force`],
       { stdio: "inherit" },
     );
   } else {

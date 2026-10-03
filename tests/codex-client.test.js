@@ -31,6 +31,47 @@ const {
   resolveCodexBin,
 } = requireTypeScript(path.resolve(__dirname, "..", "codex-client.ts"));
 
+test('lost completion event is reconciled with the exact persisted turn', async () => {
+  const client = new CodexAppServerClient('codex', process.cwd());
+  client.initialize = async () => {};
+  client.threadId = 't'; client.turnId = 'u';
+  const done = new Promise(resolve => client.completionResolve = resolve);
+  client.peer = { request: async (method, params) => {
+    assert.equal(method, 'thread/read');
+    assert.deepEqual(params, { threadId: 't', includeTurns: true });
+    return { thread: { id: 't', turns: [{ id: 'other', status: 'completed' }, { id: 'u', status: 'interrupted', items: [] }] } };
+  } };
+  await client.reconcileTurn();
+  assert.equal((await done).status, 'interrupted');
+});
+
+test('reconciliation recovers final JSON without commentary', async () => {
+  const client = new CodexAppServerClient('codex', process.cwd());
+  client.initialize = async () => {};
+  client.threadId = 't'; client.turnId = 'u';
+  const done = new Promise(resolve => client.completionResolve = resolve);
+  client.peer = { request: async () => ({ thread: { id: 't', turns: [{ id: 'u', status: 'completed', items: [
+    { id: 'c', type: 'agentMessage', phase: 'commentary', text: 'working' },
+    { id: 'f', type: 'agentMessage', phase: 'final_answer', text: '{"status":"ready"}' }
+  ] }] } }) };
+  await client.reconcileTurn();
+  assert.equal((await done).output, '{"status":"ready"}');
+});
+
+test('read failures and unrelated turns cannot turn live work into success or failure', async () => {
+  const client = new CodexAppServerClient('codex', process.cwd());
+  client.initialize = async () => {};
+  client.threadId = 't'; client.turnId = 'u';
+  let settled = false;
+  client.completionResolve = () => { settled = true; };
+  client.peer = { request: async () => { throw Error('temporary read failure'); } };
+  await client.reconcileTurn();
+  client.peer.request = async () => ({ thread: { id: 't', turns: [{id:'other',status:'completed'}] } });
+  await client.reconcileTurn();
+  client.handleMessage({method:'turn/completed',params:{threadId:'t',turn:{id:'other',status:'completed'}}});
+  assert.equal(settled, false);
+});
+
 test("Codex desktop new-thread link preserves an absolute folder with spaces", () => {
   const url = new URL(buildCodexNewThreadUrl("C:\\project with spaces"));
   assert.equal(url.protocol, "codex:");
@@ -195,4 +236,81 @@ test("Codex interrupt uses thread and turn identifiers before disposal", async (
 
 test("Codex auto-detection prefers the configured path", () => {
   assert.equal(resolveCodexBin("C:\\tools\\codex.exe"), "C:\\tools\\codex.exe");
+});
+
+
+test("Codex final item replaces interrupted or replayed deltas and excludes commentary", async () => {
+  const snapshots=[];
+  const client=new CodexAppServerClient('codex',process.cwd(),{onOutput:t=>snapshots.push(t)});
+  client.threadId='t';client.turnId='u';
+  const complete=new Promise(resolve=>client.completionResolve=resolve);
+  const send=(method,params)=>client.handleMessage({method,params:{threadId:'t',turnId:'u',...params}});
+  send('item/started',{item:{id:'progress',type:'agentMessage',phase:'commentary',text:''}});
+  send('item/agentMessage/delta',{itemId:'progress',delta:'Checking files.'});
+  send('item/completed',{item:{id:'progress',type:'agentMessage',phase:'commentary',text:'Checking files.'}});
+  send('item/started',{item:{id:'answer',type:'agentMessage',phase:'final_answer',text:''}});
+  send('item/agentMessage/delta',{itemId:'answer',delta:'{"status":"ok","planMarkdown":"Cut off'});
+  const answer=JSON.stringify({status:'ok',planMarkdown:'Complete plan — café'});
+  send('item/agentMessage/delta',{itemId:'answer',delta:answer});
+  send('item/completed',{item:{id:'answer',type:'agentMessage',phase:'final_answer',text:answer}});
+  send('item/completed',{item:{id:'answer',type:'agentMessage',phase:'final_answer',text:answer}});
+  send('turn/completed',{turn:{id:'u',status:'completed'}});
+  assert.equal((await complete).output,answer);
+  assert.equal(snapshots.at(-1),'Checking files.\n\n'+answer);
+});
+
+test("Codex preserves separate legacy messages and completion without deltas", async () => {
+  const client=new CodexAppServerClient('codex',process.cwd());
+  const done=new Promise(resolve=>client.completionResolve=resolve);
+  client.handleMessage({method:'item/agentMessage/delta',params:{itemId:'one',delta:'Progress'}});
+  client.handleMessage({method:'item/completed',params:{item:{id:'one',type:'agentMessage',text:'Progress corrected'}}});
+  client.handleMessage({method:'item/completed',params:{item:{id:'two',type:'agentMessage',text:'{"status":"ok"}'}}});
+  client.handleMessage({method:'turn/completed',params:{turn:{status:'completed'}}});
+  assert.equal((await done).output,'Progress corrected\n\n{"status":"ok"}');
+});
+
+test("Codex keeps multiple complete final messages distinct instead of guessing a winner", async () => {
+  const client=new CodexAppServerClient('codex',process.cwd());
+  const done=new Promise(resolve=>client.completionResolve=resolve);
+  for(const id of ['one','two'])client.handleMessage({method:'item/completed',params:{item:{id,type:'agentMessage',phase:'final_answer',text:JSON.stringify({status:id})}}});
+  client.handleMessage({method:'turn/completed',params:{turn:{status:'completed'}}});
+  assert.equal((await done).output,'{"status":"one"}\n\n{"status":"two"}');
+});
+
+test('Codex persists thread identity before turn/start and refuses effects when persistence fails',async()=>{
+  const events=[];
+  const client=new CodexAppServerClient('unused',process.cwd(),{onThreadCreated:async({threadId})=>{events.push('saved:'+threadId);throw Error('disk unavailable');}});
+  client.initialize=async()=>{};
+  client.peer={request:async(method)=>{events.push(method);if(method==='thread/start')return {thread:{id:'durable-thread'}};throw Error('must not start turn');}};
+  await assert.rejects(client.run('fixture'),/disk unavailable/);
+  assert.deepEqual(events,['thread/start','saved:durable-thread']);
+  assert.equal(client.getIds().threadId,'durable-thread');
+});
+
+test('Codex awaits durable turn identity before reporting an already completed turn',async()=>{
+  let release,saved=false;
+  const client=new CodexAppServerClient('unused',process.cwd(),{onStarted:async ids=>{assert.deepEqual(ids,{threadId:'t',turnId:'u'});await new Promise(resolve=>{release=resolve;});saved=true;}});
+  client.initialize=async()=>{};
+  client.peer={request:async method=>{
+    if(method==='thread/start')return {thread:{id:'t'}};
+    client.completionResolve({threadId:'t',turnId:'u',output:'done',status:'completed'});
+    client.completionResolve=undefined;
+    return {turn:{id:'u'}};
+  }};
+  let resolved=false;const pending=client.run('fixture').then(result=>{resolved=true;return result;});
+  while(!release)await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(resolved,false);release();assert.equal((await pending).output,'done');assert.equal(saved,true);
+});
+
+test('external reconciliation reads only the exact saved turn without launching work',async()=>{
+  const client=new CodexAppServerClient('unused',process.cwd());
+  client.initialize=async()=>{};
+  const calls=[];let thread={id:'saved-thread',turns:[{id:'saved-turn',status:'inProgress',items:[]}]};
+  client.peer={request:async(method,params)=>{calls.push(method);assert.equal(params.threadId,'saved-thread');return {thread};}};
+  assert.equal((await client.readExistingTurn('saved-thread','saved-turn')).status,'inProgress');
+  thread={id:'different',turns:[]};await assert.rejects(client.readExistingTurn('saved-thread','saved-turn'),/mismatch/);
+  thread={id:'saved-thread',turns:[{id:'other',status:'completed'}]};await assert.rejects(client.readExistingTurn('saved-thread','saved-turn'),/unavailable/);
+  await assert.rejects(client.readExistingTurn('saved-thread',''),/identities/);
+  assert.deepEqual(calls,['thread/read','thread/read','thread/read']);
+  assert.deepEqual(client.getIds(),{threadId:'',turnId:''});
 });

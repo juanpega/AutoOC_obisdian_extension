@@ -1,3 +1,5 @@
+import { buildOpenCodeScript } from "./opencode-script";
+import { downloadRelease, installRelease, hasCompleteInstalledRelease } from "./release-update";
 import {
   App,
   ItemView,
@@ -24,6 +26,23 @@ import {
   resolveCodexBin,
 } from "./codex-client";
 import { CopilotCliClient, checkCopilotInstallation, resolveCopilotBin } from "./copilot-client";
+import { workflowTaskPrompt } from "./workflow-handoff";
+import { executeCodexTask } from "./codex-execution";
+import { executeCode } from "./code-runtime";
+import { executeCodeTask } from "./code-task";
+import { EXECUTION_DEFAULTS } from "./execution-defaults";
+import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
+import { runInstalledWorkflow } from "./installed-workflow-host";
+import { answerWorkflowApproval } from "./workflow-approval";
+import { standaloneTaskWorkflow,projectStandaloneTask } from "./standalone-task";
+import { prepareWorkflowDefinition } from "./workflow-definition";
+import { supportsSharedWorkflow } from "./code-workflow-host";
+import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
+import { projectWorkflowProgress } from "./workflow-progress";
+import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
+import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
+import { SettingsWriter } from "./settings-writer";
+import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
 // The visual builder is shipped as a self-contained HTML file under
 // `util/ui_workflow_builder/index.html`. A pre-build step
 // (scripts/inline-visual-builder.mjs) reads the file at build time and
@@ -36,371 +55,7 @@ import { CopilotCliClient, checkCopilotInstallation, resolveCopilotBin } from ".
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const visualBuilderHtml: string = require("./visualBuilderHtml.generated").visualBuilderHtml;
 
-// Resolve the opencode binary. On Windows prefer .cmd so Electron finds it without
-// PATH. On macOS/Linux GUI apps (Obsidian) don't inherit the shell PATH, so probe the
-// common install locations explicitly before falling back to the bare command name.
-function resolveOpencodeBin(configured: string): string {
-  if (configured && configured !== "opencode") return configured;
-  const candidates: string[] = [];
-  if (os.platform() === "win32") {
-    // Common npm global path
-    candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
-  } else {
-    const home = process.env.HOME || "";
-    candidates.push(
-      `${home}/.bun/bin/opencode`,
-      `${home}/.local/bin/opencode`,
-      `${home}/.npm-global/bin/opencode`,
-      `${home}/bin/opencode`,
-      "/opt/homebrew/bin/opencode",
-      "/usr/local/bin/opencode",
-    );
-  }
-  const { accessSync, constants } = require("fs");
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch { /* ignore */ }
-  }
-  return configured || "opencode";
-}
-
-function psSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function commandPreviewArg(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
-}
-
-function shSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function buildPowerShellEnvLines(env: Record<string, string>): string[] {
-  return Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
-}
-
-const HANDOFF_CONTEXT_LIMIT = 50000;
-const SAFE_CLI_PROMPT_LENGTH = 7500;
-
-function isWindows(): boolean {
-  return process.platform === "win32";
-}
-
-// Detached-script file extension for the current platform: PowerShell on
-// Windows, POSIX shell elsewhere.
-function scriptExt(): ".ps1" | ".sh" {
-  return isWindows() ? ".ps1" : ".sh";
-}
-
-// Environment exports for POSIX shell scripts. Values are single-quoted so
-// secrets and paths with shell metacharacters stay literal.
-function buildShEnvLines(env: Record<string, string>): string[] {
-  return Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `export ${key}=${shSingleQuoted(value)}`);
-}
-
-// Builds a shell command with every token shell-quoted, so paths and values
-// that contain spaces, quotes, or shell metacharacters survive the trip into
-// an interactive terminal (previously `cd ${cwd}` failed on spaces on macOS).
-function buildPosixLaunchCommand(bin: string, cwd: string, env: Record<string, string>, args: string[]): string {
-  const envPrefix = Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `${key}=${shSingleQuoted(value)}`)
-    .join(" ");
-  return `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
-}
-
-// AppleScript string literal quoting. The embedded command is already
-// shell-quoted by buildPosixLaunchCommand, so only backslashes and double
-// quotes need escaping for the AppleScript string itself.
-function appleScriptQuoted(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-const LINUX_TERMINAL_CANDIDATES: Array<{ cmd: string; args: string[] }> = [
-  { cmd: "x-terminal-emulator", args: ["-e"] },
-  { cmd: "gnome-terminal", args: ["--"] },
-  { cmd: "konsole", args: ["-e"] },
-  { cmd: "xfce4-terminal", args: ["-e"] },
-  { cmd: "lxterminal", args: ["-e"] },
-  { cmd: "alacritty", args: ["-e"] },
-  { cmd: "xterm", args: ["-e"] },
-];
-
-function commandExists(cmd: string): boolean {
-  try {
-    const { execSync } = require("child_process");
-    execSync(`command -v ${shSingleQuoted(cmd)}`, { stdio: "ignore", timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// First available terminal emulator on Linux. A user-configured command is
-// tried first, then common emulators, so x-terminal-emulator-only setups keep
-// working and distros without it fall back to gnome-terminal/konsole/xterm.
-function resolveLinuxTerminal(configured?: string): { cmd: string; args: string[] } | null {
-  if (configured && configured.trim()) {
-    const parts = configured.trim().split(/\s+/);
-    const cmd = parts.shift() as string;
-    if (commandExists(cmd)) return { cmd, args: [...parts, "-e"] };
-    return null;
-  }
-  for (const candidate of LINUX_TERMINAL_CANDIDATES) {
-    if (commandExists(candidate.cmd)) return candidate;
-  }
-  return null;
-}
-
-interface CliLaunchOptions {
-  onError?: (error: Error) => void;
-  linuxTerminal?: string;
-}
-
-function openOpencodeCli(
-  bin: string,
-  cwd: string,
-  env: Record<string, string> = {},
-  args: string[] = [],
-  options: CliLaunchOptions = {},
-): void {
-  if (isWindows()) {
-    const envScript = buildPowerShellEnvLines(env).join("; ");
-    const runCommand = args.length > 0
-      ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList`
-      : `& ${psSingleQuoted(bin)}`;
-    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
-    const launcher = spawn(
-      "cmd.exe",
-      ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-      { detached: true, stdio: "ignore", windowsHide: false },
-    );
-    launcher.on?.("error", (error: Error) => options.onError?.(error));
-    launcher.unref();
-    return;
-  }
-
-  const command = buildPosixLaunchCommand(bin, cwd, env, args);
-
-  if (process.platform === "darwin") {
-    const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
-    const launcher = spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" });
-    launcher.on?.("error", (error: Error) => options.onError?.(error));
-    launcher.unref();
-    return;
-  }
-
-  if (process.platform === "linux") {
-    const terminal = resolveLinuxTerminal(options.linuxTerminal);
-    if (!terminal) {
-      throw new Error(
-        "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)",
-      );
-    }
-    const launcher = spawn(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
-    launcher.on?.("error", (error: Error) => options.onError?.(error));
-    launcher.unref();
-    return;
-  }
-}
-
-function openOpencodeCliLongPromptWindows(
-  bin: string,
-  cwd: string,
-  env: Record<string, string>,
-  model: string,
-  agent: string,
-  prompt: string,
-): void {
-  const promptFile = path.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
-  fs.writeFileSync(promptFile, prompt, "utf8");
-  // ponytail: workspace file avoids temp-dir access surprises; one minute is enough after TUI startup.
-  setTimeout(() => {
-    try {
-      fs.unlinkSync(promptFile);
-    } catch {
-      // ignore cleanup errors
-    }
-  }, 60 * 1000);
-
-  const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
-  const envScript = buildPowerShellEnvLines(env).join("; ");
-  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
-  const command =
-    `${envScript ? `${envScript}; ` : ""}` +
-    `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ` +
-    `$bin = ${psSingleQuoted(bin)}; ` +
-    `$argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
-    `& $bin @argList`;
-  const launcher = spawn(
-    "cmd.exe",
-    ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-    { detached: true, stdio: "ignore", windowsHide: false },
-  );
-  launcher.unref();
-}
-
-type ProcessHandle = { kill: () => void };
-
-type HiddenProcessHandle = ProcessHandle & {
-  cleanup: (removeScript?: boolean) => void;
-  onError: (callback: (error: Error) => void) => void;
-};
-
-function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHandle {
-  const fs   = require("fs");
-  const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
-  const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
-  const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
-  const launcherScript = `Set sh = CreateObject("WScript.Shell")\r\n` +
-    `sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r\n`;
-  fs.writeFileSync(launcherFile, launcherScript, "utf8");
-  const { spawn } = require("child_process");
-  const child = spawn("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
-  child.unref();
-  // Clean up launcher files after PowerShell has had time to read them. This
-  // also limits exposure for launch scripts that contain temporary env vars.
-  const launcherTimer = setTimeout(() => { try { fs.unlinkSync(launcherFile); } catch { /* ignore */ } }, 10000);
-  // ponytail: 10-minute fallback cleanup so generated ps1 stays available for debugging.
-  const scriptTimer = setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 600000);
-
-  const cleanup = (removeScript = false) => {
-    clearTimeout(launcherTimer);
-    clearTimeout(scriptTimer);
-    try { fs.unlinkSync(launcherFile); } catch { /* ignore */ }
-    if (removeScript) {
-      try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
-    }
-  };
-
-  const kill = () => {
-    let killedChildTree = false;
-    if (child.pid) {
-      try {
-        const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
-        killer.unref();
-        killedChildTree = true;
-      } catch { /* ignore */ }
-    }
-    if (!killedChildTree) {
-      try { child.kill(); } catch { /* ignore */ }
-    }
-    try {
-      const pid = fs.existsSync(effectivePidFile) ? String(fs.readFileSync(effectivePidFile, "utf8")).trim() : "";
-      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
-        const killer = spawn("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
-        killer.unref();
-      }
-    } catch { /* ignore */ }
-    cleanup(true);
-    try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
-  };
-
-  const callbacks: Array<(error: Error) => void> = [];
-  let launchError: Error | null = null;
-  child.on?.("error", (error: Error) => {
-    launchError = error;
-    cleanup(true);
-    callbacks.forEach((callback) => callback(error));
-  });
-
-  return {
-    kill,
-    cleanup,
-    onError: (callback) => {
-      if (launchError) callback(launchError);
-      else callbacks.push(callback);
-    },
-  };
-}
-
-// POSIX equivalent of launchHiddenPS: runs a shell script fully detached so the
-// Electron sandbox does not kill the child. Output capture lives inside the
-// script (temp files polled by the caller); cancellation kills the whole process
-// group; cleanup removes the script (and pid file) after a timeout or on kill.
-function launchHiddenSh(shScriptFile: string, pidFile?: string): HiddenProcessHandle {
-  const fs = require("fs");
-  const { spawn } = require("child_process");
-  const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
-  try { fs.chmodSync(shScriptFile, 0o700); } catch { /* ignore */ }
-  // detached:true on POSIX puts the child in its own process group, so a single
-  // kill(-pid) reaches the shell and every process it spawned (opencode, git…).
-  const child = spawn("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
-  child.unref();
-  // ponytail: 10-minute fallback cleanup so the generated sh stays available for debugging.
-  const scriptTimer = setTimeout(() => { try { fs.unlinkSync(shScriptFile); } catch { /* ignore */ } }, 600000);
-
-  const cleanup = (removeScript = false) => {
-    clearTimeout(scriptTimer);
-    if (removeScript) {
-      try { fs.unlinkSync(shScriptFile); } catch { /* ignore */ }
-    }
-  };
-
-  const kill = () => {
-    let killedChildTree = false;
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-        killedChildTree = true;
-      } catch { /* ignore */ }
-    }
-    if (!killedChildTree) {
-      try { child.kill("SIGKILL"); } catch { /* ignore */ }
-    }
-    try {
-      const pid = fs.existsSync(effectivePidFile) ? String(fs.readFileSync(effectivePidFile, "utf8")).trim() : "";
-      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
-        try { process.kill(-Number(pid), "SIGKILL"); } catch { /* ignore */ }
-        try { process.kill(Number(pid), "SIGKILL"); } catch { /* ignore */ }
-      }
-    } catch { /* ignore */ }
-    cleanup(true);
-    try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
-  };
-
-  const callbacks: Array<(error: Error) => void> = [];
-  let launchError: Error | null = null;
-  child.on?.("error", (error: Error) => {
-    launchError = error;
-    cleanup(true);
-    callbacks.forEach((callback) => callback(error));
-  });
-
-  return {
-    kill,
-    cleanup,
-    onError: (callback) => {
-      if (launchError) callback(launchError);
-      else callbacks.push(callback);
-    },
-  };
-}
-
-// Cross-platform hidden launcher: PowerShell/VBScript on Windows, detached
-// /bin/sh on macOS/Linux.
-function launchHidden(scriptFile: string, pidFile?: string): HiddenProcessHandle {
-  return isWindows() ? launchHiddenPS(scriptFile, pidFile) : launchHiddenSh(scriptFile, pidFile);
-}
-
-function writeUtf8BomFile(filePath: string, content: string): void {
-  fs.writeFileSync(filePath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(content, "utf8")]));
-}
-
-function psUtf8Prelude(): string[] {
-  return [
-    `$utf8NoBom = New-Object System.Text.UTF8Encoding($false)`,
-    `[Console]::OutputEncoding = $utf8NoBom`,
-    `$OutputEncoding = $utf8NoBom`,
-  ];
-}
+import { resolveOpencodeBin, psSingleQuoted, commandPreviewArg, shSingleQuoted, buildPowerShellEnvLines, SAFE_CLI_PROMPT_LENGTH, isWindows, scriptExt, buildShEnvLines, buildPosixLaunchCommand, appleScriptQuoted, LINUX_TERMINAL_CANDIDATES, commandExists, resolveLinuxTerminal, CliLaunchOptions, openOpencodeCli, openOpencodeCliLongPromptWindows, ProcessHandle, HiddenProcessHandle, launchHiddenPS, launchHiddenSh, launchHidden, writeUtf8BomFile, psUtf8Prelude } from "./cli-launchers";
 
 function setupCodeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.addClass("auto-oc-code-editor");
@@ -850,6 +505,7 @@ interface ScheduledTask {
   output: string;
   createdAt: string;       // ISO string;
   workingDirectory?: string; // Optional path override
+  requiresAutoOCSecrets?: boolean; // Shared runtime must reject this dependency.
   branch?: string;           // Git branch name
   createBranch?: boolean;    // Create branch if it doesn't exist
   code?: string;
@@ -967,6 +623,7 @@ function renderAreaSuggestions(
 //   - model (taken from the importer's system default)
 interface ExportTask {
   exportId: string;
+  requiresAutoOCSecrets?: boolean;
   taskKind?: TaskKind;
   copilotAllowAllTools?: boolean;
   name: string;
@@ -1390,29 +1047,15 @@ function fetchAgentsSync(opencodePath: string, cwd?: string): { value: string; l
 }
 
 const DEFAULT_SETTINGS: AutoOCSettings = {
+  ...EXECUTION_DEFAULTS,
   tasks: [],
   workflows: [],
-  opencodePath: "opencode",
-  codexPath: "codex",
-  copilotPath: "copilot",
-  defaultCopilotModel: "",
-  defaultAiEngine: "opencode",
-  defaultModel: "",
-  defaultCodexModel: "",
-  defaultCodexReasoningEffort: "medium",
-  defaultAgent: "build",
-  workingDirectory: "",
-  // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
-  cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
-  taskTimeoutSeconds: 7200,  // 2 h default
-  defaultInteractiveTerminal: false,
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
   dashboardPositions: {},
   dashboardTaskBubbleSize: "md",
-  linuxTerminal: "",
 };
 
 export const VIEW_TYPE = "auto-oc-view";
@@ -1582,6 +1225,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
     exportId,
     taskKind: task.taskKind,
     copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : undefined,
+    requiresAutoOCSecrets: task.requiresAutoOCSecrets,
     name: task.name,
     area: task.area,
     prompt: task.prompt,
@@ -1686,168 +1330,7 @@ function nowTimeString(): string {
   return `${padTwo(now.getHours())}:${padTwo(now.getMinutes())}`;
 }
 
-function normalizeCommandOutput(text: string): string {
-  if (!text) return "";
-
-  // Remove ANSI color/control escape sequences
-  let cleaned = text.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "");
-
-  // Best-effort fix for common mojibake (UTF-8 interpreted as Latin-1)
-  // Only apply when typical broken markers are present.
-  if (/[ÃÂâ€œâ€|â€|â€|â„¢|â€“|â€”]/.test(cleaned)) {
-    try {
-      cleaned = Buffer.from(cleaned, "latin1").toString("utf8");
-    } catch {
-      // keep cleaned as-is if conversion fails
-    }
-  }
-
-  return cleaned.trim();
-}
-
-function extractTouchedFiles(trace: string): string[] {
-  const files = new Set<string>();
-  for (const line of trace.split(/\r?\n/)) {
-    const match = line.match(/^[←→]\s+(?:Edit|Write|Read)\s+(.+)$/) || line.match(/^Index:\s+(.+)$/);
-    if (match?.[1]) files.add(match[1].trim());
-  }
-  return [...files];
-}
-
-function formatTaskOutput(stdout: string, stderr: string): string {
-  const cleanStdout = normalizeCommandOutput(stdout);
-  const cleanStderr = normalizeCommandOutput(stderr);
-  const parts: string[] = [];
-
-  if (cleanStdout) {
-    parts.push(`## Response\n\n${cleanStdout}`);
-  }
-
-  const touchedFiles = extractTouchedFiles(cleanStderr);
-  if (touchedFiles.length > 0) {
-    parts.push(`## Touched files\n\n${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
-  }
-
-  if (cleanStderr) {
-    parts.push(`## OpenCode trace\n\n\`\`\`text\n${cleanStderr}\n\`\`\``);
-  }
-
-  return parts.join("\n\n---\n\n").trim();
-}
-
-function extractSection(output: string, title: string): string {
-  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = output.match(
-    new RegExp(`(?:^|\\r?\\n)## ${escaped}\\s*(?:\\r?\\n)+([\\s\\S]*?)(?=(?:\\r?\\n){2}---(?:\\r?\\n){2}## |$)`)
-  );
-  return match ? match[1].trim() : "";
-}
-
-function cleanWorkflowContext(output: string): string {
-  if (!output) return "";
-  return output
-    .replace(/\[exit code:.*?\]/g, "")
-    .replace(/\[starting detached process…\]/g, "")
-    .replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "")
-    .replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "")
-    .replace(/\.{3,}/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function extractContextForHandoff(output: string): string {
-  const cleaned = cleanWorkflowContext(output);
-  if (!cleaned) return "";
-
-  const response = extractSection(cleaned, "Response");
-  const touchedFiles = extractSection(cleaned, "Touched files");
-  const parts: string[] = [];
-
-  if (response) {
-    parts.push(`PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${response}`);
-    if (touchedFiles) {
-      parts.push(`DIAGNOSTIC ONLY — touched files (do not re-read unless the current task explicitly asks):\n\n${touchedFiles}`);
-    }
-  } else {
-    // No explicit Response section: use the cleaned output as the primary input,
-    // omitting the OpenCode trace so diagnostics don't leak into the handoff.
-    const primary = cleaned
-      .replace(/\n\n---\n\n## OpenCode trace[\s\S]*$/, "")
-      .replace(/^## OpenCode trace[\s\S]*$/, "")
-      .trim();
-    parts.push(`PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${primary}`);
-  }
-
-  return parts.join("\n\n").slice(0, HANDOFF_CONTEXT_LIMIT).trim();
-}
-
-function formatLogContent(text: string): string {
-  if (!text) return "";
-  return normalizeCommandOutput(text).replace(/\r\n/g, "\n");
-}
-
-function countReplacementChars(text: string): number {
-  return (text.match(/�/g) || []).length;
-}
-
-function decodeCp850(bytes: Buffer): string {
-  const map: Record<number, string> = {
-    0x80: "Ç", 0x81: "ü", 0x82: "é", 0x83: "â", 0x84: "ä", 0x85: "à", 0x86: "å", 0x87: "ç",
-    0x88: "ê", 0x89: "ë", 0x8a: "è", 0x8b: "ï", 0x8c: "î", 0x8d: "ì", 0x8e: "Ä", 0x8f: "Å",
-    0x90: "É", 0x91: "æ", 0x92: "Æ", 0x93: "ô", 0x94: "ö", 0x95: "ò", 0x96: "û", 0x97: "ù",
-    0x98: "ÿ", 0x99: "Ö", 0x9a: "Ü", 0x9b: "ø", 0x9c: "£", 0x9d: "Ø", 0x9e: "×", 0x9f: "ƒ",
-    0xa0: "á", 0xa1: "í", 0xa2: "ó", 0xa3: "ú", 0xa4: "ñ", 0xa5: "Ñ", 0xa6: "ª", 0xa7: "º",
-    0xa8: "¿", 0xa9: "®", 0xaa: "¬", 0xab: "½", 0xac: "¼", 0xad: "¡", 0xae: "«", 0xaf: "»",
-  };
-  let out = "";
-  for (const byte of bytes) {
-    if (byte < 0x80) out += String.fromCharCode(byte);
-    else out += map[byte] ?? String.fromCharCode(byte);
-  }
-  return out;
-}
-
-function decodeWindows1252(bytes: Buffer): string {
-  const map: Record<number, string> = {
-    0x80: "€", 0x82: "‚", 0x83: "ƒ", 0x84: "„", 0x85: "…", 0x86: "†", 0x87: "‡",
-    0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹", 0x8c: "Œ", 0x8e: "Ž",
-    0x91: "‘", 0x92: "’", 0x93: "“", 0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—",
-    0x98: "˜", 0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž", 0x9f: "Ÿ",
-  };
-  let out = "";
-  for (const byte of bytes) {
-    if (byte < 0x80 || byte >= 0xa0) out += String.fromCharCode(byte);
-    else out += map[byte] ?? "";
-  }
-  return out;
-}
-
-function decodeCommandBuffer(bytes: Buffer): string {
-  if (bytes.length >= 2) {
-    if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString("utf16le");
-    if (bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes).swap16().toString("utf16le");
-  }
-
-  if (bytes.length > 4) {
-    let oddNulls = 0;
-    let evenNulls = 0;
-    for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] === 0) {
-        if (i % 2 === 0) evenNulls++;
-        else oddNulls++;
-      }
-    }
-    const nullRatio = (oddNulls + evenNulls) / bytes.length;
-    if (nullRatio > 0.2 && oddNulls > evenNulls * 4) return bytes.toString("utf16le");
-    if (nullRatio > 0.2 && evenNulls > oddNulls * 4) return Buffer.from(bytes).swap16().toString("utf16le");
-  }
-
-  const utf8 = bytes.toString("utf8");
-  if (countReplacementChars(utf8) === 0) return utf8;
-  const win1252 = decodeWindows1252(bytes);
-  const cp850 = decodeCp850(bytes);
-  return countReplacementChars(win1252) <= countReplacementChars(cp850) ? win1252 : cp850;
-}
+import { normalizeCommandOutput, extractTouchedFiles, formatTaskOutput, formatLogContent, countReplacementChars, decodeCp850, decodeWindows1252, decodeCommandBuffer } from "./command-output";
 
 function getOpencodeConfigPath(): string {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
@@ -2366,6 +1849,7 @@ function isWorkflowDue(wf: Workflow): boolean {
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class AutoOCPlugin extends Plugin {
+  private settingsWriter = new SettingsWriter();
   settings!: AutoOCSettings;
   secretStore!: SecretStore;
   view?: AutoOCView;
@@ -2381,6 +1865,9 @@ export default class AutoOCPlugin extends Plugin {
   private dueCheckInProgress = false;
   // Workflows that have been manually stopped; checked in step callbacks to abort chaining
   private stoppingWorkflows = new Set<string>();
+  private workflowDelayControllers = new Map<string, AbortController>();
+  private pluginExecutionLease?: ExecutionLease;
+  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;controller:AbortController};
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
 
@@ -2391,7 +1878,9 @@ export default class AutoOCPlugin extends Plugin {
   updateInProgress = false;
 
   async onload() {
-    await this.loadSettings();
+    this.reservePluginExecution();
+    try { await this.loadSettings(); }
+    catch (error) { this.releasePluginExecution(false); throw error; }
     void this.startMcpBridge().catch((error: unknown) => console.warn("AutoOC MCP bridge failed to start", error));
     // Load models asynchronously to avoid blocking startup
     setTimeout(() => {
@@ -2480,6 +1969,12 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async onunload() {
+    const unresolved = !!this.sharedWorkflowExecution || this.runningProcesses.size > 0 || this.runningCodexClients.size > 0 ||
+      this.workflowDelayControllers.size > 0 || this.settings?.tasks?.some(task=>task.status === "running") ||
+      this.settings?.workflows?.some(workflow=>workflow.status === "running");
+    this.sharedWorkflowExecution?.controller.abort();
+    for (const controller of this.workflowDelayControllers.values()) controller.abort();
+    this.workflowDelayControllers.clear();
     await this.stopMcpBridge();
     // Kill all running processes cleanly when plugin unloads
     for (const [, proc] of this.runningProcesses) {
@@ -2489,6 +1984,69 @@ export default class AutoOCPlugin extends Plugin {
     for (const [, client] of this.runningCodexClients) client.dispose();
     this.runningCodexClients.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+    this.releasePluginExecution(!!unresolved);
+  }
+
+  // Reserve the vault for the whole plugin lifetime, including legacy tasks
+  // whose asynchronous completion outlives runTask/runWorkflow. The external
+  // host uses this same lease, so opening the plugin cannot race its effects.
+  reservePluginExecution() {
+    if (this.pluginExecutionLease) { this.pluginExecutionLease.assertOwned(); return; }
+    const base = (this.app.vault.adapter as any).basePath;
+    if (!base) throw new Error("AutoOC execution requires a local vault");
+    let directory = fs.realpathSync(base);
+    for (const part of [this.app.vault.configDir, "plugins", this.manifest.id, "runtime"]) {
+      directory = path.join(directory,part);
+      if (!fs.existsSync(directory)) fs.mkdirSync(directory);
+      const stat = fs.lstatSync(directory);
+      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("AutoOC runtime must use regular directories");
+    }
+    this.pluginExecutionLease = acquireExecutionLease(directory);
+  }
+
+  releasePluginExecution(unresolved: boolean) {
+    if (!this.pluginExecutionLease) return;
+    // kill()/dispose() requests do not prove external effects have stopped.
+    if (unresolved) return;
+    this.pluginExecutionLease.release();
+    this.pluginExecutionLease = undefined;
+  }
+
+  isWorkflowExecuting(workflowId:string):boolean {
+    if (this.sharedWorkflowExecution?.workflowId === workflowId) return true;
+    const workflow=this.settings.workflows.find(item=>item.id===workflowId);
+    return !!workflow && !(workflow as any).runtimeExecution && workflow.status === "running";
+  }
+
+  async recoverSharedWorkflow(workflowId:string, expectedRunId:string) {
+    const workflow=this.settings.workflows.find(item=>item.id===workflowId);
+    const execution=(workflow as any)?.runtimeExecution;
+    if (!execution || execution.runId !== expectedRunId) throw new Error("Recovery identity changed; reload the workflow");
+    if (!["ready","in_flight"].includes(execution.phase)) throw new Error("Execution does not require recovery");
+    return await this.runSharedWorkflow(workflowId,expectedRunId,execution.phase === "in_flight");
+  }
+
+  async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
+    if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
+    if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
+      throw new Error("Legacy tasks must finish before shared execution");
+    }
+    const execution = {workflowId,taskId,controller:new AbortController()};
+    this.sharedWorkflowExecution = execution;
+    try {
+      await this.saveSettings(false);
+      return await runInstalledWorkflow({
+        vault:(this.app.vault.adapter as any).basePath, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
+        lease:this.pluginExecutionLease, signal:execution.controller.signal,
+        redact:output=>this.redactSecrets(output),
+        onCheckpoint:async()=>{await this.loadSettings();this.view?.refresh();},
+      });
+    } finally {
+      if (this.sharedWorkflowExecution === execution) this.sharedWorkflowExecution = undefined;
+      this.view?.refresh();
+    }
   }
 
   private getMcpBridgePath(): string {
@@ -2540,6 +2098,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private isTaskActive(task: ScheduledTask): boolean {
+    if (this.sharedWorkflowExecution?.taskId === task.id) return true;
     const canonical = this.settings.tasks.find((t) => t.id === task.id);
     return canonical?.status === "running" || this.runningProcesses.has(task.id);
   }
@@ -2980,14 +2539,39 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const localFile = (this.app.vault.adapter as any).basePath && this.app.vault.configDir && this.manifest?.id
+      ? path.join(vaultBasePath, this.app.vault.configDir, "plugins", this.manifest.id, "data.json") : null;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, localFile ? this.settingsWriter.load(localFile) : await this.loadData());
     this.secretStore = new SecretStore(vaultBasePath);
     try {
       this.secretStore.load();
     } catch (e) {
       new Notice(`AutoOC: could not load secrets vault — ${String(e)}`);
       this.secretStore = new SecretStore(vaultBasePath);
+    }
+    // Bound executions are recovered read-only before legacy migrations can
+    // change their definition or turn an unobserved run into a failure.
+    if (this.settings.workflows?.some(wf => (wf as any).runtimeExecution) || this.settings.tasks?.some(task=>(task as any).runtimeExecution)) {
+      const runtime = path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "runtime");
+      for (let current = runtime; current !== path.resolve(vaultBasePath); current = path.dirname(current)) {
+        const stat = fs.lstatSync(current);
+        if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("AutoOC runtime must use regular directories");
+        if (path.dirname(current) === current) throw new Error("Invalid AutoOC runtime location");
+      }
+      const recovered = this.settings.workflows.map(wf => {
+        const binding = (wf as any).runtimeExecution;
+        if (!binding) return wf;
+        const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
+        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId);
+      });
+      this.settings.workflows = recovered;
+      this.settings.tasks = this.settings.tasks.map(task=>{
+        const binding=(task as any).runtimeExecution;
+        if (!binding || binding.workflowId!==standaloneTaskWorkflow(task.id).id) return task;
+        return projectStandaloneTask(task,this.settings.tasks,this.settings,readExecutionCheckpoint(runtime,binding.runId));
+      });
+      return;
     }
     delete (this.settings as any).chatHistory;
     delete (this.settings as any).chatModel;
@@ -3091,7 +2675,7 @@ export default class AutoOCPlugin extends Plugin {
       changed = true;
     }
     if (changed) {
-      await this.saveData(this.settings);
+      await this.saveSettings(false);
     }
   }
 
@@ -3195,7 +2779,13 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async saveSettings(refreshView = true) {
-    await this.saveData(this.settings);
+    const basePath = (this.app.vault.adapter as any).basePath;
+    if (basePath) {
+      const file = path.join(basePath, this.app.vault.configDir, "plugins", this.manifest.id, "data.json");
+      await this.settingsWriter.save(file, () => this.settings);
+    } else {
+      await this.saveData(this.settings);
+    }
     if (refreshView) this.view?.refresh();
   }
 
@@ -3231,12 +2821,14 @@ export default class AutoOCPlugin extends Plugin {
         throw new Error("Remote manifest has no version");
       }
       this.latestVersion = remoteVersion;
-      this.updateAvailable = compareVersions(remoteVersion, this.manifest.version) > 0;
+      const comparison = compareVersions(remoteVersion, this.manifest.version);
+      const incomplete = this.pluginExecutionLease && !hasCompleteInstalledRelease(path.dirname(this.pluginExecutionLease.directory), this.manifest.version);
+      this.updateAvailable = comparison > 0 || comparison === 0 && !!incomplete;
       this.view?.refresh();
       if (!silent) {
         new Notice(
           this.updateAvailable
-            ? `AutoOC: update available v${remoteVersion}.`
+            ? `AutoOC: install or repair the complete v${remoteVersion} package.`
             : `AutoOC: already up to date (v${this.manifest.version}).`
         );
       }
@@ -3250,6 +2842,11 @@ export default class AutoOCPlugin extends Plugin {
   async updatePlugin(): Promise<void> {
     if (this.updateInProgress) return;
     if (!this.latestVersion) return;
+    if (!this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size ||
+        this.settings.tasks.some(task => task.status === "running") || this.settings.workflows.some(workflow => workflow.status === "running")) {
+      new Notice("AutoOC: finish or reconcile executions before updating.");
+      return;
+    }
 
     const shouldUpdate = confirm(
       `AutoOC will download v${this.latestVersion} and try to reload the plugin automatically.\n\n` +
@@ -3263,25 +2860,9 @@ export default class AutoOCPlugin extends Plugin {
     new Notice("AutoOC: downloading update…");
 
     try {
-      const [mainJs, manifest, styles] = await Promise.all([
-        fetch(noCacheUrl(REMOTE_FILE_URLS.mainJs), { cache: "reload" }).then((r) => {
-          if (!r.ok) throw new Error(`main.js HTTP ${r.status}`);
-          return r.text();
-        }),
-        fetch(noCacheUrl(REMOTE_FILE_URLS.manifest), { cache: "reload" }).then((r) => {
-          if (!r.ok) throw new Error(`manifest.json HTTP ${r.status}`);
-          return r.text();
-        }),
-        fetch(noCacheUrl(REMOTE_FILE_URLS.styles), { cache: "reload" }).then((r) => {
-          if (!r.ok) throw new Error(`styles.css HTTP ${r.status}`);
-          return r.text();
-        }),
-      ]);
-
-      const pluginDir = `.obsidian/plugins/${this.manifest.id}`;
-      await this.app.vault.adapter.write(`${pluginDir}/main.js`, mainJs);
-      await this.app.vault.adapter.write(`${pluginDir}/manifest.json`, manifest);
-      await this.app.vault.adapter.write(`${pluginDir}/styles.css`, styles);
+      const files = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, this.latestVersion);
+      const pluginDir = path.dirname(this.pluginExecutionLease.directory);
+      installRelease({ directory: pluginDir, version: this.latestVersion, files, lease: this.pluginExecutionLease });
 
       new Notice(`AutoOC: updated to v${this.latestVersion}. Reloading plugin…`);
 
@@ -3298,7 +2879,7 @@ export default class AutoOCPlugin extends Plugin {
     } catch (e) {
       new Notice(`AutoOC: update failed — ${String(e)}`);
     } finally {
-      this.updateInProgress = false;
+      this.updateInProgress = !!this.pluginExecutionLease && fs.existsSync(path.join(this.pluginExecutionLease.directory, "update-pending.json"));
       this.view?.refresh();
     }
   }
@@ -3430,6 +3011,8 @@ export default class AutoOCPlugin extends Plugin {
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
   ) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     if (this.isTaskActive(this.settings.tasks[idx])) {
@@ -3438,6 +3021,16 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
+
+    if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
+      const vault = (this.app.vault.adapter as any).basePath;
+      const workflow = standaloneTaskWorkflow(effectiveTask.id);
+      const definition = prepareWorkflowDefinition(workflow, this.settings.tasks, this.settings);
+      if (supportsSharedWorkflow(definition, createWorkflowTaskAdapter(definition, vault))) {
+        await this.runSharedWorkflow(workflow.id, undefined, false, true, effectiveTask.id);
+        return;
+      }
+    }
 
     if ((effectiveTask.taskKind || "opencode") === "code") {
       await this.runCodeTask(effectiveTask, onComplete);
@@ -3637,83 +3230,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const effectiveAgent = this.getEffectiveAgent(effectiveTask.agent);
 
-    let launchScript: string;
-    if (isWindows()) {
-      launchScript = [
-        `try {`,
-        `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
-        ...psUtf8Prelude(),
-          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
-          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
-          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
-          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-          ...buildPowerShellEnvLines(secretEnv),
-          `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
-          gitCmds ? gitCmds : "",
-        `$bin = ${psSingleQuoted(bin)}`,
-        `$binExt = [System.IO.Path]::GetExtension($bin)`,
-        `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
-        `$nodeScript = ''`,
-        `if ($psShim -and [System.IO.File]::Exists($psShim)) {`,
-        `$bin = $psShim`,
-        `} elseif ($binExt -ieq '.cmd') {`,
-        `$cmdText = Get-Content $bin -Raw -Encoding UTF8`,
-        `if ($cmdText -match '"([^"]+\\.exe)"\\s+%\\*') {`,
-        `$bin = $Matches[1]`,
-        `} elseif ($cmdText -match '"%_prog%"\\s+"%dp0%\\\\([^"]+)"\\s+%\\*') {`,
-        `$cmdDir = Split-Path -Parent $bin`,
-        `$nodeCandidate = Join-Path $cmdDir 'node.exe'`,
-        `$bin = if ([System.IO.File]::Exists($nodeCandidate)) { $nodeCandidate } else { 'node' }`,
-        `$nodeScript = Join-Path $cmdDir $Matches[1]`,
-        `} else {`,
-        `throw "Cannot safely parse npm command shim '$bin' for shell-sensitive prompt text."`,
-        `}`,
-        `}`,
-        `$model = ${psSingleQuoted(model)}`,
-        `$agent = ${psSingleQuoted(effectiveAgent)}`,
-        `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
-        `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
-        `$outFile = ${psSingleQuoted(outFile)}`,
-        `$errFile = ${psSingleQuoted(errFile)}`,
-        `$opencodeArgs = @()`,
-        `if ($nodeScript) {`,
-        `$opencodeArgs += $nodeScript`,
-        `}`,
-        `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
-        `if (-not $forceModel) {`,
-        `$opencodeArgs += @('--agent', $agent)`,
-        `}`,
-        `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
-         `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
-         `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
-         `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
-        `} catch {`,
-        `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
-        `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
-        `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
-        `}`,
-      ].filter(line => line !== "").join("\n");
-    } else {
-      const shEnv: Record<string, string> = {
-        ...secretEnv,
-        HOME: process.env.HOME || process.env.USERPROFILE || "",
-        PATH: process.env.PATH || "",
-      };
-      const agentArg = effectiveTask.forceModel ? "" : ` --agent ${shSingleQuoted(effectiveAgent)}`;
-      launchScript = [
-        `echo $$ > ${shSingleQuoted(pidFile)}`,
-        ...buildShEnvLines(shEnv),
-        `cd ${shSingleQuoted(taskCwd)} || { printf '%s' '-1' > ${shSingleQuoted(doneFile)}; printf '%s' 'cd failed' > ${shSingleQuoted(errFile)}; exit 1; }`,
-        gitCmds ? gitCmds : "",
-        `bin=${shSingleQuoted(bin)}`,
-        `prompt="$(cat ${shSingleQuoted(promptFile)} 2>/dev/null)"`,
-        `set -- --print-logs --log-level INFO --auto -m ${shSingleQuoted(model)}${agentArg} --dangerously-skip-permissions -- "$prompt"`,
-        `"$bin" run "$@" >> ${shSingleQuoted(outFile)} 2>> ${shSingleQuoted(errFile)}`,
-        `exit_code=$?`,
-        `printf '%s' "$exit_code" > ${shSingleQuoted(doneFile)}`,
-      ].filter(line => line !== "").join("\n");
-    }
+    const launchScript = buildOpenCodeScript({pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd});
 
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
@@ -4011,8 +3528,10 @@ export default class AutoOCPlugin extends Plugin {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
-        void this.saveSettings(false);
-      }, 750);
+        void this.saveSettings(false).catch(() => {
+          new Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
+        });
+      }, 10_000);
     };
     const client = this.createCodexClient(taskCwd, {
       onStarted: ({ threadId, turnId }) => {
@@ -4060,12 +3579,9 @@ export default class AutoOCPlugin extends Plugin {
 
     let exitCode = -1;
     try {
-      const result = await client.run(
-        task.prompt,
-        model || undefined,
-        reasoningEffort || undefined,
-        task.interactiveTerminal ? "on-request" : "never",
-      );
+      const result = await executeCodexTask(client, {
+        prompt: task.prompt, model, reasoningEffort, interactive: task.interactiveTerminal,
+      });
       if (cancelled || current.status !== "running") return;
       current.lastCodexThreadId = result.threadId;
       current.lastCodexTurnId = result.turnId;
@@ -4090,7 +3606,7 @@ export default class AutoOCPlugin extends Plugin {
         this.view?.startGradualSink(task.id);
         new Notice(`AutoOC: ❌ Codex task "${task.name}" failed.`);
       }
-      codexLogOutput = `${metadata}\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${current.output}`;
+      codexLogOutput = `${metadata}\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${this.redactSecrets(result.transcript || current.output)}`;
     } catch (error) {
       if (cancelled || current.output.includes("[task stopped manually]")) return;
       current.status = "failed";
@@ -4126,6 +3642,12 @@ export default class AutoOCPlugin extends Plugin {
 
   async resolveCodexApproval(taskId: string, approved: boolean): Promise<void> {
     const task = this.settings.tasks.find((candidate) => candidate.id === taskId);
+    const execution=(task as any)?.runtimeExecution;
+    if(this.sharedWorkflowExecution && execution && task?.pendingCodexApproval) {
+      const directory=path.join((this.app.vault.adapter as any).basePath,".obsidian","plugins","auto-oc","runtime");
+      answerWorkflowApproval(directory,execution.runId,String(task.pendingCodexApproval.requestId),approved);
+      return;
+    }
     const client = this.runningCodexClients.get(taskId);
     const approval = task?.pendingCodexApproval;
     if (!task || !client || !approval) {
@@ -4169,71 +3691,11 @@ export default class AutoOCPlugin extends Plugin {
     new Notice(`AutoOC: running code task "${current.name}"...`);
 
     try {
-      const vm = require("vm");
-      const inputVar = current.codeInputVar || "input";
-      const outputVar = current.codeOutputVar || "output";
-      const defaultCwd = current.workingDirectory || this.settings.workingDirectory || vaultBasePath;
-      const resolveInVault = (p: string) => {
-        const resolved = path.resolve(vaultBasePath, p || ".");
-        const root = path.resolve(vaultBasePath);
-        if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-          throw new Error(`Path escapes vault: ${p}`);
-        }
-        return resolved;
-      };
-      const readText = (p: string) => fs.readFileSync(p, "utf8");
-      const writeText = (p: string, content: any) => {
-        fs.mkdirSync(path.dirname(p), { recursive: true });
-        fs.writeFileSync(p, String(content), "utf8");
-        return p;
-      };
-      const sandbox: Record<string, any> = {
-        input: "",
-        outputs: {},
-        JSON,
-        Math,
-        Date,
-        String,
-        Number,
-        Boolean,
-        Array,
-        Object,
-        RegExp,
-        console: { log: (...args: any[]) => { current.output += args.map(String).join(" ") + "\n"; } },
-      };
-      if (current.codeAllowVault) {
-        sandbox.vault = {
-          read: (p: string) => readText(resolveInVault(p)),
-          write: (p: string, content: any) => writeText(resolveInVault(p), content),
-          append: (p: string, content: any) => { const f = resolveInVault(p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, String(content), "utf8"); return f; },
-          exists: (p: string) => fs.existsSync(resolveInVault(p)),
-          list: (p = ".") => fs.readdirSync(resolveInVault(p)),
-        };
-      }
-      if (current.codeAllowFiles) {
-        sandbox.files = {
-          read: (p: string) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-          write: (p: string, content: any) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
-          append: (p: string, content: any) => { const f = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, String(content), "utf8"); return f; },
-          exists: (p: string) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-          list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        };
-      }
-      if (current.codeAllowTerminal) {
-        const { execSync } = require("child_process");
-        sandbox.terminal = {
-          run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
-            cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
-            encoding: "utf8",
-          }),
-        };
-      }
-
-      const context = vm.createContext(sandbox);
-      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
-      const out = String(result == null ? "" : result);
+      const out = executeCodeTask({
+        ...current, code, vaultBase: vaultBasePath,
+        cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
+        log: (...args) => { current.output += args.map(String).join(" ") + "\n"; },
+      });
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
@@ -4260,6 +3722,10 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async killTask(id: string) {
+    if (this.sharedWorkflowExecution?.taskId === id) {
+      this.sharedWorkflowExecution.controller.abort();
+      return;
+    }
     const proc = this.runningProcesses.get(id);
     if (proc) {
       try { proc.kill(); } catch { /* ignore */ }
@@ -4281,10 +3747,15 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async killWorkflow(id: string) {
+    if (this.sharedWorkflowExecution?.workflowId === id) {
+      this.sharedWorkflowExecution.controller.abort();
+      return;
+    }
     const wf = this.settings.workflows.find((w) => w.id === id);
     if (!wf) return;
 
     this.stoppingWorkflows.add(id);
+    this.workflowDelayControllers.get(id)?.abort();
 
     // Stop the currently running task in the workflow, if any
     if (wf.status === "running" && wf.currentStep >= 0 && wf.currentStep < wf.steps.length) {
@@ -4563,6 +4034,7 @@ export default class AutoOCPlugin extends Plugin {
       const task: ScheduledTask = {
         id: generateId(),
         taskKind: importedTaskKind,
+        requiresAutoOCSecrets: et.requiresAutoOCSecrets,
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
         prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
@@ -4678,10 +4150,28 @@ export default class AutoOCPlugin extends Plugin {
     return { tasksImported, workflowsImported };
   }
 
+  async applyWorkflowCheckpoint(checkpoint: RunCheckpoint, expectedRunId: string, activelyExecuting = false) {
+    const index = this.settings.workflows.findIndex(w => w.id === checkpoint.workflowId);
+    if (index < 0) throw new Error("Workflow for execution progress is absent");
+    const projected = projectWorkflowProgress(this.settings.workflows[index], this.settings.tasks, this.settings, checkpoint, expectedRunId, activelyExecuting);
+    this.settings.workflows[index] = projected;
+    await this.saveSettings();
+  }
+
   async runWorkflow(workflow: Workflow) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+
+    if (this.settings.workflows.some(item => {
+      const execution = (item as any).runtimeExecution;
+      return execution && !["completed", "failed"].includes(execution.phase);
+    })) {
+      new Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
+      return;
+    }
 
     if (wf.status === "running") {
       new Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
@@ -4698,6 +4188,15 @@ export default class AutoOCPlugin extends Plugin {
       const step = wf.steps[i];
       if (step.stepKind === "task" && !this.settings.tasks.find((t) => t.id === step.taskId)) {
         new Notice(`AutoOC: Workflow "${wf.name}" — step ${i + 1} references a deleted task.`);
+        return;
+      }
+    }
+
+    if (this.pluginExecutionLease) {
+      const definition=prepareWorkflowDefinition(wf,this.settings.tasks,this.settings);
+      const vault=(this.app.vault.adapter as any).basePath;
+      if (supportsSharedWorkflow(definition,createWorkflowTaskAdapter(definition,vault))) {
+        await this.runSharedWorkflow(wf.id,undefined,false,true);
         return;
       }
     }
@@ -4735,20 +4234,11 @@ export default class AutoOCPlugin extends Plugin {
   // step in the workflow. If multiple are candidates, picks the one with the
   // smallest position.x (visual order). Falls back to the first step.
   findEntryStep(wf: Workflow): WorkflowStep | null {
-    if (wf.steps.length === 0) return null;
-    const incoming = new Set<string>();
-    for (const s of wf.steps) {
-      for (const t of s.transitions || []) {
-        incoming.add(t.toStepId);
-      }
-    }
-    const candidates = wf.steps.filter((s) => !incoming.has(s.id));
-    if (candidates.length === 0) return wf.steps[0];
-    candidates.sort((a, b) => (a.position?.x ?? 0) - (b.position?.x ?? 0));
-    return candidates[0];
+    return findWorkflowEntry(wf.steps);
   }
 
   async runWorkflowStepById(workflowId: string, stepId: string): Promise<void> {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
     const wf = this.settings.workflows[wfIdx];
@@ -4779,50 +4269,17 @@ export default class AutoOCPlugin extends Plugin {
     lastSucceeded: boolean,
     transitions: WorkflowTransition[]
   ): Promise<{ nextStepId: string | null; reason: string }> {
-    if (!transitions || transitions.length === 0) {
-      // Default: linear +1 if it exists.
-      const next = wf.steps[currentStepIndex + 1];
-      if (next) return { nextStepId: next.id, reason: "linear" };
-      return { nextStepId: null, reason: "end" };
-    }
-    for (const t of transitions) {
-      const target = wf.steps.find((s) => s.id === t.toStepId);
-      if (!target) continue;
-      if (t.mode === "force" || t.forceContinue) {
-        return { nextStepId: t.toStepId, reason: "force" };
-      }
-      if (t.mode === "default") {
-        if (lastSucceeded) return { nextStepId: t.toStepId, reason: "default" };
-        continue;
-      }
-      if (t.mode === "eval") {
+    return resolveWorkflowTransition(wf.steps, currentStepIndex, lastOutput, lastSucceeded, transitions, this.getRuntimeOutputs(wf.id), {
+      evaluate: async (transition, target, input) => {
         new Notice(`AutoOC: Evaluating transition for "${wf.name}" → ${target.id}...`);
-        try {
-          const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-          const model = this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
-          const prompt = t.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
-          const evalFullPrompt = `${prompt}\n\nPrevious step output:\n---\n${lastOutput}\n---\n\nReply ONLY with YES or NO.`;
-          const evalResult = await this.evaluateWithOpencode(evalFullPrompt, model, cwd);
-          const isYes = /\bYES\b/i.test(evalResult.output) && !/\bNO\b/i.test(evalResult.output);
-          if (isYes) {
-            return { nextStepId: t.toStepId, reason: "eval:yes" };
-          }
-        } catch (err) {
-          new Notice(`AutoOC: eval error — ${String(err)}`);
-        }
-        continue;
-      }
-      if (t.mode === "conditional") {
-        try {
-          const ok = this.evaluateCondition(t.condition || "", lastOutput, this.getRuntimeOutputs(wf.id));
-          if (ok) return { nextStepId: t.toStepId, reason: "conditional:true" };
-        } catch (err) {
-          new Notice(`AutoOC: condition error — ${String(err)}`);
-        }
-        continue;
-      }
-    }
-    return { nextStepId: null, reason: "no-match" };
+        const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+        const model = this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
+        const prompt = transition.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
+        const result = await this.evaluateWithOpencode(`${prompt}\n\nPrevious step output:\n---\n${input}\n---\n\nReply ONLY with YES or NO.`, model, cwd);
+        return result.output;
+      },
+      onError: (kind, error) => { new Notice(`AutoOC: ${kind} error — ${String(error)}`); },
+    });
   }
 
   getRuntimeOutputs(workflowId: string): Record<string, string> {
@@ -4839,29 +4296,11 @@ export default class AutoOCPlugin extends Plugin {
   // Variables exposed: input (last step output), outputs (map of stepId → output),
   // workflow (object with name/id), step (current step), require (Node require).
   evaluateCondition(expression: string, input: string, outputs: Record<string, string>): boolean {
-    if (!expression || !expression.trim()) return false;
-    const vm = require("vm");
-    const sandbox = {
-      input: input || "",
-      outputs,
-      String,
-      Number,
-      Boolean,
-      Array,
-      Object,
-      JSON,
-      Math,
-      Date,
-      RegExp,
-      console: { log: () => {} },
-    };
-    vm.createContext(sandbox);
-    const src = expression.trim().startsWith("return") ? `(function(){ ${expression} })()` : `(${expression})`;
-    const result = vm.runInContext(src, sandbox, { timeout: 500 });
-    return !!result;
+    return evaluateWorkflowCondition(expression, input, outputs);
   }
 
   async runWorkflowStep(wfIdx: number, stepIndex: number) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
@@ -4894,18 +4333,22 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDelayStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
-    const value = Math.max(0, step.delayValue || 0);
-    const unit = step.delayUnit || "seconds";
-    const ms = value * (unit === "hours" ? 3600_000 : unit === "minutes" ? 60_000 : 1000);
+    const spec = workflowDelay(step.delayValue, step.delayUnit);
     const ctx = (this as any).workflowRuntime.get(wf.id);
-    if (ctx) ctx.stepOutputs.set(step.id, `[delay ${value} ${unit}]`);
-    new Notice(`AutoOC: ⏱ Waiting ${value} ${unit} in "${wf.name}"...`);
-    if (this.stoppingWorkflows.has(wf.id)) {
-      await this.completeStep(wf, step, stepIndex, true, "[delay skipped: workflow stopped]");
-      return;
+    if (this.stoppingWorkflows.has(wf.id) || wf.status !== "running") return;
+    this.workflowDelayControllers.get(wf.id)?.abort();
+    const controller = new AbortController();
+    this.workflowDelayControllers.set(wf.id, controller);
+    new Notice(`AutoOC: ⏱ ${spec.output} in "${wf.name}"...`);
+    try {
+      await waitForWorkflowDelay(spec.milliseconds, controller.signal);
+      if (controller.signal.aborted || wf.status !== "running" || (this as any).workflowRuntime.get(wf.id) !== ctx) return;
+      await this.completeStep(wf, step, stepIndex, true, spec.output);
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      if (this.workflowDelayControllers.get(wf.id) === controller) this.workflowDelayControllers.delete(wf.id);
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, ms));
-    await this.completeStep(wf, step, stepIndex, true, `[delay ${value} ${unit}]`);
   }
 
   async runCodeStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
@@ -4915,80 +4358,13 @@ export default class AutoOCPlugin extends Plugin {
     const inputVal = (ctx && ctx.stepOutputs.size > 0) ? Array.from(ctx.stepOutputs.values()).pop() : "";
     const outputs: Record<string, string> = {};
     if (ctx) for (const [k, v] of ctx.stepOutputs.entries()) outputs[k] = v;
-    const vm = require("vm");
-    const vaultBase = (this.app.vault.adapter as any).basePath || ".";
-    const defaultCwd = this.settings.workingDirectory || vaultBase;
-    const resolveInVault = (p: string) => {
-      const resolved = path.resolve(vaultBase, p || ".");
-      const root = path.resolve(vaultBase);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        throw new Error(`Path escapes vault: ${p}`);
-      }
-      return resolved;
-    };
-    const readText = (p: string) => fs.readFileSync(p, "utf8");
-    const writeText = (p: string, content: any) => {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, String(content), "utf8");
-      return p;
-    };
-    const sandbox: Record<string, any> = {
-      input: inputVal,
-      outputs,
-      String, Number, Boolean, Array, Object, JSON, Math, Date, RegExp,
-      console: { log: () => {} },
-    };
-    if (step.codeAllowVault) {
-      sandbox.vault = {
-        basePath: vaultBase,
-        resolve: (p: string) => resolveInVault(p),
-        read: (p: string) => readText(resolveInVault(p)),
-        write: (p: string, content: any) => writeText(resolveInVault(p), content),
-        append: (p: string, content: any) => {
-          const full = resolveInVault(p);
-          fs.mkdirSync(path.dirname(full), { recursive: true });
-          fs.appendFileSync(full, String(content), "utf8");
-          return full;
-        },
-        exists: (p: string) => fs.existsSync(resolveInVault(p)),
-        list: (p = ".") => fs.readdirSync(resolveInVault(p)),
-      };
-    }
-    if (step.codeAllowFiles) {
-      sandbox.files = {
-        cwd: defaultCwd,
-        resolve: (p: string) => path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p || "."),
-        read: (p: string) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        write: (p: string, content: any) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
-        append: (p: string, content: any) => {
-          const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p);
-          fs.mkdirSync(path.dirname(full), { recursive: true });
-          fs.appendFileSync(full, String(content), "utf8");
-          return full;
-        },
-        exists: (p: string) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-      };
-    }
-    if (step.codeAllowTerminal) {
-      const { execSync } = require("child_process");
-      sandbox.terminal = {
-        run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
-          cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-          timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
-          encoding: "utf8",
-        }),
-      };
-    }
     try {
-      const context = vm.createContext(sandbox);
-      const code = step.code || "";
-      // Expose the configured variable names by aliasing `input` and `outputs`.
-      // We prepend a small preamble so the user can name their input/output
-      // variables freely while we still inject the standard ones.
-      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
-      const out = String(result == null ? "" : result);
+      const vaultBase = (this.app.vault.adapter as any).basePath || ".";
+      const out = executeCode({
+        ...step, vaultBase, cwd: this.settings.workingDirectory || vaultBase,
+        code: step.code || "", input: inputVal, outputs,
+        codeInputVar: inputVar, codeOutputVar: outputVar,
+      });
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
       await this.completeStep(wf, step, stepIndex, true, out);
@@ -5001,6 +4377,12 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runTaskStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    const executionContext = (this as any).workflowRuntime?.get(wf.id);
+    const isCurrentExecution = () => executionContext !== undefined &&
+      (this as any).workflowRuntime?.get(wf.id) === executionContext &&
+      this.settings.workflows.find(w => w.id === wf.id)?.status === "running" &&
+      !this.stoppingWorkflows.has(wf.id);
+    if (!isCurrentExecution()) return;
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
@@ -5011,39 +4393,19 @@ export default class AutoOCPlugin extends Plugin {
     const task = this.settings.tasks[taskIdx];
     const taskOverrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {};
 
-    // Apply handoff from the most recent task/code step in the runtime.
-    if (wf.handoffOutput) {
-      const ctx = (this as any).workflowRuntime.get(wf.id);
-      if (ctx && ctx.stepOutputs.size > 0) {
-        const stepOutputs = ctx.stepOutputs as Map<string, string>;
-        const entries = Array.from(stepOutputs.entries());
-        const [previousStepId, previousOutputRaw] = entries[entries.length - 1];
-        const previousStep = wf.steps.find((s) => s.id === previousStepId);
-        const sourceLine = previousStep
-          ? `Source: step "${previousStep.name || previousStepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})`
-          : `Source: step ${previousStepId}`;
-        const cleanOutput = extractContextForHandoff(String(previousOutputRaw || ""));
-        const contextBlock = [
-          "",
-          "=== WORKFLOW HANDOFF CONTEXT ===",
-          sourceLine,
-          "The previous step's output below is the PRIMARY INPUT for this task.",
-          "Touched files are DIAGNOSTIC ONLY — do not re-read them unless this task explicitly asks.",
-          "",
-          cleanOutput || String(previousOutputRaw || "").trim(),
-          "=== END WORKFLOW HANDOFF CONTEXT ===",
-        ].join("\n");
-        const capped = contextBlock.length > HANDOFF_CONTEXT_LIMIT
-          ? contextBlock.slice(0, HANDOFF_CONTEXT_LIMIT) + `\n... [truncated at ${HANDOFF_CONTEXT_LIMIT} chars]`
-          : contextBlock;
-        taskOverrides.prompt = `${task.prompt}\n${capped}`;
-      }
+    const entries = Array.from(executionContext.stepOutputs.entries()) as Array<[string, string]>;
+    const previous = entries.length ? entries[entries.length - 1] : undefined;
+    if (wf.handoffOutput && previous) {
+      taskOverrides.prompt = workflowTaskPrompt(task.prompt, wf, {stepId:previous[0],output:previous[1]});
     }
 
     wf.currentStep = stepIndex;
     await this.saveSettings();
-
+    if (!isCurrentExecution()) return;
+    let resultConsumed = false;
     await this.runTask(task, async (completedTask, exitCode) => {
+      if (!isCurrentExecution() || resultConsumed) return;
+      resultConsumed = true;
       const currentWf = this.settings.workflows.find((w) => w.id === wf.id);
       if (!currentWf || currentWf.status !== "running" || this.stoppingWorkflows.has(currentWf.id)) return;
       const currentStep = currentWf.steps[stepIndex];
@@ -5052,22 +4414,7 @@ export default class AutoOCPlugin extends Plugin {
       if (ctx) ctx.stepOutputs.set(currentStep.id, lastOutput);
       const lastSucceeded = exitCode === 0 && completedTask.status !== "failed";
 
-      const transitions = currentStep.transitions && currentStep.transitions.length > 0
-        ? currentStep.transitions
-        : (() => {
-            // Legacy fallback: synthesize a single transition from the
-            // current step to the next step in array order using the
-            // transitionMode field.
-            const next = currentWf.steps[stepIndex + 1];
-            if (!next) return [];
-            const mode = (currentStep.transitionMode as TransitionMode) || "default";
-            return [{
-              toStepId: next.id,
-              mode,
-              evaluatePrompt: currentStep.evaluatePrompt,
-              forceContinue: currentStep.forceContinue,
-            } as WorkflowTransition];
-          })();
+      const transitions = workflowStepTransitions(currentWf.steps, stepIndex) as WorkflowTransition[];
 
       const { nextStepId, reason } = await this.resolveNextStep(
         currentWf,
@@ -5077,6 +4424,7 @@ export default class AutoOCPlugin extends Plugin {
         lastSucceeded,
         transitions
       );
+      if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
 
       if (!nextStepId) {
@@ -5109,9 +4457,11 @@ export default class AutoOCPlugin extends Plugin {
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       currentWf.currentStep = nextIdx;
       await this.saveSettings();
+      if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       new Notice(`AutoOC: ⚡ Workflow "${currentWf.name}" → step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
+        if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
       }, 200);
     }, taskOverrides);
@@ -5120,23 +4470,19 @@ export default class AutoOCPlugin extends Plugin {
   // Complete a non-task step and move to the next one.
   async completeStep(wf: Workflow, step: WorkflowStep, stepIndex: number, succeeded: boolean, output: string) {
     const ctx = (this as any).workflowRuntime.get(wf.id);
+    const isCurrentExecution = () => ctx !== undefined && (this as any).workflowRuntime.get(wf.id) === ctx &&
+      this.settings.workflows.find(w => w.id === wf.id)?.status === "running" && !this.stoppingWorkflows.has(wf.id);
+    if (!isCurrentExecution()) return;
     if (ctx) ctx.stepOutputs.set(step.id, output);
     step.status = succeeded ? "completed" : "failed";
     step.output = output;
     step.lastRun = new Date().toISOString();
-    const transitions = step.transitions && step.transitions.length > 0
-      ? step.transitions
-      : (() => {
-          const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
-          if (!wfRef) return [];
-          const next = wfRef.steps[stepIndex + 1];
-          if (!next) return [];
-          return [{ toStepId: next.id, mode: "default" as TransitionMode }];
-        })();
+    const transitions = workflowStepTransitions(wf.steps, stepIndex) as WorkflowTransition[];
 
     const { nextStepId, reason } = await this.resolveNextStep(
       wf, step, stepIndex, output, succeeded, transitions
     );
+    if (!isCurrentExecution()) return;
 
     if (!nextStepId) {
       const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
@@ -5157,7 +4503,7 @@ export default class AutoOCPlugin extends Plugin {
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
         new Notice(`AutoOC: ⚡ Workflow "${wfRef.name}" → step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
-        setTimeout(() => this.runWorkflowStepById(wf.id, nextStepId), 200);
+        setTimeout(() => { if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId); }, 200);
       }
     }
   }
@@ -7115,13 +6461,13 @@ class AutoOCView extends ItemView {
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
-    btnQuickRun.title = workflow.status === "running" ? "Running" : "Run workflow";
-    btnQuickRun.disabled = workflow.status === "running";
+    btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
+    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready","in_flight"].includes((workflow as any).runtimeExecution?.phase);
     btnQuickRun.onclick = (e) => {
       e.stopPropagation();
       this.plugin.runWorkflow(workflow);
     };
-    if (workflow.status === "running") {
+    if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
       btnQuickStop.title = "Stop workflow now";
       btnQuickStop.onclick = async (e) => {
@@ -7190,7 +6536,7 @@ class AutoOCView extends ItemView {
       const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
       const stepName = stepLabel(step);
       const stepItem = stepsDiv.createDiv("auto-oc-workflow-task-detail");
-      const isCurrent = workflow.status === "running" && workflow.currentStep === i;
+      const isCurrent = this.plugin.isWorkflowExecuting(workflow.id) && workflow.currentStep === i;
       const isDone = workflow.currentStep > i || (workflow.status === "completed" && workflow.currentStep >= i);
       const icon = isDone ? "✅" : isCurrent ? "⏳" : "⬜";
 
@@ -7399,17 +6745,31 @@ class AutoOCView extends ItemView {
 
     const actions = details.createDiv("auto-oc-card-actions");
 
+    const durableExecution=(workflow as any).runtimeExecution;
+    const needsRecovery=durableExecution && ["ready","in_flight"].includes(durableExecution.phase);
+    if (needsRecovery && !this.plugin.isWorkflowExecuting(workflow.id)) {
+      const uncertain=durableExecution.phase === "in_flight";
+      actions.createEl("span", {text:uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps."});
+      const recover=actions.createEl("button", {text:uncertain ? "Verify previous result" : "Resume saved execution"});
+      recover.onclick=async(e)=>{
+        e.stopPropagation();recover.disabled=true;
+        try {await this.plugin.recoverSharedWorkflow(workflow.id,durableExecution.runId);}
+        catch(error) {new Notice(this.plugin.redactSecrets(String(error)));}
+        finally {this.refresh();}
+      };
+    }
+
     const btnRun = actions.createEl("button", {
-      text: workflow.status === "running" ? "⏳ Running…" : "▶ Run Workflow",
+      text: this.plugin.isWorkflowExecuting(workflow.id) ? "⏳ Running…" : "▶ Run Workflow",
       cls: "auto-oc-btn-run",
     });
-    btnRun.disabled = workflow.status === "running";
+    btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
     btnRun.onclick = (e) => {
       e.stopPropagation();
       this.plugin.runWorkflow(workflow);
     };
 
-    if (workflow.status === "running") {
+    if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnStop = actions.createEl("button", {
         text: "⏹ Stop",
         cls: "auto-oc-btn-stop",
@@ -7700,6 +7060,7 @@ class VisualBuilderModal extends Modal {
         prompt: t.prompt || "",
         model: t.model !== undefined ? t.model : taskKind === "copilot" ? existing?.model ?? this.plugin.settings.defaultCopilotModel ?? "" : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
         copilotAllowAllTools: taskKind === "copilot" ? (t.copilotAllowAllTools ?? existing?.copilotAllowAllTools) === true : undefined,
+        requiresAutoOCSecrets: t.requiresAutoOCSecrets ?? existing?.requiresAutoOCSecrets,
         agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
         reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
