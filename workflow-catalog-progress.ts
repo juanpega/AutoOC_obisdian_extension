@@ -2,6 +2,7 @@ import { SettingsWriter } from "./settings-writer";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { projectWorkflowProgress } from "./workflow-progress";
 import { standaloneTaskWorkflow } from "./standalone-task";
+import { persistTaskHistory } from "./task-history";
 
 // Called by the owning host after journal persistence, before advancing.
 // Read the current catalog on every boundary so unrelated edits are retained;
@@ -13,6 +14,7 @@ export async function persistWorkflowProgress(options: {
   expectedRunId: string;
   replaceCompletedRunId?: string;
   taskId?: string;
+  vaultBase?: string;
 }): Promise<void> {
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
@@ -64,8 +66,10 @@ export async function persistWorkflowProgress(options: {
       ...(item.observed.codexTurnId ? {lastCodexTurnId:item.observed.codexTurnId} : {}),
       pendingCodexApproval:item.observed.approval ? {...item.observed.approval,requestId:item.observed.approval.token} : undefined,
       runtimeExecution:{runId:durable.runId,workflowId:durable.workflowId,stepId:item.stepId,revision:durable.revision,
+        finishedAt:item.observed.finishedAt,
         requiresReconciliation:item.observed.status === "in_flight"}};
   });
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? projected : workflow)};
   await writer.save(options.configurationFile, () => next);
+  if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
 }

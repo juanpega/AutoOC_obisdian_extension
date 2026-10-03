@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "version": "1.6.0",
   "sha256": {
-    "main.js": "4e3637744b222cfd1a2ae9847855be44b8fa62c6a63375c90857c84ab2d88cdf",
+    "main.js": "b865a47dc09dc74594d2aa438d6445b6fb7e822c313503e9035c15db1198038d",
     "manifest.json": "a59c866b9ae21caee364d04f2774e0fd48eab7a964b9ed048a71601cbc94bda6",
     "styles.css": "0d1c1764830d074b5b3d6befe0fb8ad3fed3e3de54e8d21b7ba53a1a365b3b93",
-    "autooc-cli.cjs": "46bfa7d503e84aabc938e1141ff3c4b5fb02dbf84d58aa0b9f8347a7e7eff89f",
-    "autooc-runtime.cjs": "42d98ec366d5093f17b675054bd3db40e3510ca3724a927e18846d313ebd1784",
+    "autooc-cli.cjs": "3c8d40694fc4093af45fcc229c24c68d3bed9f93fbfae36607f10606d8a3c150",
+    "autooc-runtime.cjs": "01cff8efffc066af4841c2330e9b671c0cecbe1df8bf6a69ddba0a8381c5c2ae",
     "skills/autooc-runtime/SKILL.md": "0a9f1ca45903bb5d2938a8dda6cc1f76cfdf6b75dfb577d487184e1b960ad65f"
   }
 }

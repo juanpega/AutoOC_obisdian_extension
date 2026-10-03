@@ -39,6 +39,7 @@ import { prepareWorkflowDefinition } from "./workflow-definition";
 import { supportsSharedWorkflow } from "./code-workflow-host";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress } from "./workflow-progress";
+import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { SettingsWriter } from "./settings-writer";
@@ -1649,7 +1650,7 @@ function formatTimestampForLog(): string {
 }
 
 function formatLogFilenameTimestamp(fileName: string): string {
-  const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
+  const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})(?:\.\d{3}_[a-zA-Z0-9-]+_\d+)?\.log$/);
   if (!match) return fileName.replace(/\.log$/, "");
   const [, year, month, day, hour, minute, second] = match;
   return `${day}/${month}/${year} ${hour}:${minute}:${second}`;
@@ -9897,8 +9898,10 @@ class LiveLogModal extends Modal {
     // Elapsed timer line
     const elapsedEl = header.createEl("p", { cls: "auto-oc-log-elapsed" });
     const updateElapsed = () => {
+      this.task = this.plugin.settings.tasks.find(task => task.id === this.task.id) || this.task;
       if (!this.task.lastRun) { elapsedEl.textContent = ""; return; }
-      const secs = Math.floor((Date.now() - new Date(this.task.lastRun).getTime()) / 1000);
+      const secs = taskElapsedSeconds(this.task);
+      if (secs === undefined) { elapsedEl.textContent = "⏱ Elapsed time: unavailable"; return; }
       const min = Math.floor(secs / 60);
       const sec = secs % 60;
       elapsedEl.textContent = `⏱ Elapsed time: ${min}m ${sec}s`;

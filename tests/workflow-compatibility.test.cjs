@@ -15,6 +15,151 @@ function loader(overrides={}) {
   return load;
 }
 const load=loader(),{prepareWorkflowDefinition:prepare}=load('workflow-definition'),{runCodeWorkflowHost:run}=load('code-workflow-host');
+test('autonomous task history survives resume and another run, honors logging, and freezes elapsed time',()=>fixture(async root=>{
+  const directory=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(directory,{recursive:true});
+  const file=path.join(directory,'data.json');
+  fs.writeFileSync(file,JSON.stringify({logsEnabled:true,tasks:[{id:'history',taskKind:'code',code:'output="history-"+"x".repeat(64000);'}],workflows:[]}));
+  const cli=(...args)=>require('node:child_process').spawnSync(process.execPath,[path.resolve(__dirname,'../autooc-cli.cjs'),...args,'--vault',root],{encoding:'utf8',timeout:15000});
+  const first=cli('run','--task','history');assert.equal(first.status,0,first.stderr);
+  const runId=JSON.parse(first.stdout).runId,logDir=path.join(root,'.opencode/logs/history');
+  assert.ok(fs.existsSync(logDir),'History must have persistent logs from CLI tasks');
+  const logs=()=>fs.readdirSync(logDir).filter(f=>f!=='latest.log');
+  assert.equal(logs().length,1);
+  assert.match(fs.readFileSync(path.join(logDir,logs()[0]),'utf8'),new RegExp(runId));
+  assert.ok(fs.readFileSync(path.join(logDir,logs()[0]),'utf8').includes('x'.repeat(64000)));
+  const task=JSON.parse(fs.readFileSync(file)).tasks[0];
+  assert.ok(task.runtimeExecution.finishedAt);
+  const elapsed=load('task-history').taskElapsedSeconds;
+  assert.equal(elapsed(task,Date.now()),elapsed(task,Date.now()+3600000));
+  assert.equal(elapsed({...task,runtimeExecution:{}},Date.now()),undefined);
+  const resumed=cli('resume','--task','history','--run',runId);assert.equal(resumed.status,0,resumed.stderr);
+  assert.equal(logs().length,1);
+  const next=cli('run','--task','history');assert.equal(next.status,0,next.stderr);
+  assert.equal(logs().length,2);
+  const config=JSON.parse(fs.readFileSync(file));config.logsEnabled=false;fs.writeFileSync(file,JSON.stringify(config));
+  const disabled=cli('run','--task','history');assert.equal(disabled.status,0,disabled.stderr);
+  assert.equal(logs().length,2);
+}));
+test('runtime history keeps attempts and failures, applies retention and refuses path escape',()=>fixture(async root=>{
+  const {persistTaskHistory,taskElapsedSeconds}=load('task-history');
+  const workflow={steps:[{id:'a',taskId:'t'},{id:'b',taskId:'t'}]};
+  const startedAt=new Date().toISOString();
+  const checkpoint={runId:'run-1',steps:[
+    {stepId:'a',status:'completed',startedAt,finishedAt:startedAt,output:'first'},
+    {stepId:'a',status:'failed',startedAt,finishedAt:startedAt,output:'second'},
+    {stepId:'b',status:'in_flight',startedAt}
+  ]};
+  persistTaskHistory(root,workflow,checkpoint,{});
+  const dir=path.join(root,'.opencode/logs/t'),logs=()=>fs.readdirSync(dir).filter(f=>f!=='latest.log');
+  assert.equal(logs().length,2);assert.match(fs.readFileSync(path.join(dir,'latest.log'),'utf8'),/Status: failed[\s\S]*second/);
+  persistTaskHistory(root,workflow,checkpoint,{});assert.equal(logs().length,2);
+  persistTaskHistory(root,workflow,checkpoint,{maxLogsPerTask:1});assert.equal(logs().length,1);
+  assert.match(fs.readFileSync(path.join(dir,logs()[0]),'utf8'),/second/);
+  assert.throws(()=>persistTaskHistory(root,{steps:[{id:'a',taskId:'../escape'}]},checkpoint,{}),/Unsafe/);
+  assert.equal(taskElapsedSeconds({lastRun:'2026-01-01T00:00:00Z',status:'completed',runtimeExecution:{finishedAt:'2026-01-01T00:00:03Z'}},0),3);
+  assert.equal(taskElapsedSeconds({lastRun:'2026-01-01T00:00:00Z',status:'running'},Date.parse('2026-01-01T00:00:07Z')),7);
+  assert.equal(taskElapsedSeconds({lastRun:'invalid',status:'completed'}),undefined);
+  const old={runId:'old-run',steps:[{stepId:'a',status:'completed',startedAt:'2000-01-01T00:00:00Z',output:'old'}]};
+  persistTaskHistory(root,workflow,old,{logRetentionDays:1,maxLogsPerTask:0});
+  assert.equal(logs().length,1);assert.ok(!logs()[0].includes('old-run'));
+  const linked=path.join(root,'link-target');fs.mkdirSync(linked);
+  fs.symlinkSync(linked,path.join(root,'.opencode/logs/linked'),'junction');
+  assert.throws(()=>persistTaskHistory(root,{steps:[{id:'a',taskId:'linked'}]},checkpoint,{}),/regular directories/);
+  assert.deepEqual(fs.readdirSync(linked),[]);
+}));
+
+test('journal finish times are validated without rejecting legacy terminal checkpoints',()=>fixture(async root=>{
+  const {acquireExecutionLease}=load('execution-lease'),{ExecutionJournal,validateExecutionCheckpoint}=load('execution-journal');
+  const lease=acquireExecutionLease(root);
+  try {
+    const journal=await ExecutionJournal.create(lease,'w','a'.repeat(64),'a');
+    await journal.begin('a');await journal.finish('a',false,'failed',null);
+    const state=journal.snapshot();assert.ok(state.steps[0].finishedAt);validateExecutionCheckpoint(state);
+    state.steps[0].finishedAt='invalid';assert.throws(()=>validateExecutionCheckpoint(state),/finish timestamp/);
+    state.steps[0].finishedAt='2000-01-01T00:00:00Z';assert.throws(()=>validateExecutionCheckpoint(state),/finish timestamp/);
+    delete state.steps[0].finishedAt;validateExecutionCheckpoint(state);
+  } finally {lease.release();}
+}));
+test('CLI history is listed by the plugin History modal and Log duration stays fixed after reopening',()=>fixture(async root=>{
+  const directory=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(directory,{recursive:true});
+  const file=path.join(directory,'data.json');
+  fs.writeFileSync(file,JSON.stringify({tasks:[{id:'ui',name:'History fixture',taskKind:'code',code:'output="VISIBLE_HISTORY"'}],workflows:[{id:'ui-workflow',steps:[{id:'a',taskId:'ui'}]}]}));
+  const cli=require('node:child_process').spawnSync(process.execPath,[path.resolve(__dirname,'../autooc-cli.cjs'),'run','--workflow','ui-workflow','--vault',root],{encoding:'utf8',timeout:15000});
+  assert.equal(cli.status,0,cli.stderr);
+  const elements=[];
+  class Element {
+    constructor(options={}){this.textContent=options.text||'';this.cls=options.cls;elements.push(this);}
+    addClass(){} empty(){} createEl(_tag,options){return new Element(options);} createDiv(options){return new Element(options);} createSpan(options){return new Element(options);}
+  }
+  const original=Module._load,priorWindow=global.window,priorNow=Date.now;
+  const timers=new Map();let timerId=0;
+  global.window={setInterval:fn=>{timers.set(++timerId,fn);return timerId;},clearInterval:id=>timers.delete(id)};
+  let plugin,live;
+  try {
+    Module._load=function(id,...args){if(id==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{constructor(app){this.app=app;this.contentEl=new Element();}},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{},MarkdownRenderer:{render(){}}};return original.call(this,id,...args);};
+    const filename=path.resolve(__dirname,'../main.js'),bundle=new Module(filename,module);bundle.filename=filename;bundle.paths=Module._nodeModulePaths(path.dirname(filename));
+    bundle._compile(fs.readFileSync(filename,'utf8')+'\nmodule.exports.historyTest={LiveLogModal,LogHistoryModal,getLogHistory};',filename);
+    const {LiveLogModal,LogHistoryModal,getLogHistory}=bundle.exports.historyTest;
+    plugin=new bundle.exports.default();plugin.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};plugin.manifest={id:'auto-oc'};
+    plugin.reservePluginExecution();await plugin.loadSettings();
+    const task=plugin.settings.tasks[0],history=getLogHistory(root,task.id);
+    assert.equal(history.length,1);assert.match(history[0].timestamp,/^\d{2}\/\d{2}\/\d{4} /);
+    assert.match(fs.readFileSync(history[0].file,'utf8'),/VISIBLE_HISTORY/);
+    new LogHistoryModal(plugin.app,task,plugin).onOpen();
+    assert.ok(elements.some(el=>el.textContent==='1 execution(s)'));
+    live=new LiveLogModal(plugin.app,task,plugin);live.onOpen();
+    const elapsed=elements.find(el=>el.cls==='auto-oc-log-elapsed'),initial=elapsed.textContent;
+    assert.doesNotMatch(initial,/unavailable/);
+    Date.now=()=>priorNow()+3600000;for(const callback of timers.values())callback();
+    assert.equal(elapsed.textContent,initial);
+    delete task.runtimeExecution.finishedAt;for(const callback of timers.values())callback();
+    assert.match(elapsed.textContent,/unavailable/);
+  } finally {live?.onClose();plugin?.releasePluginExecution(false);Module._load=original;global.window=priorWindow;Date.now=priorNow;}
+}));
+test('CLI-first reopening preserves persisted defaults, journals and effects; real definition changes are rejected',async t=>{
+  const original=Module._load;let Plugin;
+  try {
+    Module._load=function(id,...args){if(id==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{}};return original.call(this,id,...args);};
+    Plugin=require('../main.js').default;
+  } finally {Module._load=original;}
+  const defaults=load('execution-defaults').EXECUTION_DEFAULTS;
+  for(const [name,settings] of Object.entries({omitted:{},explicit:{...defaults},custom:{taskTimeoutSeconds:3600,defaultModel:'fixture-model'}})) {
+    await t.test(name,()=>fixture(async root=>{
+      const directory=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(directory,{recursive:true});
+      const file=path.join(directory,'data.json');
+      fs.writeFileSync(file,JSON.stringify({...settings,tasks:[{id:'task',taskKind:'code',code:'output=input.length;'}],workflows:[
+        {id:'first',steps:[{id:'effect',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","once");output="x".repeat(64000);'},{id:'task',taskId:'task'}]}
+      ]}));
+      const cli=(...args)=>require('node:child_process').spawnSync(process.execPath,[path.resolve(__dirname,'../autooc-cli.cjs'),...args,'--vault',root],{encoding:'utf8',timeout:15000});
+      const result=cli('run','--workflow','first');assert.equal(result.status,0,result.stderr);
+      const run=JSON.parse(result.stdout);assert.equal(run.phase,'completed');
+      const persisted=fs.readFileSync(file,'utf8'),config=JSON.parse(persisted);
+      const journal=path.join(directory,'runtime',run.runId+'.json'),journalBefore=fs.readFileSync(journal,'utf8');
+      const plugin=new Plugin();plugin.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};plugin.manifest={id:'auto-oc'};
+      const reopen=async()=>{plugin.reservePluginExecution();try {await plugin.loadSettings();} finally {plugin.releasePluginExecution(false);}};
+      await reopen();
+      assert.equal(plugin.settings.workflows[0].runtimeExecution.runId,run.runId);
+      assert.equal(plugin.settings.workflows[0].status,'completed');
+      assert.deepEqual(plugin.settings.workflows[0].steps,config.workflows[0].steps);
+      assert.equal(plugin.settings.workflows[0].steps[0].output.length,64000);
+      assert.equal(fs.readFileSync(file,'utf8'),persisted);
+      const resumed=cli('resume','--workflow','first','--run',run.runId);assert.equal(resumed.status,0,resumed.stderr);
+      assert.equal(fs.readFileSync(journal,'utf8'),journalBefore);
+      for(const change of [
+        value=>{value.taskTimeoutSeconds=(settings.taskTimeoutSeconds??defaults.taskTimeoutSeconds)+1;},
+        value=>{value.opencodePath='changed-opencode';},
+        value=>{value.defaultModel='changed-model';},
+        value=>{value.workflows[0].steps[0].code='output="changed";';},
+      ]) {
+        const changed=JSON.parse(persisted);change(changed);const text=JSON.stringify(changed);fs.writeFileSync(file,text);
+        await assert.rejects(reopen(),/Progress identity or definition mismatch/);
+        assert.equal(fs.readFileSync(file,'utf8'),text);
+        assert.equal(fs.readFileSync(journal,'utf8'),journalBefore);
+        assert.equal(fs.readFileSync(path.join(root,'effect.txt'),'utf8'),'once');
+      }
+    }));
+  }
+});
 async function fixture(fn) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-compat-'));
   try {await fn(root);} finally {

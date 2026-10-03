@@ -88,7 +88,7 @@ export async function runInstalledWorkflow(options: {
     onCheckpoint:async checkpoint=>{
       activeRunId=checkpoint.runId;
       checkStop();
-      await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId});
+      await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,vaultBase:vault});
       await options.onCheckpoint?.(checkpoint);
     },
   });

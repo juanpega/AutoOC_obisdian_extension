@@ -15,7 +15,7 @@ export interface RunCheckpoint {
   createdAt?: string;
   phase: Phase;
   nextStepId: string | null;
-  steps: Array<{ stepId: string; status: "in_flight" | "completed" | "failed"; output?: string; startedAt?:string; codexThreadId?: string; codexTurnId?: string;
+  steps: Array<{ stepId: string; status: "in_flight" | "completed" | "failed"; output?: string; startedAt?:string; finishedAt?:string; codexThreadId?: string; codexTurnId?: string;
     branch?: {directory:string;name:string};
     result?: {succeeded:boolean;output:string;cancelled?:boolean};
     evaluations?: Array<{key:string;status:"in_flight"|"completed";output?:string}>;
@@ -38,6 +38,7 @@ export function validateExecutionCheckpoint(value: any): asserts value is RunChe
     if(step?.evaluations!==undefined && (!step.result || !Array.isArray(step.evaluations) || new Set(step.evaluations.map((e:any)=>e.key)).size!==step.evaluations.length || step.evaluations.some((e:any)=>typeof e.key!=="string" || !["in_flight","completed"].includes(e.status) || e.status==="completed" && typeof e.output!=="string"))) throw new Error("Invalid evaluation checkpoint");
     if(step?.approval && (step.status!=="in_flight" || !/^[a-f0-9-]+$/.test(step.approval.token) || !/^[a-f0-9-]+$/.test(step.approval.ownerToken) || !["string","number"].includes(typeof step.approval.requestId) || !["command","file-change","permissions"].includes(step.approval.kind) || typeof step.approval.summary!=="string")) throw new Error("Invalid approval checkpoint");
     if (!validDate(step?.startedAt)) throw new Error("Invalid step timestamp");
+    if (!validDate(step?.finishedAt) || step?.finishedAt !== undefined && (step.status === "in_flight" || !step.startedAt || Date.parse(step.finishedAt) < Date.parse(step.startedAt))) throw new Error("Invalid step finish timestamp");
     if (step?.codexThreadId !== undefined && (typeof step.codexThreadId !== "string" || !step.codexThreadId.trim())) throw new Error("Invalid Codex identity");
     if (step?.codexTurnId !== undefined && (!step.codexThreadId || typeof step.codexTurnId !== "string" || !step.codexTurnId.trim())) throw new Error("Invalid Codex turn identity");
     if (!step || typeof step.stepId !== "string" || !step.stepId ||
@@ -140,6 +141,7 @@ export class ExecutionJournal {
       const step = state.steps[state.steps.length - 1];
       if (state.phase !== "in_flight" || step?.stepId !== stepId) throw new Error("No matching step in flight");
       step.status = succeeded ? "completed" : "failed"; step.output = redactedOutput;
+      if (step.startedAt) step.finishedAt = new Date(Math.max(Date.now(), Date.parse(step.startedAt))).toISOString();
       delete step.approval;
       state.nextStepId = nextStepId;
       state.phase = nextStepId !== null ? "ready" : succeeded ? "completed" : "failed";
