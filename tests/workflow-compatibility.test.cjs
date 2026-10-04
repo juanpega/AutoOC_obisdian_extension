@@ -15,15 +15,171 @@ function loader(overrides={}) {
   return load;
 }
 const load=loader(),{prepareWorkflowDefinition:prepare}=load('workflow-definition'),{runCodeWorkflowHost:run}=load('code-workflow-host');
-function pluginFor(root) {
+function pluginFor(root, configDir='.obsidian', pluginId='auto-oc') {
   const original=Module._load;
   try {
     Module._load=function(id,...args){if(id==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{}};return original.call(this,id,...args);};
     const Plugin=require('../main.js').default,plugin=new Plugin();
-    plugin.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};plugin.manifest={id:'auto-oc'};
+    plugin.app={vault:{adapter:{basePath:root},configDir}};plugin.manifest={id:pluginId};
+    plugin.app.workspace={getLeavesOfType:()=>[]};
     return plugin;
   } finally {Module._load=original;}
 }
+test('selected installation runs plugin tasks and workflows without reading the alternative',async t=>{
+  for(const kind of ['task','workflow']) for(const alternative of [false,true]) await t.test(`${kind}/alternative=${alternative}`,()=>fixture(async root=>{
+    const configDir='custom/nested',pluginId=alternative?'custom-plugin':'auto-oc',selected=path.join(root,configDir,'plugins',pluginId),other=path.join(root,'.obsidian/plugins/auto-oc');
+    const catalog=value=>({tasks:[{id:'t',name:'Task',taskKind:'code',code:`output="${value}";`}],workflows:[{id:'w',name:'Workflow',steps:[{id:'a',taskId:'t'}]}]});
+    fs.mkdirSync(selected,{recursive:true});fs.writeFileSync(path.join(selected,'data.json'),JSON.stringify(catalog('selected')));
+    if(alternative){fs.mkdirSync(other,{recursive:true});fs.writeFileSync(path.join(other,'data.json'),JSON.stringify(catalog('wrong')));}
+    const before=alternative?fs.readFileSync(path.join(other,'data.json')):undefined;
+    const original=fs.readFileSync,reads=[];
+    fs.readFileSync=function(file,...args){if(typeof file==='string' && (file===path.join(other,'data.json') || file.startsWith(path.join(other,'runtime')+path.sep)))reads.push(file);return original.call(this,file,...args);};
+    const plugin=pluginFor(root,configDir,pluginId);
+    try {
+      await plugin.loadSettings();assert.equal(fs.existsSync(path.join(selected,'runtime')),false);
+      plugin.reservePluginExecution();
+      const result=await plugin.runSharedWorkflow(kind==='task'?'@task:t':'w',undefined,false,false,kind==='task'?'t':undefined);
+      assert.equal(result.phase,'completed');assert.match(result.steps[0].output,/\nselected$/);
+      assert.equal(plugin.settings.tasks[0].output,result.steps[0].output);
+      assert.equal(plugin.pluginExecutionLease.directory,fs.realpathSync(path.join(selected,'runtime')));
+      const bytes=fs.readFileSync(path.join(selected,'runtime',result.runId+'.json'));
+      const reloaded=pluginFor(root,configDir,pluginId);await reloaded.loadSettings();
+      assert.equal(reloaded.settings.tasks[0].runtimeExecution.runId,result.runId);
+      assert.deepEqual(fs.readFileSync(path.join(selected,'runtime',result.runId+'.json')),bytes);
+      assert.deepEqual(reads,[]);
+    } finally {fs.readFileSync=original;plugin.releasePluginExecution(false);}
+    if(alternative){assert.deepEqual(fs.readFileSync(path.join(other,'data.json')),before);assert.equal(fs.existsSync(path.join(other,'runtime')),false);}
+    else assert.equal(fs.existsSync(path.join(root,'.obsidian')),false);
+  }));
+});
+test('selected installation rejects crossed leases before catalog reads and preserves the owner',()=>fixture(async root=>{
+  const {runInstalledWorkflow:host}=load('installed-workflow-host');
+  const selected=path.join(root,'selected/plugins/auto-oc'),other=path.join(root,'.obsidian/plugins/auto-oc');
+  for(const directory of [selected,other]) {
+    fs.mkdirSync(path.join(directory,'runtime'),{recursive:true});
+    fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[],workflows:[{id:'w',steps:[{id:'a',stepKind:'code',code:'output="right";'}]}]}));
+  }
+  const lease=load('execution-lease').acquireExecutionLease(path.join(other,'runtime'));
+  const before=fs.readFileSync(path.join(selected,'data.json')),read=fs.readFileSync;
+  let catalogReads=0;
+  fs.readFileSync=function(file,...args){if(file===path.join(selected,'data.json'))catalogReads++;return read.call(this,file,...args);};
+  try {
+    await assert.rejects(host({vault:root,installationDirectory:selected,workflowId:'w',lease,redact:s=>s}),/another installation/);
+    assert.equal(catalogReads,0);lease.assertOwned();
+    assert.deepEqual(fs.readdirSync(path.join(selected,'runtime')),[]);
+    assert.deepEqual(read(path.join(selected,'data.json')),before);
+  } finally {fs.readFileSync=read;lease.release();}
+  const own=load('execution-lease').acquireExecutionLease(path.join(selected,'runtime'));
+  try {assert.equal((await host({vault:root,installationDirectory:selected,workflowId:'w',lease:own,redact:s=>s})).phase,'completed');own.assertOwned();}
+  finally {own.release();}
+}));
+
+test('selected installation rejects changes throughout the reserved plugin lifetime',()=>fixture(async root=>{
+  for(const configDir of ['selected','.obsidian']) {
+    const dir=path.join(root,configDir,'plugins/auto-oc');fs.mkdirSync(dir,{recursive:true});
+    fs.writeFileSync(path.join(dir,'data.json'),JSON.stringify({tasks:[],workflows:[]}));
+  }
+  const plugin=pluginFor(root,'selected');await plugin.loadSettings();plugin.reservePluginExecution();
+  const before=fs.readFileSync(path.join(root,'.obsidian/plugins/auto-oc/data.json'));
+  try {
+    plugin.app.vault.configDir='.obsidian';
+    assert.throws(()=>plugin.reservePluginExecution(),/changed while reserved/);
+    await assert.rejects(plugin.loadSettings(),/changed while reserved/);
+    await assert.rejects(plugin.saveSettings(),/changed while reserved/);
+    await assert.rejects(plugin.runSharedWorkflow('w'),/changed while reserved/);
+    assert.deepEqual(fs.readFileSync(path.join(root,'.obsidian/plugins/auto-oc/data.json')),before);
+    plugin.pluginExecutionLease.assertOwned();
+    assert.equal(fs.existsSync(path.join(root,'.obsidian/plugins/auto-oc/runtime')),false);
+  } finally {plugin.releasePluginExecution(false);}
+}));
+
+test('selected installation recovers pending tasks and workflows read-only before reserving',async t=>{
+  for(const kind of ['task','workflow']) for(const phase of ['ready','in_flight']) await t.test(`${kind}/${phase}`,()=>fixture(async root=>{
+    const installation=path.join(root,'selected/plugins/auto-oc'),runtime=path.join(installation,'runtime');fs.mkdirSync(runtime,{recursive:true});
+    const task={id:'t',taskKind:'code',code:'output="once";'},workflow=kind==='task'?load('standalone-task').standaloneTaskWorkflow('t'):{id:'w',steps:[{id:'a',taskId:'t'}]};
+    const config={tasks:[task],workflows:kind==='task'?[]:[workflow]},definition=prepare(workflow,[task],config);
+    const lease=load('execution-lease').acquireExecutionLease(runtime),journal=await load('execution-journal').ExecutionJournal.create(lease,workflow.id,definition.hash,workflow.steps[0].id);
+    if(phase==='in_flight')await journal.begin(workflow.steps[0].id);lease.release();
+    const state=journal.snapshot();(kind==='task'?task:workflow).runtimeExecution={runId:state.runId,workflowId:workflow.id,revision:state.revision};
+    const file=path.join(installation,'data.json');fs.writeFileSync(file,JSON.stringify(config));
+    const before=fs.readFileSync(path.join(runtime,state.runId+'.json')),catalogBefore=fs.readFileSync(file),plugin=pluginFor(root,'selected');
+    await plugin.loadSettings();
+    const recovered=kind==='task'?plugin.settings.tasks[0]:plugin.settings.workflows[0];
+    assert.equal(recovered.runtimeExecution.runId,state.runId);assert.equal(recovered.runtimeExecution.phase,phase);
+    assert.equal(recovered.runtimeExecution.requiresReconciliation,phase==='in_flight');
+    assert.deepEqual(fs.readFileSync(path.join(runtime,state.runId+'.json')),before);assert.deepEqual(fs.readFileSync(file),catalogBefore);
+    assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),false);
+    const options={vault:root,installationDirectory:installation,...(kind==='task'?{taskId:'t'}:{workflowId:'w'}),resumeRunId:state.runId,redact:s=>s};
+    if(phase==='in_flight') {
+      await assert.rejects(load('installed-workflow-host').runInstalledWorkflow(options),/requires reconciliation/);
+      assert.deepEqual(fs.readFileSync(path.join(runtime,state.runId+'.json')),before);
+    } else assert.equal((await load('installed-workflow-host').runInstalledWorkflow(options)).phase,'completed');
+    assert.equal(fs.existsSync(path.join(root,'.obsidian')),false);
+  }));
+});
+
+test('selected installation routes live approve and deny using the same journal and owner',async t=>{
+  for(const kind of ['task','workflow']) for(const approved of [true,false]) await t.test(`${kind}/${approved}`,()=>fixture(async root=>{
+    const installation=path.join(root,'selected/plugins/auto-oc'),other=path.join(root,'.obsidian/plugins/auto-oc');
+    const task={id:'t',name:'Task',taskKind:'codex',interactiveTerminal:true,prompt:'fixture'},workflow={id:'w',name:'Workflow',steps:[{id:'a',taskId:'t'}]};
+    fs.mkdirSync(installation,{recursive:true});fs.mkdirSync(other,{recursive:true});
+    const config={tasks:[task],workflows:[workflow]};
+    for(const dir of [installation,other])fs.writeFileSync(path.join(dir,'data.json'),JSON.stringify(config));
+    const otherBefore=fs.readFileSync(path.join(other,'data.json')),plugin=pluginFor(root,'selected');
+    await plugin.loadSettings();plugin.reservePluginExecution();
+    const controller=new AbortController();let observed,decisions=0,token;
+    const host=loader({'workflow-task-adapters':{createWorkflowTaskAdapter:()=>({supports:()=>true,execute:async(_task,_prompt,signal,record,interaction)=>{
+      await record('thread','turn');observed=await interaction.approve({requestId:1,kind:'command',summary:'controlled'},signal);
+      return {succeeded:true,output:'done'};
+    }})}})('installed-workflow-host').runInstalledWorkflow;
+    plugin.sharedWorkflowExecution={workflowId:kind==='task'?'@task:t':'w',controller};
+    try {
+      const result=await host({vault:root,installationDirectory:installation,...(kind==='task'?{taskId:'t'}:{workflowId:'w'}),lease:plugin.pluginExecutionLease,redact:s=>s,
+        onCheckpoint:async state=>{
+          plugin.sharedWorkflowExecution.runId=state.runId;await plugin.loadSettings();
+          const pending=state.steps.at(-1)?.approval;if(!pending)return;
+          decisions++;token=pending.token;
+          assert.equal(pending.ownerToken,plugin.pluginExecutionLease.token);
+          plugin.settings.tasks[0].pendingCodexApproval.requestId='bad';
+          await assert.rejects(plugin.resolveCodexApproval('t',approved),/no longer pending/);
+          plugin.settings.tasks[0].pendingCodexApproval.requestId=pending.token;
+          plugin.app.vault.configDir='.obsidian';
+          await assert.rejects(plugin.resolveCodexApproval('t',approved),/changed while reserved/);plugin.app.vault.configDir='selected';
+          const runId=plugin.sharedWorkflowExecution.runId;plugin.sharedWorkflowExecution.runId='foreign';
+          await assert.rejects(plugin.resolveCodexApproval('t',approved),/active execution/);plugin.sharedWorkflowExecution.runId=runId;
+          await plugin.resolveCodexApproval('t',approved);
+          await assert.rejects(plugin.resolveCodexApproval('t',approved),/EEXIST/);
+        }});
+      assert.equal(result.phase,'completed');assert.equal(observed,approved);assert.equal(decisions,1);
+      const response=JSON.parse(fs.readFileSync(path.join(installation,'runtime',`${result.runId}-${token}.approval.json`)));
+      assert.equal(response.approved,approved);plugin.pluginExecutionLease.assertOwned();
+      assert.deepEqual(fs.readFileSync(path.join(other,'data.json')),otherBefore);assert.equal(fs.existsSync(path.join(other,'runtime')),false);
+    } finally {plugin.sharedWorkflowExecution=undefined;plugin.releasePluginExecution(false);}
+  }));
+});
+
+test('selected installation validation rejects missing, escaped and linked paths without fallback',async t=>{
+  const {resolveInstalledWorkflowLocation:resolve}=load('installed-workflow-location');
+  await fixture(async root=>{
+    const valid=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(valid,{recursive:true});
+    fs.writeFileSync(path.join(valid,'data.json'),'{}');
+    for(const invalid of ['',null,'missing',path.dirname(root),'../escape','missing/../.obsidian/plugins/auto-oc','.obsidian/./plugins/auto-oc']) {
+      assert.throws(()=>resolve(root,invalid));
+      await assert.rejects(load('installed-workflow-host').runInstalledWorkflow({vault:root,installationDirectory:invalid,workflowId:'w',redact:s=>s}));
+    }
+    fs.writeFileSync(path.join(root,'file'),'');assert.throws(()=>resolve(root,'file/plugins/auto-oc'));
+    const location=resolve(root);assert.equal(location.installationDirectory,fs.realpathSync(valid));assert.equal(fs.existsSync(location.runtimeDirectory),false);
+  });
+  for(const component of ['custom','custom/nested','custom/nested/plugins','custom/nested/plugins/auto-oc','custom/nested/plugins/auto-oc/runtime','custom/nested/plugins/auto-oc/data.json']) await t.test(component,()=>fixture(async root=>{
+    const selected=path.join(root,'custom/nested/plugins/auto-oc'),link=path.join(root,component),target=path.join(root,'target');
+    fs.mkdirSync(path.dirname(link),{recursive:true});fs.mkdirSync(target);
+    // A directory junction at data.json also must be rejected before reading.
+    fs.symlinkSync(target,link,process.platform==='win32'?'junction':'dir');
+    assert.throws(()=>resolve(root,selected),/regular|runtime/);
+    await assert.rejects(load('installed-workflow-host').runInstalledWorkflow({vault:root,installationDirectory:selected,workflowId:'w',redact:s=>s}),/regular|runtime/);
+    assert.equal(fs.existsSync(path.join(root,'.obsidian')),false);
+  }));
+});
 test('edited terminal tasks and workflows reload and rerun without rewriting history',async t=>{
   for(const kind of ['task','workflow']) for(const phase of ['completed','failed']) {
     const changes={name:c=>{(kind==='task'?c.tasks[0]:c.workflows[0]).name='Edited';},

@@ -13,11 +13,13 @@ import { preflightInstalledWorkflow } from "./workflow-preflight";
 import { validateProgressBinding } from "./workflow-progress";
 import { createWorkflowEvaluator } from "./workflow-evaluation";
 import type { VaultMutationBatchFactory } from "./code-vault-mutations";
+import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime } from "./installed-workflow-location";
 
 // Shared installed-catalog entry point. The caller must authorize this vault
 // and its trusted Code capabilities. No discovery by name or implicit retry.
 export async function runInstalledWorkflow(options: {
   vault: string;
+  installationDirectory?: string;
   workflowId?: string;
   taskId?: string;
   resumeRunId?: string;
@@ -32,14 +34,14 @@ export async function runInstalledWorkflow(options: {
 }) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
-  const vault = fs.realpathSync(options.vault);
-  let directory = vault;
-  for (const part of [".obsidian", "plugins", "auto-oc"]) {
-    directory = path.join(directory, part);
-    const stat = fs.lstatSync(directory);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Installation must use regular directories");
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const {vault, configurationFile, runtimeDirectory} = location;
+  // Reject a foreign reservation before reading the catalog or creating runtime.
+  // The caller retains its lease, including on failure.
+  if (options.lease) {
+    options.lease.assertOwned();
+    if (fs.realpathSync(options.lease.directory) !== fs.realpathSync(runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
   }
-  const configurationFile = path.join(directory, "data.json");
   const config:any = new SettingsWriter().load(configurationFile);
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
   if (config.tasks.some((task:any)=>task.status === "running") || config.workflows.some((workflow:any)=>workflow.status === "running")) {
@@ -54,10 +56,7 @@ export async function runInstalledWorkflow(options: {
   }
   const definition = prepareWorkflowDefinition(virtual || matches[0],config.tasks,config);
   preflightInstalledWorkflow(definition,vault);
-  const runtimeDirectory = path.join(directory,"runtime");
-  if (!fs.existsSync(runtimeDirectory)) fs.mkdirSync(runtimeDirectory);
-  const runtimeStat = fs.lstatSync(runtimeDirectory);
-  if (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory()) throw new Error("Invalid runtime directory");
+  ensureInstalledWorkflowRuntime(location);
   const replaceCompletedRunId = options.newExecution ? matches[0].runtimeExecution?.runId : undefined;
   if (replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(runtimeDirectory,replaceCompletedRunId);

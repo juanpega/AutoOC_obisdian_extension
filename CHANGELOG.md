@@ -11,6 +11,7 @@
 - CI matrix (`.github/workflows/ci.yml`) running build, tests, and release packaging on `windows-latest`, `ubuntu-latest`, and `macos-latest`.
 
 ### Fixed
+- Las tareas y workflows compartidos del plugin usan la instalación seleccionada por Obsidian para catálogo, reserva, journal, recuperación y aprobaciones, incluso con una carpeta de configuración personalizada. Las ubicaciones inválidas y reservas cruzadas se rechazan; la CLI mantiene su ubicación predeterminada.
 - Standalone Visual Builder exports now include portable task references so Copilot and mixed-engine workflows can be imported into AutoOC.
 - Auto-detect the `opencode` binary on macOS/Linux. Obsidian (an Electron GUI app) does not inherit the shell `PATH`, so commands like `opencode models` previously failed with "command not found" and left the model list empty. The plugin now probes common install locations (`~/.bun/bin`, `~/.local/bin`, `~/.npm-global/bin`, `~/bin`, `/opt/homebrew/bin`, `/usr/local/bin`) and only falls back to the bare command name if none exist. An explicit path configured in Settings always wins.
 - macOS AppleScript launch now shell-quotes the working directory, so vault paths containing spaces no longer break the terminal command.

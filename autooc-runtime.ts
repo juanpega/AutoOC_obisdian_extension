@@ -6,6 +6,8 @@ export { prepareWorkflowDefinition } from "./workflow-definition";
 export { runCodeWorkflowHost } from "./code-workflow-host";
 export { persistWorkflowProgress } from "./workflow-catalog-progress";
 export { runInstalledWorkflow } from "./installed-workflow-host";
+export { resolveInstalledWorkflowLocation } from "./installed-workflow-location";
+export type { InstalledWorkflowLocation } from "./installed-workflow-location";
 export { requestWorkflowStop } from "./workflow-stop";
 export { answerWorkflowApproval } from "./workflow-approval";
 export { createWorkflowEvaluator } from "./workflow-evaluation";

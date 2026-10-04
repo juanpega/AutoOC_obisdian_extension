@@ -7,6 +7,37 @@ const { spawnSync } = require('node:child_process');
 const cli = path.resolve(__dirname, '../autooc-cli.cjs');
 const call = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
 
+test('every CLI command keeps the default installation and never discovers a custom one',async()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-selection-'));
+  const custom=path.join(root,'custom/plugins/auto-oc'),normal=path.join(root,'.obsidian/plugins/auto-oc');
+  const catalog=value=>({tasks:[],workflows:[{id:'w',name:value,steps:[{id:'a',stepKind:'code',code:`output="${value}";`}]}]});
+  const commands=[['list'],['status'],['run','--workflow','w'],['resume','--workflow','w','--run','aa11'],['reconcile','--workflow','w','--run','aa11'],
+    ['stop','--workflow','w','--run','aa11'],['recover-lease','--owner','aa11'],['approve','--run','aa11','--approval','bb22'],['deny','--run','aa11','--approval','bb22']];
+  try {
+    fs.mkdirSync(custom,{recursive:true});fs.writeFileSync(path.join(custom,'data.json'),JSON.stringify(catalog('CUSTOM')));
+    const before=fs.readFileSync(path.join(custom,'data.json'));
+    for(const [command,...args] of commands) {
+      const result=call(command,'--vault',root,...args);assert.equal(result.status,1,command);
+      assert.match(result.stderr,/ENOENT/,command);assert.equal(fs.existsSync(path.join(root,'.obsidian')),false);
+    }
+    fs.mkdirSync(normal,{recursive:true});fs.writeFileSync(path.join(normal,'data.json'),JSON.stringify(catalog('DEFAULT')));
+    const executed=call('run','--vault',root,'--workflow','w');assert.equal(executed.status,0,executed.stderr);
+    const runId=JSON.parse(executed.stdout).runId;
+    for(const [command,...raw] of commands) {
+      if(command==='run')continue; // Already executed above; preserve its binding for recovery.
+      const args=raw.map(value=>value==='aa11'?runId:value),result=call(command,'--vault',root,...args);
+      if(['list','status','resume','reconcile'].includes(command))assert.equal(result.status,0,`${command}: ${result.stderr}`);
+      if(command==='list')assert.equal(JSON.parse(result.stdout).workflows[0].name,'DEFAULT');
+      assert.doesNotMatch(result.stderr,/custom[\\/]plugins/i);
+    }
+    assert.deepEqual(fs.readFileSync(path.join(custom,'data.json')),before);
+    assert.equal(fs.existsSync(path.join(custom,'runtime')),false);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(normal,'data.json'))).workflows[0].steps[0].output,'DEFAULT');
+  } finally {
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-cli-selection-'));fs.rmSync(root,{recursive:true});
+  }
+});
+
 test('public lease recovery keeps an in-flight journal blocked and does not repeat effects',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-recover-'));
   try {

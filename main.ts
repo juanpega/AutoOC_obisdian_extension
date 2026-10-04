@@ -35,6 +35,7 @@ import { ObsidianVaultRefresh } from "./obsidian-vault-refresh";
 import { EXECUTION_DEFAULTS } from "./execution-defaults";
 import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
 import { runInstalledWorkflow } from "./installed-workflow-host";
+import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime, type InstalledWorkflowLocation } from "./installed-workflow-location";
 import { answerWorkflowApproval } from "./workflow-approval";
 import { standaloneTaskWorkflow,projectStandaloneTask } from "./standalone-task";
 import { prepareWorkflowDefinition } from "./workflow-definition";
@@ -1870,6 +1871,7 @@ export default class AutoOCPlugin extends Plugin {
   private stoppingWorkflows = new Set<string>();
   private workflowDelayControllers = new Map<string, AbortController>();
   private pluginExecutionLease?: ExecutionLease;
+  private pluginExecutionLocation?: InstalledWorkflowLocation;
   private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint};
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
@@ -1995,18 +1997,28 @@ export default class AutoOCPlugin extends Plugin {
   // Reserve the vault for the whole plugin lifetime, including legacy tasks
   // whose asynchronous completion outlives runTask/runWorkflow. The external
   // host uses this same lease, so opening the plugin cannot race its effects.
-  reservePluginExecution() {
-    if (this.pluginExecutionLease) { this.pluginExecutionLease.assertOwned(); return; }
+  private selectedExecutionLocation(requireOwnership = true): InstalledWorkflowLocation {
     const base = (this.app.vault.adapter as any).basePath;
     if (!base) throw new Error("AutoOC execution requires a local vault");
-    let directory = fs.realpathSync(base);
-    for (const part of [this.app.vault.configDir, "plugins", this.manifest.id, "runtime"]) {
-      directory = path.join(directory,part);
-      if (!fs.existsSync(directory)) fs.mkdirSync(directory);
-      const stat = fs.lstatSync(directory);
-      if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("AutoOC runtime must use regular directories");
+    const configDir = this.app.vault.configDir, id = this.manifest?.id;
+    if (!configDir || path.isAbsolute(configDir) || !id || /[\\/:]/.test(id)) throw new Error("Invalid selected installation");
+    const location = resolveInstalledWorkflowLocation(base, `${configDir}/plugins/${id}`);
+    if (this.pluginExecutionLease) {
+      if (requireOwnership) this.pluginExecutionLease.assertOwned();
+      if (!this.pluginExecutionLocation || location.installationDirectory !== this.pluginExecutionLocation.installationDirectory ||
+          fs.realpathSync(this.pluginExecutionLease.directory) !== fs.realpathSync(location.runtimeDirectory)) {
+        throw new Error("Selected installation changed while reserved; reload safely");
+      }
     }
-    this.pluginExecutionLease = acquireExecutionLease(directory);
+    return this.pluginExecutionLocation || location;
+  }
+
+  reservePluginExecution() {
+    const location = this.selectedExecutionLocation();
+    if (this.pluginExecutionLease) return;
+    ensureInstalledWorkflowRuntime(location);
+    this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory);
+    this.pluginExecutionLocation = location;
   }
 
   releasePluginExecution(unresolved: boolean) {
@@ -2015,6 +2027,7 @@ export default class AutoOCPlugin extends Plugin {
     if (unresolved) return;
     this.pluginExecutionLease.release();
     this.pluginExecutionLease = undefined;
+    this.pluginExecutionLocation = undefined;
   }
 
   isWorkflowExecuting(workflowId:string):boolean {
@@ -2034,6 +2047,7 @@ export default class AutoOCPlugin extends Plugin {
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
+    const location = this.selectedExecutionLocation();
     if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
     if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
@@ -2043,7 +2057,7 @@ export default class AutoOCPlugin extends Plugin {
     try {
       await this.saveSettings(false);
       return await runInstalledWorkflow({
-        vault:(this.app.vault.adapter as any).basePath, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
+        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
         lease:this.pluginExecutionLease, signal:execution.controller.signal,
         vaultMutations:()=>this.createVaultMutationBatch(),
         redact:output=>this.redactSecrets(output),
@@ -2566,8 +2580,9 @@ export default class AutoOCPlugin extends Plugin {
 
   async loadSettings() {
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
-    const localFile = (this.app.vault.adapter as any).basePath && this.app.vault.configDir && this.manifest?.id
-      ? path.join(vaultBasePath, this.app.vault.configDir, "plugins", this.manifest.id, "data.json") : null;
+    const location = (this.app.vault.adapter as any).basePath && this.app.vault.configDir && this.manifest?.id
+      ? this.selectedExecutionLocation(false) : undefined;
+    const localFile = location?.configurationFile;
     this.settings = Object.assign({}, DEFAULT_SETTINGS, localFile ? this.settingsWriter.load(localFile) : await this.loadData());
     this.secretStore = new SecretStore(vaultBasePath);
     try {
@@ -2579,12 +2594,7 @@ export default class AutoOCPlugin extends Plugin {
     // Bound executions are recovered read-only before legacy migrations can
     // change their definition or turn an unobserved run into a failure.
     if (this.settings.workflows?.some(wf => (wf as any).runtimeExecution) || this.settings.tasks?.some(task=>(task as any).runtimeExecution)) {
-      const runtime = path.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "runtime");
-      for (let current = runtime; current !== path.resolve(vaultBasePath); current = path.dirname(current)) {
-        const stat = fs.lstatSync(current);
-        if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("AutoOC runtime must use regular directories");
-        if (path.dirname(current) === current) throw new Error("Invalid AutoOC runtime location");
-      }
+      const runtime = (location || this.selectedExecutionLocation()).runtimeDirectory;
       const recovered = this.settings.workflows.map(wf => {
         const binding = (wf as any).runtimeExecution;
         if (!binding) return wf;
@@ -2828,7 +2838,7 @@ export default class AutoOCPlugin extends Plugin {
   async saveSettings(refreshView = true) {
     const basePath = (this.app.vault.adapter as any).basePath;
     if (basePath) {
-      const file = path.join(basePath, this.app.vault.configDir, "plugins", this.manifest.id, "data.json");
+      const file = this.selectedExecutionLocation().configurationFile;
       await this.settingsWriter.save(file, () => this.settings);
     } else {
       await this.saveData(this.settings);
@@ -3697,7 +3707,8 @@ export default class AutoOCPlugin extends Plugin {
     const task = this.settings.tasks.find((candidate) => candidate.id === taskId);
     const execution=(task as any)?.runtimeExecution;
     if(this.sharedWorkflowExecution && execution && task?.pendingCodexApproval) {
-      const directory=path.join((this.app.vault.adapter as any).basePath,".obsidian","plugins","auto-oc","runtime");
+      const directory=this.selectedExecutionLocation().runtimeDirectory;
+      if (!this.ownsSharedRun(execution.workflowId,execution.runId)) throw new Error("Approval does not belong to the active execution");
       answerWorkflowApproval(directory,execution.runId,String(task.pendingCodexApproval.requestId),approved);
       return;
     }

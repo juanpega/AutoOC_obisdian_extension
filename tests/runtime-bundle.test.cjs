@@ -5,6 +5,29 @@ const os=require('node:os');
 const path=require('node:path');
 const {spawnSync}=require('node:child_process');
 
+test('runtime bundle accepts an explicit installation and retains the default without discovery',async()=>{
+  const {runInstalledWorkflow,resolveInstalledWorkflowLocation}=require('../autooc-runtime.cjs');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-bundle-selection-'));
+  try {
+    const selected=path.join(root,'custom/plugins/custom-plugin'),normal=path.join(root,'.obsidian/plugins/auto-oc');
+    const install=(dir,output)=>{fs.mkdirSync(dir,{recursive:true});fs.writeFileSync(path.join(dir,'data.json'),JSON.stringify({tasks:[],workflows:[{id:'w',steps:[{id:'a',stepKind:'code',code:`output="${output}";`}]}]}));};
+    install(selected,'selected');
+    const options={vault:root,workflowId:'w',redact:s=>s};
+    await assert.rejects(runInstalledWorkflow(options),/ENOENT/);
+    const first=await runInstalledWorkflow({...options,installationDirectory:selected});assert.equal(first.steps[0].output,'selected');
+    assert.equal(fs.existsSync(path.join(root,'.obsidian')),false);
+    install(normal,'default');
+    const second=await runInstalledWorkflow(options);assert.equal(second.steps[0].output,'default');
+    const previous=fs.readFileSync(path.join(normal,'data.json'));
+    assert.equal((await runInstalledWorkflow({...options,installationDirectory:selected,resumeRunId:first.runId})).runId,first.runId);
+    assert.deepEqual(fs.readFileSync(path.join(normal,'data.json')),previous);
+    assert.equal(resolveInstalledWorkflowLocation(root,selected).runtimeDirectory,path.join(selected,'runtime'));
+    await assert.rejects(runInstalledWorkflow({...options,installationDirectory:'absent'}),/ENOENT/);
+  } finally {
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-bundle-selection-'));fs.rmSync(root,{recursive:true});
+  }
+});
+
 test('standalone runtime bundle executes and resumes real Code workflow across processes',()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-runtime-real-'));
   try {

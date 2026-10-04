@@ -319,6 +319,9 @@ test('shared checkpoints cannot regress, change run or overwrite a replacement o
   const started = new Promise(resolve => ready = resolve);
   delete p.sharedWorkflowExecution;
   p.app = { vault: { adapter: { basePath: 'fixture' } } };
+  // This unit fixture controls the host and persistence; location validation
+  // is exercised through real installations in workflow-compatibility.
+  p.selectedExecutionLocation = () => ({ vault: 'fixture', installationDirectory: 'fixture/install' });
   p.saveSettings = async () => {}; p.loadSettings = async () => { loads++; };
   h.setRunner(async options => { callback = options.onCheckpoint; ready(); return await new Promise(resolve => finish = resolve); });
   const pending = p.runSharedWorkflow('wf'); await started;

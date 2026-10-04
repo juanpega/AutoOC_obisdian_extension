@@ -259,7 +259,9 @@ test('plugin startup recovers a bound checkpoint read-only and blocks legacy rep
   const runtime=path.join(dir,'.obsidian','plugins','auto-oc','runtime');
   fs.mkdirSync(runtime,{recursive:true});
   try {
-    const p=new Plugin();p.app={vault:{adapter:{basePath:dir}}};p.loadData=async()=>({tasks:[],workflows:[]});p.saveSettings=async()=>{};
+    const file=path.join(path.dirname(runtime),'data.json');
+    fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[]}));
+    const p=new Plugin();p.app={vault:{adapter:{basePath:dir},configDir:'.obsidian'}};p.manifest={id:'auto-oc'};p.saveSettings=async()=>{};
     await p.loadSettings();
     const wf={id:'startup',name:'Recovery',status:'pending',handoffOutput:false,steps:[{id:'one',stepKind:'code',code:'output="once";'},{id:'two',stepKind:'code',code:'output="next";'}]};
     p.settings.workflows=[wf];
@@ -268,7 +270,7 @@ test('plugin startup recovers a bound checkpoint read-only and blocks legacy rep
     const stored=structuredClone(p.settings);stored.workflows[0].runtimeExecution={runId:checkpoint.runId,revision:0,phase:'ready'};
     stored.workflows[0].status='running';
     const before=fs.readFileSync(path.join(runtime,checkpoint.runId+'.json'),'utf8');
-    p.loadData=async()=>structuredClone(stored);let saves=0;p.saveSettings=async()=>{saves++;};
+    fs.writeFileSync(file,JSON.stringify(stored));let saves=0;p.saveSettings=async()=>{saves++;};
     await p.loadSettings();
     assert.equal(saves,0);assert.equal(p.settings.workflows[0].status,'pending');
     assert.equal(p.settings.workflows[0].steps[0].output,'once');assert.equal(p.settings.workflows[0].handoffOutput,false);
@@ -276,11 +278,12 @@ test('plugin startup recovers a bound checkpoint read-only and blocks legacy rep
     await p.runWorkflow(p.settings.workflows[0]);assert.equal(saves,0);
     assert.equal(fs.readFileSync(path.join(runtime,checkpoint.runId+'.json'),'utf8'),before);
     stored.workflows[0].steps[0].code='output="changed";';
+    fs.writeFileSync(file,JSON.stringify(stored));
     await assert.rejects(p.loadSettings(),/definition mismatch/);assert.equal(saves,0);
     assert.equal(p.settings.workflows[0].steps[0].code,'output="changed";');
   } finally {
     for(const file of fs.readdirSync(runtime)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,file));}
-    fs.rmdirSync(runtime);fs.rmdirSync(path.dirname(runtime));fs.rmdirSync(path.join(dir,'.obsidian','plugins'));fs.rmdirSync(path.join(dir,'.obsidian'));fs.rmdirSync(dir);
+    fs.rmdirSync(runtime);fs.unlinkSync(path.join(path.dirname(runtime),'data.json'));fs.rmdirSync(path.dirname(runtime));fs.rmdirSync(path.join(dir,'.obsidian','plugins'));fs.rmdirSync(path.join(dir,'.obsidian'));fs.rmdirSync(dir);
   }
 });
 
