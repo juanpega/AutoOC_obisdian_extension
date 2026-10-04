@@ -157,7 +157,7 @@ test('classic callbacks cannot complete a stopped task or replacement workflow a
     p.workflowRuntime=new Map([['wf',{stepOutputs:new Map()}]]);
     const pending=kind==='task'?p.runCodeTask(item,async()=>{completions++;}):p.runCodeStep({id:'wf',name:'WF'},item,0);
     await tick();
-    if(kind==='task') await p.killTask(item.id);
+    if(kind==='task') await p.killTask(item.id,p.taskStopIdentity(item));
     else p.workflowRuntime.set('wf',{stepOutputs:new Map()});
     release();await pending;assert.equal(completions,0);
     if(kind==='task')assert.equal(item.status,'failed');

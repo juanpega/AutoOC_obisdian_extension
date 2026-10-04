@@ -160,6 +160,83 @@ function pluginHarness(payload) {
 }
 const drain = () => new Promise(resolve => setImmediate(resolve));
 
+// C5: complete the real shared host before reusing its task, retaining the journal.
+for (const entry of ['card', 'workflow']) for (const standalone of [false, true]) for (const logsEnabled of [false, true]) {
+  test(`shared to legacy ${entry}, standalone=${standalone}, logs=${logsEnabled}`, async () => {
+    const h = stopCardHarness(), p = h.plugin, os = require('node:os');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-legacy-history-'));
+    const install = path.join(root, '.obsidian/plugins/auto-oc'), file = path.join(install, 'data.json');
+    fs.mkdirSync(install, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ logsEnabled, tasks: [{ id: 't', name: 'Task', taskKind: 'codex', prompt: 'fixture', scheduleType: 'manual' }],
+      workflows: [{ id: 'wf', name: 'Shared', steps: [{ id: 'a', stepKind: 'task', taskId: 't' }] }] }));
+    delete p.pluginExecutionLease; delete p.sharedWorkflowExecution; delete p.saveSettings;
+    p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
+    p.manifest = { id: 'auto-oc' }; p.redactSecrets = text => text;
+    h.Client.prototype.run = async function() { return { status: 'completed', output: 'historical result', threadId: 'thread-history', turnId: 'turn-history' }; };
+    h.Client.prototype.dispose = () => {};
+    let finish, legacyJob, disposed = 0, advances = 0;
+    try {
+      p.reservePluginExecution(); await p.loadSettings();
+      await p.runSharedWorkflow(standalone ? '@task:t' : 'wf', undefined, false, true, standalone ? 't' : undefined);
+      const task = p.settings.tasks[0], historical = JSON.stringify(task.runtimeExecution);
+      const oldIdentity = p.taskStopIdentity(task);
+      const journalFile = path.join(install, 'runtime', task.runtimeExecution.runId + '.json');
+      const journal = fs.readFileSync(journalFile, 'utf8');
+      const wf = { id: 'legacy', name: 'Legacy', status: 'running', currentStep: 0, steps: [
+        { id: 'first', stepKind: 'task', taskId: 't', transitions: [{ toStepId: 'next', mode: 'force' }] },
+        { id: 'next', stepKind: 'code', code: 'output = "must not run";' }] };
+      if (!standalone && logsEnabled) { Object.assign(p.settings.workflows[0], {...wf,id:'wf'}); Object.assign(wf,p.settings.workflows[0]); p.settings.workflows[0]=wf; }
+      else p.settings.workflows.push(wf);
+      task.taskKind = 'copilot';
+      p.workflowRuntime = new Map([[wf.id, { stepOutputs: new Map() }]]);
+      p.runWorkflowStepById = async () => { advances++; };
+      p.createCopilotClient = () => ({ run: () => new Promise(resolve => finish = resolve), dispose() { disposed++; } });
+      const runLegacy = p.runCopilotTask.bind(p);
+      p.runCopilotTask = (...args) => (legacyJob = runLegacy(...args));
+      await p.runTaskStep(wf, wf.steps[0], 0);
+      while (!finish) await drain();
+      const active = p.taskStopIdentity(task);
+      assert.equal(active.kind, 'legacy'); assert.notEqual(active.token, oldIdentity.runId);
+      assert.equal(active.workflowId, wf.id); assert.equal(JSON.stringify(task.runtimeExecution), historical);
+      await assert.rejects(p.killTask('t', oldIdentity), /changed|owned/);
+      assert.equal(disposed, 0);
+      const reloaded = new h.Plugin(); reloaded.app = p.app; reloaded.manifest = p.manifest;
+      await reloaded.loadSettings();
+      assert.equal(reloaded.settings.tasks[0].legacyExecution.token, active.token);
+      assert.notEqual(reloaded.settings.tasks[0].output, 'historical result');
+      await assert.rejects(reloaded.killTask('t', active), /changed|owned/);
+      if (entry === 'card') await h.renderCard(task).find(el => el.text === '⏹').onclick({ stopPropagation() {} });
+      else await p.killWorkflow(wf.id);
+      assert.equal(disposed, 1);
+      assert.equal(task.legacyExecution.stopState, 'unconfirmed');
+      assert.equal(wf.status, 'failed');
+      finish({ exitCode: 0, output: 'late result' }); await drain();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      assert.equal(advances, 0); assert.notEqual(task.output, 'late result');
+      assert.equal(JSON.stringify(task.runtimeExecution), historical);
+      assert.equal(fs.readFileSync(journalFile, 'utf8'), journal);
+      await reloaded.loadSettings();
+      assert.equal(reloaded.settings.tasks[0].legacyExecution.stopState, 'unconfirmed');
+      assert.equal(JSON.stringify(reloaded.settings.tasks[0].runtimeExecution), historical);
+      assert.notEqual(reloaded.settings.tasks[0].output, 'historical result');
+      assert.ok(h.renderCard(task).some(el => el.text === 'stop outcome unconfirmed'));
+      if (standalone && !logsEnabled && entry === 'card') {
+        task.taskKind='codex'; await p.saveSettings();
+        await p.runSharedWorkflow('@task:t',undefined,false,true,'t');
+        assert.equal(p.settings.tasks[0].legacyExecution,undefined);
+        assert.notEqual(p.settings.tasks[0].runtimeExecution.runId,JSON.parse(historical).runId);
+        assert.equal(p.taskStopIdentity(p.settings.tasks[0]).kind,'shared');
+        assert.equal(fs.readFileSync(journalFile,'utf8'),journal);
+      }
+    } finally {
+      if (finish) finish({ exitCode: 0, output: '' }); if (legacyJob) await legacyJob; p.releasePluginExecution(false);
+      assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+      assert.ok(path.basename(root).startsWith('autooc-legacy-history-'));
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+}
+
 function stopCardHarness() {
   const notices = [], elements = [], bundle = { exports: {} };
   class Stub {}
@@ -196,6 +273,145 @@ function stopCardHarness() {
   return { plugin, task, workflow, notices, elements, stop: elements.find(el => el.text === '⏹'),
     detailStop: elements.find(el => el.text === '⏹ Stop'), renderCard, Plugin: bundle.exports.default, Client: bundle.exports.TestClient, setRunner: bundle.exports.setRunner };
 }
+
+function legacyHarness(kind = 'copilot') {
+  const h = stopCardHarness(), p = h.plugin;
+  delete p.sharedWorkflowExecution; delete p.pluginExecutionLease; delete h.task.runtimeExecution;
+  Object.assign(h.task, {taskKind:kind,prompt:'fixture',code:'output="code result";',status:'pending',model:'test/model'});
+  p.app = {vault:{adapter:{basePath:require('node:os').tmpdir()}}};
+  p.saveSettings = async () => {};
+  return h;
+}
+
+test('legacy stop requires a complete identity and never cancels a foreign workflow or occurrence', async () => {
+  const h = legacyHarness(), p = h.plugin, task = h.task;
+  let finish, killed = 0;
+  p.createCopilotClient = () => ({run:()=>new Promise(resolve=>finish=resolve),dispose(){killed++;}});
+  const wf = {id:'owner',name:'Owner',status:'running',currentStep:0,steps:[{id:'a',taskId:'t'},{id:'b',taskId:'t'}]};
+  const context = {stepOutputs:new Map()}; p.workflowRuntime = new Map([[wf.id,context]]); p.settings.workflows=[wf];
+  const job = p.runCopilotTask(task, undefined, {workflowId:wf.id,stepId:'a',stepIndex:0,context}); await drain();
+  const identity = p.taskStopIdentity(task), before = JSON.stringify(task);
+  for (const stale of [undefined, {...identity,token:undefined}, {...identity,workflowId:'foreign'}, {...identity,stepId:'b'}, {...identity,stepIndex:1}]) {
+    await assert.rejects(p.killTask('t',stale),/changed|owned/);
+    assert.equal(JSON.stringify(task),before); assert.equal(killed,0);
+  }
+  const foreign = {...wf,id:'foreign'}; p.settings.workflows.push(foreign); p.workflowRuntime.set('foreign',{});
+  await p.killWorkflow('foreign'); assert.equal(killed,0); assert.equal(JSON.stringify(task),before);
+  await Promise.all([p.killTask('t',identity),p.killTask('t',identity)]); assert.equal(killed,1);
+  finish({exitCode:0,output:'late'}); await job;
+});
+
+for (const kind of ['copilot','codex','code']) {
+  test(`legacy ${kind} reserves identity before initial persistence and suppresses launch after stop`, async () => {
+    const h=legacyHarness(kind), p=h.plugin; let release, launches=0, saves=0, completions=0;
+    p.saveSettings=()=>++saves===1 ? new Promise(resolve=>release=resolve) : Promise.resolve();
+    p.createCopilotClient=p.createCodexClient=()=>{launches++;throw Error('must not launch');};
+    p.createVaultMutationBatch=()=>{launches++;throw Error('must not execute');};
+    const method={copilot:'runCopilotTask',codex:'runCodexTask',code:'runCodeTask'}[kind];
+    const job=p[method](h.task,async()=>{completions++;});
+    const identity=p.taskStopIdentity(h.task); assert.equal(identity.kind,'legacy');
+    await p.killTask('t',identity); release(); await job;
+    assert.equal(launches,0); assert.equal(completions,0); assert.equal(h.task.status,'failed');
+  });
+}
+
+for (const kind of ['copilot','codex']) for (const outcome of ['success','error']) {
+  test(`legacy ${kind} old ${outcome} cannot overwrite a replacement or remove its handle`, async () => {
+    const h=legacyHarness(kind),p=h.plugin, runs=[]; let completed=0;
+    const create=(_cwd,callbacks)=>{
+      const record={callbacks,killed:0}; runs.push(record);
+      return record.client={run:()=>new Promise((resolve,reject)=>{record.resolve=resolve;record.reject=reject;}),
+        dispose(){record.killed++;},interrupt:async()=>{record.killed++;},getIds:()=>({})};
+    };
+    p.createCopilotClient=p.createCodexClient=create;
+    const method=kind==='copilot'?'runCopilotTask':'runCodexTask';
+    const first=p[method](h.task,async()=>{completed++;}); await drain(); const stale=p.taskStopIdentity(h.task);
+    await p.killTask('t',stale);
+    const second=p[method](h.task,async()=>{completed++;}); await drain(); const current=p.taskStopIdentity(h.task);
+    assert.notEqual(current.token,stale.token);
+    await assert.rejects(p.killTask('t',stale),/changed|owned/);
+    const before=JSON.stringify(h.task), handle=p.runningProcesses.get('t');
+    if(kind==='copilot') runs[0].callbacks('late stream');
+    else {
+      runs[0].callbacks.onStarted({threadId:'late',turnId:'late'});
+      runs[0].callbacks.onOutput('late stream');
+      runs[0].callbacks.onApproval({requestId:1,kind:'command',summary:'late approval'});
+    }
+    if(outcome==='error') runs[0].reject(Error('late error'));
+    else runs[0].resolve({exitCode:0,status:'completed',output:'late result'});
+    await first;
+    assert.equal(JSON.stringify(h.task),before); assert.equal(p.runningProcesses.get('t'),handle);
+    if(kind==='codex') assert.equal(p.runningCodexClients.get('t'),runs[1].client);
+    assert.equal(completed,0);
+    runs[1].resolve({exitCode:0,status:'completed',output:'new result'}); await second;
+    assert.equal(h.task.output,'new result'); assert.equal(completed,1);
+  });
+}
+
+test('legacy interruption errors stay visible and double stop never repeats the request', async () => {
+  const h=legacyHarness('codex'),p=h.plugin; let finish, interrupts=0;
+  p.createCodexClient=()=>({run:()=>new Promise(resolve=>finish=resolve),interrupt:async()=>{interrupts++;throw Error('fixture interruption failure');},dispose(){}});
+  const job=p.runCodexTask(h.task); await drain(); const identity=p.taskStopIdentity(h.task);
+  await Promise.all([p.killTask('t',identity),p.killTask('t',identity)]);
+  assert.equal(interrupts,1); assert.equal(h.task.legacyExecution.stopState,'error');
+  assert.match(h.task.legacyExecution.stopError,/fixture interruption failure/);
+  finish({status:'completed',output:'late'}); await job;
+  assert.notEqual(h.task.output,'late'); assert.ok(h.notices.some(text=>/Stop request failed/.test(text)));
+});
+
+test('legacy Code result after vault flush cannot overwrite a newer attempt', async () => {
+  const h=legacyHarness('code'),p=h.plugin; const flushes=[]; let completions=0;
+  p.createVaultMutationBatch=()=>({record(){},flush:()=>new Promise(resolve=>flushes.push(resolve))});
+  const first=p.runCodeTask(h.task,async()=>{completions++;}); await drain();
+  await p.killTask('t',p.taskStopIdentity(h.task)); h.task.code='output="new result";';
+  const second=p.runCodeTask(h.task,async()=>{completions++;}); await drain();
+  const before=JSON.stringify(h.task), identity=p.taskStopIdentity(h.task);
+  flushes[0](); await first;
+  assert.equal(JSON.stringify(h.task),before); assert.equal(p.taskStopIdentity(h.task).token,identity.token); assert.equal(completions,0);
+  flushes[1](); await second; assert.match(h.task.output,/new result/); assert.equal(completions,1);
+});
+
+test('stop during legacy final persistence suppresses continuation after a relaunch', async () => {
+  const h=legacyHarness(),p=h.plugin; const runs=[]; let release, completes=0;
+  p.createCopilotClient=()=>({run:()=>new Promise(resolve=>runs.push(resolve)),dispose(){}});
+  p.saveSettings=()=>h.task.status==='completed' && !release ? new Promise(resolve=>release=resolve) : Promise.resolve();
+  const first=p.runCopilotTask(h.task,async()=>{completes++;}); await drain();
+  runs[0]({exitCode:0,output:'first result'}); await drain(); assert.ok(release);
+  await p.killTask('t',p.taskStopIdentity(h.task));
+  const second=p.runCopilotTask(h.task,async()=>{completes++;}); await drain();
+  const before=JSON.stringify(h.task); release(); await first;
+  assert.equal(JSON.stringify(h.task),before); assert.equal(completes,0);
+  runs[1]({exitCode:0,output:'second result'}); await second; assert.equal(completes,1);
+});
+
+for (const interactiveTerminal of [true,false]) {
+  test(`OpenCode reserves identity before persistence, interactive=${interactiveTerminal}`, async () => {
+    const h=pluginHarness('fixture'); h.task.interactiveTerminal=interactiveTerminal;
+    let release,saves=0,completes=0;
+    h.plugin.saveSettings=()=>++saves===1 ? new Promise(resolve=>release=resolve) : Promise.resolve();
+    const job=h.plugin.runTask(h.task,async()=>{completes++;});
+    const identity=h.plugin.taskStopIdentity(h.task); assert.equal(identity.kind,'legacy');
+    await h.plugin.killTask(h.task.id,identity); release(); await job;
+    assert.equal(h.calls.length,0); assert.equal(completes,0);
+  });
+}
+
+test('legacy duration never combines the historical shared end with the latest start', () => {
+  const {taskElapsedSeconds}=load('task-history.ts');
+  const task={lastRun:'2026-10-04T12:00:00Z',status:'failed',runtimeExecution:{finishedAt:'2026-10-03T12:00:00Z'},legacyExecution:{token:'new'}};
+  assert.equal(taskElapsedSeconds(task),undefined);
+  task.legacyExecution.finishedAt='2026-10-04T12:00:05Z'; assert.equal(taskElapsedSeconds(task),5);
+});
+
+test('a stopped workflow cannot launch from its delayed initial save after replacement', async () => {
+  const h=legacyHarness(),p=h.plugin; let release,saves=0,launches=0;
+  Object.assign(h.workflow,{name:'Fixture',status:'pending',currentStep:-1});
+  p.saveSettings=()=>++saves===1 ? new Promise(resolve=>release=resolve) : Promise.resolve();
+  p.runWorkflowStepById=async()=>{launches++;};
+  const first=p.runWorkflow(h.workflow); await p.killWorkflow(h.workflow.id);
+  await p.runWorkflow(h.workflow); assert.equal(launches,1);
+  release(); await first; assert.equal(launches,1);
+});
 
 test('referenced task card requests cancellation from its workflow owner without fabricating a result', async () => {
   const h = stopCardHarness(), before = JSON.stringify(h.task);
@@ -240,12 +456,16 @@ test('same occurrence remains stoppable across thread and approval checkpoint re
 test('legacy stop and standalone owner cancellation preserve their separate behavior', async () => {
   const legacy = stopCardHarness();
   delete legacy.task.runtimeExecution; delete legacy.plugin.sharedWorkflowExecution;
-  let killed = 0, saved = 0;
-  legacy.plugin.runningProcesses.set('t', { kill() { killed++; } });
-  legacy.plugin.saveSettings = async () => { saved++; };
-  assert.equal(await legacy.plugin.killTask('t'), 'stopped');
-  assert.equal(killed, 1); assert.equal(saved, 1); assert.equal(legacy.task.status, 'failed');
-  assert.match(legacy.task.output, /stopped manually/);
+  let killed = 0, finish;
+  legacy.task.taskKind = 'copilot'; legacy.task.prompt = 'fixture';
+  legacy.plugin.app = { vault: { adapter: { basePath: '.' } } };
+  legacy.plugin.saveSettings = async () => {};
+  legacy.plugin.createCopilotClient = () => ({ run: () => new Promise(resolve => finish = resolve), dispose() { killed++; } });
+  const job = legacy.plugin.runCopilotTask(legacy.task); await drain();
+  assert.equal(await legacy.plugin.killTask('t', legacy.plugin.taskStopIdentity(legacy.task)), 'stop-requested');
+  assert.equal(killed, 1); assert.equal(legacy.task.status, 'failed');
+  assert.match(legacy.task.output, /external outcome unconfirmed/);
+  finish({exitCode:0,output:'late'}); await job;
   const single = stopCardHarness(); single.plugin.sharedWorkflowExecution.taskId = 't';
   single.plugin.settings.workflows = [];
   await single.stop.onclick({ stopPropagation() {} });
@@ -513,7 +733,7 @@ test('late callbacks after stop, deletion or relaunch cannot complete another ta
     const h = pluginHarness('data'); let completions = 0;
     await h.plugin.runTask(h.task, async () => { completions++; });
     if (mode === 'delete') h.plugin.settings.tasks = [];
-    else { await h.plugin.killTask(h.task.id); if (mode === 'relaunch') await h.plugin.runTask(h.task, async () => { completions++; }); }
+    else { await h.plugin.killTask(h.task.id, h.plugin.taskStopIdentity(h.task)); if (mode === 'relaunch') await h.plugin.runTask(h.task, async () => { completions++; }); }
     h.signal(0, { status: 'started', confirmed: true }); await drain();
     assert.equal(completions, 0, mode);
     if (mode === 'relaunch') {

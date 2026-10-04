@@ -130,11 +130,11 @@ test("stopping a Copilot task preserves the stopped state and suppresses late re
   });
   const job = plugin.runCopilotTask(task);
   await started;
-  await plugin.killTask(task.id);
+  await plugin.killTask(task.id, plugin.taskStopIdentity(task));
   output("late stream");
   await job;
   assert.equal(task.status, "failed");
-  assert.match(task.output, /task stopped manually/);
+  assert.match(task.output, /stop requested; external outcome unconfirmed/);
   assert.doesNotMatch(task.output, /late/);
   assert.equal(plugin.runningProcesses.size, 0);
 });
@@ -249,14 +249,18 @@ test("Copilot default survives settings migration and is used in both task edito
 
 test("Visual Builder preserves Copilot configuration and runtime state across edits", async () => {
   const task = createTask({ status: "completed", output: "Existing result", copilotAllowAllTools: true, model: "chosen" });
+  task.runtimeExecution = {runId:"historical"};
+  task.legacyExecution = {kind:"legacy",token:"current",taskId:task.id};
   const plugin = createPlugin([task]);
   const modal = new VisualBuilderModal(plugin.app, plugin);
-  await modal.applyExternalState({ tasks: [{ id: task.id, taskKind: "copilot", name: "Renamed", prompt: task.prompt }], workflows: [] });
+  await modal.applyExternalState({ tasks: [{ id: task.id, taskKind: "copilot", name: "Renamed", prompt: task.prompt, legacyExecution: {token:"stale"} }], workflows: [] });
   const edited = plugin.settings.tasks[0];
   assert.equal(edited.status, "completed");
   assert.equal(edited.output, "Existing result");
   assert.equal(edited.model, "chosen");
   assert.equal(edited.copilotAllowAllTools, true);
+  assert.deepEqual(edited.runtimeExecution, task.runtimeExecution);
+  assert.deepEqual(edited.legacyExecution, task.legacyExecution);
 });
 
 test("standalone Copilot workflow export is accepted by the plugin and import preview", async () => {

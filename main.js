@@ -4153,7 +4153,7 @@ var path17 = __toESM(require("path"));
 
 // workflow-definition.ts
 var import_crypto5 = require("crypto");
-var runtimeFields = /* @__PURE__ */ new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution"]);
+var runtimeFields = /* @__PURE__ */ new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 function withoutRuntime(value) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));
 }
@@ -5155,7 +5155,7 @@ var path13 = __toESM(require("path"));
 function taskElapsedSeconds(task, now = Date.now()) {
   var _a;
   const start = Date.parse(task.lastRun);
-  const end = task.status === "running" ? now : Date.parse((_a = task.runtimeExecution) == null ? void 0 : _a.finishedAt);
+  const end = task.status === "running" ? now : Date.parse(task.legacyExecution ? task.legacyExecution.finishedAt : (_a = task.runtimeExecution) == null ? void 0 : _a.finishedAt);
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1e3)) : void 0;
 }
 function regularDirectory(directory) {
@@ -5220,7 +5220,7 @@ ${observed.output || "(no output)"}`;
 
 // workflow-catalog-progress.ts
 async function persistWorkflowProgress(options) {
-  var _a;
+  var _a, _b;
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
@@ -5246,7 +5246,12 @@ async function persistWorkflowProgress(options) {
     workflow = { ...workflow };
     delete workflow.runtimeExecution;
   }
-  const projected = projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId);
+  const preserveLegacy = !virtual && matches[0].legacyExecution && ((_b = matches[0].runtimeExecution) == null ? void 0 : _b.runId) === durable.runId;
+  if (preserveLegacy) {
+    validateProgressBinding(matches[0], durable, options.expectedRunId);
+    if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+  }
+  const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
   const observedTasks = /* @__PURE__ */ new Map();
   for (const [stepIndex, observed] of durable.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
@@ -5259,6 +5264,11 @@ async function persistWorkflowProgress(options) {
     if (!item) return task;
     const previous = task.runtimeExecution;
     if ((previous == null ? void 0 : previous.runId) === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
+    if (task.legacyExecution && (previous == null ? void 0 : previous.runId) === durable.runId) {
+      validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable, options.expectedRunId);
+      if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+      return task;
+    }
     if (previous && previous.runId !== durable.runId) {
       if (item.observed.status !== "in_flight") return task;
       const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
@@ -5266,6 +5276,7 @@ async function persistWorkflowProgress(options) {
     }
     return {
       ...task,
+      legacyExecution: void 0,
       status: item.observed.status === "in_flight" ? "pending" : item.observed.status,
       ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
       output: item.observed.output || "",
@@ -6882,6 +6893,7 @@ function isWorkflowDue(wf) {
 var AutoOCPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
+    this.legacyAttempts = /* @__PURE__ */ new Map();
     this.settingsWriter = new SettingsWriter();
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
@@ -7033,7 +7045,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     var _a;
     if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.workflowId) === workflowId) return true;
     const workflow = this.settings.workflows.find((item) => item.id === workflowId);
-    return !!workflow && !workflow.runtimeExecution && workflow.status === "running";
+    return !!workflow && (!workflow.runtimeExecution || !!workflow.legacyExecution) && workflow.status === "running";
   }
   async recoverSharedWorkflow(workflowId, expectedRunId) {
     const workflow = this.settings.workflows.find((item) => item.id === workflowId);
@@ -7043,11 +7055,12 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     return await this.runSharedWorkflow(workflowId, expectedRunId, execution.phase === "in_flight");
   }
   async runSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId) {
+    var _a;
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
     const location = this.selectedExecutionLocation();
     if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
-    if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
+    if (Array.from(((_a = this.legacyAttempts) == null ? void 0 : _a.values()) || []).some((attempt) => !attempt.cancelled) || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
     const execution = { workflowId, taskId, runId: void 0, controller: new AbortController(), checkpoint: void 0 };
@@ -7141,10 +7154,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
   }
   isTaskActive(task) {
-    var _a;
+    var _a, _b;
     if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.taskId) === task.id) return true;
     const canonical2 = this.settings.tasks.find((t) => t.id === task.id);
-    return (canonical2 == null ? void 0 : canonical2.status) === "running" || this.runningProcesses.has(task.id);
+    return !!((_b = this.legacyAttempts) == null ? void 0 : _b.get(task.id)) && !this.legacyAttempts.get(task.id).cancelled || (canonical2 == null ? void 0 : canonical2.status) === "running" || this.runningProcesses.has(task.id);
   }
   getMcpRawWorkflowReferenceError(payload) {
     if (!payload || typeof payload !== "object" || "autoOCExport" in payload) return null;
@@ -7553,7 +7566,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.syncVisualBuilders();
   }
   async loadSettings() {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     const location = this.app.vault.adapter.basePath && this.app.vault.configDir && ((_a = this.manifest) == null ? void 0 : _a.id) ? this.selectedExecutionLocation(false) : void 0;
     const localFile = location == null ? void 0 : location.configurationFile;
@@ -7565,10 +7578,34 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       new import_obsidian.Notice(`AutoOC: could not load secrets vault \u2014 ${String(e)}`);
       this.secretStore = new SecretStore(vaultBasePath);
     }
+    this.settings.tasks = this.settings.tasks.map((task) => {
+      var _a2, _b2;
+      if (!task.legacyExecution) return task;
+      const attempt = (_a2 = this.legacyAttempts) == null ? void 0 : _a2.get(task.id);
+      if (attempt && ((_b2 = attempt.task.legacyExecution) == null ? void 0 : _b2.token) === task.legacyExecution.token) return attempt.task;
+      if (task.status !== "running") return task;
+      return {
+        ...task,
+        status: "failed",
+        pendingCodexApproval: void 0,
+        legacyExecution: { ...task.legacyExecution, stopState: "unconfirmed" },
+        output: `${task.output || ""}
+[legacy owner unavailable; external outcome unconfirmed]`
+      };
+    });
     if (((_b = this.settings.workflows) == null ? void 0 : _b.some((wf) => wf.runtimeExecution)) || ((_c = this.settings.tasks) == null ? void 0 : _c.some((task) => task.runtimeExecution))) {
       const runtime = (location || this.selectedExecutionLocation()).runtimeDirectory;
       const recovered = this.settings.workflows.map((wf) => {
+        var _a2;
         const binding = wf.runtimeExecution;
+        if (wf.legacyExecution) {
+          if (binding) {
+            const checkpoint2 = readExecutionCheckpoint(runtime, binding.runId);
+            validateProgressBinding(wf, checkpoint2, binding.runId);
+            if (!["completed", "failed"].includes(checkpoint2.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+          }
+          return wf.status === "running" && !((_a2 = this.workflowRuntime) == null ? void 0 : _a2.has(wf.id)) ? { ...wf, status: "failed" } : wf;
+        }
         if (!binding) return wf;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
         return recoverWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id, binding.runId));
@@ -7579,6 +7616,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         if (!binding) return task;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
         validateProgressBinding({ id: binding.workflowId, runtimeExecution: binding }, checkpoint, binding.runId);
+        if (task.legacyExecution) {
+          if (!["completed", "failed"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+          return task;
+        }
         if (checkpoint.workflowId.startsWith("@task:") && checkpoint.workflowId !== standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
         if (binding.workflowId === standaloneTaskWorkflow(task.id).id) {
           return projectStandaloneTask(task, this.settings.tasks, this.settings, checkpoint, this.ownsSharedRun(binding.workflowId, binding.runId), true);
@@ -7611,13 +7652,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     delete this.settings.chatModel;
     let changed = false;
     for (const task of this.settings.tasks) {
-      if (task.status === "running") {
+      if (task.status === "running" && !task.legacyExecution) {
         task.status = "failed";
         task.output = `${task.output || ""}
 [stale running state cleared on plugin load]`;
         changed = true;
       }
-      if (task.pendingCodexApproval) {
+      if (task.pendingCodexApproval && !task.legacyExecution) {
         delete task.pendingCodexApproval;
         changed = true;
       }
@@ -7636,7 +7677,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     if (!this.settings.workflows) this.settings.workflows = [];
     for (const wf of this.settings.workflows) {
-      if (wf.status === "running") {
+      if (wf.status === "running" && !((_d = this.workflowRuntime) == null ? void 0 : _d.has(wf.id))) {
         wf.status = "failed";
         changed = true;
       }
@@ -7695,7 +7736,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       }
     }
     if (!this.settings.defaultModel) {
-      this.settings.defaultModel = (_e = (_d = this.availableModels[0]) == null ? void 0 : _d.value) != null ? _e : "";
+      this.settings.defaultModel = (_f = (_e = this.availableModels[0]) == null ? void 0 : _e.value) != null ? _f : "";
       changed = true;
     }
     if (!["codex", "opencode", "copilot"].includes(this.settings.defaultAiEngine)) {
@@ -8034,7 +8075,54 @@ DONE:%s
   // Runs opencode via a fully-detached PowerShell process to avoid Electron's
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
-  async runTask(task, onComplete, overrides = {}) {
+  beginLegacyAttempt(task, owner) {
+    var _a, _b, _c;
+    (_a = this.legacyAttempts) != null ? _a : this.legacyAttempts = /* @__PURE__ */ new Map();
+    const current = this.settings.tasks.find((item) => item.id === task.id);
+    if (!current || this.sharedWorkflowExecution || this.legacyAttempts.get(task.id) && !this.legacyAttempts.get(task.id).cancelled) {
+      throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+    }
+    const binding = current.runtimeExecution;
+    if (binding) {
+      const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory, binding.runId);
+      validateProgressBinding({ id: binding.workflowId, runtimeExecution: binding }, checkpoint, binding.runId);
+      if (!["completed", "failed"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
+    }
+    if (owner && ((_b = this.workflowRuntime) == null ? void 0 : _b.get(owner.workflowId)) !== owner.context) throw new Error("Workflow execution changed");
+    const identity = {
+      kind: "legacy",
+      token: require("crypto").randomUUID(),
+      taskId: task.id,
+      ...owner ? { workflowId: owner.workflowId, stepId: owner.stepId, stepIndex: owner.stepIndex } : {}
+    };
+    const attempt = { identity, task: current, owner, cancelled: false };
+    if (owner) {
+      const workflow = this.settings.workflows.find((item) => item.id === owner.workflowId);
+      if (workflow) (_c = workflow.legacyExecution) != null ? _c : workflow.legacyExecution = { token: require("crypto").randomUUID() };
+    }
+    this.legacyAttempts.set(task.id, attempt);
+    current.legacyExecution = { ...identity, startedAt: (/* @__PURE__ */ new Date()).toISOString() };
+    delete current.pendingCodexApproval;
+    return attempt;
+  }
+  isLegacyCurrent(attempt) {
+    var _a, _b, _c, _d;
+    const current = this.settings.tasks.find((item) => item.id === attempt.identity.taskId);
+    if (((_a = current == null ? void 0 : current.legacyExecution) == null ? void 0 : _a.token) === attempt.identity.token) attempt.task = current;
+    return !attempt.cancelled && ((_b = this.legacyAttempts) == null ? void 0 : _b.get(attempt.identity.taskId)) === attempt && this.settings.tasks.find((item) => item.id === attempt.identity.taskId) === attempt.task && ((_c = attempt.task.legacyExecution) == null ? void 0 : _c.token) === attempt.identity.token && (!attempt.owner || ((_d = this.workflowRuntime) == null ? void 0 : _d.get(attempt.owner.workflowId)) === attempt.owner.context);
+  }
+  legacyCompletion(attempt, callback) {
+    return async (task, code) => {
+      if (!this.isLegacyCurrent(attempt)) return;
+      task = attempt.task;
+      task.legacyExecution.finishedAt = (/* @__PURE__ */ new Date()).toISOString();
+      await this.saveSettings();
+      if (!this.isLegacyCurrent(attempt)) return;
+      this.legacyAttempts.delete(task.id);
+      if (callback) await callback(task, code);
+    };
+  }
+  async runTask(task, onComplete, overrides = {}, owner) {
     var _a, _b, _c, _d, _e, _f;
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -8055,18 +8143,20 @@ DONE:%s
         return;
       }
     }
+    const attempt = this.beginLegacyAttempt(effectiveTask, owner);
     if ((effectiveTask.taskKind || "opencode") === "code") {
-      await this.runCodeTask(effectiveTask, onComplete);
+      await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
     if (effectiveTask.taskKind === "codex") {
-      void this.runCodexTask(effectiveTask, onComplete);
+      void this.runCodexTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
     if (effectiveTask.taskKind === "copilot") {
-      void this.runCopilotTask(effectiveTask, onComplete);
+      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
+    onComplete = this.legacyCompletion(attempt, onComplete);
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
     if (branchWasProvided && typeof effectiveTask.branch !== "string") {
       this.settings.tasks[idx].status = "failed";
@@ -8115,12 +8205,13 @@ DONE:%s
       const current = this.settings.tasks[idx];
       let settled2 = false;
       let cancelled2 = false;
-      const controller = { kill: () => {
+      const controller2 = { kill: () => {
         cancelled2 = true;
         settled2 = true;
       } };
-      this.runningProcesses.set(task.id, controller);
-      const isCurrent = () => !settled2 && this.runningProcesses.get(task.id) === controller && this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
+      attempt.handle = controller2;
+      this.runningProcesses.set(task.id, controller2);
+      const isCurrent = () => this.isLegacyCurrent(attempt) && !settled2 && this.runningProcesses.get(task.id) === controller2 && this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
       const finish = async (error) => {
         var _a2;
         if (!isCurrent()) return;
@@ -8129,8 +8220,8 @@ DONE:%s
         current.output = error ? `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}` : "[interactive OpenCode CLI launch confirmed; agent task completion is not tracked]";
         if (error) (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
         await this.saveSettings();
-        if (cancelled2 || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current || current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller) return;
-        this.runningProcesses.delete(task.id);
+        if (!this.isLegacyCurrent(attempt) || cancelled2 || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current || current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller2) return;
+        if (this.runningProcesses.get(task.id) === controller2) this.runningProcesses.delete(task.id);
         new import_obsidian.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
         if (onComplete) await onComplete(current, error ? -1 : 0);
       };
@@ -8174,6 +8265,7 @@ DONE:%s
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
     (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
     await this.saveSettings();
+    if (!this.isLegacyCurrent(attempt)) return;
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
     const bin = args[0];
@@ -8184,13 +8276,13 @@ DONE:%s
     const model = effectiveTask.model;
     const preparedPrompt = prompt.replace(/\r?\n+/g, " ").replace(/\s+/g, " ").trim();
     const tmpDir = require("os").tmpdir();
-    const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
-    const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
-    const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
-    const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
-    const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
-    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
-    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
+    const outFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.txt`);
+    const errFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.err.txt`);
+    const doneFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.done.txt`);
+    const pidFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.pid`);
+    const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
+    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
+    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     const fs21 = require("fs");
     try {
       fs21.unlinkSync(outFile);
@@ -8257,7 +8349,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     }
     const effectiveAgent = this.getEffectiveAgent(effectiveTask.agent);
     const launchScript = buildOpenCodeScript({ pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd });
-    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}${scriptExt()}`);
+    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
     else fs21.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
@@ -8276,7 +8368,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     let settled = false;
     let cancelled = false;
     let pollHandle = null;
-    const wasManuallyStopped = (current) => cancelled || current.output.includes("[task stopped manually]");
+    const wasManuallyStopped = (current) => !this.isLegacyCurrent(attempt) || cancelled || current.output.includes("[task stopped manually]");
     const shouldAbortBeforeFinalMutation = (current) => wasManuallyStopped(current) || current.status !== "running";
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
@@ -8309,7 +8401,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       } catch (e) {
       }
     };
-    this.runningProcesses.set(task.id, {
+    const controller = {
       kill: () => {
         cancelled = true;
         settled = true;
@@ -8319,11 +8411,13 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         }
         hiddenProc.kill();
         cleanupTempFiles();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       }
-    });
+    };
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
     hiddenProc.onError(async (error) => {
-      if (settled) return;
+      if (!this.isLegacyCurrent(attempt) || settled) return;
       settled = true;
       if (pollHandle) clearInterval(pollHandle);
       const current = this.settings.tasks.find((candidate) => candidate.id === task.id);
@@ -8332,7 +8426,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
       cleanupTempFiles();
-      this.runningProcesses.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       await this.saveSettings();
       new import_obsidian.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
@@ -8344,14 +8438,14 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     let timeoutWarned = false;
     pollHandle = setInterval(async () => {
       var _a2, _b2, _c2;
-      if (settled || cancelled) return;
+      if (!this.isLegacyCurrent(attempt) || settled || cancelled) return;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         settled = true;
         if (pollHandle) clearInterval(pollHandle);
         pollHandle = null;
         cleanupTempFiles();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         return;
       }
       if (t.status !== "running" && !this.runningProcesses.has(task.id)) {
@@ -8366,6 +8460,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         t.output += `
 [\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings(false);
+        if (!this.isLegacyCurrent(attempt)) return;
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
@@ -8374,7 +8469,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         if (pollHandle) clearInterval(pollHandle);
         pollHandle = null;
         hiddenProc.kill();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         cleanupTempFiles();
         if (shouldAbortBeforeFinalMutation(t)) return;
         t.status = "failed";
@@ -8406,7 +8501,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       settled = true;
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
-      this.runningProcesses.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       const stdout = fs21.existsSync(outFile) ? decodeCommandBuffer(fs21.readFileSync(outFile)) : "";
       const stderr = fs21.existsSync(errFile) ? decodeCommandBuffer(fs21.readFileSync(errFile)) : "";
       const exitCodeRaw = fs21.readFileSync(doneFile, "utf8").trim();
@@ -8439,11 +8534,13 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       }
     }, 3e3);
   }
-  async runCopilotTask(task, onComplete) {
+  async runCopilotTask(task, onComplete, owner, reserved) {
     var _a, _b, _c, _d, _e;
     const findCurrent = () => this.settings.tasks.find((candidate) => candidate.id === task.id);
     let current = findCurrent();
     if (!current) return;
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     const cwd = task.workingDirectory || this.settings.workingDirectory || vaultBasePath;
     const model = ((_a = task.model) == null ? void 0 : _a.trim()) || this.settings.defaultCopilotModel || "";
@@ -8459,23 +8556,24 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     current.status = "running";
     current.lastRun = startedAt;
     current.output = "[starting GitHub Copilot CLI task\u2026]\n";
+    attempt.handle = controller;
     this.runningProcesses.set(task.id, controller);
     (_b = this.view) == null ? void 0 : _b.resetDashboardTaskShift(task.id);
     try {
       await this.saveSettings();
-      if (cancelled) return;
+      if (!this.isLegacyCurrent(attempt) || cancelled) return;
       const validationError = getCopilotTaskValidationError(task);
       if (validationError) throw new Error(validationError);
       if (!((_c = task.prompt) == null ? void 0 : _c.trim())) throw new Error("Copilot task prompt is empty.");
       client = this.createCopilotClient(cwd, (output) => {
         const active = findCurrent();
-        if (cancelled || !active || active.status !== "running") return;
+        if (!this.isLegacyCurrent(attempt) || cancelled || !active || active.status !== "running") return;
         active.output = this.redactSecrets(output);
         if (!saveTimer) {
           saveTimer = setTimeout(() => {
             saveTimer = void 0;
             const activeTask = findCurrent();
-            if (cancelled || !activeTask || activeTask.status !== "running") return;
+            if (!this.isLegacyCurrent(attempt) || cancelled || !activeTask || activeTask.status !== "running") return;
             this.emitTaskUpdated(activeTask);
             void this.saveSettings(false);
           }, 750);
@@ -8488,7 +8586,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         env: this.getSecretsEnv()
       });
       current = findCurrent();
-      if (cancelled || !current || current.status !== "running") return;
+      if (!this.isLegacyCurrent(attempt) || cancelled || !current || current.status !== "running") return;
       exitCode = result.exitCode;
       current.output = this.redactSecrets(result.output || (result.exitCode === 0 ? "(no output)" : ""));
       if (result.exitCode !== 0) {
@@ -8498,17 +8596,17 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       current.status = exitCode === 0 ? ["daily", "weekly", "monthly", "interval"].includes(task.scheduleType) ? "pending" : "completed" : "failed";
     } catch (error) {
       current = findCurrent();
-      if (cancelled || !current) return;
+      if (!this.isLegacyCurrent(attempt) || cancelled || !current) return;
       current.status = "failed";
       current.output = `${current.output || ""}
 [Copilot error: ${this.redactSecrets(String(error))}]`;
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      client == null ? void 0 : client.dispose();
+      if (!cancelled) client == null ? void 0 : client.dispose();
     }
     current = findCurrent();
-    if (!current || cancelled) return;
+    if (!this.isLegacyCurrent(attempt) || !current || cancelled) return;
     if (current.status === "failed") (_e = this.view) == null ? void 0 : _e.startGradualSink(task.id);
     if (this.settings.logsEnabled) {
       const metadata = `[engine: copilot]
@@ -8522,6 +8620,7 @@ ${current.output}`);
       cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
     }
     await this.saveSettings();
+    if (!this.isLegacyCurrent(attempt)) return;
     this.emitTaskUpdated(current);
     new import_obsidian.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
     if (onComplete) await onComplete(current, exitCode);
@@ -8529,11 +8628,18 @@ ${current.output}`);
   createCopilotClient(cwd, onOutput) {
     return new CopilotCliClient(resolveCopilotBin(this.settings.copilotPath), cwd, onOutput);
   }
-  async runCodexTask(task, onComplete) {
+  async runCodexTask(task, onComplete, owner, reserved) {
     var _a, _b, _c, _d;
     const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
     if (idx === -1) return;
-    const current = this.settings.tasks[idx];
+    let current = this.settings.tasks[idx];
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const isCurrent = () => {
+      const owned = this.isLegacyCurrent(attempt);
+      if (owned) current = attempt.task;
+      return owned;
+    };
     if (!((_a = task.prompt) == null ? void 0 : _a.trim())) {
       current.status = "failed";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -8550,24 +8656,36 @@ ${current.output}`);
     let cancelled = false;
     let saveTimer = null;
     let codexLogOutput = "";
+    let client;
+    const controller = { kill: async () => {
+      cancelled = true;
+      if (saveTimer) clearTimeout(saveTimer);
+      if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
+      await (client == null ? void 0 : client.interrupt());
+    } };
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
     current.status = "running";
     current.lastRun = startedAt;
     current.output = "[starting Codex task\u2026]\n";
     delete current.pendingCodexApproval;
     (_b = this.view) == null ? void 0 : _b.resetDashboardTaskShift(task.id);
     await this.saveSettings();
+    if (!isCurrent()) return;
     new import_obsidian.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
     const scheduleSave = () => {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
+        if (!isCurrent()) return;
         void this.saveSettings(false).catch(() => {
           new import_obsidian.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
         });
       }, 1e4);
     };
-    const client = this.createCodexClient(taskCwd, {
+    client = this.createCodexClient(taskCwd, {
       onStarted: ({ threadId, turnId }) => {
+        if (!isCurrent()) return;
         current.lastCodexThreadId = threadId;
         current.lastCodexTurnId = turnId;
         if (task.interactiveTerminal) {
@@ -8581,14 +8699,14 @@ ${current.output}`);
       },
       onOutput: (output) => {
         var _a2;
-        if (cancelled || current.status !== "running") return;
+        if (!isCurrent() || cancelled || current.status !== "running") return;
         current.output = this.redactSecrets(output || "[Codex is working\u2026]");
         (_a2 = this.view) == null ? void 0 : _a2.nudgeDashboardTask(task.id, "up");
         this.emitTaskUpdated(current);
         scheduleSave();
       },
       onApproval: (approval) => {
-        if (cancelled || current.status !== "running") return;
+        if (!isCurrent() || cancelled || current.status !== "running") return;
         current.pendingCodexApproval = {
           requestId: approval.requestId,
           kind: approval.kind,
@@ -8601,15 +8719,6 @@ ${current.output}`);
       }
     });
     this.runningCodexClients.set(task.id, client);
-    this.runningProcesses.set(task.id, {
-      kill: () => {
-        cancelled = true;
-        if (saveTimer) clearTimeout(saveTimer);
-        void client.interrupt();
-        this.runningCodexClients.delete(task.id);
-        this.runningProcesses.delete(task.id);
-      }
-    });
     let exitCode = -1;
     try {
       const result = await executeCodexTask(client, {
@@ -8618,7 +8727,7 @@ ${current.output}`);
         reasoningEffort,
         interactive: task.interactiveTerminal
       });
-      if (cancelled || current.status !== "running") return;
+      if (!isCurrent() || cancelled || current.status !== "running") return;
       current.lastCodexThreadId = result.threadId;
       current.lastCodexTurnId = result.turnId;
       delete current.pendingCodexApproval;
@@ -8649,7 +8758,7 @@ ${current.output}`);
 
 ${this.redactSecrets(result.transcript || current.output)}`;
     } catch (error) {
-      if (cancelled || current.output.includes("[task stopped manually]")) return;
+      if (!isCurrent() || cancelled || current.output.includes("[task stopped manually]")) return;
       current.status = "failed";
       delete current.pendingCodexApproval;
       current.output = `${current.output || ""}
@@ -8668,16 +8777,18 @@ ${current.output}`;
       new import_obsidian.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
-      this.runningCodexClients.delete(task.id);
-      this.runningProcesses.delete(task.id);
+      if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       client.dispose();
     }
+    if (!isCurrent()) return;
     if (this.settings.logsEnabled) {
       saveLogToFile(vaultBasePath, task.id, codexLogOutput || current.output);
       cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
       cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
     }
     await this.saveSettings();
+    if (!isCurrent()) return;
     this.emitTaskUpdated(current);
     if (onComplete) await onComplete(current, exitCode);
   }
@@ -8715,11 +8826,18 @@ ${current.output}`;
     (_a = this.vaultRefresh) != null ? _a : this.vaultRefresh = new ObsidianVaultRefresh(this.app.vault.adapter.basePath || ".", this.app.vault.adapter);
     return this.vaultRefresh.createBatch();
   }
-  async runCodeTask(task, onComplete) {
+  async runCodeTask(task, onComplete, owner, reserved) {
     var _a, _b;
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
-    const current = this.settings.tasks[idx];
+    let current = this.settings.tasks[idx];
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const isCurrent = () => {
+      const owned = this.isLegacyCurrent(attempt);
+      if (owned) current = attempt.task;
+      return owned;
+    };
     const code = current.code || current.prompt || "";
     if (!code.trim()) {
       current.status = "failed";
@@ -8740,18 +8858,19 @@ ${current.output}`;
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running code task "${current.name}"...`);
     try {
-      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       const out = await runWithVaultMutations(() => this.createVaultMutationBatch(), (onVaultMutation) => executeCodeTask({
         ...current,
         code,
         vaultBase: vaultBasePath,
         cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
         log: (...args) => {
+          if (!isCurrent()) return;
           current.output += args.map(String).join(" ") + "\n";
         },
         onVaultMutation
       }));
-      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new import_obsidian.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
@@ -8763,7 +8882,7 @@ ${current.output}`;
       await this.saveSettings();
       if (onComplete) await onComplete(current, 0);
     } catch (err) {
-      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.status = "failed";
       current.output = (current.output || "") + `[code error: ${String(err)}]`;
       (_b = this.view) == null ? void 0 : _b.startGradualSink(current.id);
@@ -8780,18 +8899,63 @@ ${current.output}`;
     }
   }
   taskStopIdentity(task) {
+    var _a, _b;
+    const attempt = (_a = this.legacyAttempts) == null ? void 0 : _a.get(task.id);
+    if (attempt && ((_b = task.legacyExecution) == null ? void 0 : _b.token) === attempt.identity.token) return { ...attempt.identity };
+    if (task.legacyExecution) return { ...task.legacyExecution };
     const binding = task.runtimeExecution;
-    return binding ? { taskId: task.id, runId: binding.runId, workflowId: binding.workflowId, stepId: binding.stepId, stepIndex: binding.stepIndex } : void 0;
+    return binding ? { kind: "shared", taskId: task.id, runId: binding.runId, workflowId: binding.workflowId, stepId: binding.stepId, stepIndex: binding.stepIndex } : void 0;
   }
   async killTask(id, observed) {
-    var _a;
+    var _a, _b, _c, _d, _e, _f;
     const task = this.settings.tasks.find((item) => item.id === id);
+    const registered = (_a = this.legacyAttempts) == null ? void 0 : _a.get(id);
+    const attempt = ((_b = task == null ? void 0 : task.legacyExecution) == null ? void 0 : _b.token) === (registered == null ? void 0 : registered.identity.token) ? registered : void 0;
+    if ((observed == null ? void 0 : observed.kind) === "legacy" || attempt || (task == null ? void 0 : task.legacyExecution)) {
+      const keys = ["kind", "token", "taskId", "workflowId", "stepId", "stepIndex"];
+      if (!observed || observed.kind !== "legacy" || !attempt || !task || ((_c = task.legacyExecution) == null ? void 0 : _c.token) !== attempt.identity.token || !observed.token || observed.taskId !== id || keys.some((key) => observed[key] !== attempt.identity[key]) || attempt.owner && ((_d = this.workflowRuntime) == null ? void 0 : _d.get(attempt.owner.workflowId)) !== attempt.owner.context && !attempt.cancelled) {
+        throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+      }
+      if (attempt.stopPromise) return attempt.stopPromise;
+      attempt.cancelled = true;
+      const metadata = task.legacyExecution;
+      metadata.stopState = "requested";
+      delete task.pendingCodexApproval;
+      task.status = "failed";
+      task.output += "\n[stop requested; external outcome unconfirmed]";
+      if (attempt.owner) {
+        const wf = this.settings.workflows.find((item) => item.id === attempt.owner.workflowId);
+        if (wf && ((_e = this.workflowRuntime) == null ? void 0 : _e.get(wf.id)) === attempt.owner.context) {
+          wf.status = "failed";
+          this.workflowRuntime.delete(wf.id);
+        }
+      }
+      const handle = attempt.handle;
+      if (this.runningProcesses.get(id) === handle) this.runningProcesses.delete(id);
+      attempt.stopPromise = (async () => {
+        var _a2;
+        try {
+          await (handle == null ? void 0 : handle.kill());
+          metadata.stopState = "unconfirmed";
+        } catch (error) {
+          metadata.stopState = "error";
+          metadata.stopError = this.redactSecrets(String(error));
+        }
+        if (((_a2 = this.legacyAttempts) == null ? void 0 : _a2.get(id)) === attempt && task.legacyExecution === metadata) {
+          await this.saveSettings();
+          new import_obsidian.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
+        }
+        return "stop-requested";
+      })();
+      return attempt.stopPromise;
+    }
     const binding = this.taskStopIdentity(task || { id });
     const execution = this.sharedWorkflowExecution;
     if (observed || binding || (execution == null ? void 0 : execution.taskId) === id) {
+      if (observed && observed.kind !== "shared") throw new Error("Task execution changed or is not owned here");
       const checkpoint = execution == null ? void 0 : execution.checkpoint;
       const active = checkpoint == null ? void 0 : checkpoint.steps[checkpoint.steps.length - 1];
-      const step = (_a = this.settings.workflows.find((workflow) => workflow.id === (observed == null ? void 0 : observed.workflowId))) == null ? void 0 : _a.steps.find((step2) => step2.id === (observed == null ? void 0 : observed.stepId));
+      const step = (_f = this.settings.workflows.find((workflow) => workflow.id === (observed == null ? void 0 : observed.workflowId))) == null ? void 0 : _f.steps.find((step2) => step2.id === (observed == null ? void 0 : observed.stepId));
       const sameBinding = observed && binding && Object.keys(observed).every((key) => observed[key] === binding[key]);
       const referencesTask = (execution == null ? void 0 : execution.taskId) === id || (step == null ? void 0 : step.taskId) === id && (!step.stepKind || step.stepKind === "task");
       if (!observed || observed.taskId !== id || !observed.runId || !observed.workflowId || !observed.stepId || !Number.isSafeInteger(observed.stepIndex) || !sameBinding || !execution || !checkpoint || !this.ownsSharedRun(observed.workflowId, observed.runId) || checkpoint.runId !== observed.runId || checkpoint.workflowId !== observed.workflowId || checkpoint.phase !== "in_flight" || checkpoint.nextStepId !== observed.stepId || (active == null ? void 0 : active.stepId) !== observed.stepId || active.status !== "in_flight" || checkpoint.steps.length - 1 !== observed.stepIndex || !referencesTask) {
@@ -8803,60 +8967,28 @@ ${current.output}`;
       }
       return "stop-requested";
     }
-    const proc = this.runningProcesses.get(id);
-    if (proc) {
-      try {
-        proc.kill();
-      } catch (e) {
-      }
-      this.runningProcesses.delete(id);
-    }
-    const t = this.settings.tasks.find((x) => x.id === id);
-    if (t) {
-      t.status = "failed";
-      t.output += "\n[task stopped manually]";
-      if (this.settings.logsEnabled) {
-        const vaultBasePath = this.app.vault.adapter.basePath || ".";
-        saveLogToFile(vaultBasePath, id, t.output);
-        cleanupOldLogs(vaultBasePath, id, this.settings.maxLogsPerTask);
-        cleanupLogsByAge(vaultBasePath, id, this.settings.logRetentionDays);
-      }
-      await this.saveSettings();
-    }
-    new import_obsidian.Notice(`AutoOC: \u23F9 Task stopped.`);
-    return "stopped";
+    throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
   }
   async killWorkflow(id) {
-    var _a, _b;
+    var _a, _b, _c, _d, _e, _f, _g;
     if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.workflowId) === id) {
       this.sharedWorkflowExecution.controller.abort();
       return;
     }
     const wf = this.settings.workflows.find((w) => w.id === id);
     if (!wf) return;
-    this.stoppingWorkflows.add(id);
-    (_b = this.workflowDelayControllers.get(id)) == null ? void 0 : _b.abort();
-    if (wf.status === "running" && wf.currentStep >= 0 && wf.currentStep < wf.steps.length) {
-      const currentStep = wf.steps[wf.currentStep];
-      const currentTask = this.settings.tasks.find((t) => t.id === (currentStep == null ? void 0 : currentStep.taskId));
-      if ((currentTask == null ? void 0 : currentTask.status) === "running") {
-        await this.killTask(currentTask.id);
-      }
-    }
-    if (wf.status === "running") {
-      wf.status = "failed";
-      const stepLabel = wf.currentStep >= 0 ? ` at step ${wf.currentStep + 1}/${wf.steps.length}` : "";
-      wf.steps.forEach((step) => {
-        const task = this.settings.tasks.find((t) => t.id === step.taskId);
-        if (task && task.status === "running") {
-          task.status = "failed";
-          task.output += "\n[workflow stopped manually]";
-        }
-      });
-      await this.saveSettings();
-      new import_obsidian.Notice(`AutoOC: \u23F9 Workflow "${wf.name}" stopped${stepLabel}.`);
-    }
-    this.stoppingWorkflows.delete(id);
+    const context = (_b = this.workflowRuntime) == null ? void 0 : _b.get(id);
+    if (!context) return;
+    const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
+    const attempt = (step == null ? void 0 : step.taskId) ? (_c = this.legacyAttempts) == null ? void 0 : _c.get(step.taskId) : void 0;
+    const owned = !!attempt && ((_d = attempt.owner) == null ? void 0 : _d.context) === context && attempt.identity.workflowId === id && attempt.identity.stepId === (step == null ? void 0 : step.id) && attempt.identity.stepIndex === stepIndex;
+    wf.status = "failed";
+    (_e = this.workflowDelayControllers.get(id)) == null ? void 0 : _e.abort();
+    if (owned) await this.killTask(attempt.identity.taskId, { ...attempt.identity });
+    else if (((_f = this.workflowRuntime) == null ? void 0 : _f.get(id)) === context) this.workflowRuntime.delete(id);
+    if ((_g = this.workflowRuntime) == null ? void 0 : _g.has(id)) return;
+    await this.saveSettings();
+    new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
   async runDueAll() {
     if (this.dueCheckInProgress) return;
@@ -9200,11 +9332,10 @@ ${current.output}`;
         return;
       }
     }
+    wf.legacyExecution = { token: require("crypto").randomUUID() };
     this.workflowRuntime = this.workflowRuntime || /* @__PURE__ */ new Map();
-    this.workflowRuntime.set(wf.id, {
-      stepOutputs: /* @__PURE__ */ new Map(),
-      stepIndex: 0
-    });
+    const context = { stepOutputs: /* @__PURE__ */ new Map(), stepIndex: 0 };
+    this.workflowRuntime.set(wf.id, context);
     wf.status = "running";
     wf.currentStep = 0;
     wf.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -9214,6 +9345,7 @@ ${current.output}`;
       step.lastRun = "";
     });
     await this.saveSettings();
+    if (this.workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     new import_obsidian.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
     const entryStep = this.findEntryStep(wf);
     if (!entryStep) {
@@ -9292,6 +9424,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     return evaluateWorkflowCondition(expression, input, outputs);
   }
   async runWorkflowStep(wfIdx, stepIndex) {
+    var _a, _b;
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
     if (!wf || wf.status !== "running") return;
@@ -9301,10 +9434,12 @@ Reply ONLY with YES or NO.`, model, cwd);
       await this.saveSettings();
       return;
     }
+    const context = (_a = this.workflowRuntime) == null ? void 0 : _a.get(wf.id);
     step.status = "running";
     step.lastRun = (/* @__PURE__ */ new Date()).toISOString();
     step.output = "";
     await this.saveSettings();
+    if (!context || ((_b = this.workflowRuntime) == null ? void 0 : _b.get(wf.id)) !== context || wf.status !== "running") return;
     const rt = this.workflowRuntime.get(wf.id);
     if (rt) rt.stepIndex = stepIndex;
     if (step.stepKind === "delay") {
@@ -9449,7 +9584,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
       }, 200);
-    }, taskOverrides);
+    }, taskOverrides, { workflowId: wf.id, stepId: step.id, stepIndex, context: executionContext });
   }
   // Complete a non-task step and move to the next one.
   async completeStep(wf, step, stepIndex, succeeded, output) {
@@ -10970,7 +11105,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     renderTaskResults(resultsRoot);
   }
   renderTaskCard(parent, task) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const stopIdentity = this.plugin.taskStopIdentity(task);
     const stopTask = async (button) => {
       button.disabled = true;
@@ -10993,7 +11128,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`
     });
     const badge = summary.createEl("span", {
-      text: task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_a = task.runtimeExecution) == null ? void 0 : _a.requiresReconciliation) ? "reconciliation required" : task.status,
+      text: ((_a = task.legacyExecution) == null ? void 0 : _a.stopState) ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_b = task.runtimeExecution) == null ? void 0 : _b.requiresReconciliation) ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -11058,8 +11193,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const isExpanded = this.expandedTasks.has(task.id);
     details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = task.taskKind === "codex" ? (_d = (_c = (_b = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _b.label) != null ? _c : task.model) != null ? _d : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_f = (_e = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _e.label) != null ? _f : task.model;
-    meta.createEl("span", { text: `\u{1F5C2} ${((_g = task.area) == null ? void 0 : _g.trim()) || "No area"}` });
+    const modelLabel = task.taskKind === "codex" ? (_e = (_d = (_c = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _c.label) != null ? _d : task.model) != null ? _e : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_g = (_f = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _f.label) != null ? _g : task.model;
+    meta.createEl("span", { text: `\u{1F5C2} ${((_h = task.area) == null ? void 0 : _h.trim()) || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else if (task.taskKind === "codex") {
@@ -11086,8 +11221,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     } else if (task.scheduleType === "interval") {
-      const value = (_h = task.scheduleIntervalValue) != null ? _h : 10;
-      const unit = (_i = task.scheduleIntervalUnit) != null ? _i : "minutes";
+      const value = (_i = task.scheduleIntervalValue) != null ? _i : 10;
+      const unit = (_j = task.scheduleIntervalUnit) != null ? _j : "minutes";
       scheduleText = `\u{1F501} Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
@@ -11853,6 +11988,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       const lastRun = (existing == null ? void 0 : existing.lastRun) || "";
       const output = (existing == null ? void 0 : existing.output) || "";
       return {
+        ...existing ? { runtimeExecution: existing.runtimeExecution, legacyExecution: existing.legacyExecution } : {},
         id,
         taskKind,
         name: t.name || "Unnamed",
@@ -11901,6 +12037,7 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
       const status = (existing == null ? void 0 : existing.status) || "pending";
       const currentStep = (_a2 = existing == null ? void 0 : existing.currentStep) != null ? _a2 : -1;
       return {
+        ...existing ? { runtimeExecution: existing.runtimeExecution, legacyExecution: existing.legacyExecution } : {},
         id,
         name: w.name || "Unnamed",
         area: w.area !== void 0 ? w.area || "" : (existing == null ? void 0 : existing.area) || "",
@@ -12600,6 +12737,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
               interactiveTerminal: savingTaskKind === "code" ? void 0 : !!this.draft.interactiveTerminal,
               reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : void 0,
               copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : void 0,
+              ...existing ? { runtimeExecution: existing.runtimeExecution, legacyExecution: existing.legacyExecution } : {},
               status: existing.status,
               lastRun: existing.lastRun,
               output: existing.output

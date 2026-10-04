@@ -436,6 +436,12 @@ type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interv
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 type IntervalUnit = "seconds" | "minutes" | "hours";
 type TaskKind = "opencode" | "codex" | "copilot" | "code";
+type LegacyOwner = { workflowId: string; stepId: string; stepIndex: number; context: object };
+type LegacyStopIdentity = { kind: "legacy"; token: string; taskId: string; workflowId?: string; stepId?: string; stepIndex?: number };
+type SharedStopIdentity = { kind: "shared"; taskId: string; runId: string; workflowId: string; stepId: string; stepIndex: number };
+type TaskStopIdentity = LegacyStopIdentity | SharedStopIdentity;
+type LegacyAttempt = { identity: LegacyStopIdentity; task: ScheduledTask; owner?: LegacyOwner; cancelled: boolean;
+  handle?: { kill(): unknown }; stopPromise?: Promise<string> };
 type DefaultAiEngine = "opencode" | "codex" | "copilot";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
@@ -488,6 +494,7 @@ interface WorkflowStep {
 }
 
 interface ScheduledTask {
+  legacyExecution?: LegacyStopIdentity & { startedAt: string; finishedAt?: string; stopState?: "requested" | "unconfirmed" | "error"; stopError?: string };
   id: string;
   taskKind?: TaskKind;
   name: string;
@@ -534,6 +541,7 @@ interface ScheduledTask {
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
 
 interface Workflow {
+  legacyExecution?: { token: string };
   id: string;
   name: string;
   area?: string;
@@ -1853,6 +1861,7 @@ function isWorkflowDue(wf: Workflow): boolean {
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class AutoOCPlugin extends Plugin {
+  private legacyAttempts = new Map<string, LegacyAttempt>();
   private settingsWriter = new SettingsWriter();
   settings!: AutoOCSettings;
   secretStore!: SecretStore;
@@ -2033,7 +2042,7 @@ export default class AutoOCPlugin extends Plugin {
   isWorkflowExecuting(workflowId:string):boolean {
     if (this.sharedWorkflowExecution?.workflowId === workflowId) return true;
     const workflow=this.settings.workflows.find(item=>item.id===workflowId);
-    return !!workflow && !(workflow as any).runtimeExecution && workflow.status === "running";
+    return !!workflow && (!(workflow as any).runtimeExecution || !!workflow.legacyExecution) && workflow.status === "running";
   }
 
   async recoverSharedWorkflow(workflowId:string, expectedRunId:string) {
@@ -2049,7 +2058,8 @@ export default class AutoOCPlugin extends Plugin {
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
     const location = this.selectedExecutionLocation();
     if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
-    if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
+    if (Array.from(this.legacyAttempts?.values() || []).some(attempt => !attempt.cancelled) ||
+        this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
     const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined};
@@ -2140,7 +2150,7 @@ export default class AutoOCPlugin extends Plugin {
   private isTaskActive(task: ScheduledTask): boolean {
     if (this.sharedWorkflowExecution?.taskId === task.id) return true;
     const canonical = this.settings.tasks.find((t) => t.id === task.id);
-    return canonical?.status === "running" || this.runningProcesses.has(task.id);
+    return !!this.legacyAttempts?.get(task.id) && !this.legacyAttempts.get(task.id)!.cancelled || canonical?.status === "running" || this.runningProcesses.has(task.id);
   }
 
   private getMcpRawWorkflowReferenceError(payload: unknown): string | null {
@@ -2591,12 +2601,29 @@ export default class AutoOCPlugin extends Plugin {
       new Notice(`AutoOC: could not load secrets vault — ${String(e)}`);
       this.secretStore = new SecretStore(vaultBasePath);
     }
+    this.settings.tasks = this.settings.tasks.map(task => {
+      if (!task.legacyExecution) return task;
+      const attempt = this.legacyAttempts?.get(task.id);
+      if (attempt && attempt.task.legacyExecution?.token === task.legacyExecution.token) return attempt.task;
+      if (task.status !== "running") return task;
+      return {...task,status:"failed",pendingCodexApproval:undefined,
+        legacyExecution:{...task.legacyExecution,stopState:"unconfirmed"},
+        output:`${task.output || ""}\n[legacy owner unavailable; external outcome unconfirmed]`};
+    });
     // Bound executions are recovered read-only before legacy migrations can
     // change their definition or turn an unobserved run into a failure.
     if (this.settings.workflows?.some(wf => (wf as any).runtimeExecution) || this.settings.tasks?.some(task=>(task as any).runtimeExecution)) {
       const runtime = (location || this.selectedExecutionLocation()).runtimeDirectory;
       const recovered = this.settings.workflows.map(wf => {
         const binding = (wf as any).runtimeExecution;
+        if (wf.legacyExecution) {
+          if (binding) {
+            const checkpoint = readExecutionCheckpoint(runtime,binding.runId);
+            validateProgressBinding(wf,checkpoint,binding.runId);
+            if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+          }
+          return wf.status === "running" && !(this as any).workflowRuntime?.has(wf.id) ? {...wf,status:"failed" as const} : wf;
+        }
         if (!binding) return wf;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
         return recoverWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id,binding.runId));
@@ -2607,6 +2634,10 @@ export default class AutoOCPlugin extends Plugin {
         if (!binding) return task;
         const checkpoint=readExecutionCheckpoint(runtime,binding.runId);
         validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
+        if (task.legacyExecution) {
+          if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+          return task;
+        }
         if (checkpoint.workflowId.startsWith('@task:') && checkpoint.workflowId!==standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
         if (binding.workflowId===standaloneTaskWorkflow(task.id).id) {
           return projectStandaloneTask(task,this.settings.tasks,this.settings,checkpoint,this.ownsSharedRun(binding.workflowId,binding.runId),true);
@@ -2634,12 +2665,12 @@ export default class AutoOCPlugin extends Plugin {
     delete (this.settings as any).chatModel;
     let changed = false;
     for (const task of this.settings.tasks) {
-      if (task.status === "running") {
+      if (task.status === "running" && !task.legacyExecution) {
         task.status = "failed";
         task.output = `${task.output || ""}\n[stale running state cleared on plugin load]`;
         changed = true;
       }
-      if (task.pendingCodexApproval) {
+      if (task.pendingCodexApproval && !task.legacyExecution) {
         delete task.pendingCodexApproval;
         changed = true;
       }
@@ -2659,7 +2690,7 @@ export default class AutoOCPlugin extends Plugin {
     // Stale workflow cleanup + migration for missing schedule fields
     if (!this.settings.workflows) this.settings.workflows = [];
     for (const wf of this.settings.workflows) {
-      if (wf.status === "running") {
+      if (wf.status === "running" && !(this as any).workflowRuntime?.has(wf.id)) {
         wf.status = "failed";
         changed = true;
       }
@@ -3063,10 +3094,58 @@ export default class AutoOCPlugin extends Plugin {
   // Runs opencode via a fully-detached PowerShell process to avoid Electron's
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
+  private beginLegacyAttempt(task: ScheduledTask, owner?: LegacyOwner): LegacyAttempt {
+    this.legacyAttempts ??= new Map();
+    const current = this.settings.tasks.find(item => item.id === task.id);
+    if (!current || this.sharedWorkflowExecution || this.legacyAttempts.get(task.id) && !this.legacyAttempts.get(task.id)!.cancelled) {
+      throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+    }
+    const binding = (current as any).runtimeExecution;
+    if (binding) {
+      const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory, binding.runId);
+      validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
+      if (!["completed", "failed"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
+    }
+    if (owner && (this as any).workflowRuntime?.get(owner.workflowId) !== owner.context) throw new Error("Workflow execution changed");
+    const identity: LegacyStopIdentity = {kind:"legacy", token:require("crypto").randomUUID(), taskId:task.id,
+      ...(owner ? {workflowId:owner.workflowId,stepId:owner.stepId,stepIndex:owner.stepIndex} : {})};
+    const attempt: LegacyAttempt = {identity,task:current,owner,cancelled:false};
+    if (owner) {
+      const workflow = this.settings.workflows.find(item => item.id === owner.workflowId);
+      if (workflow) workflow.legacyExecution ??= {token:require("crypto").randomUUID()};
+    }
+    this.legacyAttempts.set(task.id, attempt);
+    current.legacyExecution = {...identity,startedAt:new Date().toISOString()};
+    delete current.pendingCodexApproval;
+    return attempt;
+  }
+
+  private isLegacyCurrent(attempt: LegacyAttempt): boolean {
+    const current = this.settings.tasks.find(item => item.id === attempt.identity.taskId);
+    if (current?.legacyExecution?.token === attempt.identity.token) attempt.task = current;
+    return !attempt.cancelled && this.legacyAttempts?.get(attempt.identity.taskId) === attempt &&
+      this.settings.tasks.find(item => item.id === attempt.identity.taskId) === attempt.task &&
+      attempt.task.legacyExecution?.token === attempt.identity.token &&
+      (!attempt.owner || (this as any).workflowRuntime?.get(attempt.owner.workflowId) === attempt.owner.context);
+  }
+
+  private legacyCompletion(attempt: LegacyAttempt, callback?: (task: ScheduledTask, code: number) => Promise<void>) {
+    return async (task: ScheduledTask, code: number) => {
+      if (!this.isLegacyCurrent(attempt)) return;
+      task = attempt.task;
+      task.legacyExecution!.finishedAt = new Date().toISOString();
+      await this.saveSettings();
+      if (!this.isLegacyCurrent(attempt)) return;
+      this.legacyAttempts.delete(task.id);
+      if (callback) await callback(task, code);
+    };
+  }
+
   async runTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
+    owner?: LegacyOwner,
   ) {
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -3089,21 +3168,24 @@ export default class AutoOCPlugin extends Plugin {
       }
     }
 
+    const attempt = this.beginLegacyAttempt(effectiveTask, owner);
+
     if ((effectiveTask.taskKind || "opencode") === "code") {
-      await this.runCodeTask(effectiveTask, onComplete);
+      await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
 
     if (effectiveTask.taskKind === "codex") {
-      void this.runCodexTask(effectiveTask, onComplete);
+      void this.runCodexTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
 
     if (effectiveTask.taskKind === "copilot") {
-      void this.runCopilotTask(effectiveTask, onComplete);
+      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
 
+    onComplete = this.legacyCompletion(attempt, onComplete);
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
     if (branchWasProvided && typeof effectiveTask.branch !== "string") {
       this.settings.tasks[idx].status = "failed";
@@ -3159,8 +3241,9 @@ export default class AutoOCPlugin extends Plugin {
       // Identity, not just task ID/status, prevents late callbacks from a
       // stopped, deleted or relaunched task from completing another attempt.
       const controller = { kill: () => { cancelled = true; settled = true; } };
+      attempt.handle = controller;
       this.runningProcesses.set(task.id, controller);
-      const isCurrent = () => !settled && this.runningProcesses.get(task.id) === controller &&
+      const isCurrent = () => this.isLegacyCurrent(attempt) && !settled && this.runningProcesses.get(task.id) === controller &&
         this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
       const finish = async (error?: Error) => {
         if (!isCurrent()) return;
@@ -3172,9 +3255,9 @@ export default class AutoOCPlugin extends Plugin {
         if (error) this.view?.startGradualSink(task.id);
         await this.saveSettings();
         // A stop/delete/relaunch during persistence invalidates continuation.
-        if (cancelled || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current ||
+        if (!this.isLegacyCurrent(attempt) || cancelled || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current ||
           current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller) return;
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         new Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
         if (onComplete) await onComplete(current, error ? -1 : 0);
       };
@@ -3217,6 +3300,7 @@ export default class AutoOCPlugin extends Plugin {
     this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
 
+    if (!this.isLegacyCurrent(attempt)) return;
     new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(effectiveTask);
@@ -3232,13 +3316,13 @@ export default class AutoOCPlugin extends Plugin {
       .trim();
 
     const tmpDir = require("os").tmpdir();
-    const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
-    const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
-    const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
-    const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
-    const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
-    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
-    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
+    const outFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.txt`);
+    const errFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.err.txt`);
+    const doneFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.done.txt`);
+    const pidFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.pid`);
+    const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
+    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
+    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     const fs = require("fs");
 
     // Clean up any previous temp files
@@ -3295,7 +3379,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const launchScript = buildOpenCodeScript({pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd});
 
-    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}${scriptExt()}`);
+    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
     else fs.writeFileSync(scriptFile, launchScript, "utf8");
 
@@ -3315,7 +3399,7 @@ export default class AutoOCPlugin extends Plugin {
     let settled = false;
     let cancelled = false;
     let pollHandle: ReturnType<typeof setInterval> | null = null;
-    const wasManuallyStopped = (current: ScheduledTask) => cancelled || current.output.includes("[task stopped manually]");
+    const wasManuallyStopped = (current: ScheduledTask) => !this.isLegacyCurrent(attempt) || cancelled || current.output.includes("[task stopped manually]");
     const shouldAbortBeforeFinalMutation = (current: ScheduledTask) => wasManuallyStopped(current) || current.status !== "running";
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
@@ -3327,7 +3411,7 @@ export default class AutoOCPlugin extends Plugin {
       try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
       try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
     };
-    this.runningProcesses.set(task.id, {
+    const controller = {
       kill: () => {
         cancelled = true;
         settled = true;
@@ -3337,11 +3421,13 @@ export default class AutoOCPlugin extends Plugin {
         }
         hiddenProc.kill();
         cleanupTempFiles();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       },
-    });
+    };
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
     hiddenProc.onError(async (error) => {
-      if (settled) return;
+      if (!this.isLegacyCurrent(attempt) || settled) return;
       settled = true;
       if (pollHandle) clearInterval(pollHandle);
       const current = this.settings.tasks.find((candidate) => candidate.id === task.id);
@@ -3350,7 +3436,7 @@ export default class AutoOCPlugin extends Plugin {
       current.lastRun = new Date().toISOString();
       current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
       cleanupTempFiles();
-      this.runningProcesses.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       await this.saveSettings();
       new Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
@@ -3364,14 +3450,14 @@ export default class AutoOCPlugin extends Plugin {
 
     // Poll the output file every 3 s
     pollHandle = setInterval(async () => {
-      if (settled || cancelled) return;
+      if (!this.isLegacyCurrent(attempt) || settled || cancelled) return;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         settled = true;
         if (pollHandle) clearInterval(pollHandle);
         pollHandle = null;
         cleanupTempFiles();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         return;
       }
       if (t.status !== "running" && !this.runningProcesses.has(task.id)) {
@@ -3387,6 +3473,7 @@ export default class AutoOCPlugin extends Plugin {
         timeoutWarned = true;
         t.output += `\n[⏱ timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings(false);
+        if (!this.isLegacyCurrent(attempt)) return;
         new Notice(`AutoOC: ⏱ "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
 
@@ -3396,7 +3483,7 @@ export default class AutoOCPlugin extends Plugin {
         if (pollHandle) clearInterval(pollHandle);
         pollHandle = null;
         hiddenProc.kill();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         cleanupTempFiles();
 
         if (shouldAbortBeforeFinalMutation(t)) return;
@@ -3430,7 +3517,7 @@ export default class AutoOCPlugin extends Plugin {
       settled = true;
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
-      this.runningProcesses.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
 
       const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
       const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
@@ -3471,10 +3558,14 @@ export default class AutoOCPlugin extends Plugin {
   async runCopilotTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    owner?: LegacyOwner,
+    reserved?: LegacyAttempt,
   ): Promise<void> {
     const findCurrent = () => this.settings.tasks.find((candidate) => candidate.id === task.id);
     let current = findCurrent();
     if (!current) return;
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
     const cwd = task.workingDirectory || this.settings.workingDirectory || vaultBasePath;
     const model = task.model?.trim() || this.settings.defaultCopilotModel || "";
@@ -3487,23 +3578,24 @@ export default class AutoOCPlugin extends Plugin {
     current.status = "running";
     current.lastRun = startedAt;
     current.output = "[starting GitHub Copilot CLI task…]\n";
+    attempt.handle = controller;
     this.runningProcesses.set(task.id, controller);
     this.view?.resetDashboardTaskShift(task.id);
     try {
       await this.saveSettings();
-      if (cancelled) return;
+      if (!this.isLegacyCurrent(attempt) || cancelled) return;
       const validationError = getCopilotTaskValidationError(task);
       if (validationError) throw new Error(validationError);
       if (!task.prompt?.trim()) throw new Error("Copilot task prompt is empty.");
       client = this.createCopilotClient(cwd, (output) => {
         const active = findCurrent();
-        if (cancelled || !active || active.status !== "running") return;
+        if (!this.isLegacyCurrent(attempt) || cancelled || !active || active.status !== "running") return;
         active.output = this.redactSecrets(output);
         if (!saveTimer) {
           saveTimer = setTimeout(() => {
             saveTimer = undefined;
             const activeTask = findCurrent();
-            if (cancelled || !activeTask || activeTask.status !== "running") return;
+            if (!this.isLegacyCurrent(attempt) || cancelled || !activeTask || activeTask.status !== "running") return;
             this.emitTaskUpdated(activeTask);
             void this.saveSettings(false);
           }, 750);
@@ -3516,7 +3608,7 @@ export default class AutoOCPlugin extends Plugin {
         env: this.getSecretsEnv(),
       });
       current = findCurrent();
-      if (cancelled || !current || current.status !== "running") return;
+      if (!this.isLegacyCurrent(attempt) || cancelled || !current || current.status !== "running") return;
       exitCode = result.exitCode;
       current.output = this.redactSecrets(result.output || (result.exitCode === 0 ? "(no output)" : ""));
       if (result.exitCode !== 0) {
@@ -3527,16 +3619,16 @@ export default class AutoOCPlugin extends Plugin {
         : "failed";
     } catch (error) {
       current = findCurrent();
-      if (cancelled || !current) return;
+      if (!this.isLegacyCurrent(attempt) || cancelled || !current) return;
       current.status = "failed";
       current.output = `${current.output || ""}\n[Copilot error: ${this.redactSecrets(String(error))}]`;
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      client?.dispose();
+      if (!cancelled) client?.dispose();
     }
     current = findCurrent();
-    if (!current || cancelled) return;
+    if (!this.isLegacyCurrent(attempt) || !current || cancelled) return;
     if (current.status === "failed") this.view?.startGradualSink(task.id);
     if (this.settings.logsEnabled) {
       const metadata = `[engine: copilot]\n[model: ${this.redactSecrets(model || "default")}]\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]`;
@@ -3545,6 +3637,7 @@ export default class AutoOCPlugin extends Plugin {
       cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
     }
     await this.saveSettings();
+    if (!this.isLegacyCurrent(attempt)) return;
     this.emitTaskUpdated(current);
     new Notice(`AutoOC: ${exitCode === 0 ? "✅" : "❌"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
     if (onComplete) await onComplete(current, exitCode);
@@ -3557,10 +3650,19 @@ export default class AutoOCPlugin extends Plugin {
   async runCodexTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    owner?: LegacyOwner,
+    reserved?: LegacyAttempt,
   ): Promise<void> {
     const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
     if (idx === -1) return;
-    const current = this.settings.tasks[idx];
+    let current = this.settings.tasks[idx];
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const isCurrent = () => {
+      const owned = this.isLegacyCurrent(attempt);
+      if (owned) current = attempt.task;
+      return owned;
+    };
     if (!task.prompt?.trim()) {
       current.status = "failed";
       current.lastRun = new Date().toISOString();
@@ -3578,6 +3680,15 @@ export default class AutoOCPlugin extends Plugin {
     let cancelled = false;
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     let codexLogOutput = "";
+    let client: CodexAppServerClient | undefined;
+    const controller = {kill: async () => {
+      cancelled = true;
+      if (saveTimer) clearTimeout(saveTimer);
+      if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
+      await client?.interrupt();
+    }};
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
 
     current.status = "running";
     current.lastRun = startedAt;
@@ -3585,19 +3696,22 @@ export default class AutoOCPlugin extends Plugin {
     delete current.pendingCodexApproval;
     this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
+    if (!isCurrent()) return;
     new Notice(`AutoOC: running Codex task "${task.name}"…`);
 
     const scheduleSave = () => {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
+        if (!isCurrent()) return;
         void this.saveSettings(false).catch(() => {
           new Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
         });
       }, 10_000);
     };
-    const client = this.createCodexClient(taskCwd, {
+    client = this.createCodexClient(taskCwd, {
       onStarted: ({ threadId, turnId }) => {
+        if (!isCurrent()) return;
         current.lastCodexThreadId = threadId;
         current.lastCodexTurnId = turnId;
         if (task.interactiveTerminal) {
@@ -3610,14 +3724,14 @@ export default class AutoOCPlugin extends Plugin {
         scheduleSave();
       },
       onOutput: (output) => {
-        if (cancelled || current.status !== "running") return;
+        if (!isCurrent() || cancelled || current.status !== "running") return;
         current.output = this.redactSecrets(output || "[Codex is working…]");
         this.view?.nudgeDashboardTask(task.id, "up");
         this.emitTaskUpdated(current);
         scheduleSave();
       },
       onApproval: (approval) => {
-        if (cancelled || current.status !== "running") return;
+        if (!isCurrent() || cancelled || current.status !== "running") return;
         current.pendingCodexApproval = {
           requestId: approval.requestId,
           kind: approval.kind,
@@ -3630,22 +3744,13 @@ export default class AutoOCPlugin extends Plugin {
       },
     });
     this.runningCodexClients.set(task.id, client);
-    this.runningProcesses.set(task.id, {
-      kill: () => {
-        cancelled = true;
-        if (saveTimer) clearTimeout(saveTimer);
-        void client.interrupt();
-        this.runningCodexClients.delete(task.id);
-        this.runningProcesses.delete(task.id);
-      },
-    });
 
     let exitCode = -1;
     try {
       const result = await executeCodexTask(client, {
         prompt: task.prompt, model, reasoningEffort, interactive: task.interactiveTerminal,
       });
-      if (cancelled || current.status !== "running") return;
+      if (!isCurrent() || cancelled || current.status !== "running") return;
       current.lastCodexThreadId = result.threadId;
       current.lastCodexTurnId = result.turnId;
       delete current.pendingCodexApproval;
@@ -3671,7 +3776,7 @@ export default class AutoOCPlugin extends Plugin {
       }
       codexLogOutput = `${metadata}\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${this.redactSecrets(result.transcript || current.output)}`;
     } catch (error) {
-      if (cancelled || current.output.includes("[task stopped manually]")) return;
+      if (!isCurrent() || cancelled || current.output.includes("[task stopped manually]")) return;
       current.status = "failed";
       delete current.pendingCodexApproval;
       current.output = `${current.output || ""}\n[Codex error: ${String(error)}]`.trim();
@@ -3681,17 +3786,19 @@ export default class AutoOCPlugin extends Plugin {
       new Notice(`AutoOC: ❌ Codex task "${task.name}" failed.`);
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
-      this.runningCodexClients.delete(task.id);
-      this.runningProcesses.delete(task.id);
+      if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       client.dispose();
     }
 
+    if (!isCurrent()) return;
     if (this.settings.logsEnabled) {
       saveLogToFile(vaultBasePath, task.id, codexLogOutput || current.output);
       cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
       cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
     }
     await this.saveSettings();
+    if (!isCurrent()) return;
     this.emitTaskUpdated(current);
     if (onComplete) await onComplete(current, exitCode);
   }
@@ -3741,10 +3848,19 @@ export default class AutoOCPlugin extends Plugin {
   async runCodeTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    owner?: LegacyOwner,
+    reserved?: LegacyAttempt,
   ) {
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
-    const current = this.settings.tasks[idx];
+    let current = this.settings.tasks[idx];
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const isCurrent = () => {
+      const owned = this.isLegacyCurrent(attempt);
+      if (owned) current = attempt.task;
+      return owned;
+    };
     const code = current.code || current.prompt || "";
     if (!code.trim()) {
       current.status = "failed";
@@ -3767,14 +3883,14 @@ export default class AutoOCPlugin extends Plugin {
     new Notice(`AutoOC: running code task "${current.name}"...`);
 
     try {
-      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCodeTask({
         ...current, code, vaultBase: vaultBasePath,
         cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
-        log: (...args) => { current.output += args.map(String).join(" ") + "\n"; },
+        log: (...args) => { if (!isCurrent()) return; current.output += args.map(String).join(" ") + "\n"; },
         onVaultMutation,
       }));
-      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
@@ -3786,7 +3902,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       if (onComplete) await onComplete(current, 0);
     } catch (err) {
-      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.status = "failed";
       current.output = (current.output || "") + `[code error: ${String(err)}]`;
       this.view?.startGradualSink(current.id);
@@ -3803,16 +3919,60 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
-  taskStopIdentity(task: ScheduledTask) {
+  taskStopIdentity(task: ScheduledTask): TaskStopIdentity | undefined {
+    const attempt = this.legacyAttempts?.get(task.id);
+    if (attempt && task.legacyExecution?.token === attempt.identity.token) return {...attempt.identity};
+    if (task.legacyExecution) return {...task.legacyExecution};
     const binding = (task as any).runtimeExecution;
-    return binding ? {taskId:task.id,runId:binding.runId,workflowId:binding.workflowId,stepId:binding.stepId,stepIndex:binding.stepIndex} : undefined;
+    return binding ? {kind:"shared",taskId:task.id,runId:binding.runId,workflowId:binding.workflowId,stepId:binding.stepId,stepIndex:binding.stepIndex} : undefined;
   }
 
-  async killTask(id: string, observed?: {taskId:string;runId:string;workflowId:string;stepId:string;stepIndex:number}) {
+  async killTask(id: string, observed?: TaskStopIdentity) {
     const task = this.settings.tasks.find(item => item.id === id);
+    const registered = this.legacyAttempts?.get(id);
+    const attempt = task?.legacyExecution?.token === registered?.identity.token ? registered : undefined;
+    if (observed?.kind === "legacy" || attempt || task?.legacyExecution) {
+      const keys = ["kind", "token", "taskId", "workflowId", "stepId", "stepIndex"] as const;
+      if (!observed || observed.kind !== "legacy" || !attempt || !task ||
+          task.legacyExecution?.token !== attempt.identity.token || !observed.token || observed.taskId !== id ||
+          keys.some(key => observed[key] !== attempt.identity[key]) ||
+          attempt.owner && (this as any).workflowRuntime?.get(attempt.owner.workflowId) !== attempt.owner.context && !attempt.cancelled) {
+        throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+      }
+      if (attempt.stopPromise) return attempt.stopPromise;
+      // Invalidate continuation synchronously, before interruption or persistence can yield.
+      attempt.cancelled = true;
+      const metadata = task.legacyExecution!;
+      metadata.stopState = "requested";
+      delete task.pendingCodexApproval;
+      task.status = "failed";
+      task.output += "\n[stop requested; external outcome unconfirmed]";
+      if (attempt.owner) {
+        const wf = this.settings.workflows.find(item => item.id === attempt.owner!.workflowId);
+        if (wf && (this as any).workflowRuntime?.get(wf.id) === attempt.owner.context) {
+          wf.status = "failed";
+          (this as any).workflowRuntime.delete(wf.id);
+        }
+      }
+      const handle = attempt.handle;
+      if (this.runningProcesses.get(id) === handle) this.runningProcesses.delete(id);
+      attempt.stopPromise = (async () => {
+        try { await handle?.kill(); metadata.stopState = "unconfirmed"; }
+        catch (error) { metadata.stopState = "error"; metadata.stopError = this.redactSecrets(String(error)); }
+        // Metadata belongs to this attempt, not to a replacement task/attempt.
+        if (this.legacyAttempts?.get(id) === attempt && task.legacyExecution === metadata) {
+          await this.saveSettings();
+          new Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` :
+            "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
+        }
+        return "stop-requested";
+      })();
+      return attempt.stopPromise;
+    }
     const binding = this.taskStopIdentity(task || {id} as ScheduledTask);
     const execution = this.sharedWorkflowExecution;
     if (observed || binding || execution?.taskId === id) {
+      if (observed && observed.kind !== "shared") throw new Error("Task execution changed or is not owned here");
       const checkpoint = execution?.checkpoint;
       const active = checkpoint?.steps[checkpoint.steps.length - 1];
       const step = this.settings.workflows.find(workflow => workflow.id === observed?.workflowId)?.steps.find(step => step.id === observed?.stepId);
@@ -3831,25 +3991,7 @@ export default class AutoOCPlugin extends Plugin {
       }
       return "stop-requested";
     }
-    const proc = this.runningProcesses.get(id);
-    if (proc) {
-      try { proc.kill(); } catch { /* ignore */ }
-      this.runningProcesses.delete(id);
-    }
-    const t = this.settings.tasks.find((x) => x.id === id);
-    if (t) {
-      t.status = "failed";
-      t.output += "\n[task stopped manually]";
-      if (this.settings.logsEnabled) {
-        const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
-        saveLogToFile(vaultBasePath, id, t.output);
-        cleanupOldLogs(vaultBasePath, id, this.settings.maxLogsPerTask);
-        cleanupLogsByAge(vaultBasePath, id, this.settings.logRetentionDays);
-      }
-      await this.saveSettings();
-    }
-    new Notice(`AutoOC: ⏹ Task stopped.`);
-    return "stopped";
+    throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
   }
 
   async killWorkflow(id: string) {
@@ -3860,33 +4002,20 @@ export default class AutoOCPlugin extends Plugin {
     const wf = this.settings.workflows.find((w) => w.id === id);
     if (!wf) return;
 
-    this.stoppingWorkflows.add(id);
+    const context = (this as any).workflowRuntime?.get(id);
+    if (!context) return;
+    const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
+    const attempt = step?.taskId ? this.legacyAttempts?.get(step.taskId) : undefined;
+    const owned = !!attempt && attempt.owner?.context === context && attempt.identity.workflowId === id &&
+      attempt.identity.stepId === step?.id && attempt.identity.stepIndex === stepIndex;
+    // Invalidate before awaiting a handle. Never sweep tasks by shared taskId.
+    wf.status = "failed";
     this.workflowDelayControllers.get(id)?.abort();
-
-    // Stop the currently running task in the workflow, if any
-    if (wf.status === "running" && wf.currentStep >= 0 && wf.currentStep < wf.steps.length) {
-      const currentStep = wf.steps[wf.currentStep];
-      const currentTask = this.settings.tasks.find((t) => t.id === currentStep?.taskId);
-      if (currentTask?.status === "running") {
-        await this.killTask(currentTask.id);
-      }
-    }
-
-    if (wf.status === "running") {
-      wf.status = "failed";
-      const stepLabel = wf.currentStep >= 0 ? ` at step ${wf.currentStep + 1}/${wf.steps.length}` : "";
-      wf.steps.forEach((step) => {
-        const task = this.settings.tasks.find((t) => t.id === step.taskId);
-        if (task && task.status === "running") {
-          task.status = "failed";
-          task.output += "\n[workflow stopped manually]";
-        }
-      });
-      await this.saveSettings();
-      new Notice(`AutoOC: ⏹ Workflow "${wf.name}" stopped${stepLabel}.`);
-    }
-
-    this.stoppingWorkflows.delete(id);
+    if (owned) await this.killTask(attempt!.identity.taskId, {...attempt!.identity});
+    else if ((this as any).workflowRuntime?.get(id) === context) (this as any).workflowRuntime.delete(id);
+    if ((this as any).workflowRuntime?.has(id)) return;
+    await this.saveSettings();
+    new Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
 
   async runDueAll() {
@@ -4307,12 +4436,11 @@ export default class AutoOCPlugin extends Plugin {
       }
     }
 
+    wf.legacyExecution = {token:require("crypto").randomUUID()};
     // Initialize the runtime context that flows between steps.
     (this as any).workflowRuntime = (this as any).workflowRuntime || new Map();
-    (this as any).workflowRuntime.set(wf.id, {
-      stepOutputs: new Map<string, string>(),
-      stepIndex: 0,
-    });
+    const context = {stepOutputs:new Map<string, string>(),stepIndex:0};
+    (this as any).workflowRuntime.set(wf.id, context);
 
     wf.status = "running";
     wf.currentStep = 0;
@@ -4323,6 +4451,7 @@ export default class AutoOCPlugin extends Plugin {
       step.lastRun = "";
     });
     await this.saveSettings();
+    if ((this as any).workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     new Notice(`AutoOC: ⚡ Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
 
     // Find the entry step: one with no incoming transitions, or the first step.
@@ -4415,10 +4544,13 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       return;
     }
+    const context = (this as any).workflowRuntime?.get(wf.id);
     step.status = "running";
     step.lastRun = new Date().toISOString();
     step.output = "";
     await this.saveSettings();
+
+    if (!context || (this as any).workflowRuntime?.get(wf.id) !== context || wf.status !== "running") return;
 
     // Record the current step in the runtime.
     const rt = (this as any).workflowRuntime.get(wf.id);
@@ -4575,7 +4707,7 @@ export default class AutoOCPlugin extends Plugin {
         if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
       }, 200);
-    }, taskOverrides);
+    }, taskOverrides, {workflowId:wf.id,stepId:step.id,stepIndex,context:executionContext});
   }
 
   // Complete a non-task step and move to the next one.
@@ -6228,7 +6360,7 @@ class AutoOCView extends ItemView {
     });
     
     const badge = summary.createEl("span", {
-      text: task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
+      text: task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -7176,6 +7308,7 @@ class VisualBuilderModal extends Modal {
       const lastRun = existing?.lastRun || "";
       const output = existing?.output || "";
       return {
+        ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
         taskKind,
         name: t.name || "Unnamed",
@@ -7225,6 +7358,7 @@ class VisualBuilderModal extends Modal {
       const status = existing?.status || "pending";
       const currentStep = existing?.currentStep ?? -1;
       return {
+        ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
         name: w.name || "Unnamed",
         area: w.area !== undefined ? (w.area || "") : (existing?.area || ""),
@@ -8096,6 +8230,7 @@ class CreateTaskModal extends Modal {
                 interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
                 reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : undefined,
                 copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
+                ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,

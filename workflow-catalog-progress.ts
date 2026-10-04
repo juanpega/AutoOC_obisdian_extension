@@ -42,7 +42,12 @@ export async function persistWorkflowProgress(options: {
     workflow = {...workflow};
     delete workflow.runtimeExecution;
   }
-  const projected = projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId);
+  const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
+  if (preserveLegacy) {
+    validateProgressBinding(matches[0], durable, options.expectedRunId);
+    if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+  }
+  const projected = preserveLegacy ? matches[0] : {...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId),legacyExecution:undefined};
   const observedTasks = new Map<string,{stepId:string;stepIndex:number;observed:RunCheckpoint["steps"][number]}>();
   for (const [stepIndex, observed] of durable.steps.entries()) {
     const step = workflow.steps.find((item:any)=>item.id === observed.stepId);
@@ -55,13 +60,18 @@ export async function persistWorkflowProgress(options: {
     if (!item) return task;
     const previous = task.runtimeExecution;
     if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
+    if (task.legacyExecution && previous?.runId === durable.runId) {
+      validateProgressBinding({id:previous.workflowId,runtimeExecution:previous},durable,options.expectedRunId);
+      if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+      return task;
+    }
     if (previous && previous.runId !== durable.runId) {
       // Reopening an old terminal journal must not overwrite a later task run.
       if (item.observed.status !== "in_flight") return task;
       const prior = readExecutionCheckpoint(options.runtimeDirectory,previous.runId);
       if (!["completed","failed"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
     }
-    return {...task,status:item.observed.status === "in_flight" ? "pending" : item.observed.status,
+    return {...task,legacyExecution:undefined,status:item.observed.status === "in_flight" ? "pending" : item.observed.status,
       ...(item.observed.startedAt ? {lastRun:item.observed.startedAt} : {}),
       output:item.observed.output || "",
       ...(item.observed.codexThreadId ? {lastCodexThreadId:item.observed.codexThreadId} : {}),

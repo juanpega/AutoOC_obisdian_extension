@@ -323,7 +323,7 @@ function effectiveExecutionSettings(settings) {
 }
 
 // workflow-definition.ts
-var runtimeFields = /* @__PURE__ */ new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution"]);
+var runtimeFields = /* @__PURE__ */ new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 function withoutRuntime(value) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));
 }
@@ -2717,7 +2717,12 @@ async function persistWorkflowProgress(options) {
     workflow = { ...workflow };
     delete workflow.runtimeExecution;
   }
-  const projected = projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId);
+  const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
+  if (preserveLegacy) {
+    validateProgressBinding(matches[0], durable, options.expectedRunId);
+    if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+  }
+  const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
   const observedTasks = /* @__PURE__ */ new Map();
   for (const [stepIndex, observed] of durable.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
@@ -2730,6 +2735,11 @@ async function persistWorkflowProgress(options) {
     if (!item) return task;
     const previous = task.runtimeExecution;
     if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
+    if (task.legacyExecution && previous?.runId === durable.runId) {
+      validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable, options.expectedRunId);
+      if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+      return task;
+    }
     if (previous && previous.runId !== durable.runId) {
       if (item.observed.status !== "in_flight") return task;
       const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
@@ -2737,6 +2747,7 @@ async function persistWorkflowProgress(options) {
     }
     return {
       ...task,
+      legacyExecution: void 0,
       status: item.observed.status === "in_flight" ? "pending" : item.observed.status,
       ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
       output: item.observed.output || "",

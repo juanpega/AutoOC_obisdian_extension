@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import type { RoutingStep } from "./workflow-routing";
 import { effectiveExecutionSettings } from "./execution-defaults";
 
-const runtimeFields = new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution"]);
+const runtimeFields = new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 
 function withoutRuntime(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));

@@ -6,7 +6,7 @@ import type { RunCheckpoint } from "./execution-journal";
 // turn time since reopening into execution time for legacy checkpoints.
 export function taskElapsedSeconds(task: any, now = Date.now()): number | undefined {
   const start = Date.parse(task.lastRun);
-  const end = task.status === "running" ? now : Date.parse(task.runtimeExecution?.finishedAt);
+  const end = task.status === "running" ? now : Date.parse(task.legacyExecution ? task.legacyExecution.finishedAt : task.runtimeExecution?.finishedAt);
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1000)) : undefined;
 }
 
