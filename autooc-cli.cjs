@@ -2918,7 +2918,7 @@ async function runInstalledWorkflow(options) {
 }
 
 // autooc-cli.ts
-var version = "1.6.0";
+var version = "1.6.1";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "approve" || command === "deny") {

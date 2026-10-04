@@ -7,7 +7,7 @@ description: Consultar, iniciar, detener y recuperar tareas o workflows de AutoO
 
 ## Compatibilidad y disponibilidad
 
-Guía del componente en desarrollo para el release 1.6.1. El build actual todavía informa `version: 1.6.0` y `experimental: true`; no confundirlo con una versión pública compatible. El release 1.6.1 aún no está publicado. El ZIP y el recorrido Code se verifican offline; proveedores reales y recarga gráfica requieren validación en su entorno. Usar este build solo en un vault aislado o una instalación experimental expresamente autorizada.
+Guía del componente incluido en el paquete 1.6.1. La CLI informa `version: 1.6.1` y `experimental: true`: la interfaz autónoma conserva esa marca y debe comprobarse con `version` y `help` antes de usarla. Preparar y probar el paquete no significa que esté publicado. Se han validado recorridos reales con Code, Codex y OpenCode en Windows, además de apertura nativa, aprobación por CLI, cancelación y reapertura gráfica. GitHub Copilot real queda fuera de la validación de esta entrega; su integración permanece disponible para quien tenga acceso al proveedor. El almacén de secrets de AutoOC sigue aplazado.
 
 Requiere Node 18 o posterior. Localizar `autooc-cli.cjs` dentro de la instalación seleccionada: `<vault>/.obsidian/plugins/auto-oc/`. Usar su ruta absoluta, especialmente al trabajar desde otro directorio. El ZIP y el deploy de desarrollo incluyen también `autooc-runtime.cjs` y `skills/autooc-runtime/SKILL.md`. El actualizador de este build instala esos mismos archivos y `release-integrity.json`, verifica sus hashes y conserva respaldo de los artefactos anteriores. No modifica `data.json` ni el almacén de credenciales.
 
@@ -18,7 +18,7 @@ node /ruta/instalacion/autooc-cli.cjs version
 node /ruta/instalacion/autooc-cli.cjs help
 ```
 
-Este protocolo requiere `taskSelection: true` y las capacidades `list`, `status`, `run`, `resume`, `reconcile`, `stop`, `recover-lease`. Si faltan, detenerse e informar de incompatibilidad; no usar comandos imaginados ni sustituirlos por ediciones de `data.json`. Al publicarse 1.6.1 deberá verificarse y documentarse su compatibilidad antes de retirar la marca experimental.
+Este protocolo requiere `taskSelection: true` y las capacidades `list`, `status`, `run`, `resume`, `reconcile`, `stop`, `recover-lease`. Si faltan, detenerse e informar de incompatibilidad; no usar comandos imaginados ni sustituirlos por ediciones de `data.json`. La marca experimental no sustituye la comprobación de versión, capacidades y permisos del vault.
 
 ## Seleccionar y ejecutar
 
@@ -98,9 +98,9 @@ La skill portable está en `skills/autooc-runtime/` dentro del paquete. Para un 
 
 Las pruebas offline verifican tareas individuales Code, paridad con el host del plugin, handoff mayor de 50 KB, conservación del catálogo, exclusión, recuperación de propietario terminado y no repetición de efectos. Las pruebas de adaptadores usan inyección de unidades donde no está disponible el lanzador/proveedor real; no acreditan esa integración.
 
-La ampliación de compatibilidad se comprueba con Git real en repositorios temporales, el plugin sin GUI y la CLI distribuida sobre la misma definición; decisiones por comandos reales con peticiones ficticias; y fallos de transporte inyectados para comprobar que no se repiten tareas ni evaluaciones. La apertura nativa de Codex y las decisiones de proveedores reales conservan su validación externa pendiente.
+La ampliación de compatibilidad se comprueba con Git real en repositorios temporales, el plugin sin GUI y la CLI distribuida sobre la misma definición; decisiones por comandos reales con peticiones ficticias; y fallos de transporte inyectados para comprobar que no se repiten tareas ni evaluaciones. La apertura nativa de Codex, aprobación mediante CLI y cancelación se validaron también con el proveedor real; no se atribuye esa prueba a los dobles ni a los botones de aprobación del plugin.
 
-Verificado desde un ZIP generado e instalado en un vault temporal: listar, tarea individual, Code → tarea Code → Code con 64 KB, condición de decisión con datos ficticios, error deliberado, vault incorrecto, parada, exclusión y continuación desde otro proceso sin repetir efectos. Se probó la instalación y el actualizador con descarga inyectada y fallos de integridad/escritura. Pendientes: OpenCode/Codex/Copilot con proveedores reales, apertura interactiva nativa, cancelación del proveedor, reapertura GUI, descarga desde GitHub y publicación del paquete final 1.6.1. No declarar terminado el requisito o publicado el release por existir esta guía. Registrar identidad, comandos, resultados reales y validaciones pendientes en el expediente del proyecto.
+Verificado desde un ZIP generado e instalado en un vault temporal: listar, tarea individual, Code → tarea Code → Code con 64 KB, condición de decisión con datos ficticios, error deliberado, vault incorrecto, parada, exclusión y continuación desde otro proceso sin repetir efectos. Se probó la instalación y el actualizador con descarga inyectada y fallos de integridad/escritura. La entrega cuenta además con validación externa real de Codex/OpenCode, apertura interactiva nativa, aprobación por CLI, cancelación y reapertura GUI. Se conserva la evidencia de cada candidato en el expediente, con fechas originales y hashes; las pruebas de un candidato anterior solo se reutilizan al comprobar equivalencia. Copilot real, botones de aprobación del plugin y descarga desde GitHub no están acreditados por esas pruebas. La publicación corresponde al responsable de la entrega. Esta guía no acredita por sí sola un requisito ni una publicación.
 
 ## Actualizar instalaciones anteriores
 
