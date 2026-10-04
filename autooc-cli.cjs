@@ -535,6 +535,7 @@ async function executeCodexTask(client, request) {
 
 // codex-client.ts
 var import_child_process = require("child_process");
+var import_string_decoder = require("string_decoder");
 var fs4 = __toESM(require("fs"));
 var os = __toESM(require("os"));
 var path4 = __toESM(require("path"));
@@ -549,11 +550,13 @@ var JsonLineRpcPeer = class {
     this.writeLine = writeLine;
     this.onMessage = onMessage;
     this.buffer = "";
+    // stdout may split a UTF-8 character across data events. Keep bytes per peer.
+    this.decoder = new import_string_decoder.StringDecoder("utf8");
     this.nextId = 1;
     this.pending = /* @__PURE__ */ new Map();
   }
   feed(chunk) {
-    this.buffer += chunk.toString();
+    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     while (true) {
       const newline = this.buffer.indexOf("\n");
       if (newline < 0) return;

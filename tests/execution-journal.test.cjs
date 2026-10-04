@@ -256,6 +256,46 @@ test('mixed Code to Codex to Code workflow shares handoff and waits for task com
   } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
+test('UTF-8 Codex bytes survive the real adapter, journal reopen and next Code input',async()=>fixture(async(lease,dir)=>{
+  const {CodexAppServerClient,JsonLineRpcPeer}=load('codex-client');
+  const {codexWorkflowAdapter}=load('codex-workflow-adapter');
+  const answer=JSON.stringify({text:'acción, pingüino, € 😀',path:'carpeta/niño/😀',decomposed:'a\u0301'});
+  const definition=prepare({id:'utf8',handoffOutput:true,steps:[
+    {id:'agent',stepKind:'task',taskId:'codex'},
+    {id:'next',stepKind:'code',code:'if (input !== outputs.agent) throw Error("changed handoff"); output = input;'}
+  ]},[{id:'codex',taskKind:'codex',prompt:'fixture'}],{});
+  const requests=[];
+  const tasks=codexWorkflowAdapter((task,callbacks)=>{
+    const client=new CodexAppServerClient('fixture',dir,callbacks);
+    client.initialize=async()=>{};
+    const feed=message=>{
+      for(const byte of Buffer.from(JSON.stringify(message)+'\n','utf8'))client.peer.feed(Buffer.from([byte]));
+    };
+    client.peer=new JsonLineRpcPeer(line=>{
+      const request=JSON.parse(line);requests.push(request.method);
+      if(request.method==='thread/start')feed({id:request.id,result:{thread:{id:'hilo-ñ'}}});
+      else if(request.method==='turn/start'){
+        feed({id:request.id,result:{turn:{id:'turno-😀'}}});
+        setImmediate(()=>{
+          feed({method:'item/agentMessage/delta',params:{itemId:'f',delta:answer}});
+          feed({method:'item/completed',params:{item:{id:'f',type:'agentMessage',phase:'final_answer',text:answer}}});
+          feed({method:'turn/completed',params:{threadId:'hilo-ñ',turn:{id:'turno-😀',status:'completed'}}});
+        });
+      } else assert.fail('Unexpected RPC: '+request.method);
+    },message=>client.handleMessage(message));
+    return client;
+  });
+  const first=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,lease,tasks,redact:s=>s,maxSteps:1});
+  assert.equal(first.phase,'ready');assert.equal(first.steps[0].output,answer);
+  assert.equal(first.steps[0].codexThreadId,'hilo-ñ');assert.equal(first.steps[0].codexTurnId,'turno-😀');
+  const reopened=J.open(lease,first.runId,definition.hash).snapshot();
+  assert.deepEqual(reopened,first);
+  const resumed=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,lease,tasks,redact:s=>s,resumeRunId:first.runId});
+  assert.equal(resumed.phase,'completed');assert.equal(resumed.steps[1].output,answer);
+  assert.equal(J.open(lease,first.runId,definition.hash).snapshot().steps[1].output,answer);
+  assert.deepEqual(requests,['thread/start','turn/start']);
+}));
+
 test('Codex transport loss is uncertain and adapter disposal never turns it into success',async()=>{
   const {codexWorkflowAdapter}=load('codex-workflow-adapter');let disposed=0;
   const adapter=codexWorkflowAdapter(()=>({run:async()=>{throw Error('transport lost');},interrupt:async()=>{},dispose:()=>disposed++}));

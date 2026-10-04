@@ -31,6 +31,124 @@ const {
   resolveCodexBin,
 } = requireTypeScript(path.resolve(__dirname, "..", "codex-client.ts"));
 
+function feedBytes(peer, bytes) {
+  for (const byte of bytes) peer.feed(Buffer.from([byte]));
+}
+
+test('UTF-8 notifications and RPC results survive every internal character split', async () => {
+  for (const character of ['á', 'ü', '€', '😀']) {
+    for (let split = 1; split < Buffer.byteLength(character); split++) {
+      for (const rpc of [false, true]) {
+        const writes = [], received = [];
+        const peer = new JsonLineRpcPeer(line => writes.push(JSON.parse(line)), message => received.push(message));
+        const text = `acción/${character}/niño`;
+        const pending = rpc ? peer.request('thread/read') : undefined;
+        const message = rpc ? { id: writes[0].id, result: { text } } : { method: 'notice', params: { text } };
+        const bytes = Buffer.from(JSON.stringify(message) + '\n', 'utf8');
+        const cut = bytes.indexOf(Buffer.from(character)) + split;
+        peer.feed(bytes.subarray(0, cut));
+        assert.deepEqual(received, []);
+        peer.feed(Buffer.alloc(0));
+        peer.feed(bytes.subarray(cut));
+        if (rpc) assert.deepEqual(await pending, { text }, `${character}/${split} RPC`);
+        else assert.deepEqual(received, [message], `${character}/${split} notification`);
+      }
+    }
+  }
+});
+
+test('UTF-8 bytewise multiplexing preserves ordering, RPC correlation and string compatibility', async () => {
+  const writes = [], received = [];
+  const peer = new JsonLineRpcPeer(line => writes.push(JSON.parse(line)), message => received.push(message));
+  const first = peer.request('first'), second = peer.request('second'), failure = peer.request('failure');
+  const rejected = assert.rejects(failure, { message: 'denegación 😀' });
+  const one = { method: 'one', params: { text: 'pingüino 😀' } };
+  const two = { method: 'two', params: { text: '€ niño' } };
+  const lines = [one, { id: writes[1].id, result: 'segundo 😀' }, two,
+    { id: writes[0].id, result: 'primero á' }, { id: writes[2].id, error: { code: -1, message: 'denegación 😀' } }];
+  peer.feed('\nnot-json\r\n');
+  feedBytes(peer, Buffer.from(lines.map(message => JSON.stringify(message)).join('\r\n')));
+  assert.deepEqual(received, [one, two]);
+  assert.equal(peer.pending.size, 1, 'last line is not dispatched before newline');
+  peer.feed('\r'); peer.feed(Buffer.from('\n'));
+  assert.equal(await first, 'primero á'); assert.equal(await second, 'segundo 😀'); await rejected;
+  peer.feed(JSON.stringify(one).slice(0, 12));
+  peer.feed(Buffer.from(JSON.stringify(one).slice(12) + '\n' + JSON.stringify(two) + '\n'));
+  assert.deepEqual(received, [one, two, one, two]);
+});
+
+test('UTF-8 incomplete bytes belong to each peer independently', () => {
+  const first = [], second = [];
+  const a = new JsonLineRpcPeer(() => {}, message => first.push(message));
+  const b = new JsonLineRpcPeer(() => {}, message => second.push(message));
+  const message = { method: 'notice', params: { text: '😀' } };
+  const bytes = Buffer.from(JSON.stringify(message) + '\n');
+  const cut = bytes.indexOf(Buffer.from('😀')) + 2;
+  a.feed(bytes.subarray(0, cut));
+  b.feed(Buffer.from('{"method":"other","params":{"text":"á"}}\n'));
+  a.feed(bytes.subarray(cut));
+  assert.deepEqual(first, [message]); assert.deepEqual(second, [{ method: 'other', params: { text: 'á' } }]);
+});
+
+test('UTF-8 live final results and snapshots match unsplit transport at every byte boundary', async () => {
+  const answer = JSON.stringify({ text: 'acción, pingüino, € 😀', path: 'carpeta/niño/😀', decomposed: 'a\u0301' });
+  const commentary = 'Revisando acción 😀';
+  const events = [
+    { method: 'item/completed', params: { item: { id: 'c', type: 'agentMessage', phase: 'commentary', text: commentary } } },
+    { method: 'item/agentMessage/delta', params: { itemId: 'f', delta: answer } },
+    { method: 'item/completed', params: { item: { id: 'f', type: 'agentMessage', phase: 'final_answer', text: answer } } },
+    { method: 'turn/completed', params: { threadId: 't', turn: { id: 'u', status: 'completed' } } },
+  ];
+  const bytes = Buffer.from(events.map(event => JSON.stringify(event) + '\n').join(''));
+  async function run(chunks) {
+    const snapshots = [], client = new CodexAppServerClient('codex', process.cwd(), { onOutput: output => snapshots.push(output) });
+    client.threadId = 't'; client.turnId = 'u';
+    const completion = new Promise(resolve => client.completionResolve = resolve);
+    const peer = new JsonLineRpcPeer(() => {}, message => client.handleMessage(message));
+    for (const chunk of chunks) peer.feed(chunk);
+    return { result: await completion, snapshots };
+  }
+  const expected = await run([bytes]);
+  assert.equal(expected.result.output, answer);
+  assert.equal(expected.result.transcript, commentary + '\n\n' + answer);
+  assert.deepEqual(expected.snapshots, [commentary, commentary + '\n\n' + answer, commentary + '\n\n' + answer]);
+  for (let cut = 1; cut < bytes.length; cut++) {
+    assert.deepEqual(await run([bytes.subarray(0, cut), bytes.subarray(cut)]), expected, `byte ${cut}`);
+  }
+  assert.deepEqual(await run(Array.from(bytes, byte => Buffer.from([byte]))), expected);
+});
+
+test('UTF-8 thread/read bytes preserve exact recovery and reconciliation with identity checks', async () => {
+  const answer = JSON.stringify({ text: 'acción 😀', path: 'niño/€' });
+  const client = new CodexAppServerClient('codex', process.cwd());
+  client.initialize = async () => {};
+  client.threadId = 't'; client.turnId = 'u';
+  const writes = [];
+  client.peer = new JsonLineRpcPeer(line => writes.push(JSON.parse(line)), message => client.handleMessage(message));
+  const turn = { id: 'u', status: 'completed', items: [
+    { id: 'c', type: 'agentMessage', phase: 'commentary', text: 'acción en curso 😀' },
+    { id: 'f', type: 'agentMessage', phase: 'final_answer', text: answer },
+  ] };
+  async function respond(thread) {
+    await Promise.resolve();
+    const request = writes.at(-1);
+    assert.equal(request.method, 'thread/read');
+    assert.deepEqual(request.params, { threadId: 't', includeTurns: true });
+    feedBytes(client.peer, Buffer.from(JSON.stringify({ id: request.id, result: { thread } }) + '\n'));
+  }
+  const thread = { id: 't', turns: [{ id: 'other', status: 'completed', items: [{ type: 'agentMessage', text: 'ajeno 😀' }] }, turn] };
+  const recovered = client.readExistingResult('t', 'u'); await respond(thread);
+  assert.equal((await recovered).output, answer);
+  const done = new Promise(resolve => client.completionResolve = resolve);
+  const reconciling = client.reconcileTurn(); await respond(thread); await reconciling;
+  assert.deepEqual(await done, await recovered);
+  for (const bad of [{ ...thread, id: 'otro' }, { id: 't', turns: [thread.turns[0]] }]) {
+    const rejected = assert.rejects(client.readExistingResult('t', 'u'), /identity mismatch|turn is unavailable/);
+    await respond(bad); await rejected;
+  }
+  assert.equal(writes.length, 4, 'recovery only sends thread/read, never creates work');
+});
+
 test('lost completion event is reconciled with the exact persisted turn', async () => {
   const client = new CodexAppServerClient('codex', process.cwd());
   client.initialize = async () => {};

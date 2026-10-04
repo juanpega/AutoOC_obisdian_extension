@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { StringDecoder } from "string_decoder";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -54,6 +55,8 @@ interface PendingRequest {
 /** Small JSON-lines peer used by Codex App Server's stdio transport. */
 export class JsonLineRpcPeer {
   private buffer = "";
+  // stdout may split a UTF-8 character across data events. Keep bytes per peer.
+  private readonly decoder = new StringDecoder("utf8");
   private nextId = 1;
   private pending = new Map<string | number, PendingRequest>();
 
@@ -63,7 +66,7 @@ export class JsonLineRpcPeer {
   ) {}
 
   feed(chunk: string | Buffer): void {
-    this.buffer += chunk.toString();
+    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     while (true) {
       const newline = this.buffer.indexOf("\n");
       if (newline < 0) return;
