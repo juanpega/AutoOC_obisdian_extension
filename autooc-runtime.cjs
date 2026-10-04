@@ -392,8 +392,9 @@ var ExecutionJournal = class _ExecutionJournal {
       state.steps.push({ stepId, status: "in_flight", startedAt: (/* @__PURE__ */ new Date()).toISOString() });
     });
   }
-  recordCodexThread(stepId, threadId, turnId) {
+  recordCodexThread(stepId, threadId, turnId, expectedStepIndex) {
     return this.update((state) => {
+      if (expectedStepIndex !== void 0 && expectedStepIndex !== state.steps.length - 1) throw new Error("Codex step occurrence changed");
       const step = state.steps[state.steps.length - 1];
       if (state.phase !== "in_flight" || step?.stepId !== stepId) throw new Error("No matching step in flight");
       if (step.codexThreadId && step.codexThreadId !== threadId) throw new Error("Codex execution identity changed");
@@ -571,16 +572,22 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
       await host.onCheckpoint?.(journal.snapshot());
       return journal.snapshot();
     }
+    if (options.signal?.aborted) {
+      await host.onCheckpoint?.(journal.snapshot());
+      return journal.snapshot();
+    }
     outputs[step.id] = output;
     const transitions = workflowStepTransitions(steps, index);
     const next = await resolveWorkflowTransition(steps, index, output, result.succeeded, transitions, outputs, {
       evaluate: async (transition, target, input2) => {
+        if (options.signal?.aborted) throw new Error("Workflow cancelled before evaluation");
         const key = String(transitions.indexOf(transition));
         const saved = journal.snapshot().steps.slice(-1)[0].evaluations?.find((entry) => entry.key === key);
         if (saved?.status === "completed") return saved.output;
         if (saved) throw new Error("Interrupted evaluation requires reconciliation; it cannot be replayed");
         await journal.recordEvaluation(key);
         await host.onCheckpoint?.(journal.snapshot());
+        if (options.signal?.aborted) throw new Error("Workflow cancelled before evaluation effects");
         const response = host.redact(await host.evaluate(transition, target, input2));
         await journal.recordEvaluation(key, response);
         return response;
@@ -1035,6 +1042,7 @@ async function runCodeWorkflowHost(options) {
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find((task2) => task2.id === step.taskId);
           if (!task || !options.tasks) throw new Error("Workflow task adapter is unavailable");
+          const stepIndex = journal.snapshot().steps.length - 1;
           await prepareTaskBranch(journal, task, task.workingDirectory || definition.settings.workingDirectory || options.vaultBase, options.vaultBase, !!definition.workflow.handoffBranch);
           const completed = journal.snapshot().steps.filter((item) => item.status !== "in_flight");
           const previous = completed[completed.length - 1];
@@ -1044,7 +1052,7 @@ async function runCodeWorkflowHost(options) {
             previous ? { stepId: previous.stepId, output: previous.output || "" } : void 0
           );
           return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
-            await journal.recordCodexThread(step.id, threadId, turnId);
+            await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
             await options.onCheckpoint?.(journal.snapshot());
           }, { approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint) });
         }
@@ -1207,10 +1215,10 @@ async function persistWorkflowProgress(options) {
   }
   const projected = projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId);
   const observedTasks = /* @__PURE__ */ new Map();
-  for (const observed of durable.steps) {
+  for (const [stepIndex, observed] of durable.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
     if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
-      observedTasks.set(step.taskId, { stepId: step.id, observed });
+      observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
     }
   }
   const tasks = config.tasks.map((task) => {
@@ -1236,6 +1244,7 @@ async function persistWorkflowProgress(options) {
         workflowId: durable.workflowId,
         definitionHash: durable.definitionHash,
         stepId: item.stepId,
+        stepIndex: item.stepIndex,
         revision: durable.revision,
         finishedAt: item.observed.finishedAt,
         requiresReconciliation: item.observed.status === "in_flight"

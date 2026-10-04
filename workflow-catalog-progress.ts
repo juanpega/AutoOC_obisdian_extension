@@ -43,11 +43,11 @@ export async function persistWorkflowProgress(options: {
     delete workflow.runtimeExecution;
   }
   const projected = projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId);
-  const observedTasks = new Map<string,{stepId:string;observed:RunCheckpoint["steps"][number]}>();
-  for (const observed of durable.steps) {
+  const observedTasks = new Map<string,{stepId:string;stepIndex:number;observed:RunCheckpoint["steps"][number]}>();
+  for (const [stepIndex, observed] of durable.steps.entries()) {
     const step = workflow.steps.find((item:any)=>item.id === observed.stepId);
     if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
-      observedTasks.set(step.taskId,{stepId:step.id,observed});
+      observedTasks.set(step.taskId,{stepId:step.id,stepIndex,observed});
     }
   }
   const tasks = config.tasks.map((task:any)=>{
@@ -67,7 +67,7 @@ export async function persistWorkflowProgress(options: {
       ...(item.observed.codexThreadId ? {lastCodexThreadId:item.observed.codexThreadId} : {}),
       ...(item.observed.codexTurnId ? {lastCodexTurnId:item.observed.codexTurnId} : {}),
       pendingCodexApproval:item.observed.approval ? {...item.observed.approval,requestId:item.observed.approval.token} : undefined,
-      runtimeExecution:{runId:durable.runId,workflowId:durable.workflowId,definitionHash:durable.definitionHash,stepId:item.stepId,revision:durable.revision,
+      runtimeExecution:{runId:durable.runId,workflowId:durable.workflowId,definitionHash:durable.definitionHash,stepId:item.stepId,stepIndex:item.stepIndex,revision:durable.revision,
         finishedAt:item.observed.finishedAt,
         requiresReconciliation:item.observed.status === "in_flight"}};
   });

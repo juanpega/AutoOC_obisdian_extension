@@ -160,6 +160,181 @@ function pluginHarness(payload) {
 }
 const drain = () => new Promise(resolve => setImmediate(resolve));
 
+function stopCardHarness() {
+  const notices = [], elements = [], bundle = { exports: {} };
+  class Stub {}
+  const obsidian = { Plugin: Stub, Notice: class { constructor(text) { notices.push(text); } }, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; };', {
+    module: bundle, exports: bundle.exports, require: name => name === 'obsidian' ? obsidian : require(name),
+    process, Buffer, console, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+  });
+  const plugin = new bundle.exports.default();
+  const binding = { runId: 'run-1', workflowId: 'wf', stepId: 'a', stepIndex: 0, revision: 1 };
+  const task = { id: 't', name: 'Task', taskKind: 'codex', prompt: '', status: 'running', output: '', scheduleType: 'manual', runtimeExecution: binding };
+  const workflow = { id: 'wf', steps: [{ id: 'a', taskId: 't' }, { id: 'b', stepKind: 'code' }] };
+  plugin.settings = { tasks: [task], workflows: [workflow] };
+  plugin.pluginExecutionLease = { assertOwned() {} };
+  plugin.sharedWorkflowExecution = { workflowId: 'wf', runId: 'run-1', controller: new AbortController(), checkpoint: {
+    runId: 'run-1', workflowId: 'wf', revision: 1, phase: 'in_flight', nextStepId: 'a', steps: [{ stepId: 'a', status: 'in_flight' }],
+  } };
+  plugin.saveSettings = async () => { throw Error('Shared stop must not write catalog'); };
+  plugin.refreshOpenViews = () => {};
+  function element(options = {}) {
+    const el = { ...options, textContent: options.text, style: {}, classList: { toggle() {} },
+      createEl(tag, opts) { return element({ tag, ...opts }); }, createDiv(opts) { return element(typeof opts === 'string' ? { cls: opts } : opts); },
+      setAttr() {}, addClass() {}, addEventListener() {}, };
+    elements.push(el); return el;
+  }
+  const view = Object.create(bundle.exports.TestView.prototype);
+  view.plugin = plugin; view.expandedTasks = new Set();
+  const renderCard = task => {
+    const start = elements.length;
+    view.renderTaskCard(element(), task);
+    return elements.slice(start);
+  };
+  renderCard(task);
+  return { plugin, task, workflow, notices, elements, stop: elements.find(el => el.text === '⏹'),
+    detailStop: elements.find(el => el.text === '⏹ Stop'), renderCard, Plugin: bundle.exports.default, Client: bundle.exports.TestClient, setRunner: bundle.exports.setRunner };
+}
+
+test('referenced task card requests cancellation from its workflow owner without fabricating a result', async () => {
+  const h = stopCardHarness(), before = JSON.stringify(h.task);
+  await h.stop.onclick({ stopPropagation() {} });
+  assert.equal(h.plugin.sharedWorkflowExecution.controller.signal.aborted, true);
+  assert.equal(JSON.stringify(h.task), before);
+  assert.ok(h.notices.some(text => /requested/i.test(text)));
+  assert.ok(h.notices.every(text => !/Task stopped|stopped manually/.test(text)));
+  await h.detailStop.onclick({ stopPropagation() {} });
+  assert.equal(h.notices.length, 1, 'request is idempotent');
+});
+
+test('obsolete task cards never cancel another owner or occurrence and recover their button', async () => {
+  const changes = {
+    run: h => { h.task.runtimeExecution.runId = h.plugin.sharedWorkflowExecution.runId = 'run-2'; },
+    workflow: h => { h.task.runtimeExecution.workflowId = 'foreign'; },
+    step: h => { h.task.runtimeExecution.stepId = 'b'; },
+    reference: h => { h.workflow.steps[0].taskId = 'other'; },
+    finished: h => { h.plugin.sharedWorkflowExecution.checkpoint.steps[0].status = 'completed'; },
+    lease: h => { h.plugin.pluginExecutionLease.assertOwned = () => { throw Error('lost'); }; },
+    occurrence: h => { h.task.runtimeExecution.stepIndex = 1; h.plugin.sharedWorkflowExecution.checkpoint.steps.push({ stepId: 'a', status: 'in_flight' }); },
+    incomplete: h => { delete h.task.runtimeExecution.stepIndex; },
+    ownerGone: h => { h.plugin.sharedWorkflowExecution.runId = undefined; },
+  };
+  for (const [name, change] of Object.entries(changes)) {
+    const h = stopCardHarness(); change(h); const before = JSON.stringify(h.task);
+    await h.stop.onclick({ stopPropagation() {} });
+    assert.equal(h.plugin.sharedWorkflowExecution.controller.signal.aborted, false, name);
+    assert.equal(JSON.stringify(h.task), before, name);
+    assert.equal(h.stop.disabled, false, name);
+    assert.ok(h.notices.some(text => /refresh or reconcile/.test(text)), name);
+  }
+});
+
+test('same occurrence remains stoppable across thread and approval checkpoint revisions', async () => {
+  const h = stopCardHarness();
+  h.task.runtimeExecution.revision = h.plugin.sharedWorkflowExecution.checkpoint.revision = 5;
+  await h.stop.onclick({ stopPropagation() {} });
+  assert.equal(h.plugin.sharedWorkflowExecution.controller.signal.aborted, true);
+});
+
+test('legacy stop and standalone owner cancellation preserve their separate behavior', async () => {
+  const legacy = stopCardHarness();
+  delete legacy.task.runtimeExecution; delete legacy.plugin.sharedWorkflowExecution;
+  let killed = 0, saved = 0;
+  legacy.plugin.runningProcesses.set('t', { kill() { killed++; } });
+  legacy.plugin.saveSettings = async () => { saved++; };
+  assert.equal(await legacy.plugin.killTask('t'), 'stopped');
+  assert.equal(killed, 1); assert.equal(saved, 1); assert.equal(legacy.task.status, 'failed');
+  assert.match(legacy.task.output, /stopped manually/);
+  const single = stopCardHarness(); single.plugin.sharedWorkflowExecution.taskId = 't';
+  single.plugin.settings.workflows = [];
+  await single.stop.onclick({ stopPropagation() {} });
+  assert.equal(single.plugin.sharedWorkflowExecution.controller.signal.aborted, true);
+  assert.equal(single.task.status, 'running');
+});
+
+test('real shared host receives card stop, preserves uncertain Codex outcome and reload never advances', async () => {
+  const os = require('node:os');
+  for (const mode of ['interrupt-ok', 'interrupt-error', 'standalone']) {
+    const h = stopCardHarness(), p = h.plugin;
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-card-stop-'));
+    const install = path.join(root, '.obsidian/plugins/auto-oc'), file = path.join(install, 'data.json');
+    fs.mkdirSync(install, { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ logsEnabled: false, tasks: [{ id: 't', name: 'Task', taskKind: 'codex', prompt: 'fixture', scheduleType: 'manual' }],
+      workflows: [{ id: 'wf', name: 'Fixture', steps: [{ id: 'a', stepKind: 'task', taskId: 't', transitionMode: 'force' },
+        { id: 'b', stepKind: 'code', codeAllowVault: true, code: 'vault.write("next-effect.txt", "bad");' }] }] }));
+    delete p.pluginExecutionLease; delete p.sharedWorkflowExecution; delete p.saveSettings;
+    p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
+    p.manifest = { id: 'auto-oc' }; p.redactSecrets = text => text;
+    let finish, started, interrupts = 0, runs = 0;
+    const ready = new Promise(resolve => started = resolve);
+    h.Client.prototype.run = async function() {
+      runs++;
+      await this.callbacks.onThreadCreated({ threadId: 'thread-fixture' });
+      await this.callbacks.onStarted({ threadId: 'thread-fixture', turnId: 'turn-fixture' });
+      started();
+      return await new Promise(resolve => finish = resolve);
+    };
+    h.Client.prototype.interrupt = async () => { interrupts++; if (mode === 'interrupt-error') throw Error('fixture interrupt failure'); };
+    h.Client.prototype.dispose = () => {};
+    let pending;
+    try {
+      p.reservePluginExecution(); await p.loadSettings();
+      pending = p.runSharedWorkflow(mode === 'standalone' ? '@task:t' : 'wf', undefined, false, true, mode === 'standalone' ? 't' : undefined);
+      // Race against rejection so a broken fixture never waits indefinitely.
+      await Promise.race([ready, pending.then(() => { throw Error('host finished before task started'); })]);
+      const owner = p.sharedWorkflowExecution;
+      const card = h.renderCard(p.settings.tasks[0]);
+      await card.find(el => el.text === '⏹').onclick({ stopPropagation() {} });
+      assert.equal(owner.controller.signal.aborted, true); assert.equal(interrupts, 1);
+      finish({ status: 'completed', output: 'late external result', threadId: 'thread-fixture', turnId: 'turn-fixture' });
+      await assert.rejects(pending, /cancelled; reconcile/);
+      const task = p.settings.tasks[0], binding = task.runtimeExecution;
+      const checkpoint = JSON.parse(fs.readFileSync(path.join(install, 'runtime', binding.runId + '.json'), 'utf8'));
+      assert.equal(checkpoint.phase, 'in_flight'); assert.equal(checkpoint.steps.length, 1);
+      assert.equal(checkpoint.steps[0].codexThreadId, 'thread-fixture'); assert.equal(checkpoint.steps[0].codexTurnId, 'turn-fixture');
+      assert.equal(binding.requiresReconciliation, true); assert.equal(fs.existsSync(path.join(root, 'next-effect.txt')), false);
+      const reloaded = new h.Plugin(); reloaded.app = p.app; reloaded.manifest = p.manifest;
+      await reloaded.loadSettings();
+      assert.equal(reloaded.settings.tasks[0].runtimeExecution.requiresReconciliation, true);
+      assert.equal(reloaded.settings.tasks[0].status, 'pending'); assert.equal(runs, 1);
+      assert.ok(h.renderCard(reloaded.settings.tasks[0]).some(el => el.text === 'reconciliation required'));
+      assert.ok(h.notices.every(text => !/Task stopped|stopped manually/.test(text)));
+    } finally {
+      if (finish) finish({ status: 'interrupted', output: '' });
+      if (pending) await pending.catch(() => {});
+      p.releasePluginExecution(false);
+      // Only this isolated fixture tree is removed; never the operational vault.
+      assert.equal(path.dirname(path.resolve(root)), path.resolve(os.tmpdir()));
+      assert.ok(path.basename(root).startsWith('autooc-card-stop-'));
+      assert.equal(fs.lstatSync(root).isSymbolicLink(), false);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test('shared checkpoints cannot regress, change run or overwrite a replacement owner', async () => {
+  const h = stopCardHarness(), p = h.plugin;
+  let callback, finish, ready, loads = 0;
+  const started = new Promise(resolve => ready = resolve);
+  delete p.sharedWorkflowExecution;
+  p.app = { vault: { adapter: { basePath: 'fixture' } } };
+  p.saveSettings = async () => {}; p.loadSettings = async () => { loads++; };
+  h.setRunner(async options => { callback = options.onCheckpoint; ready(); return await new Promise(resolve => finish = resolve); });
+  const pending = p.runSharedWorkflow('wf'); await started;
+  const state = { runId: 'run-a', workflowId: 'wf', revision: 2, phase: 'in_flight', nextStepId: 'a', steps: [{ stepId: 'a', status: 'in_flight' }] };
+  await callback(state); state.steps[0].status = 'completed';
+  assert.equal(p.sharedWorkflowExecution.checkpoint.steps[0].status, 'in_flight', 'checkpoint is copied');
+  for (const altered of [{ ...state, runId: 'other' }, { ...state, workflowId: 'other' }, { ...state, revision: 1 }]) await callback(altered);
+  assert.equal(loads, 1); assert.equal(p.sharedWorkflowExecution.runId, 'run-a');
+  await callback({ ...state, revision: 3 }); assert.equal(loads, 2);
+  const replacement = { workflowId: 'wf', runId: 'run-b', controller: new AbortController() };
+  p.sharedWorkflowExecution = replacement; await callback({ ...state, revision: 4 });
+  assert.equal(loads, 2); assert.equal(p.sharedWorkflowExecution, replacement);
+  finish(); await pending;
+  assert.equal(p.sharedWorkflowExecution, replacement);
+});
+
 test('workflow GUI buttons report rejected preflight without effects; CLI still returns an error', async () => {
   const Module = require('node:module'), os = require('node:os');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-preflight-notice-'));

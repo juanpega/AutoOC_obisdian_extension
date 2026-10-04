@@ -17,5 +17,5 @@ export function projectStandaloneTask(task:any,tasks:any[],settings:Record<strin
     ...(observed?.startedAt ? {lastRun:observed.startedAt} : {}),
     ...(observed?.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
     ...(observed?.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),
-    runtimeExecution:{...projected.runtimeExecution,workflowId:workflow.id,stepId:'task',finishedAt:observed?.finishedAt}};
+    runtimeExecution:{...projected.runtimeExecution,workflowId:workflow.id,stepId:'task',stepIndex:checkpoint.steps.length-1,finishedAt:observed?.finishedAt}};
 }

@@ -97,13 +97,14 @@ export async function runCodeWorkflowHost(options: {
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find(task => task.id === step.taskId);
           if (!task || !options.tasks) throw new Error("Workflow task adapter is unavailable");
+          const stepIndex = journal.snapshot().steps.length - 1;
           await prepareTaskBranch(journal,task,task.workingDirectory || definition.settings.workingDirectory || options.vaultBase,options.vaultBase,!!definition.workflow.handoffBranch);
           const completed = journal.snapshot().steps.filter(item => item.status !== "in_flight");
           const previous = completed[completed.length - 1];
           const prompt = workflowTaskPrompt(task.prompt || "", definition.workflow,
             previous ? {stepId:previous.stepId,output:previous.output || ""} : undefined);
           return await options.tasks.execute(task, prompt, signal, async(threadId,turnId) => {
-            await journal.recordCodexThread(step.id, threadId,turnId);
+            await journal.recordCodexThread(step.id, threadId,turnId,stepIndex);
             await options.onCheckpoint?.(journal.snapshot());
           },{approve:(request,lifetime)=>awaitWorkflowApproval(journal,options.runtimeDirectory,request,options.redact,lifetime || signal,options.onCheckpoint)});
         }

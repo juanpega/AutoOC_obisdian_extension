@@ -123,8 +123,9 @@ export class ExecutionJournal {
     });
   }
 
-  recordCodexThread(stepId: string, threadId: string, turnId?: string): Promise<void> {
+  recordCodexThread(stepId: string, threadId: string, turnId?: string, expectedStepIndex?: number): Promise<void> {
     return this.update(state => {
+      if (expectedStepIndex !== undefined && expectedStepIndex !== state.steps.length - 1) throw new Error("Codex step occurrence changed");
       const step = state.steps[state.steps.length - 1];
       if (state.phase !== "in_flight" || step?.stepId !== stepId) throw new Error("No matching step in flight");
       if (step.codexThreadId && step.codexThreadId !== threadId) throw new Error("Codex execution identity changed");

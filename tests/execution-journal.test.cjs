@@ -69,6 +69,61 @@ test('failed steps retain evidence even when an explicit transition continues',a
 }));
 
 const sessionHost=execute=>({execute,evaluate:async()=> 'NO',redact:text=>text.replaceAll('fake-secret','[redacted]'),onTransitionError:()=>{}});
+
+test('late success or failure after stop is durable but never starts evaluation or force continuation',async()=>fixture(async lease=>{
+  for (const succeeded of [true,false]) {
+    const definition=prepare({id:'late',steps:[{id:'a',stepKind:'task',taskId:'t',transitions:[{toStepId:'b',mode:'eval'},{toStepId:'b',forceContinue:true}]},{id:'b',stepKind:'code'}]},[{id:'t'}],{});
+    const run=await J.create(lease,'late',definition.hash,'a'),controller=new AbortController();
+    let release,started;const ready=new Promise(resolve=>started=resolve),calls=[];
+    const pending=advance(run,definition,{...sessionHost(async step=>{calls.push(step.id);started();return await new Promise(resolve=>release=resolve);}),
+      evaluate:async()=>{calls.push('eval');return 'YES';}}, {signal:controller.signal});
+    await ready;controller.abort();release({succeeded,output:'late result'});
+    const result=await pending;
+    assert.deepEqual(calls,['a']);assert.equal(result.phase,'in_flight');
+    assert.equal(result.steps[0].result.output,'late result');
+    assert.deepEqual(J.open(lease,result.runId,definition.hash).snapshot(),result);
+    const {projectWorkflowProgress}=load('workflow-progress');
+    assert.equal(projectWorkflowProgress(definition.workflow,definition.tasks,{},result,result.runId).runtimeExecution.requiresReconciliation,true);
+  }
+}));
+
+test('stop at evaluation publication blocks evaluation effects and keeps reconciliation evidence',async()=>fixture(async lease=>{
+  const definition=prepare({id:'eval-stop',steps:[{id:'a',stepKind:'task',taskId:'t',transitions:[{toStepId:'b',mode:'eval'}]},{id:'b',stepKind:'code'}]},[{id:'t'}],{});
+  const run=await J.create(lease,'eval-stop',definition.hash,'a'),controller=new AbortController();let evaluations=0;
+  await assert.rejects(advance(run,definition,{...sessionHost(async()=>({succeeded:true,output:'observed'})),
+    evaluate:async()=>{evaluations++;return 'YES';},
+    onCheckpoint:async state=>{if(state.steps.at(-1)?.evaluations?.length)controller.abort();},
+  },{signal:controller.signal}),/cancelled before evaluation effects/);
+  assert.equal(evaluations,0);assert.equal(run.snapshot().steps.length,1);
+  assert.equal(run.snapshot().steps[0].evaluations[0].status,'in_flight');
+}));
+
+test('late thread callback cannot bind an earlier occurrence to a repeated step',async()=>fixture(async(lease,dir)=>{
+  const definition=prepare({id:'repeat',steps:[{id:'a',stepKind:'task',taskId:'t',transitions:[{toStepId:'a',forceContinue:true}]}]},[{id:'t'}],{});
+  let prior,calls=0;
+  const tasks={supports:()=>true,execute:async(task,prompt,signal,recordThread)=>{
+    calls++;
+    if(calls===1)prior=recordThread;
+    else {
+      await assert.rejects(prior('old-thread','old-turn'),/occurrence/);
+      await recordThread('current-thread','current-turn');
+    }
+    return {succeeded:true,output:'done'};
+  }};
+  const result=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,lease,tasks,redact:s=>s,maxSteps:2});
+  assert.equal(result.steps[0].codexThreadId,undefined);
+  assert.equal(result.steps[1].codexThreadId,'current-thread');
+}));
+
+test('cancellation before effects and confirmed terminal cancellation do not follow force transitions',async()=>fixture(async lease=>{
+  for(const when of ['before','terminal']) {
+    const definition=prepare({id:'cancel',steps:[{id:'a',stepKind:'task',taskId:'t',transitionMode:'force'},{id:'b',stepKind:'code'}]},[{id:'t'}],{});
+    const run=await J.create(lease,'cancel',definition.hash,'a'),controller=new AbortController();let calls=0;
+    const result=await advance(run,definition,{...sessionHost(async()=>{calls++;return {succeeded:false,cancelled:true,output:'observed cancellation'};}),
+      onCheckpoint:async state=>{if(when==='before'&&state.phase==='in_flight')controller.abort();}}, {signal:controller.signal});
+    assert.equal(result.phase,'failed');assert.equal(result.steps.length,1);assert.equal(calls,when==='before'?0:1);
+  }
+}));
 test('Code host runs without Obsidian and retains complete durable output',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-host-'));
   try {

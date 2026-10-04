@@ -67,16 +67,23 @@ export async function advanceWorkflowSession(
       await host.onCheckpoint?.(journal.snapshot());
       return journal.snapshot();
     }
+    if (options.signal?.aborted) {
+      // Retain the observed result without authorizing a transition after stop.
+      await host.onCheckpoint?.(journal.snapshot());
+      return journal.snapshot();
+    }
     outputs[step.id] = output;
     const transitions = workflowStepTransitions(steps, index);
     const next = await resolveWorkflowTransition(steps,index,output,result.succeeded,transitions,outputs,{
       evaluate:async(transition,target,input)=>{
+        if (options.signal?.aborted) throw new Error("Workflow cancelled before evaluation");
         const key=String(transitions.indexOf(transition));
         const saved=journal.snapshot().steps.slice(-1)[0].evaluations?.find(entry=>entry.key===key);
         if(saved?.status==="completed")return saved.output!;
         if(saved)throw new Error("Interrupted evaluation requires reconciliation; it cannot be replayed");
         await journal.recordEvaluation(key);
         await host.onCheckpoint?.(journal.snapshot());
+        if (options.signal?.aborted) throw new Error("Workflow cancelled before evaluation effects");
         const response=host.redact(await host.evaluate(transition,target,input));
         await journal.recordEvaluation(key,response);
         return response;

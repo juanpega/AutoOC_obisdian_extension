@@ -2915,8 +2915,9 @@ var ExecutionJournal = class _ExecutionJournal {
       state.steps.push({ stepId, status: "in_flight", startedAt: (/* @__PURE__ */ new Date()).toISOString() });
     });
   }
-  recordCodexThread(stepId, threadId, turnId) {
+  recordCodexThread(stepId, threadId, turnId, expectedStepIndex) {
     return this.update((state) => {
+      if (expectedStepIndex !== void 0 && expectedStepIndex !== state.steps.length - 1) throw new Error("Codex step occurrence changed");
       const step = state.steps[state.steps.length - 1];
       if (state.phase !== "in_flight" || (step == null ? void 0 : step.stepId) !== stepId) throw new Error("No matching step in flight");
       if (step.codexThreadId && step.codexThreadId !== threadId) throw new Error("Codex execution identity changed");
@@ -4674,7 +4675,7 @@ async function resolveWorkflowTransition(steps, index, input, succeeded, transit
 
 // workflow-session.ts
 async function advanceWorkflowSession(journal, definition, host, options = {}) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
   const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks, definition.settings);
   const checkpoint = journal.snapshot();
   if (verified.hash !== definition.hash || checkpoint.definitionHash !== verified.hash || checkpoint.workflowId !== verified.workflow.id) throw new Error("Workflow definition does not match execution checkpoint");
@@ -4719,17 +4720,23 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
       await ((_g = host.onCheckpoint) == null ? void 0 : _g.call(host, journal.snapshot()));
       return journal.snapshot();
     }
+    if ((_h = options.signal) == null ? void 0 : _h.aborted) {
+      await ((_i = host.onCheckpoint) == null ? void 0 : _i.call(host, journal.snapshot()));
+      return journal.snapshot();
+    }
     outputs[step.id] = output;
     const transitions = workflowStepTransitions(steps, index);
     const next = await resolveWorkflowTransition(steps, index, output, result.succeeded, transitions, outputs, {
       evaluate: async (transition, target, input2) => {
-        var _a2, _b2;
+        var _a2, _b2, _c2, _d2;
+        if ((_a2 = options.signal) == null ? void 0 : _a2.aborted) throw new Error("Workflow cancelled before evaluation");
         const key = String(transitions.indexOf(transition));
-        const saved = (_a2 = journal.snapshot().steps.slice(-1)[0].evaluations) == null ? void 0 : _a2.find((entry) => entry.key === key);
+        const saved = (_b2 = journal.snapshot().steps.slice(-1)[0].evaluations) == null ? void 0 : _b2.find((entry) => entry.key === key);
         if ((saved == null ? void 0 : saved.status) === "completed") return saved.output;
         if (saved) throw new Error("Interrupted evaluation requires reconciliation; it cannot be replayed");
         await journal.recordEvaluation(key);
-        await ((_b2 = host.onCheckpoint) == null ? void 0 : _b2.call(host, journal.snapshot()));
+        await ((_c2 = host.onCheckpoint) == null ? void 0 : _c2.call(host, journal.snapshot()));
+        if ((_d2 = options.signal) == null ? void 0 : _d2.aborted) throw new Error("Workflow cancelled before evaluation effects");
         const response = host.redact(await host.evaluate(transition, target, input2));
         await journal.recordEvaluation(key, response);
         return response;
@@ -4739,9 +4746,9 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
         if (kind === "eval") throw error;
       }
     });
-    if ((_h = options.signal) == null ? void 0 : _h.aborted) return journal.snapshot();
+    if ((_j = options.signal) == null ? void 0 : _j.aborted) return journal.snapshot();
     await journal.finish(step.id, result.succeeded, output, next.nextStepId);
-    await ((_i = host.onCheckpoint) == null ? void 0 : _i.call(host, journal.snapshot()));
+    await ((_k = host.onCheckpoint) == null ? void 0 : _k.call(host, journal.snapshot()));
   }
   return journal.snapshot();
 }
@@ -5009,6 +5016,7 @@ async function runCodeWorkflowHost(options) {
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find((task2) => task2.id === step.taskId);
           if (!task || !options.tasks) throw new Error("Workflow task adapter is unavailable");
+          const stepIndex = journal.snapshot().steps.length - 1;
           await prepareTaskBranch(journal, task, task.workingDirectory || definition.settings.workingDirectory || options.vaultBase, options.vaultBase, !!definition.workflow.handoffBranch);
           const completed = journal.snapshot().steps.filter((item) => item.status !== "in_flight");
           const previous = completed[completed.length - 1];
@@ -5019,7 +5027,7 @@ async function runCodeWorkflowHost(options) {
           );
           return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
             var _a2;
-            await journal.recordCodexThread(step.id, threadId, turnId);
+            await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
             await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, journal.snapshot()));
           }, { approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint) });
         }
@@ -5134,7 +5142,7 @@ function projectStandaloneTask(task, tasks, settings, checkpoint, activelyExecut
     ...(observed == null ? void 0 : observed.startedAt) ? { lastRun: observed.startedAt } : {},
     ...(observed == null ? void 0 : observed.codexThreadId) ? { lastCodexThreadId: observed.codexThreadId } : {},
     ...(observed == null ? void 0 : observed.codexTurnId) ? { lastCodexTurnId: observed.codexTurnId } : {},
-    runtimeExecution: { ...projected.runtimeExecution, workflowId: workflow.id, stepId: "task", finishedAt: observed == null ? void 0 : observed.finishedAt }
+    runtimeExecution: { ...projected.runtimeExecution, workflowId: workflow.id, stepId: "task", stepIndex: checkpoint.steps.length - 1, finishedAt: observed == null ? void 0 : observed.finishedAt }
   };
 }
 
@@ -5237,10 +5245,10 @@ async function persistWorkflowProgress(options) {
   }
   const projected = projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId);
   const observedTasks = /* @__PURE__ */ new Map();
-  for (const observed of durable.steps) {
+  for (const [stepIndex, observed] of durable.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
     if ((step == null ? void 0 : step.taskId) && (!step.stepKind || step.stepKind === "task")) {
-      observedTasks.set(step.taskId, { stepId: step.id, observed });
+      observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
     }
   }
   const tasks = config.tasks.map((task) => {
@@ -5266,6 +5274,7 @@ async function persistWorkflowProgress(options) {
         workflowId: durable.workflowId,
         definitionHash: durable.definitionHash,
         stepId: item.stepId,
+        stepIndex: item.stepIndex,
         revision: durable.revision,
         finishedAt: item.observed.finishedAt,
         requiresReconciliation: item.observed.status === "in_flight"
@@ -6981,7 +6990,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
-    const execution = { workflowId, taskId, runId: void 0, controller: new AbortController() };
+    const execution = { workflowId, taskId, runId: void 0, controller: new AbortController(), checkpoint: void 0 };
     this.sharedWorkflowExecution = execution;
     try {
       await this.saveSettings(false);
@@ -6998,8 +7007,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         redact: (output) => this.redactSecrets(output),
         onCheckpoint: async (checkpoint) => {
           if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
+          if (execution.runId && checkpoint.runId !== execution.runId || execution.checkpoint && checkpoint.revision < execution.checkpoint.revision) return;
           execution.runId = checkpoint.runId;
+          execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
           await this.loadSettings();
+          if (this.sharedWorkflowExecution !== execution) return;
           this.refreshOpenViews();
         }
       });
@@ -7344,9 +7356,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
         }
         if (request.url === "/stop") {
-          if (kind === "task") await this.killTask(item.id);
-          else await this.killWorkflow(item.id);
-          return send(200, { ok: true, id: item.id, name: item.name, status: "stopped" });
+          const status = kind === "task" ? await this.killTask(item.id, this.taskStopIdentity(item)) : (await this.killWorkflow(item.id), "stopped");
+          return send(200, { ok: true, id: item.id, name: item.name, status });
         }
         return send(404, { ok: false, error: "Unknown endpoint" });
       } catch (error) {
@@ -8710,11 +8721,29 @@ ${current.output}`;
       if (this.codeTaskRuns.get(current.id) === execution) this.codeTaskRuns.delete(current.id);
     }
   }
-  async killTask(id) {
+  taskStopIdentity(task) {
+    const binding = task.runtimeExecution;
+    return binding ? { taskId: task.id, runId: binding.runId, workflowId: binding.workflowId, stepId: binding.stepId, stepIndex: binding.stepIndex } : void 0;
+  }
+  async killTask(id, observed) {
     var _a;
-    if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.taskId) === id) {
-      this.sharedWorkflowExecution.controller.abort();
-      return;
+    const task = this.settings.tasks.find((item) => item.id === id);
+    const binding = this.taskStopIdentity(task || { id });
+    const execution = this.sharedWorkflowExecution;
+    if (observed || binding || (execution == null ? void 0 : execution.taskId) === id) {
+      const checkpoint = execution == null ? void 0 : execution.checkpoint;
+      const active = checkpoint == null ? void 0 : checkpoint.steps[checkpoint.steps.length - 1];
+      const step = (_a = this.settings.workflows.find((workflow) => workflow.id === (observed == null ? void 0 : observed.workflowId))) == null ? void 0 : _a.steps.find((step2) => step2.id === (observed == null ? void 0 : observed.stepId));
+      const sameBinding = observed && binding && Object.keys(observed).every((key) => observed[key] === binding[key]);
+      const referencesTask = (execution == null ? void 0 : execution.taskId) === id || (step == null ? void 0 : step.taskId) === id && (!step.stepKind || step.stepKind === "task");
+      if (!observed || observed.taskId !== id || !observed.runId || !observed.workflowId || !observed.stepId || !Number.isSafeInteger(observed.stepIndex) || !sameBinding || !execution || !checkpoint || !this.ownsSharedRun(observed.workflowId, observed.runId) || checkpoint.runId !== observed.runId || checkpoint.workflowId !== observed.workflowId || checkpoint.phase !== "in_flight" || checkpoint.nextStepId !== observed.stepId || (active == null ? void 0 : active.stepId) !== observed.stepId || active.status !== "in_flight" || checkpoint.steps.length - 1 !== observed.stepIndex || !referencesTask) {
+        throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+      }
+      if (!execution.controller.signal.aborted) {
+        execution.controller.abort();
+        new import_obsidian.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
+      }
+      return "stop-requested";
     }
     const proc = this.runningProcesses.get(id);
     if (proc) {
@@ -8737,6 +8766,7 @@ ${current.output}`;
       await this.saveSettings();
     }
     new import_obsidian.Notice(`AutoOC: \u23F9 Task stopped.`);
+    return "stopped";
   }
   async killWorkflow(id) {
     var _a, _b;
@@ -10882,7 +10912,20 @@ var AutoOCView = class extends import_obsidian.ItemView {
     renderTaskResults(resultsRoot);
   }
   renderTaskCard(parent, task) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i;
+    const stopIdentity = this.plugin.taskStopIdentity(task);
+    const stopTask = async (button) => {
+      button.disabled = true;
+      const label = button.textContent;
+      try {
+        const result = await this.plugin.killTask(task.id, stopIdentity);
+        if (result === "stop-requested") button.textContent = "Stop requested\u2026";
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = label;
+        new import_obsidian.Notice(`AutoOC: ${String(error)}`);
+      }
+    };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
     card.setAttr("data-auto-oc-task-id", task.id);
     const summary = card.createDiv("auto-oc-card-summary");
@@ -10892,7 +10935,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`
     });
     const badge = summary.createEl("span", {
-      text: task.pendingCodexApproval ? "waiting approval" : task.status,
+      text: task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_a = task.runtimeExecution) == null ? void 0 : _a.requiresReconciliation) ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -10908,8 +10951,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       btnQuickStop.title = "Terminate process now";
       btnQuickStop.onclick = async (e) => {
         e.stopPropagation();
-        btnQuickStop.disabled = true;
-        await this.plugin.killTask(task.id);
+        await stopTask(btnQuickStop);
       };
     }
     if (task.pendingCodexApproval) {
@@ -10958,8 +11000,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const isExpanded = this.expandedTasks.has(task.id);
     details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = task.taskKind === "codex" ? (_c = (_b = (_a = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _a.label) != null ? _b : task.model) != null ? _c : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_e = (_d = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _d.label) != null ? _e : task.model;
-    meta.createEl("span", { text: `\u{1F5C2} ${((_f = task.area) == null ? void 0 : _f.trim()) || "No area"}` });
+    const modelLabel = task.taskKind === "codex" ? (_d = (_c = (_b = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _b.label) != null ? _c : task.model) != null ? _d : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_f = (_e = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _e.label) != null ? _f : task.model;
+    meta.createEl("span", { text: `\u{1F5C2} ${((_g = task.area) == null ? void 0 : _g.trim()) || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else if (task.taskKind === "codex") {
@@ -10986,8 +11028,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     } else if (task.scheduleType === "interval") {
-      const value = (_g = task.scheduleIntervalValue) != null ? _g : 10;
-      const unit = (_h = task.scheduleIntervalUnit) != null ? _h : "minutes";
+      const value = (_h = task.scheduleIntervalValue) != null ? _h : 10;
+      const unit = (_i = task.scheduleIntervalUnit) != null ? _i : "minutes";
       scheduleText = `\u{1F501} Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
@@ -11026,9 +11068,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       btnStop.title = "Terminate process now";
       btnStop.onclick = async (e) => {
         e.stopPropagation();
-        btnStop.disabled = true;
-        btnStop.textContent = "Stopping\u2026";
-        await this.plugin.killTask(task.id);
+        await stopTask(btnStop);
       };
     }
     if (task.pendingCodexApproval) {

@@ -1870,7 +1870,7 @@ export default class AutoOCPlugin extends Plugin {
   private stoppingWorkflows = new Set<string>();
   private workflowDelayControllers = new Map<string, AbortController>();
   private pluginExecutionLease?: ExecutionLease;
-  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController};
+  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint};
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
 
@@ -2038,7 +2038,7 @@ export default class AutoOCPlugin extends Plugin {
     if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
-    const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController()};
+    const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined};
     this.sharedWorkflowExecution = execution;
     try {
       await this.saveSettings(false);
@@ -2049,8 +2049,11 @@ export default class AutoOCPlugin extends Plugin {
         redact:output=>this.redactSecrets(output),
         onCheckpoint:async checkpoint=>{
           if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
+          if (execution.runId && checkpoint.runId !== execution.runId || execution.checkpoint && checkpoint.revision < execution.checkpoint.revision) return;
           execution.runId = checkpoint.runId;
+          execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
           await this.loadSettings();
+          if (this.sharedWorkflowExecution !== execution) return;
           this.refreshOpenViews();
         },
       });
@@ -2411,8 +2414,8 @@ export default class AutoOCPlugin extends Plugin {
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
         }
         if (request.url === "/stop") {
-          if (kind === "task") await this.killTask(item.id); else await this.killWorkflow(item.id);
-          return send(200, { ok: true, id: item.id, name: item.name, status: "stopped" });
+          const status = kind === "task" ? await this.killTask(item.id, this.taskStopIdentity(item as ScheduledTask)) : (await this.killWorkflow(item.id), "stopped");
+          return send(200, { ok: true, id: item.id, name: item.name, status });
         }
         return send(404, { ok: false, error: "Unknown endpoint" });
       } catch (error) {
@@ -3789,10 +3792,33 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
-  async killTask(id: string) {
-    if (this.sharedWorkflowExecution?.taskId === id) {
-      this.sharedWorkflowExecution.controller.abort();
-      return;
+  taskStopIdentity(task: ScheduledTask) {
+    const binding = (task as any).runtimeExecution;
+    return binding ? {taskId:task.id,runId:binding.runId,workflowId:binding.workflowId,stepId:binding.stepId,stepIndex:binding.stepIndex} : undefined;
+  }
+
+  async killTask(id: string, observed?: {taskId:string;runId:string;workflowId:string;stepId:string;stepIndex:number}) {
+    const task = this.settings.tasks.find(item => item.id === id);
+    const binding = this.taskStopIdentity(task || {id} as ScheduledTask);
+    const execution = this.sharedWorkflowExecution;
+    if (observed || binding || execution?.taskId === id) {
+      const checkpoint = execution?.checkpoint;
+      const active = checkpoint?.steps[checkpoint.steps.length - 1];
+      const step = this.settings.workflows.find(workflow => workflow.id === observed?.workflowId)?.steps.find(step => step.id === observed?.stepId);
+      const sameBinding = observed && binding && Object.keys(observed).every(key => (observed as any)[key] === (binding as any)[key]);
+      const referencesTask = execution?.taskId === id || step?.taskId === id && (!step.stepKind || step.stepKind === "task");
+      if (!observed || observed.taskId !== id || !observed.runId || !observed.workflowId || !observed.stepId || !Number.isSafeInteger(observed.stepIndex) ||
+          !sameBinding || !execution || !checkpoint || !this.ownsSharedRun(observed.workflowId, observed.runId) ||
+          checkpoint.runId !== observed.runId || checkpoint.workflowId !== observed.workflowId || checkpoint.phase !== "in_flight" ||
+          checkpoint.nextStepId !== observed.stepId || active?.stepId !== observed.stepId || active.status !== "in_flight" ||
+          checkpoint.steps.length - 1 !== observed.stepIndex || !referencesTask) {
+        throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+      }
+      if (!execution.controller.signal.aborted) {
+        execution.controller.abort();
+        new Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
+      }
+      return "stop-requested";
     }
     const proc = this.runningProcesses.get(id);
     if (proc) {
@@ -3812,6 +3838,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
     }
     new Notice(`AutoOC: ⏹ Task stopped.`);
+    return "stopped";
   }
 
   async killWorkflow(id: string) {
@@ -6161,6 +6188,19 @@ class AutoOCView extends ItemView {
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
+    const stopIdentity = this.plugin.taskStopIdentity(task);
+    const stopTask = async (button: HTMLButtonElement) => {
+      button.disabled = true;
+      const label = button.textContent;
+      try {
+        const result = await this.plugin.killTask(task.id, stopIdentity);
+        if (result === "stop-requested") button.textContent = "Stop requested…";
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = label;
+        new Notice(`AutoOC: ${String(error)}`);
+      }
+    };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
     card.setAttr("data-auto-oc-task-id", task.id);
     
@@ -6177,7 +6217,7 @@ class AutoOCView extends ItemView {
     });
     
     const badge = summary.createEl("span", {
-      text: task.pendingCodexApproval ? "waiting approval" : task.status,
+      text: task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -6193,8 +6233,7 @@ class AutoOCView extends ItemView {
       btnQuickStop.title = "Terminate process now";
       btnQuickStop.onclick = async (e) => {
         e.stopPropagation();
-        btnQuickStop.disabled = true;
-        await this.plugin.killTask(task.id);
+        await stopTask(btnQuickStop);
       };
     }
     if (task.pendingCodexApproval) {
@@ -6318,9 +6357,7 @@ class AutoOCView extends ItemView {
       btnStop.title = "Terminate process now";
       btnStop.onclick = async (e) => {
         e.stopPropagation();
-        btnStop.disabled = true;
-        btnStop.textContent = "Stopping…";
-        await this.plugin.killTask(task.id);
+        await stopTask(btnStop);
       };
     }
     if (task.pendingCodexApproval) {
