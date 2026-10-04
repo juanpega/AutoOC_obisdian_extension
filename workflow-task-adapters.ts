@@ -1,5 +1,6 @@
 import type { WorkflowTaskAdapter } from "./code-workflow-host";
 import type { PreparedWorkflow } from "./workflow-definition";
+import type { VaultMutationBatchFactory } from "./code-vault-mutations";
 import { createCodeWorkflowAdapter } from "./code-workflow-adapter";
 import { createCodexWorkflowAdapter } from "./codex-workflow-adapter";
 import { createCopilotWorkflowAdapter,createOpenCodeWorkflowAdapter } from "./cli-workflow-adapters";
@@ -25,9 +26,9 @@ export function combineWorkflowTaskAdapters(adapters:readonly WorkflowTaskAdapte
   };
 }
 
-export function createWorkflowTaskAdapter(definition:PreparedWorkflow,vaultBase:string):WorkflowTaskAdapter {
+export function createWorkflowTaskAdapter(definition:PreparedWorkflow,vaultBase:string,vaultMutations?:VaultMutationBatchFactory):WorkflowTaskAdapter {
   return combineWorkflowTaskAdapters([
-    createCodeWorkflowAdapter(vaultBase,definition.settings.workingDirectory || vaultBase),
+    createCodeWorkflowAdapter(vaultBase,definition.settings.workingDirectory || vaultBase,vaultMutations),
     createCodexWorkflowAdapter(definition,vaultBase),
     createCopilotWorkflowAdapter(definition,vaultBase),
     createOpenCodeWorkflowAdapter(definition,vaultBase),

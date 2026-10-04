@@ -1,7 +1,8 @@
 import { executeCodeTask } from "./code-task";
 import type { WorkflowTaskAdapter } from "./code-workflow-host";
+import { runWithVaultMutations, type VaultMutationBatchFactory } from "./code-vault-mutations";
 
-export function createCodeWorkflowAdapter(vaultBase:string,workingDirectory = vaultBase):WorkflowTaskAdapter {
+export function createCodeWorkflowAdapter(vaultBase:string,workingDirectory = vaultBase, vaultMutations?:VaultMutationBatchFactory):WorkflowTaskAdapter {
   const supports = (task:Readonly<Record<string,any>>) => task.taskKind === "code";
   return {
     supports,
@@ -11,8 +12,8 @@ export function createCodeWorkflowAdapter(vaultBase:string,workingDirectory = va
       if (!(task.code || task.prompt || "").trim()) return {succeeded:false,output:"[AutoOC] Code task not launched: code is empty."};
       let output = "[running code task...]\n";
       try {
-        const result = executeCodeTask({...task,vaultBase,cwd:task.workingDirectory || workingDirectory,
-          log:(...args)=>{output += args.map(String).join(" ")+"\n";}});
+        const result = await runWithVaultMutations(vaultMutations, onVaultMutation => executeCodeTask({...task,vaultBase,cwd:task.workingDirectory || workingDirectory,
+          onVaultMutation, log:(...args)=>{output += args.map(String).join(" ")+"\n";}}));
         output += result;
         return {succeeded:true,output};
       } catch (error) {

@@ -11,6 +11,7 @@ import { readStopRequest } from "./workflow-stop";
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { preflightInstalledWorkflow } from "./workflow-preflight";
 import { createWorkflowEvaluator } from "./workflow-evaluation";
+import type { VaultMutationBatchFactory } from "./code-vault-mutations";
 
 // Shared installed-catalog entry point. The caller must authorize this vault
 // and its trusted Code capabilities. No discovery by name or implicit retry.
@@ -26,6 +27,7 @@ export async function runInstalledWorkflow(options: {
   redact: (output:string) => string;
   lease?: ExecutionLease;
   onCheckpoint?: (checkpoint:RunCheckpoint)=>Promise<void>;
+  vaultMutations?: VaultMutationBatchFactory;
 }) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
@@ -83,7 +85,8 @@ export async function runInstalledWorkflow(options: {
     resumeRunId:options.resumeRunId, reconcile:options.reconcile,
     maxSteps:options.maxSteps, signal:controller.signal, redact:options.redact,
     lease:options.lease,
-    tasks:createWorkflowTaskAdapter(definition,vault),
+    vaultMutations:options.vaultMutations,
+    tasks:createWorkflowTaskAdapter(definition,vault,options.vaultMutations),
     evaluate:createWorkflowEvaluator(definition,vault,controller.signal),
     onCheckpoint:async checkpoint=>{
       activeRunId=checkpoint.runId;

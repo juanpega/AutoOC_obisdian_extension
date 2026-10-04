@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vm from "vm";
+import type { VaultMutation } from "./code-vault-mutations";
 
 export interface CodeExecutionOptions {
   vaultBase: string;
@@ -15,6 +16,7 @@ export interface CodeExecutionOptions {
   codeAllowTerminal?: boolean;
   exposePaths?: boolean;
   log?: (...args: unknown[]) => void;
+  onVaultMutation?: (mutation: VaultMutation) => void;
 }
 
 // Same execution contract for tasks and steps. The caller owns status/history.
@@ -60,11 +62,16 @@ export function executeCode(options: CodeExecutionOptions): string {
         basePath: vaultBase,
         resolve: (p: string) => resolveInVault(p),
         read: (p: string) => readText(resolveInVault(p)),
-        write: (p: string, content: any) => writeText(resolveInVault(p), content),
+        write: (p: string, content: any) => {
+          const full = writeText(resolveInVault(p), content);
+          options.onVaultMutation?.({path: full, operation: "write"});
+          return full;
+        },
         append: (p: string, content: any) => {
           const full = resolveInVault(p);
           fs.mkdirSync(path.dirname(full), { recursive: true });
           fs.appendFileSync(full, String(content), "utf8");
+          options.onVaultMutation?.({path: full, operation: "append"});
           return full;
         },
         exists: (p: string) => fs.existsSync(resolveInVault(p)),

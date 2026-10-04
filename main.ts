@@ -30,6 +30,8 @@ import { workflowTaskPrompt } from "./workflow-handoff";
 import { executeCodexTask } from "./codex-execution";
 import { executeCode } from "./code-runtime";
 import { executeCodeTask } from "./code-task";
+import { runWithVaultMutations } from "./code-vault-mutations";
+import { ObsidianVaultRefresh } from "./obsidian-vault-refresh";
 import { EXECUTION_DEFAULTS } from "./execution-defaults";
 import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
 import { runInstalledWorkflow } from "./installed-workflow-host";
@@ -1970,6 +1972,8 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async onunload() {
+    this.vaultRefreshStopped = true;
+    this.vaultRefresh?.dispose();
     const unresolved = !!this.sharedWorkflowExecution || this.runningProcesses.size > 0 || this.runningCodexClients.size > 0 ||
       this.workflowDelayControllers.size > 0 || this.settings?.tasks?.some(task=>task.status === "running") ||
       this.settings?.workflows?.some(workflow=>workflow.status === "running");
@@ -2041,6 +2045,7 @@ export default class AutoOCPlugin extends Plugin {
       return await runInstalledWorkflow({
         vault:(this.app.vault.adapter as any).basePath, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
         lease:this.pluginExecutionLease, signal:execution.controller.signal,
+        vaultMutations:()=>this.createVaultMutationBatch(),
         redact:output=>this.redactSecrets(output),
         onCheckpoint:async checkpoint=>{
           if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
@@ -3694,6 +3699,16 @@ export default class AutoOCPlugin extends Plugin {
     this.emitTaskUpdated(task);
   }
 
+  private vaultRefresh?: ObsidianVaultRefresh;
+  private vaultRefreshStopped = false;
+  private codeTaskRuns = new Map<string, object>();
+
+  private createVaultMutationBatch() {
+    if (this.vaultRefreshStopped) throw new Error("Plugin unloaded before Code execution");
+    this.vaultRefresh ??= new ObsidianVaultRefresh((this.app.vault.adapter as any).basePath || ".", this.app.vault.adapter);
+    return this.vaultRefresh.createBatch();
+  }
+
   async runCodeTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
@@ -3713,6 +3728,8 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const execution = {};
+    this.codeTaskRuns.set(current.id, execution);
     current.status = "running";
     current.lastRun = new Date().toISOString();
     current.output = "[running code task...]\n";
@@ -3721,11 +3738,14 @@ export default class AutoOCPlugin extends Plugin {
     new Notice(`AutoOC: running code task "${current.name}"...`);
 
     try {
-      const out = executeCodeTask({
+      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCodeTask({
         ...current, code, vaultBase: vaultBasePath,
         cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
         log: (...args) => { current.output += args.map(String).join(" ") + "\n"; },
-      });
+        onVaultMutation,
+      }));
+      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
@@ -3737,6 +3757,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       if (onComplete) await onComplete(current, 0);
     } catch (err) {
+      if (this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.status = "failed";
       current.output = (current.output || "") + `[code error: ${String(err)}]`;
       this.view?.startGradualSink(current.id);
@@ -3748,6 +3769,8 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       new Notice(`AutoOC: ❌ code task "${current.name}" failed.`);
       if (onComplete) await onComplete(current, -1);
+    } finally {
+      if (this.codeTaskRuns.get(current.id) === execution) this.codeTaskRuns.delete(current.id);
     }
   }
 
@@ -4390,15 +4413,18 @@ export default class AutoOCPlugin extends Plugin {
     if (ctx) for (const [k, v] of ctx.stepOutputs.entries()) outputs[k] = v;
     try {
       const vaultBase = (this.app.vault.adapter as any).basePath || ".";
-      const out = executeCode({
+      const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCode({
         ...step, vaultBase, cwd: this.settings.workingDirectory || vaultBase,
         code: step.code || "", input: inputVal, outputs,
         codeInputVar: inputVar, codeOutputVar: outputVar,
-      });
+        onVaultMutation,
+      }));
+      if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
       await this.completeStep(wf, step, stepIndex, true, out);
     } catch (err) {
+      if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
       const msg = `[code error: ${String(err)}]`;
       if (ctx) ctx.stepOutputs.set(step.id, msg);
       new Notice(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`);

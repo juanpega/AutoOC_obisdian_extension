@@ -22,7 +22,8 @@ test('standalone task state survives plugin reload and plugin uses the same coor
   const install=path.join(root,'.obsidian/plugins/auto-oc'),file=path.join(install,'data.json');
   fs.mkdirSync(install,{recursive:true});
   fs.writeFileSync(file,JSON.stringify({tasks:[{id:'single',name:'Single',taskKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once"); output="shared result";'}],workflows:[],custom:'keep'}));
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
+  const reconciled=[];
+  p.app={vault:{adapter:{basePath:root,queue:job=>job(),reconcileInternalFile:async relative=>{reconciled.push(relative);}},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
   try {
     const first=await runInstalledWorkflow({vault:root,taskId:'single',newExecution:true,redact:s=>s});
     const before=fs.readFileSync(file,'utf8');
@@ -36,6 +37,7 @@ test('standalone task state survives plugin reload and plugin uses the same coor
     p.releasePluginExecution(false);
     assert.equal((await runInstalledWorkflow({vault:root,taskId:'single',resumeRunId:current,redact:s=>s})).phase,'completed');
     assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'onceonce');
+    assert.deepEqual(reconciled,['effects.txt']);
   } finally {
     p.releasePluginExecution(false);
     assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-task-parity-'));

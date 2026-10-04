@@ -648,11 +648,16 @@ function executeCode(options) {
       basePath: vaultBase,
       resolve: (p) => resolveInVault(p),
       read: (p) => readText(resolveInVault(p)),
-      write: (p, content) => writeText(resolveInVault(p), content),
+      write: (p, content) => {
+        const full = writeText(resolveInVault(p), content);
+        options.onVaultMutation?.({ path: full, operation: "write" });
+        return full;
+      },
       append: (p, content) => {
         const full = resolveInVault(p);
         fs4.mkdirSync(path4.dirname(full), { recursive: true });
         fs4.appendFileSync(full, String(content), "utf8");
+        options.onVaultMutation?.({ path: full, operation: "append" });
         return full;
       },
       exists: (p) => fs4.existsSync(resolveInVault(p)),
@@ -700,6 +705,30 @@ function executeCode(options) {
   const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
   const result = vm2.runInNewContext(preamble + "\n" + options.code + "\n;" + outputVar, sandbox, { timeout: 9e5 });
   return String(result == null ? "" : result);
+}
+
+// code-vault-mutations.ts
+async function runWithVaultMutations(factory, execute) {
+  const batch = factory?.();
+  let result;
+  let failed = false;
+  let original;
+  try {
+    result = execute(batch?.record);
+  } catch (error) {
+    failed = true;
+    original = error;
+  }
+  try {
+    await batch?.flush();
+  } catch (refreshError) {
+    if (!failed) throw refreshError;
+    const combined = new Error(`${String(original)}; ${String(refreshError)}`);
+    combined.cause = original;
+    throw combined;
+  }
+  if (failed) throw original;
+  return result;
 }
 
 // workflow-delay.ts
@@ -1032,7 +1061,8 @@ async function runCodeWorkflowHost(options) {
           return { succeeded: true, output: spec.output };
         }
         try {
-          return { succeeded: true, output: executeCode({ ...step, code: step.code || "", vaultBase: options.vaultBase, cwd: definition.settings.workingDirectory || options.vaultBase, input, outputs }) };
+          const output = await runWithVaultMutations(options.vaultMutations, (onVaultMutation) => executeCode({ ...step, code: step.code || "", vaultBase: options.vaultBase, cwd: definition.settings.workingDirectory || options.vaultBase, input, outputs, onVaultMutation }));
+          return { succeeded: true, output };
         } catch (error) {
           return { succeeded: false, output: `[code error: ${String(error)}]` };
         }
@@ -1221,7 +1251,7 @@ function executeCodeTask(options) {
 }
 
 // code-workflow-adapter.ts
-function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase) {
+function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaultMutations) {
   const supports = (task) => task.taskKind === "code";
   return {
     supports,
@@ -1231,14 +1261,15 @@ function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase) {
       if (!(task.code || task.prompt || "").trim()) return { succeeded: false, output: "[AutoOC] Code task not launched: code is empty." };
       let output = "[running code task...]\n";
       try {
-        const result = executeCodeTask({
+        const result = await runWithVaultMutations(vaultMutations, (onVaultMutation) => executeCodeTask({
           ...task,
           vaultBase,
           cwd: task.workingDirectory || workingDirectory,
+          onVaultMutation,
           log: (...args) => {
             output += args.map(String).join(" ") + "\n";
           }
-        });
+        }));
         output += result;
         return { succeeded: true, output };
       } catch (error) {
@@ -2725,9 +2756,9 @@ function combineWorkflowTaskAdapters(adapters) {
     }
   };
 }
-function createWorkflowTaskAdapter(definition, vaultBase) {
+function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations) {
   return combineWorkflowTaskAdapters([
-    createCodeWorkflowAdapter(vaultBase, definition.settings.workingDirectory || vaultBase),
+    createCodeWorkflowAdapter(vaultBase, definition.settings.workingDirectory || vaultBase, vaultMutations),
     createCodexWorkflowAdapter(definition, vaultBase),
     createCopilotWorkflowAdapter(definition, vaultBase),
     createOpenCodeWorkflowAdapter(definition, vaultBase)
@@ -2893,7 +2924,8 @@ async function runInstalledWorkflow(options) {
       signal: controller.signal,
       redact: options.redact,
       lease: options.lease,
-      tasks: createWorkflowTaskAdapter(definition, vault),
+      vaultMutations: options.vaultMutations,
+      tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
       evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
       onCheckpoint: async (checkpoint) => {
         activeRunId = checkpoint.runId;

@@ -5,6 +5,7 @@ import { prepareWorkflowDefinition, type PreparedWorkflow } from "./workflow-def
 import { findWorkflowEntry } from "./workflow-routing";
 import { advanceWorkflowSession } from "./workflow-session";
 import { executeCode } from "./code-runtime";
+import { runWithVaultMutations, type VaultMutationBatchFactory } from "./code-vault-mutations";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { workflowTaskPrompt } from "./workflow-handoff";
 import { reconcileWorkflowTask } from "./workflow-recovery";
@@ -43,6 +44,7 @@ export async function runCodeWorkflowHost(options: {
   redact: (text: string) => string;
   onCheckpoint?: (checkpoint:RunCheckpoint) => Promise<void>;
   lease?: ExecutionLease;
+  vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
@@ -117,7 +119,8 @@ export async function runCodeWorkflowHost(options: {
           return {succeeded:true, output:spec.output};
         }
         try {
-          return {succeeded:true,output:executeCode({...step,code:step.code || "",vaultBase:options.vaultBase,cwd:definition.settings.workingDirectory || options.vaultBase,input,outputs})};
+          const output = await runWithVaultMutations(options.vaultMutations, onVaultMutation => executeCode({...step,code:step.code || "",vaultBase:options.vaultBase,cwd:definition.settings.workingDirectory || options.vaultBase,input,outputs,onVaultMutation}));
+          return {succeeded:true,output};
         } catch (error) { return {succeeded:false,output:`[code error: ${String(error)}]`}; }
       },
       evaluate:options.evaluate || (async()=>{throw new Error("Model evaluation is not supported by this host");}),
