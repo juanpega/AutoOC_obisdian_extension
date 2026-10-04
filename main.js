@@ -4950,9 +4950,9 @@ function standaloneTaskWorkflow(taskId) {
   if (!taskId) throw new Error("Explicit task identity required");
   return { id: `@task:${taskId}`, name: "Standalone task", steps: [{ id: "task", stepKind: "task", taskId }] };
 }
-function projectStandaloneTask(task, tasks, settings, checkpoint) {
+function projectStandaloneTask(task, tasks, settings, checkpoint, activelyExecuting = false) {
   const workflow = { ...standaloneTaskWorkflow(task.id), runtimeExecution: task.runtimeExecution };
-  const projected = projectWorkflowProgress(workflow, tasks, settings, checkpoint, task.runtimeExecution.runId);
+  const projected = projectWorkflowProgress(workflow, tasks, settings, checkpoint, task.runtimeExecution.runId, activelyExecuting);
   const observed = checkpoint.steps[checkpoint.steps.length - 1];
   return {
     ...task,
@@ -6791,14 +6791,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     return await this.runSharedWorkflow(workflowId, expectedRunId, execution.phase === "in_flight");
   }
   async runSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId) {
-    var _a;
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
     if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
     if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
-    const execution = { workflowId, taskId, controller: new AbortController() };
+    const execution = { workflowId, taskId, runId: void 0, controller: new AbortController() };
     this.sharedWorkflowExecution = execution;
     try {
       await this.saveSettings(false);
@@ -6812,15 +6811,32 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         lease: this.pluginExecutionLease,
         signal: execution.controller.signal,
         redact: (output) => this.redactSecrets(output),
-        onCheckpoint: async () => {
-          var _a2;
+        onCheckpoint: async (checkpoint) => {
+          if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
+          execution.runId = checkpoint.runId;
           await this.loadSettings();
-          (_a2 = this.view) == null ? void 0 : _a2.refresh();
+          this.refreshOpenViews();
         }
       });
     } finally {
       if (this.sharedWorkflowExecution === execution) this.sharedWorkflowExecution = void 0;
-      (_a = this.view) == null ? void 0 : _a.refresh();
+      await this.loadSettings();
+      this.refreshOpenViews();
+    }
+  }
+  ownsSharedRun(workflowId, runId) {
+    var _a;
+    if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.workflowId) !== workflowId || this.sharedWorkflowExecution.runId !== runId || !this.pluginExecutionLease) return false;
+    try {
+      this.pluginExecutionLease.assertOwned();
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  refreshOpenViews() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AutoOCView) leaf.view.refresh();
     }
   }
   getMcpBridgePath() {
@@ -7302,13 +7318,22 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         const binding = wf.runtimeExecution;
         if (!binding) return wf;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
-        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId);
+        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id, binding.runId));
       });
       this.settings.workflows = recovered;
       this.settings.tasks = this.settings.tasks.map((task) => {
         const binding = task.runtimeExecution;
-        if (!binding || binding.workflowId !== standaloneTaskWorkflow(task.id).id) return task;
-        return projectStandaloneTask(task, this.settings.tasks, this.settings, readExecutionCheckpoint(runtime, binding.runId));
+        if (!binding) return task;
+        if (binding.workflowId === standaloneTaskWorkflow(task.id).id) {
+          return projectStandaloneTask(task, this.settings.tasks, this.settings, readExecutionCheckpoint(runtime, binding.runId), this.ownsSharedRun(binding.workflowId, binding.runId));
+        }
+        const workflow = recovered.find((wf) => {
+          var _a2;
+          return wf.id === binding.workflowId && ((_a2 = wf.runtimeExecution) == null ? void 0 : _a2.runId) === binding.runId;
+        });
+        const step = workflow == null ? void 0 : workflow.steps.find((step2) => step2.id === binding.stepId && step2.taskId === task.id);
+        if (!step) return task;
+        return { ...task, status: step.status, runtimeExecution: { ...binding, requiresReconciliation: step.status === "pending" && workflow.runtimeExecution.requiresReconciliation } };
       });
       return;
     }
@@ -10980,9 +11005,13 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const btnQuickRun = quickActions.createEl("button", { text: "\u25B6", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
     btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready", "in_flight"].includes((_a = workflow.runtimeExecution) == null ? void 0 : _a.phase);
-    btnQuickRun.onclick = (e) => {
+    btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runWorkflow(workflow);
+      try {
+        await this.plugin.runWorkflow(workflow);
+      } catch (error) {
+        new import_obsidian.Notice(this.plugin.redactSecrets(String(error)));
+      }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnQuickStop = quickActions.createEl("button", { text: "\u23F9", cls: "auto-oc-btn-stop" });
@@ -11261,9 +11290,13 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: "auto-oc-btn-run"
     });
     btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
-    btnRun.onclick = (e) => {
+    btnRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runWorkflow(workflow);
+      try {
+        await this.plugin.runWorkflow(workflow);
+      } catch (error) {
+        new import_obsidian.Notice(this.plugin.redactSecrets(String(error)));
+      }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnStop = actions.createEl("button", {

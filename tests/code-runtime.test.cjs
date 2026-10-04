@@ -22,7 +22,7 @@ test('standalone task state survives plugin reload and plugin uses the same coor
   const install=path.join(root,'.obsidian/plugins/auto-oc'),file=path.join(install,'data.json');
   fs.mkdirSync(install,{recursive:true});
   fs.writeFileSync(file,JSON.stringify({tasks:[{id:'single',name:'Single',taskKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once"); output="shared result";'}],workflows:[],custom:'keep'}));
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};p.manifest={id:'auto-oc'};
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
   try {
     const first=await runInstalledWorkflow({vault:root,taskId:'single',newExecution:true,redact:s=>s});
     const before=fs.readFileSync(file,'utf8');
@@ -335,7 +335,7 @@ test('plugin lifetime reservation excludes the installed host in both directions
   const install=path.join(root,'.obsidian','plugins','auto-oc'),runtime=path.join(install,'runtime'),file=path.join(install,'data.json');
   fs.mkdirSync(install,{recursive:true});
   fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[{id:'exclusive',name:'Exclusive',steps:[{id:'a',stepKind:'code',code:'output="one";'}]}]}));
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};p.manifest={id:'auto-oc'};
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
   const options={vault:root,workflowId:'exclusive',redact:s=>s};
   try {
     p.reservePluginExecution();p.reservePluginExecution();
@@ -366,7 +366,7 @@ test('plugin shared entry runs the installed motor while retaining its lifetime 
   const install=path.join(root,'.obsidian','plugins','auto-oc'),runtime=path.join(install,'runtime'),file=path.join(install,'data.json');
   fs.mkdirSync(install,{recursive:true});
   fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[{id:'shared',name:'Shared',steps:[{id:'a',stepKind:'code',code:'output="same motor";'}]}]}));
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};p.manifest={id:'auto-oc'};
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
   try {
     p.reservePluginExecution();await p.loadSettings();
     const pending=p.runWorkflow(p.settings.workflows[0]);
@@ -400,7 +400,7 @@ test('plugin stop controls follow the owned session and cancellation prevents th
   const install=path.join(root,'.obsidian','plugins','auto-oc'),runtime=path.join(install,'runtime'),file=path.join(install,'data.json');
   fs.mkdirSync(install,{recursive:true});
   fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[{id:'stop',name:'Stop',steps:[{id:'wait',stepKind:'delay',delayValue:30,delayUnit:'seconds'},{id:'after',stepKind:'code',code:'output="must not execute";'}]}]}));
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};p.manifest={id:'auto-oc'};
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
   let pending;
   try {
     p.reservePluginExecution();await p.loadSettings();
@@ -411,7 +411,7 @@ test('plugin stop controls follow the owned session and cancellation prevents th
       if(Date.now()>deadline) throw Error('no persisted in-flight checkpoint');
       await new Promise(resolve=>setTimeout(resolve,10));
     }
-    assert.equal(p.settings.workflows[0].status,'pending');
+    assert.equal(p.settings.workflows[0].status,'running');
     assert.equal(p.isWorkflowExecuting('stop'),true);
     assert.equal(p.isWorkflowExecuting('other'),false);
     await p.killWorkflow('stop');await pending;
@@ -437,7 +437,7 @@ test('plugin recovery continues the exact saved execution without repeating its 
   const install=path.join(root,'.obsidian','plugins','auto-oc'),runtime=path.join(install,'runtime'),file=path.join(install,'data.json');
   fs.mkdirSync(install,{recursive:true});
   fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[{id:'recover',name:'Recover',steps:[{id:'first',stepKind:'code',code:'output="first";'},{id:'last',stepKind:'code',code:'output=input+" last";'}]}]}));
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};p.manifest={id:'auto-oc'};
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
   try {
     const partial=await runInstalledWorkflow({vault:root,workflowId:'recover',redact:s=>s,maxSteps:1});
     assert.equal(partial.phase,'ready');

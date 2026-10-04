@@ -8,9 +8,9 @@ export function standaloneTaskWorkflow(taskId:string) {
   return {id:`@task:${taskId}`,name:"Standalone task",steps:[{id:"task",stepKind:"task",taskId}]};
 }
 
-export function projectStandaloneTask(task:any,tasks:any[],settings:Record<string,any>,checkpoint:RunCheckpoint) {
+export function projectStandaloneTask(task:any,tasks:any[],settings:Record<string,any>,checkpoint:RunCheckpoint,activelyExecuting=false) {
   const workflow={...standaloneTaskWorkflow(task.id),runtimeExecution:task.runtimeExecution};
-  const projected=projectWorkflowProgress(workflow,tasks,settings,checkpoint,task.runtimeExecution.runId);
+  const projected=projectWorkflowProgress(workflow,tasks,settings,checkpoint,task.runtimeExecution.runId,activelyExecuting);
   const observed=checkpoint.steps[checkpoint.steps.length-1];
   return {...task,status:projected.status,output:observed?.output || '',
     ...(observed?.startedAt ? {lastRun:observed.startedAt} : {}),

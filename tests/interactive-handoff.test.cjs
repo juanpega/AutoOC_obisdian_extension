@@ -160,6 +160,157 @@ function pluginHarness(payload) {
 }
 const drain = () => new Promise(resolve => setImmediate(resolve));
 
+test('workflow GUI buttons report rejected preflight without effects; CLI still returns an error', async () => {
+  const Module = require('node:module'), os = require('node:os');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-preflight-notice-'));
+  const directory = path.join(root, '.obsidian/plugins/auto-oc');
+  fs.mkdirSync(directory, { recursive: true });
+  const file = path.join(directory, 'data.json'), badCwd = path.join(root, 'not-directory.txt');
+  fs.writeFileSync(badCwd, 'fixture');
+  fs.writeFileSync(file, JSON.stringify({ tasks: [{ id: 'interactive', name: 'Interactive', taskKind: 'opencode', interactiveTerminal: true,
+    prompt: 'Read', model: 'test/model', workingDirectory: badCwd }], workflows: [{ id: 'workflow', name: 'Preflight', steps: [
+    { id: 'code', stepKind: 'code', codeAllowVault: true, code: 'vault.write("must-not-exist.txt", "bad");' },
+    { id: 'cli', stepKind: 'task', taskId: 'interactive' }] }] }));
+  const original = Module._load, notices = [];
+  let plugin;
+  try {
+    class Notice { constructor(message) { notices.push(message); } }
+    Module._load = function(id, ...args) {
+      if (id === 'obsidian') return { Plugin: class {}, Notice, Modal: class {}, Setting: class {}, ItemView: class {}, PluginSettingTab: class {} };
+      return original.call(this, id, ...args);
+    };
+    const filename = path.resolve(__dirname, '../main.js'), source = fs.readFileSync(filename, 'utf8');
+    const bundle = new Module(filename, module);
+    bundle.filename = filename; bundle.paths = Module._nodeModulePaths(path.dirname(filename));
+    bundle._compile(source, filename);
+    plugin = new bundle.exports.default();
+    plugin.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
+    plugin.manifest = { id: 'auto-oc' };
+    plugin.reservePluginExecution(); await plugin.loadSettings(); await plugin.saveSettings(false);
+    const before = fs.readFileSync(file, 'utf8');
+    const runtime = path.join(directory, 'runtime'), entries = fs.readdirSync(runtime);
+    // Execute both real bundle event handlers, without requiring an Obsidian DOM.
+    const ast = ts.createSourceFile(filename, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+    const handlers = [];
+    function visit(node) {
+      if (ts.isMethodDeclaration(node) && node.name.getText(ast) === 'renderWorkflowCard') {
+        function find(child) {
+          if (ts.isBinaryExpression(child) && ['btnQuickRun.onclick', 'btnRun.onclick'].includes(child.left.getText(ast))) handlers.push(child.right.getText(ast));
+          ts.forEachChild(child, find);
+        }
+        find(node);
+      } else ts.forEachChild(node, visit);
+    }
+    visit(ast); assert.equal(handlers.length, 2);
+    let stopped = 0;
+    for (const handler of handlers) {
+      const click = vm.runInNewContext('(function () { return ' + handler + '; })', { workflow: plugin.settings.workflows[0], import_obsidian: { Notice } }).call({ plugin });
+      await click({ stopPropagation() { stopped++; } });
+      assert.match(notices.at(-1), /Working directory is unavailable/);
+      assert.equal(fs.readFileSync(file, 'utf8'), before, 'no binding, status or history changes');
+      assert.deepEqual(fs.readdirSync(runtime), entries, 'no execution journal');
+      assert.equal(fs.existsSync(path.join(root, 'must-not-exist.txt')), false);
+      assert.equal(fs.existsSync(path.join(root, '.opencode')), false, 'no process logs');
+      assert.equal(plugin.sharedWorkflowExecution, undefined);
+    }
+    assert.equal(notices.length, 2); assert.equal(stopped, 2);
+    await assert.rejects(plugin.runWorkflow(plugin.settings.workflows[0]), /Working directory is unavailable/);
+    plugin.releasePluginExecution(false);
+    const result = require('node:child_process').spawnSync(process.execPath, [path.resolve(__dirname, '../autooc-cli.cjs'), 'run', '--vault', root, '--workflow', 'workflow'], { encoding: 'utf8', timeout: 15000 });
+    assert.equal(result.status, 1); assert.match(result.stderr, /Working directory is unavailable/);
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+    assert.equal(fs.existsSync(path.join(root, 'must-not-exist.txt')), false);
+  } finally {
+    plugin?.releasePluginExecution(false); Module._load = original;
+    assert.equal(path.dirname(fs.realpathSync(root)), fs.realpathSync(os.tmpdir()));
+    assert.ok(path.basename(root).startsWith('autooc-preflight-notice-'));
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('shared owner projects running and refreshes every open panel; reopening stays read-only pending', async () => {
+  const Module = require('node:module'), os = require('node:os');
+  for (const standalone of [false, true]) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-owner-ui-'));
+    const directory = path.join(root, '.obsidian/plugins/auto-oc');
+    fs.mkdirSync(directory, { recursive: true });
+    const file = path.join(directory, 'data.json');
+    fs.writeFileSync(file, JSON.stringify({ tasks: [{ id: 'interactive', taskKind: 'opencode', interactiveTerminal: true, prompt: 'Read', model: 'test/model' }],
+      workflows: [{ id: 'workflow', steps: [{ id: 'cli', taskId: 'interactive' }] }] }));
+    const original = Module._load;
+    let plugin, finish, execution;
+    try {
+      Module._load = function(id, ...args) {
+        if (id === 'obsidian') return { Plugin: class {}, Notice: class {}, Modal: class {}, Setting: class {}, ItemView: class {}, PluginSettingTab: class {} };
+        return original.call(this, id, ...args);
+      };
+      const filename = path.resolve(__dirname, '../main.js'), bundle = new Module(filename, module);
+      bundle.filename = filename; bundle.paths = Module._nodeModulePaths(path.dirname(filename));
+      bundle._compile(fs.readFileSync(filename, 'utf8') + '\nmodule.exports.uiTest={AutoOCView,setAdapter:adapter=>{createWorkflowTaskAdapter=()=>adapter;}};', filename);
+      const { AutoOCView, setAdapter } = bundle.exports.uiTest;
+      let entered;
+      const started = new Promise(resolve => { entered = resolve; });
+      const gate = new Promise(resolve => { finish = resolve; });
+      setAdapter({ supports: () => true, execute: async () => { entered(); return await gate; } });
+      const createPlugin = () => {
+        const p = new bundle.exports.default();
+        p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
+        p.manifest = { id: 'auto-oc' };
+        return p;
+      };
+      plugin = createPlugin(); plugin.reservePluginExecution(); await plugin.loadSettings();
+      const rendered = [[], []];
+      const leaves = rendered.map(states => {
+        const view = Object.create(AutoOCView.prototype);
+        view.refresh = () => states.push(plugin.settings.tasks[0].status);
+        return { view };
+      });
+      plugin.app.workspace.getLeavesOfType = () => leaves;
+      plugin.view = { refresh() {} }; // A stale cached view must not swallow refreshes.
+      execution = plugin.runSharedWorkflow(standalone ? '@task:interactive' : 'workflow', undefined, false, true, standalone ? 'interactive' : undefined);
+      await Promise.race([started, execution.then(() => { throw Error('Executor never entered'); })]);
+      assert.equal(plugin.settings.tasks[0].status, 'running');
+      assert.equal(plugin.settings.tasks[0].runtimeExecution.requiresReconciliation, false);
+      if (!standalone) {
+        assert.equal(plugin.settings.workflows[0].status, 'running');
+        assert.equal(plugin.settings.workflows[0].steps[0].status, 'running');
+      }
+      for (const states of rendered) assert.equal(states.at(-1), 'running');
+      const persisted = fs.readFileSync(file, 'utf8');
+      assert.equal(JSON.parse(persisted).tasks[0].status, 'pending');
+      const runId = plugin.settings.tasks[0].runtimeExecution.runId;
+      const journalFile = path.join(directory, 'runtime', runId + '.json');
+      const journal = fs.readFileSync(journalFile, 'utf8');
+      const reopened = createPlugin(); await reopened.loadSettings();
+      assert.equal(reopened.settings.tasks[0].status, 'pending');
+      assert.equal(reopened.settings.tasks[0].runtimeExecution.requiresReconciliation, true);
+      assert.equal(fs.readFileSync(file, 'utf8'), persisted);
+      assert.equal(fs.readFileSync(journalFile, 'utf8'), journal);
+      const owner = plugin.sharedWorkflowExecution;
+      plugin.sharedWorkflowExecution = { ...owner, runId: 'another-run' };
+      await plugin.loadSettings(); assert.equal(plugin.settings.tasks[0].status, 'pending');
+      plugin.sharedWorkflowExecution = owner;
+      const assertOwned = plugin.pluginExecutionLease.assertOwned;
+      plugin.pluginExecutionLease.assertOwned = () => { throw Error('Lost ownership'); };
+      await plugin.loadSettings(); assert.equal(plugin.settings.tasks[0].status, 'pending');
+      plugin.pluginExecutionLease.assertOwned = assertOwned;
+      await plugin.loadSettings(); assert.equal(plugin.settings.tasks[0].status, 'running');
+      finish({ succeeded: true, output: 'Interactive terminal opened; agent result not verified.' });
+      await execution;
+      assert.equal(plugin.sharedWorkflowExecution, undefined);
+      assert.equal(plugin.settings.tasks[0].status, 'completed');
+      for (const states of rendered) assert.equal(states.at(-1), 'completed');
+      assert.match(plugin.settings.tasks[0].output, /agent result not verified/);
+    } finally {
+      finish?.({ succeeded: false, output: 'Test cleanup' });
+      await execution?.catch(() => {});
+      plugin?.releasePluginExecution(false);
+      Module._load = original;
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test('real Code → task → Windows launcher keeps literal payload and waits for one confirmation', async () => {
   for (const size of [10, 12000, 60000]) {
     const payload = '## Response\r\n INICIO ñ " & % $\r\n' + 'z'.repeat(size) + '\r\nFINAL  ';

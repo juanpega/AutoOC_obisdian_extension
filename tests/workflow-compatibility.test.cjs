@@ -294,6 +294,7 @@ test('plugin and distributed CLI execute the same branching definition and retai
   } finally {Module._load=original;}
   const plugin=new Plugin();plugin.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};plugin.manifest={id:'auto-oc'};
   try {
+    plugin.app.workspace={getLeavesOfType:()=>[]};
     plugin.reservePluginExecution();await plugin.loadSettings();await plugin.runWorkflow(plugin.settings.workflows[0]);
     const first=JSON.parse(fs.readFileSync(file)).workflows[0];assert.equal(first.status,'failed');
     assert.match(git('branch','--show-current'),/^feature-/);assert.equal(first.steps[0].output.length,64023);

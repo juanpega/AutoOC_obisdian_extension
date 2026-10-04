@@ -1868,7 +1868,7 @@ export default class AutoOCPlugin extends Plugin {
   private stoppingWorkflows = new Set<string>();
   private workflowDelayControllers = new Map<string, AbortController>();
   private pluginExecutionLease?: ExecutionLease;
-  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;controller:AbortController};
+  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController};
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
 
@@ -2034,7 +2034,7 @@ export default class AutoOCPlugin extends Plugin {
     if (this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
-    const execution = {workflowId,taskId,controller:new AbortController()};
+    const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController()};
     this.sharedWorkflowExecution = execution;
     try {
       await this.saveSettings(false);
@@ -2042,11 +2042,28 @@ export default class AutoOCPlugin extends Plugin {
         vault:(this.app.vault.adapter as any).basePath, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
         lease:this.pluginExecutionLease, signal:execution.controller.signal,
         redact:output=>this.redactSecrets(output),
-        onCheckpoint:async()=>{await this.loadSettings();this.view?.refresh();},
+        onCheckpoint:async checkpoint=>{
+          if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
+          execution.runId = checkpoint.runId;
+          await this.loadSettings();
+          this.refreshOpenViews();
+        },
       });
     } finally {
       if (this.sharedWorkflowExecution === execution) this.sharedWorkflowExecution = undefined;
-      this.view?.refresh();
+      await this.loadSettings();
+      this.refreshOpenViews();
+    }
+  }
+
+  private ownsSharedRun(workflowId:string, runId:string):boolean {
+    if (this.sharedWorkflowExecution?.workflowId !== workflowId || this.sharedWorkflowExecution.runId !== runId || !this.pluginExecutionLease) return false;
+    try { this.pluginExecutionLease.assertOwned(); return true; } catch { return false; }
+  }
+
+  private refreshOpenViews():void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AutoOCView) leaf.view.refresh();
     }
   }
 
@@ -2564,13 +2581,19 @@ export default class AutoOCPlugin extends Plugin {
         const binding = (wf as any).runtimeExecution;
         if (!binding) return wf;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
-        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId);
+        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id,binding.runId));
       });
       this.settings.workflows = recovered;
       this.settings.tasks = this.settings.tasks.map(task=>{
         const binding=(task as any).runtimeExecution;
-        if (!binding || binding.workflowId!==standaloneTaskWorkflow(task.id).id) return task;
-        return projectStandaloneTask(task,this.settings.tasks,this.settings,readExecutionCheckpoint(runtime,binding.runId));
+        if (!binding) return task;
+        if (binding.workflowId===standaloneTaskWorkflow(task.id).id) {
+          return projectStandaloneTask(task,this.settings.tasks,this.settings,readExecutionCheckpoint(runtime,binding.runId),this.ownsSharedRun(binding.workflowId,binding.runId));
+        }
+        const workflow = recovered.find(wf=>wf.id===binding.workflowId && (wf as any).runtimeExecution?.runId===binding.runId);
+        const step = workflow?.steps.find(step=>step.id===binding.stepId && step.taskId===task.id);
+        if (!step) return task;
+        return {...task,status:step.status,runtimeExecution:{...binding,requiresReconciliation:step.status==="pending" && (workflow as any).runtimeExecution.requiresReconciliation}};
       });
       return;
     }
@@ -6472,9 +6495,10 @@ class AutoOCView extends ItemView {
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
     btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready","in_flight"].includes((workflow as any).runtimeExecution?.phase);
-    btnQuickRun.onclick = (e) => {
+    btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runWorkflow(workflow);
+      try { await this.plugin.runWorkflow(workflow); }
+      catch (error) { new Notice(this.plugin.redactSecrets(String(error))); }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
@@ -6773,9 +6797,10 @@ class AutoOCView extends ItemView {
       cls: "auto-oc-btn-run",
     });
     btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
-    btnRun.onclick = (e) => {
+    btnRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runWorkflow(workflow);
+      try { await this.plugin.runWorkflow(workflow); }
+      catch (error) { new Notice(this.plugin.redactSecrets(String(error))); }
     };
 
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
