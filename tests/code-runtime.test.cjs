@@ -160,7 +160,7 @@ test('non-task completion cannot close a new run after asynchronous transition e
   assert.equal(wf.status,'running');assert.equal(p.workflowRuntime.get('wf'),replacement);
 });
 
-test('shared handoff preserves primary response and plugin prompt overrides without trace leakage',async()=>{
+test('shared handoff preserves opaque Code data and strips diagnostics only from task reports',async()=>{
   const source=path.resolve(__dirname,'../workflow-handoff.ts');
   const m=new Module(source,module);m._compile(ts.transpileModule(fs.readFileSync(source,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,source);
   const {workflowTaskPrompt:prompt}=m.exports;
@@ -170,7 +170,10 @@ test('shared handoff preserves primary response and plugin prompt overrides with
   const response='x'.repeat(24000);
   const output='## Response\n\n'+response+'\n\n---\n\n## Touched files\n\n- diagnostic.md\n\n---\n\n## OpenCode trace\n\nTRACE_ONLY';
   const expected=prompt('Do work',wf,{stepId:previous.id,output});
-  assert.ok(expected.includes(response));assert.ok(expected.includes('DIAGNOSTIC ONLY'));assert.ok(!expected.includes('TRACE_ONLY'));
+  assert.ok(expected.includes(output));
+  const reportWorkflow={...wf,steps:[{...previous,stepKind:'task'},step]};
+  const reportPrompt=prompt('Do work',reportWorkflow,{stepId:previous.id,output});
+  assert.ok(reportPrompt.includes(response));assert.ok(reportPrompt.includes('DIAGNOSTIC ONLY'));assert.ok(!reportPrompt.includes('TRACE_ONLY'));
   assert.equal(prompt('Do work',{...wf,handoffOutput:false},{stepId:previous.id,output}),'Do work');
   assert.equal(prompt('Do work',wf),'Do work');
   const complete='x'.repeat(60000)+'\n\n\n... [exit code: literal data] END';

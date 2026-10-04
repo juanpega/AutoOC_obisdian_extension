@@ -35,7 +35,10 @@ export function workflowTaskPrompt(prompt: string, workflow: {handoffOutput?: bo
   const sourceLine = previousStep
     ? `Source: step "${previousStep.name || previous.stepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})`
     : `Source: step ${previous.stepId}`;
-  const cleanOutput = extractContextForHandoff(String(previous.output || ""));
+  // Code output is opaque data, even when it resembles an engine report.
+  const cleanOutput = previousStep?.stepKind === "code"
+    ? `PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${previous.output}`
+    : extractContextForHandoff(String(previous.output || ""));
   const contextBlock = ["", "=== WORKFLOW HANDOFF CONTEXT ===", sourceLine,
     "The previous step's output below is the PRIMARY INPUT for this task.",
     "Touched files are DIAGNOSTIC ONLY — do not re-read them unless this task explicitly asks.", "",

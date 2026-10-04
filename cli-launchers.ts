@@ -192,34 +192,122 @@ export function openOpencodeCliLongPromptWindows(
   prompt: string,
   options: CliLaunchOptions = {},
 ): void {
-  const promptFile = path.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
-  fs.writeFileSync(promptFile, prompt, "utf8");
-  // ponytail: workspace file avoids temp-dir access surprises; one minute is enough after TUI startup.
-  setTimeout(() => {
-    try {
-      fs.unlinkSync(promptFile);
-    } catch {
-      // ignore cleanup errors
+  const attempt = crypto.randomBytes(16).toString("hex");
+  const directory = fs.mkdtempSync(path.join(path.resolve(cwd), ".autooc-interactive-"));
+  const promptFile = path.join(directory, "prompt.txt");
+  const stateFile = path.join(directory, "state.json");
+  const ignoreFile = path.join(directory, ".gitignore");
+  // This owned directory ignores itself in any Git workspace. Never edit the
+  // destination's existing ignore rules or sweep files by a shared prefix.
+  const cleanup = () => {
+    for (const file of [promptFile, stateFile, ignoreFile]) {
+      try { fs.unlinkSync(file); } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("AutoOC: interactive cleanup pending", file);
+      }
     }
-  }, 60 * 1000).unref?.();
-
-  const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
-  const envScript = buildPowerShellEnvLines(env).join("; ");
-  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
-  const command =
-    `${envScript ? `${envScript}; ` : ""}` +
-    `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ` +
-    `$bin = ${psSingleQuoted(bin)}; ` +
-    `$argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
-    `& $bin @argList`;
-  const launcher = spawn(
-    "cmd.exe",
-    ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-    { detached: true, stdio: "ignore", windowsHide: false },
-  );
-  launcher.on?.("error", (error:Error)=>options.onError?.(error));
-  launcher.on?.("spawn", ()=>options.onLaunched?.());
-  launcher.unref();
+    try { fs.rmdirSync(directory); } catch { /* Keep unexpected files intact. */ }
+  };
+  let settled = false;
+  let poll: ReturnType<typeof setInterval> | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const finish = (error?: Error) => {
+    if (settled) return;
+    settled = true;
+    if (timeout) clearTimeout(timeout);
+    // A standalone CLI awaiting confirmation must stay alive. After settlement
+    // only the interactive session owns its lifetime; Electron can keep polling.
+    poll?.unref?.();
+    if (error) options.onError?.(error);
+    else options.onLaunched?.();
+  };
+  const stopPolling = () => { if (poll) clearInterval(poll); };
+  try {
+    fs.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
+    fs.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
+    const instruction = `Read the full task prompt from ${path.basename(directory)}/prompt.txt and follow it exactly.`;
+    // Values stay in PowerShell literals. Credentials are inherited through the
+    // environment, never written into a script or a command-line argument.
+    const runner = [
+      "$ErrorActionPreference = 'Stop'",
+      `Set-Location -LiteralPath ${psSingleQuoted(path.resolve(cwd))}`,
+      "try {",
+      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
+      `  $cliArgs = @('-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
+      "  & $target.Source @cliArgs",
+      "  exit $LASTEXITCODE",
+      "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
+      "finally {",
+      `  Remove-Item -LiteralPath ${psSingleQuoted(promptFile)} -ErrorAction SilentlyContinue`,
+      // The standalone Node host exits after startup confirmation. Windows may
+      // then stop its hidden observer, so the visible runner must own cleanup
+      // when that host is gone. Delete only this attempt's known files; never
+      // recursively delete a directory that could contain unrelated files.
+      `  if (-not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) {`,
+      `    Remove-Item -LiteralPath ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)} -ErrorAction SilentlyContinue`,
+      `    try { [System.IO.Directory]::Delete(${psSingleQuoted(directory)}, $false) } catch { }`,
+      "  }",
+      "}",
+    ].join("\n");
+    const encodedRunner = Buffer.from(runner, "utf16le").toString("base64");
+    // The hidden observer launches ONE visible session. A descendant native
+    // process (OpenCode executable or its Node runtime) confirms invocation;
+    // starting PowerShell/cmd alone is explicitly insufficient.
+    const observer = [
+      "$ErrorActionPreference = 'Stop'",
+      "$session = $null; $confirmed = $false",
+      `function Report($status, $ended) { @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
+      "try {",
+      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path.resolve(cwd))} -PassThru`,
+      "  while (-not $session.HasExited) {",
+      "    if (-not $confirmed) {",
+      "      $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name)",
+      "      $parents = @($session.Id)",
+      "      for ($depth = 0; $depth -lt 16 -and $parents.Count -gt 0; $depth++) {",
+      "        $children = @($all | Where-Object { $parents -contains $_.ParentProcessId })",
+      "        if (@($children | Where-Object { $_.Name -notmatch '^(powershell|pwsh|cmd|conhost|OpenConsole)\\.exe$' }).Count -gt 0) { $confirmed = $true; Report 'started' $false; break }",
+      "        $parents = @($children | ForEach-Object { $_.ProcessId })",
+      "      }",
+      "    }",
+      "    Start-Sleep -Milliseconds 100; $session.Refresh()",
+      "  }",
+      "  Report 'ended' $true",
+      "} catch {",
+      "  Report 'error' ($null -eq $session)",
+      "  if ($null -ne $session) { $session.WaitForExit(); Report 'error' $true }",
+      "}",
+    ].join("\n");
+    const encodedObserver = Buffer.from(observer, "utf16le").toString("base64");
+    if (encodedObserver.length > 30000 || encodedRunner.length > 30000) throw new Error("Interactive launcher configuration exceeds Windows command-line limit");
+    const readState = () => {
+      let state: { attempt?: string; status?: string; ended?: boolean; confirmed?: boolean };
+      try { state = JSON.parse(fs.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, "")); }
+      catch { return; } // A partial write is retried; it is never a success.
+      if (state.attempt !== attempt) return;
+      if (state.status === "error") finish(new Error("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
+      else if (state.confirmed === true && (state.status === "started" || state.status === "ended")) finish();
+      else if (state.status === "ended") finish(new Error("Interactive CLI exited without confirmed startup"));
+      if (state.ended === true && (state.status === "ended" || state.status === "error")) { stopPolling(); cleanup(); }
+    };
+    poll = setInterval(readState, 100);
+    timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 30000);
+    const launcher = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
+      // A detached hidden PowerShell can exit without executing its command on
+      // Windows. The observer does not need a new process group; unref below
+      // releases the host after confirmation while its visible session runs.
+      detached: false, stdio: "ignore", windowsHide: true, env: { ...process.env, ...env },
+    });
+    launcher.on?.("error", () => { stopPolling(); cleanup(); finish(new Error("Could not start the interactive CLI observer")); });
+    launcher.on?.("exit", () => {
+      readState();
+      stopPolling();
+      finish(new Error("Interactive CLI observer exited without startup confirmation; prompt retained"));
+    });
+    launcher.unref();
+  } catch (error) {
+    stopPolling();
+    cleanup(); // No session was launched when preparation/spawn throws.
+    finish(error instanceof Error ? error : new Error(String(error)));
+  }
 }
 
 export type ProcessHandle = { kill: () => void };

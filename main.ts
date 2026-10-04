@@ -3098,11 +3098,36 @@ export default class AutoOCPlugin extends Plugin {
 
     if (effectiveTask.interactiveTerminal) {
       const current = this.settings.tasks[idx];
+      let settled = false;
+      let cancelled = false;
+      // Identity, not just task ID/status, prevents late callbacks from a
+      // stopped, deleted or relaunched task from completing another attempt.
+      const controller = { kill: () => { cancelled = true; settled = true; } };
+      this.runningProcesses.set(task.id, controller);
+      const isCurrent = () => !settled && this.runningProcesses.get(task.id) === controller &&
+        this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
+      const finish = async (error?: Error) => {
+        if (!isCurrent()) return;
+        settled = true;
+        current.status = error ? "failed" : "completed";
+        current.output = error
+          ? `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`
+          : "[interactive OpenCode CLI launch confirmed; agent task completion is not tracked]";
+        if (error) this.view?.startGradualSink(task.id);
+        await this.saveSettings();
+        // A stop/delete/relaunch during persistence invalidates continuation.
+        if (cancelled || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current ||
+          current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller) return;
+        this.runningProcesses.delete(task.id);
+        new Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, error ? -1 : 0);
+      };
       current.status = "running";
       current.lastRun = new Date().toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
       this.view?.resetDashboardTaskShift(task.id);
       await this.saveSettings();
+      if (!isCurrent()) return;
 
       try {
         let prompt = effectiveTask.prompt;
@@ -3111,40 +3136,21 @@ export default class AutoOCPlugin extends Plugin {
         }
         const bin = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
-        const reportInteractiveFailure = async (error: Error) => {
-          const t = this.settings.tasks.find((candidate) => candidate.id === task.id);
-          if (!t) return;
-          t.status = "failed";
-          t.lastRun = new Date().toISOString();
-          t.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`;
-          this.view?.startGradualSink(task.id);
-          await this.saveSettings();
-          new Notice(`AutoOC: could not open CLI task "${task.name}".`);
-          if (onComplete) await onComplete(t, -1);
+        const launchOptions = {
+          onError: (error: Error) => { void finish(error); },
+          onLaunched: () => { void finish(); },
+          linuxTerminal: this.settings.linuxTerminal,
         };
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt);
+          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt, launchOptions);
         } else {
           const args = ["-m", effectiveTask.model];
           if (!effectiveTask.forceModel) args.push("--agent", agent);
           args.push("--prompt", prompt);
-          openOpencodeCli(bin, taskCwd, secretEnv, args, {
-            onError: reportInteractiveFailure,
-            linuxTerminal: this.settings.linuxTerminal,
-          });
+          openOpencodeCli(bin, taskCwd, secretEnv, args, launchOptions);
         }
-        current.status = "completed";
-        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
-        await this.saveSettings();
-        new Notice(`AutoOC: opened CLI task "${task.name}".`);
-        if (onComplete) await onComplete(current, 0);
       } catch (e) {
-        current.status = "failed";
-        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
-        this.view?.startGradualSink(task.id);
-        await this.saveSettings();
-        new Notice(`AutoOC: could not open CLI task "${task.name}".`);
-        if (onComplete) await onComplete(current, -1);
+        await finish(e instanceof Error ? e : new Error(String(e)));
       }
       return;
     }
@@ -4414,6 +4420,8 @@ export default class AutoOCPlugin extends Plugin {
       const ctx = (this as any).workflowRuntime.get(currentWf.id);
       if (ctx) ctx.stepOutputs.set(currentStep.id, lastOutput);
       const lastSucceeded = exitCode === 0 && completedTask.status !== "failed";
+      currentStep.status = lastSucceeded ? "completed" : "failed";
+      currentStep.output = lastOutput;
 
       const transitions = workflowStepTransitions(currentWf.steps, stepIndex) as WorkflowTransition[];
 
@@ -7579,7 +7587,7 @@ class CreateTaskModal extends Modal {
             if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
               ta.inputEl.addClass("auto-oc-prompt-too-long");
               promptNotice.setText(
-                `CLI prompts over ${SAFE_CLI_PROMPT_LENGTH} characters are saved to a temporary workspace file, the OpenCode TUI is instructed to read it, and the file is deleted after 1 minute.`,
+                "On Windows, interactive CLI prompts are kept in an ignored session directory until the CLI exits. Launch confirmation does not mean the agent has finished the task.",
               );
               promptNotice.style.display = "block";
             } else {

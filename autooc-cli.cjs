@@ -116,7 +116,7 @@ async function atomicSettingsWrite(file, data, io = fs.promises) {
         break;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve4) => setTimeout(resolve4, 50 * (attempt + 1)));
+        await new Promise((resolve5) => setTimeout(resolve5, 50 * (attempt + 1)));
         const current = await io.readFile(file).catch((readError) => {
           if (readError.code === "ENOENT") return null;
           throw readError;
@@ -552,12 +552,12 @@ var JsonLineRpcPeer = class {
   }
   request(method, params = {}, timeoutMs = 3e4) {
     const id = this.nextId++;
-    return new Promise((resolve4, reject) => {
+    return new Promise((resolve5, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex RPC request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve4, reject, timer });
+      this.pending.set(id, { resolve: resolve5, reject, timer });
       this.writeLine(JSON.stringify({ id, method, params }) + "\n");
     });
   }
@@ -620,7 +620,7 @@ function openCodexUrl(url) {
     ],
     env: { ...process.env, AUTOOC_CODEX_URL: url }
   } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     const child = (0, import_child_process.spawn)(launcher.bin, launcher.args, {
       detached: false,
       stdio: "ignore",
@@ -634,7 +634,7 @@ function openCodexUrl(url) {
     });
     child.once("close", (code) => {
       if (settled) return;
-      if (code === 0) resolve4();
+      if (code === 0) resolve5();
       else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code ?? "unknown"}`));
     });
   });
@@ -738,8 +738,8 @@ var CodexAppServerClient = class {
     this.threadId = threadResponse?.thread?.id || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
     await this.callbacks.onThreadCreated?.({ threadId: this.threadId });
-    const completion = new Promise((resolve4, reject) => {
-      this.completionResolve = resolve4;
+    const completion = new Promise((resolve5, reject) => {
+      this.completionResolve = resolve5;
       this.completionReject = reject;
     });
     void completion.catch(() => {
@@ -1076,7 +1076,7 @@ var CopilotCliClient = class {
     if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
       return Promise.reject(new Error("Select the native copilot.exe executable, or reinstall @github/copilot with optional dependencies enabled."));
     }
-    return new Promise((resolve4) => {
+    return new Promise((resolve5) => {
       let output = "";
       let error = "";
       let settled = false;
@@ -1094,7 +1094,7 @@ var CopilotCliClient = class {
           } catch {
           }
         }
-        resolve4(result);
+        resolve5(result);
       };
       this.finish = finish;
       try {
@@ -1298,26 +1298,133 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   }
 }
 function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, options = {}) {
-  const promptFile = path6.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
-  fs7.writeFileSync(promptFile, prompt, "utf8");
-  setTimeout(() => {
+  const attempt = crypto.randomBytes(16).toString("hex");
+  const directory = fs7.mkdtempSync(path6.join(path6.resolve(cwd), ".autooc-interactive-"));
+  const promptFile = path6.join(directory, "prompt.txt");
+  const stateFile = path6.join(directory, "state.json");
+  const ignoreFile = path6.join(directory, ".gitignore");
+  const cleanup = () => {
+    for (const file of [promptFile, stateFile, ignoreFile]) {
+      try {
+        fs7.unlinkSync(file);
+      } catch (error) {
+        if (error.code !== "ENOENT") console.warn("AutoOC: interactive cleanup pending", file);
+      }
+    }
     try {
-      fs7.unlinkSync(promptFile);
+      fs7.rmdirSync(directory);
     } catch {
     }
-  }, 60 * 1e3).unref?.();
-  const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
-  const envScript = buildPowerShellEnvLines(env).join("; ");
-  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
-  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
-  const launcher = (0, import_child_process3.spawn)(
-    "cmd.exe",
-    ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-    { detached: true, stdio: "ignore", windowsHide: false }
-  );
-  launcher.on?.("error", (error) => options.onError?.(error));
-  launcher.on?.("spawn", () => options.onLaunched?.());
-  launcher.unref();
+  };
+  let settled = false;
+  let poll;
+  let timeout;
+  const finish = (error) => {
+    if (settled) return;
+    settled = true;
+    if (timeout) clearTimeout(timeout);
+    poll?.unref?.();
+    if (error) options.onError?.(error);
+    else options.onLaunched?.();
+  };
+  const stopPolling = () => {
+    if (poll) clearInterval(poll);
+  };
+  try {
+    fs7.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
+    fs7.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
+    const instruction = `Read the full task prompt from ${path6.basename(directory)}/prompt.txt and follow it exactly.`;
+    const runner = [
+      "$ErrorActionPreference = 'Stop'",
+      `Set-Location -LiteralPath ${psSingleQuoted(path6.resolve(cwd))}`,
+      "try {",
+      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
+      `  $cliArgs = @('-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
+      "  & $target.Source @cliArgs",
+      "  exit $LASTEXITCODE",
+      "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
+      "finally {",
+      `  Remove-Item -LiteralPath ${psSingleQuoted(promptFile)} -ErrorAction SilentlyContinue`,
+      // The standalone Node host exits after startup confirmation. Windows may
+      // then stop its hidden observer, so the visible runner must own cleanup
+      // when that host is gone. Delete only this attempt's known files; never
+      // recursively delete a directory that could contain unrelated files.
+      `  if (-not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) {`,
+      `    Remove-Item -LiteralPath ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)} -ErrorAction SilentlyContinue`,
+      `    try { [System.IO.Directory]::Delete(${psSingleQuoted(directory)}, $false) } catch { }`,
+      "  }",
+      "}"
+    ].join("\n");
+    const encodedRunner = Buffer.from(runner, "utf16le").toString("base64");
+    const observer = [
+      "$ErrorActionPreference = 'Stop'",
+      "$session = $null; $confirmed = $false",
+      `function Report($status, $ended) { @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
+      "try {",
+      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path6.resolve(cwd))} -PassThru`,
+      "  while (-not $session.HasExited) {",
+      "    if (-not $confirmed) {",
+      "      $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name)",
+      "      $parents = @($session.Id)",
+      "      for ($depth = 0; $depth -lt 16 -and $parents.Count -gt 0; $depth++) {",
+      "        $children = @($all | Where-Object { $parents -contains $_.ParentProcessId })",
+      "        if (@($children | Where-Object { $_.Name -notmatch '^(powershell|pwsh|cmd|conhost|OpenConsole)\\.exe$' }).Count -gt 0) { $confirmed = $true; Report 'started' $false; break }",
+      "        $parents = @($children | ForEach-Object { $_.ProcessId })",
+      "      }",
+      "    }",
+      "    Start-Sleep -Milliseconds 100; $session.Refresh()",
+      "  }",
+      "  Report 'ended' $true",
+      "} catch {",
+      "  Report 'error' ($null -eq $session)",
+      "  if ($null -ne $session) { $session.WaitForExit(); Report 'error' $true }",
+      "}"
+    ].join("\n");
+    const encodedObserver = Buffer.from(observer, "utf16le").toString("base64");
+    if (encodedObserver.length > 3e4 || encodedRunner.length > 3e4) throw new Error("Interactive launcher configuration exceeds Windows command-line limit");
+    const readState = () => {
+      let state;
+      try {
+        state = JSON.parse(fs7.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, ""));
+      } catch {
+        return;
+      }
+      if (state.attempt !== attempt) return;
+      if (state.status === "error") finish(new Error("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
+      else if (state.confirmed === true && (state.status === "started" || state.status === "ended")) finish();
+      else if (state.status === "ended") finish(new Error("Interactive CLI exited without confirmed startup"));
+      if (state.ended === true && (state.status === "ended" || state.status === "error")) {
+        stopPolling();
+        cleanup();
+      }
+    };
+    poll = setInterval(readState, 100);
+    timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
+    const launcher = (0, import_child_process3.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
+      // A detached hidden PowerShell can exit without executing its command on
+      // Windows. The observer does not need a new process group; unref below
+      // releases the host after confirmation while its visible session runs.
+      detached: false,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, ...env }
+    });
+    launcher.on?.("error", () => {
+      stopPolling();
+      cleanup();
+      finish(new Error("Could not start the interactive CLI observer"));
+    });
+    launcher.on?.("exit", () => {
+      readState();
+      stopPolling();
+      finish(new Error("Interactive CLI observer exited without startup confirmation; prompt retained"));
+    });
+    launcher.unref();
+  } catch (error) {
+    stopPolling();
+    cleanup();
+    finish(error instanceof Error ? error : new Error(String(error)));
+  }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   const fs18 = require("fs");
@@ -1769,8 +1876,9 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const agent = task.agent || definition.settings.defaultAgent || "build";
     if (task.useRalphLoop) prompt = "/ralph-loop " + prompt;
     if (task.interactiveTerminal) {
-      await new Promise((resolve4, reject) => {
-        const options = { onLaunched: resolve4, onError: reject, linuxTerminal: definition.settings.linuxTerminal };
+      if (path7.isAbsolute(bin) && !fs8.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
+      await new Promise((resolve5, reject) => {
+        const options = { onLaunched: resolve5, onError: reject, linuxTerminal: definition.settings.linuxTerminal };
         if (process.platform === "win32") openOpencodeCliLongPromptWindows(bin, taskCwd, {}, model, task.forceModel ? "" : agent, prompt, options);
         else openOpencodeCli(bin, taskCwd, {}, ["-m", model, ...task.forceModel ? [] : ["--agent", agent], "--prompt", prompt], options);
       });
@@ -1788,7 +1896,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const handle = launchHidden(scriptFile, pidFile);
     let known = false;
     try {
-      const result = await new Promise((resolve4, reject) => {
+      const result = await new Promise((resolve5, reject) => {
         let ended = false;
         const finish = (error) => {
           if (ended) return;
@@ -1815,7 +1923,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
             const output = formatTaskOutput(read(outFile), read(errFile));
             known = true;
             finish();
-            resolve4({ succeeded: exit === "0", output: output || "(no output)" });
+            resolve5({ succeeded: exit === "0", output: output || "(no output)" });
           } catch (error) {
             finish(error);
           }
@@ -2104,7 +2212,7 @@ function workflowDelay(value = 0, unit = "seconds") {
 }
 function waitForWorkflowDelay(milliseconds, signal) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return Promise.reject(new Error("Invalid workflow delay"));
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     let timer;
     let remaining = milliseconds;
     const cleanup = () => {
@@ -2124,7 +2232,7 @@ function waitForWorkflowDelay(milliseconds, signal) {
         if (remaining > 0) schedule();
         else {
           cleanup();
-          resolve4();
+          resolve5();
         }
       }, chunk);
     };
@@ -2172,7 +2280,9 @@ function workflowTaskPrompt(prompt, workflow, previous) {
   if (!workflow.handoffOutput || !previous) return prompt;
   const previousStep = workflow.steps.find((s) => s.id === previous.stepId);
   const sourceLine = previousStep ? `Source: step "${previousStep.name || previous.stepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})` : `Source: step ${previous.stepId}`;
-  const cleanOutput = extractContextForHandoff(String(previous.output || ""));
+  const cleanOutput = previousStep?.stepKind === "code" ? `PRIMARY HANDOFF INPUT \u2014 use this as the main input for the current task:
+
+${previous.output}` : extractContextForHandoff(String(previous.output || ""));
   const contextBlock = [
     "",
     "=== WORKFLOW HANDOFF CONTEXT ===",
@@ -2311,11 +2421,11 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await onCheckpoint?.(journal.snapshot());
   const file = responseFile(directory, runId, token);
-  const approved = await new Promise((resolve4, reject) => {
+  const approved = await new Promise((resolve5, reject) => {
     const finish = (error, value) => {
       clearInterval(timer);
       signal?.removeEventListener("abort", abort);
-      error ? reject(error) : resolve4(value);
+      error ? reject(error) : resolve5(value);
     };
     const abort = () => finish(new Error("Approval interrupted; execution requires reconciliation"));
     const timer = setInterval(() => {

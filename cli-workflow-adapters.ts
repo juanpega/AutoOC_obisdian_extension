@@ -35,6 +35,10 @@ export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:
     const agent=task.agent || definition.settings.defaultAgent || 'build';
     if(task.useRalphLoop) prompt='/ralph-loop '+prompt;
     if(task.interactiveTerminal) {
+      // A missing explicitly configured file is a known failure before any
+      // launch effect. Persist it as failed rather than an uncertain run that
+      // would unnecessarily require reconciliation. Timeouts remain uncertain.
+      if(path.isAbsolute(bin) && !fs.existsSync(bin)) return {succeeded:false,output:'[interactive OpenCode executable is unavailable; nothing was launched]'};
       // Completion describes the OS launch acknowledgement, never the result
       // of the human's interactive session, matching the plugin's contract.
       await new Promise<void>((resolve,reject)=>{

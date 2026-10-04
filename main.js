@@ -2319,33 +2319,135 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   }
 }
 function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, options = {}) {
-  var _a, _b, _c, _d;
-  const promptFile = path.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
-  fs.writeFileSync(promptFile, prompt, "utf8");
-  (_b = (_a = setTimeout(() => {
+  var _a, _b;
+  const attempt = crypto.randomBytes(16).toString("hex");
+  const directory = fs.mkdtempSync(path.join(path.resolve(cwd), ".autooc-interactive-"));
+  const promptFile = path.join(directory, "prompt.txt");
+  const stateFile = path.join(directory, "state.json");
+  const ignoreFile = path.join(directory, ".gitignore");
+  const cleanup = () => {
+    for (const file of [promptFile, stateFile, ignoreFile]) {
+      try {
+        fs.unlinkSync(file);
+      } catch (error) {
+        if (error.code !== "ENOENT") console.warn("AutoOC: interactive cleanup pending", file);
+      }
+    }
     try {
-      fs.unlinkSync(promptFile);
+      fs.rmdirSync(directory);
     } catch (e) {
     }
-  }, 60 * 1e3)).unref) == null ? void 0 : _b.call(_a);
-  const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
-  const envScript = buildPowerShellEnvLines(env).join("; ");
-  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
-  const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; $bin = ${psSingleQuoted(bin)}; $argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); & $bin @argList`;
-  const launcher = (0, import_child_process.spawn)(
-    "cmd.exe",
-    ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-    { detached: true, stdio: "ignore", windowsHide: false }
-  );
-  (_c = launcher.on) == null ? void 0 : _c.call(launcher, "error", (error) => {
-    var _a2;
-    return (_a2 = options.onError) == null ? void 0 : _a2.call(options, error);
-  });
-  (_d = launcher.on) == null ? void 0 : _d.call(launcher, "spawn", () => {
-    var _a2;
-    return (_a2 = options.onLaunched) == null ? void 0 : _a2.call(options);
-  });
-  launcher.unref();
+  };
+  let settled = false;
+  let poll;
+  let timeout;
+  const finish = (error) => {
+    var _a2, _b2, _c;
+    if (settled) return;
+    settled = true;
+    if (timeout) clearTimeout(timeout);
+    (_a2 = poll == null ? void 0 : poll.unref) == null ? void 0 : _a2.call(poll);
+    if (error) (_b2 = options.onError) == null ? void 0 : _b2.call(options, error);
+    else (_c = options.onLaunched) == null ? void 0 : _c.call(options);
+  };
+  const stopPolling = () => {
+    if (poll) clearInterval(poll);
+  };
+  try {
+    fs.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
+    fs.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
+    const instruction = `Read the full task prompt from ${path.basename(directory)}/prompt.txt and follow it exactly.`;
+    const runner = [
+      "$ErrorActionPreference = 'Stop'",
+      `Set-Location -LiteralPath ${psSingleQuoted(path.resolve(cwd))}`,
+      "try {",
+      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
+      `  $cliArgs = @('-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
+      "  & $target.Source @cliArgs",
+      "  exit $LASTEXITCODE",
+      "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
+      "finally {",
+      `  Remove-Item -LiteralPath ${psSingleQuoted(promptFile)} -ErrorAction SilentlyContinue`,
+      // The standalone Node host exits after startup confirmation. Windows may
+      // then stop its hidden observer, so the visible runner must own cleanup
+      // when that host is gone. Delete only this attempt's known files; never
+      // recursively delete a directory that could contain unrelated files.
+      `  if (-not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) {`,
+      `    Remove-Item -LiteralPath ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)} -ErrorAction SilentlyContinue`,
+      `    try { [System.IO.Directory]::Delete(${psSingleQuoted(directory)}, $false) } catch { }`,
+      "  }",
+      "}"
+    ].join("\n");
+    const encodedRunner = Buffer.from(runner, "utf16le").toString("base64");
+    const observer = [
+      "$ErrorActionPreference = 'Stop'",
+      "$session = $null; $confirmed = $false",
+      `function Report($status, $ended) { @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
+      "try {",
+      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path.resolve(cwd))} -PassThru`,
+      "  while (-not $session.HasExited) {",
+      "    if (-not $confirmed) {",
+      "      $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name)",
+      "      $parents = @($session.Id)",
+      "      for ($depth = 0; $depth -lt 16 -and $parents.Count -gt 0; $depth++) {",
+      "        $children = @($all | Where-Object { $parents -contains $_.ParentProcessId })",
+      "        if (@($children | Where-Object { $_.Name -notmatch '^(powershell|pwsh|cmd|conhost|OpenConsole)\\.exe$' }).Count -gt 0) { $confirmed = $true; Report 'started' $false; break }",
+      "        $parents = @($children | ForEach-Object { $_.ProcessId })",
+      "      }",
+      "    }",
+      "    Start-Sleep -Milliseconds 100; $session.Refresh()",
+      "  }",
+      "  Report 'ended' $true",
+      "} catch {",
+      "  Report 'error' ($null -eq $session)",
+      "  if ($null -ne $session) { $session.WaitForExit(); Report 'error' $true }",
+      "}"
+    ].join("\n");
+    const encodedObserver = Buffer.from(observer, "utf16le").toString("base64");
+    if (encodedObserver.length > 3e4 || encodedRunner.length > 3e4) throw new Error("Interactive launcher configuration exceeds Windows command-line limit");
+    const readState = () => {
+      let state;
+      try {
+        state = JSON.parse(fs.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, ""));
+      } catch (e) {
+        return;
+      }
+      if (state.attempt !== attempt) return;
+      if (state.status === "error") finish(new Error("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
+      else if (state.confirmed === true && (state.status === "started" || state.status === "ended")) finish();
+      else if (state.status === "ended") finish(new Error("Interactive CLI exited without confirmed startup"));
+      if (state.ended === true && (state.status === "ended" || state.status === "error")) {
+        stopPolling();
+        cleanup();
+      }
+    };
+    poll = setInterval(readState, 100);
+    timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
+    const launcher = (0, import_child_process.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
+      // A detached hidden PowerShell can exit without executing its command on
+      // Windows. The observer does not need a new process group; unref below
+      // releases the host after confirmation while its visible session runs.
+      detached: false,
+      stdio: "ignore",
+      windowsHide: true,
+      env: { ...process.env, ...env }
+    });
+    (_a = launcher.on) == null ? void 0 : _a.call(launcher, "error", () => {
+      stopPolling();
+      cleanup();
+      finish(new Error("Could not start the interactive CLI observer"));
+    });
+    (_b = launcher.on) == null ? void 0 : _b.call(launcher, "exit", () => {
+      readState();
+      stopPolling();
+      finish(new Error("Interactive CLI observer exited without startup confirmation; prompt retained"));
+    });
+    launcher.unref();
+  } catch (error) {
+    stopPolling();
+    cleanup();
+    finish(error instanceof Error ? error : new Error(String(error)));
+  }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
@@ -2702,7 +2804,7 @@ async function atomicSettingsWrite(file, data, io = fs2.promises) {
         break;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve5) => setTimeout(resolve5, 50 * (attempt + 1)));
+        await new Promise((resolve6) => setTimeout(resolve6, 50 * (attempt + 1)));
         const current = await io.readFile(file).catch((readError) => {
           if (readError.code === "ENOENT") return null;
           throw readError;
@@ -3055,12 +3157,12 @@ var JsonLineRpcPeer = class {
   }
   request(method, params = {}, timeoutMs = 3e4) {
     const id = this.nextId++;
-    return new Promise((resolve5, reject) => {
+    return new Promise((resolve6, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex RPC request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve5, reject, timer });
+      this.pending.set(id, { resolve: resolve6, reject, timer });
       this.writeLine(JSON.stringify({ id, method, params }) + "\n");
     });
   }
@@ -3133,7 +3235,7 @@ function openCodexUrl(url) {
     ],
     env: { ...process.env, AUTOOC_CODEX_URL: url }
   } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = (0, import_child_process2.spawn)(launcher.bin, launcher.args, {
       detached: false,
       stdio: "ignore",
@@ -3147,7 +3249,7 @@ function openCodexUrl(url) {
     });
     child.once("close", (code) => {
       if (settled) return;
-      if (code === 0) resolve5();
+      if (code === 0) resolve6();
       else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code != null ? code : "unknown"}`));
     });
   });
@@ -3265,8 +3367,8 @@ var CodexAppServerClient = class {
     this.threadId = ((_a = threadResponse == null ? void 0 : threadResponse.thread) == null ? void 0 : _a.id) || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
     await ((_c = (_b = this.callbacks).onThreadCreated) == null ? void 0 : _c.call(_b, { threadId: this.threadId }));
-    const completion = new Promise((resolve5, reject) => {
-      this.completionResolve = resolve5;
+    const completion = new Promise((resolve6, reject) => {
+      this.completionResolve = resolve6;
       this.completionReject = reject;
     });
     void completion.catch(() => {
@@ -3523,7 +3625,7 @@ var CopilotCliClient = class {
     if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
       return Promise.reject(new Error("Select the native copilot.exe executable, or reinstall @github/copilot with optional dependencies enabled."));
     }
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       let output = "";
       let error = "";
       let settled = false;
@@ -3541,7 +3643,7 @@ var CopilotCliClient = class {
           } catch (e) {
           }
         }
-        resolve5(result);
+        resolve6(result);
       };
       this.finish = finish;
       try {
@@ -3620,7 +3722,7 @@ var CopilotCliClient = class {
   }
 };
 function checkCopilotInstallation(bin, cwd) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     const child = (0, import_child_process3.spawn)(bin, ["--version"], { cwd, windowsHide: true, shell: false, stdio: "pipe" });
     let output = "";
     const timer = setTimeout(() => {
@@ -3641,7 +3743,7 @@ function checkCopilotInstallation(bin, cwd) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve5(output.trim());
+      if (code === 0) resolve6(output.trim());
       else reject(new Error(output.trim() || `Copilot exited with code ${code}.`));
     });
     child.stdin.end();
@@ -3683,7 +3785,9 @@ function workflowTaskPrompt(prompt, workflow, previous) {
   if (!workflow.handoffOutput || !previous) return prompt;
   const previousStep = workflow.steps.find((s) => s.id === previous.stepId);
   const sourceLine = previousStep ? `Source: step "${previousStep.name || previous.stepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})` : `Source: step ${previous.stepId}`;
-  const cleanOutput = extractContextForHandoff(String(previous.output || ""));
+  const cleanOutput = (previousStep == null ? void 0 : previousStep.stepKind) === "code" ? `PRIMARY HANDOFF INPUT \u2014 use this as the main input for the current task:
+
+${previous.output}` : extractContextForHandoff(String(previous.output || ""));
   const contextBlock = [
     "",
     "=== WORKFLOW HANDOFF CONTEXT ===",
@@ -4257,8 +4361,9 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const agent = task.agent || definition.settings.defaultAgent || "build";
     if (task.useRalphLoop) prompt = "/ralph-loop " + prompt;
     if (task.interactiveTerminal) {
-      await new Promise((resolve5, reject) => {
-        const options = { onLaunched: resolve5, onError: reject, linuxTerminal: definition.settings.linuxTerminal };
+      if (path9.isAbsolute(bin) && !fs10.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
+      await new Promise((resolve6, reject) => {
+        const options = { onLaunched: resolve6, onError: reject, linuxTerminal: definition.settings.linuxTerminal };
         if (process.platform === "win32") openOpencodeCliLongPromptWindows(bin, taskCwd, {}, model, task.forceModel ? "" : agent, prompt, options);
         else openOpencodeCli(bin, taskCwd, {}, ["-m", model, ...task.forceModel ? [] : ["--agent", agent], "--prompt", prompt], options);
       });
@@ -4276,7 +4381,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const handle = launchHidden(scriptFile, pidFile);
     let known = false;
     try {
-      const result = await new Promise((resolve5, reject) => {
+      const result = await new Promise((resolve6, reject) => {
         let ended = false;
         const finish = (error) => {
           if (ended) return;
@@ -4303,7 +4408,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
             const output = formatTaskOutput(read(outFile), read(errFile));
             known = true;
             finish();
-            resolve5({ succeeded: exit === "0", output: output || "(no output)" });
+            resolve6({ succeeded: exit === "0", output: output || "(no output)" });
           } catch (error) {
             finish(error);
           }
@@ -4516,7 +4621,7 @@ function workflowDelay(value = 0, unit = "seconds") {
 }
 function waitForWorkflowDelay(milliseconds, signal) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return Promise.reject(new Error("Invalid workflow delay"));
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     let timer;
     let remaining = milliseconds;
     const cleanup = () => {
@@ -4536,7 +4641,7 @@ function waitForWorkflowDelay(milliseconds, signal) {
         if (remaining > 0) schedule();
         else {
           cleanup();
-          resolve5();
+          resolve6();
         }
       }, chunk);
     };
@@ -4677,11 +4782,11 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await (onCheckpoint == null ? void 0 : onCheckpoint(journal.snapshot()));
   const file = responseFile(directory, runId, token);
-  const approved = await new Promise((resolve5, reject) => {
+  const approved = await new Promise((resolve6, reject) => {
     const finish = (error, value) => {
       clearInterval(timer);
       signal == null ? void 0 : signal.removeEventListener("abort", abort);
-      error ? reject(error) : resolve5(value);
+      error ? reject(error) : resolve6(value);
     };
     const abort = () => finish(new Error("Approval interrupted; execution requires reconciliation"));
     const timer = setInterval(() => {
@@ -5848,7 +5953,7 @@ function parseMonthDays(input) {
   return [...new Set(days)].sort((a, b) => a - b);
 }
 function delay(ms) {
-  return new Promise((resolve5) => window.setTimeout(resolve5, ms));
+  return new Promise((resolve6) => window.setTimeout(resolve6, ms));
 }
 function preventBackdropClose(modal) {
   const contentEl = modal.contentEl;
@@ -6726,11 +6831,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     await this.stopMcpBridge();
     this.mcpBridgeToken = crypto2.randomBytes(24).toString("hex");
     const server = http.createServer((request, response) => void this.handleMcpBridgeRequest(request, response));
-    await new Promise((resolve5, reject) => {
+    await new Promise((resolve6, reject) => {
       server.once("error", reject);
       server.listen(0, "127.0.0.1", () => {
         server.off("error", reject);
-        resolve5();
+        resolve6();
       });
     });
     const address = server.address();
@@ -6744,7 +6849,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       fs18.writeFileSync(bridgePath, JSON.stringify({ url: `http://127.0.0.1:${address.port}`, token: this.mcpBridgeToken }), "utf8");
       this.mcpBridgeServer = server;
     } catch (error) {
-      await new Promise((resolve5) => server.close(() => resolve5()));
+      await new Promise((resolve6) => server.close(() => resolve6()));
       throw error;
     }
   }
@@ -6756,7 +6861,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       fs18.unlinkSync(this.getMcpBridgePath());
     } catch (e) {
     }
-    if (server) await new Promise((resolve5) => server.close(() => resolve5()));
+    if (server) await new Promise((resolve6) => server.close(() => resolve6()));
   }
   findTaskByIdOrName(idOrName) {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
@@ -7525,7 +7630,7 @@ Continue?`
   // Quick evaluation via same detached PS + polling mechanism. Used for workflow
   // transition validation prompts.
   async evaluateWithOpencode(prompt, model, cwd) {
-    return new Promise((resolve5) => {
+    return new Promise((resolve6) => {
       const fs19 = require("fs");
       const path17 = require("path");
       const tmpDir = require("os").tmpdir();
@@ -7616,7 +7721,7 @@ DONE:%s
           clearInterval(poll);
           hiddenProc == null ? void 0 : hiddenProc.kill();
           cleanup(true);
-          resolve5({ output: "evaluation timeout", exitCode: -1 });
+          resolve6({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
         if (!fs19.existsSync(outFile)) return;
@@ -7627,7 +7732,7 @@ DONE:%s
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
-        resolve5({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
+        resolve6({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
       }, 2e3);
     });
   }
@@ -7635,7 +7740,7 @@ DONE:%s
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   async runTask(task, onComplete, overrides = {}) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f;
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
@@ -7713,11 +7818,33 @@ DONE:%s
     const secretEnv = this.getSecretsEnv();
     if (effectiveTask.interactiveTerminal) {
       const current = this.settings.tasks[idx];
+      let settled2 = false;
+      let cancelled2 = false;
+      const controller = { kill: () => {
+        cancelled2 = true;
+        settled2 = true;
+      } };
+      this.runningProcesses.set(task.id, controller);
+      const isCurrent = () => !settled2 && this.runningProcesses.get(task.id) === controller && this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
+      const finish = async (error) => {
+        var _a2;
+        if (!isCurrent()) return;
+        settled2 = true;
+        current.status = error ? "failed" : "completed";
+        current.output = error ? `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}` : "[interactive OpenCode CLI launch confirmed; agent task completion is not tracked]";
+        if (error) (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
+        await this.saveSettings();
+        if (cancelled2 || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current || current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller) return;
+        this.runningProcesses.delete(task.id);
+        new import_obsidian.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, error ? -1 : 0);
+      };
       current.status = "running";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
       (_d = this.view) == null ? void 0 : _d.resetDashboardTaskShift(task.id);
       await this.saveSettings();
+      if (!isCurrent()) return;
       try {
         let prompt2 = effectiveTask.prompt;
         if (effectiveTask.useRalphLoop) {
@@ -7725,48 +7852,32 @@ DONE:%s
         }
         const bin2 = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
-        const reportInteractiveFailure = async (error) => {
-          var _a2;
-          const t = this.settings.tasks.find((candidate) => candidate.id === task.id);
-          if (!t) return;
-          t.status = "failed";
-          t.lastRun = (/* @__PURE__ */ new Date()).toISOString();
-          t.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`;
-          (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
-          await this.saveSettings();
-          new import_obsidian.Notice(`AutoOC: could not open CLI task "${task.name}".`);
-          if (onComplete) await onComplete(t, -1);
+        const launchOptions = {
+          onError: (error) => {
+            void finish(error);
+          },
+          onLaunched: () => {
+            void finish();
+          },
+          linuxTerminal: this.settings.linuxTerminal
         };
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt2);
+          openOpencodeCliLongPromptWindows(bin2, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt2, launchOptions);
         } else {
           const args2 = ["-m", effectiveTask.model];
           if (!effectiveTask.forceModel) args2.push("--agent", agent);
           args2.push("--prompt", prompt2);
-          openOpencodeCli(bin2, taskCwd, secretEnv, args2, {
-            onError: reportInteractiveFailure,
-            linuxTerminal: this.settings.linuxTerminal
-          });
+          openOpencodeCli(bin2, taskCwd, secretEnv, args2, launchOptions);
         }
-        current.status = "completed";
-        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
-        await this.saveSettings();
-        new import_obsidian.Notice(`AutoOC: opened CLI task "${task.name}".`);
-        if (onComplete) await onComplete(current, 0);
       } catch (e) {
-        current.status = "failed";
-        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
-        (_e = this.view) == null ? void 0 : _e.startGradualSink(task.id);
-        await this.saveSettings();
-        new import_obsidian.Notice(`AutoOC: could not open CLI task "${task.name}".`);
-        if (onComplete) await onComplete(current, -1);
+        await finish(e instanceof Error ? e : new Error(String(e)));
       }
       return;
     }
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
+    (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
@@ -7931,7 +8042,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       new import_obsidian.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
-    const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -8961,6 +9072,8 @@ Reply ONLY with YES or NO.`, model, cwd);
       const ctx = this.workflowRuntime.get(currentWf.id);
       if (ctx) ctx.stepOutputs.set(currentStep.id, lastOutput);
       const lastSucceeded = exitCode === 0 && completedTask.status !== "failed";
+      currentStep.status = lastSucceeded ? "completed" : "failed";
+      currentStep.output = lastOutput;
       const transitions = workflowStepTransitions(currentWf.steps, stepIndex);
       const { nextStepId, reason } = await this.resolveNextStep(
         currentWf,
@@ -11512,8 +11625,8 @@ var ConfirmModal = class extends import_obsidian.Modal {
   }
   openAndWait() {
     this.open();
-    return new Promise((resolve5) => {
-      this.resolve = resolve5;
+    return new Promise((resolve6) => {
+      this.resolve = resolve6;
     });
   }
   onOpen() {
@@ -11551,8 +11664,8 @@ var SecretsPinModal = class extends import_obsidian.Modal {
   }
   openAndWait() {
     this.open();
-    return new Promise((resolve5) => {
-      this.resolve = resolve5;
+    return new Promise((resolve6) => {
+      this.resolve = resolve6;
     });
   }
   finish(value) {
@@ -11840,7 +11953,7 @@ var CreateTaskModal = class extends import_obsidian.Modal {
           if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
             ta.inputEl.addClass("auto-oc-prompt-too-long");
             promptNotice.setText(
-              `CLI prompts over ${SAFE_CLI_PROMPT_LENGTH} characters are saved to a temporary workspace file, the OpenCode TUI is instructed to read it, and the file is deleted after 1 minute.`
+              "On Windows, interactive CLI prompts are kept in an ignored session directory until the CLI exits. Launch confirmation does not mean the agent has finished the task."
             );
             promptNotice.style.display = "block";
           } else {
@@ -13976,8 +14089,8 @@ var BranchSelectorModal = class extends import_obsidian.Modal {
     this.branches = branches;
   }
   async open() {
-    return new Promise((resolve5) => {
-      this.resolveSelection = resolve5;
+    return new Promise((resolve6) => {
+      this.resolveSelection = resolve6;
       super.open();
     });
   }
