@@ -8932,8 +8932,10 @@ ${current.output}`;
       }
       const handle = attempt.handle;
       if (this.runningProcesses.get(id) === handle) this.runningProcesses.delete(id);
+      const ownerWorkflow = attempt.owner ? this.settings.workflows.find((item) => item.id === attempt.owner.workflowId) : void 0;
+      const ownerExecution = ownerWorkflow == null ? void 0 : ownerWorkflow.legacyExecution;
       attempt.stopPromise = (async () => {
-        var _a2;
+        var _a2, _b2;
         try {
           await (handle == null ? void 0 : handle.kill());
           metadata.stopState = "unconfirmed";
@@ -8943,6 +8945,7 @@ ${current.output}`;
         }
         if (((_a2 = this.legacyAttempts) == null ? void 0 : _a2.get(id)) === attempt && task.legacyExecution === metadata) {
           await this.saveSettings();
+          if (((_b2 = this.legacyAttempts) == null ? void 0 : _b2.get(id)) !== attempt || task.legacyExecution !== metadata || (ownerWorkflow == null ? void 0 : ownerWorkflow.legacyExecution) !== ownerExecution) return "stop-requested";
           new import_obsidian.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
         }
         return "stop-requested";
@@ -8970,7 +8973,7 @@ ${current.output}`;
     throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
   }
   async killWorkflow(id) {
-    var _a, _b, _c, _d, _e, _f, _g;
+    var _a, _b, _c, _d, _e, _f, _g, _h;
     if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.workflowId) === id) {
       this.sharedWorkflowExecution.controller.abort();
       return;
@@ -8979,6 +8982,7 @@ ${current.output}`;
     if (!wf) return;
     const context = (_b = this.workflowRuntime) == null ? void 0 : _b.get(id);
     if (!context) return;
+    const execution = wf.legacyExecution;
     const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
     const attempt = (step == null ? void 0 : step.taskId) ? (_c = this.legacyAttempts) == null ? void 0 : _c.get(step.taskId) : void 0;
     const owned = !!attempt && ((_d = attempt.owner) == null ? void 0 : _d.context) === context && attempt.identity.workflowId === id && attempt.identity.stepId === (step == null ? void 0 : step.id) && attempt.identity.stepIndex === stepIndex;
@@ -8988,6 +8992,7 @@ ${current.output}`;
     else if (((_f = this.workflowRuntime) == null ? void 0 : _f.get(id)) === context) this.workflowRuntime.delete(id);
     if ((_g = this.workflowRuntime) == null ? void 0 : _g.has(id)) return;
     await this.saveSettings();
+    if (wf.legacyExecution !== execution || ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id))) return;
     new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
   async runDueAll() {
@@ -9351,6 +9356,7 @@ ${current.output}`;
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
+      if (this.workflowRuntime.get(wf.id) !== context) return;
       new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
@@ -9613,6 +9619,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (wfRef2) {
         wfRef2.status = succeeded ? "completed" : "failed";
         await this.saveSettings();
+        if (this.workflowRuntime.get(wf.id) !== ctx) return;
         new import_obsidian.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
       }
       this.workflowRuntime.delete(wf.id);
@@ -9624,6 +9631,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (nextIdx >= 0) {
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
+        if (!isCurrentExecution()) return;
         new import_obsidian.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
         setTimeout(() => {
           if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId);

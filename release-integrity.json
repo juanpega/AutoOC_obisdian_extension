@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "version": "1.6.1",
   "sha256": {
-    "main.js": "224dc165d92739671a3db0a280ce4a6513abbb83cb2d2018b8fd11e914d38874",
+    "main.js": "80f7f05f159090aa90164cfa7570ac59bb0f1545a446c9fea6652dbb9eabc5fc",
     "manifest.json": "92776926b8ad44b9e6e1594644ccebaa4ba561018c997a2636fe56ef87e76f54",
     "styles.css": "0d1c1764830d074b5b3d6befe0fb8ad3fed3e3de54e8d21b7ba53a1a365b3b93",
     "autooc-cli.cjs": "299d35252fd35e9c6fa061482ffac07e00101dd3ff5d38c5dae80705bc6ce242",

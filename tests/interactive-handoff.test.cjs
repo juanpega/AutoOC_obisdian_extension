@@ -237,13 +237,13 @@ for (const entry of ['card', 'workflow']) for (const standalone of [false, true]
   });
 }
 
-function stopCardHarness() {
+function stopCardHarness(globals = {}) {
   const notices = [], elements = [], bundle = { exports: {} };
   class Stub {}
   const obsidian = { Plugin: Stub, Notice: class { constructor(text) { notices.push(text); } }, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; };', {
     module: bundle, exports: bundle.exports, require: name => name === 'obsidian' ? obsidian : require(name),
-    process, Buffer, console, AbortController, setTimeout, clearTimeout, setInterval, clearInterval,
+    process, Buffer, console, AbortController, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
   });
   const plugin = new bundle.exports.default();
   const binding = { runId: 'run-1', workflowId: 'wf', stepId: 'a', stepIndex: 0, revision: 1 };
@@ -274,13 +274,148 @@ function stopCardHarness() {
     detailStop: elements.find(el => el.text === '⏹ Stop'), renderCard, Plugin: bundle.exports.default, Client: bundle.exports.TestClient, setRunner: bundle.exports.setRunner };
 }
 
-function legacyHarness(kind = 'copilot') {
-  const h = stopCardHarness(), p = h.plugin;
+function legacyHarness(kind = 'copilot', globals = {}) {
+  const h = stopCardHarness(globals), p = h.plugin;
   delete p.sharedWorkflowExecution; delete p.pluginExecutionLease; delete h.task.runtimeExecution;
   Object.assign(h.task, {taskKind:kind,prompt:'fixture',code:'output="code result";',status:'pending',model:'test/model'});
   p.app = {vault:{adapter:{basePath:require('node:os').tmpdir()}}};
   p.saveSettings = async () => {};
   return h;
+}
+
+// C6: keep production workflow dispatch, Code execution, task ownership and Stop;
+// only the persistence boundary, clock and external client are controlled.
+function terminalRestartHarness(kind) {
+  const timers = [];
+  const h = legacyHarness('copilot', {
+    setTimeout(fn, ms) { const timer = {fn, ms}; timers.push(timer); return timer; },
+    clearTimeout(timer) { if (timer) timer.cancelled = true; },
+  });
+  const p = h.plugin, wf = h.workflow;
+  Object.assign(wf, {name:'C6 fixture', status:'pending', currentStep:0, steps:[{
+    id:'terminal', stepKind:kind === 'delay' ? 'delay' : 'code', delayValue:0,
+    code:kind === 'failure' ? 'throw new Error("old failure");' : 'output="old result";', transitions:[],
+  }]});
+  p.createVaultMutationBatch = () => ({record(){}, async flush(){}});
+  const clients = [], callbacks = [];
+  p.createCopilotClient = (_cwd, onOutput) => {
+    const record = {onOutput, killed:0}; clients.push(record);
+    return record.client = {run:() => new Promise(resolve => record.finish = resolve), dispose(){record.killed++;}};
+  };
+  const runTask = p.runTask.bind(p);
+  p.runTask = (task, callback, ...args) => { callbacks.push(callback); return runTask(task, callback, ...args); };
+  return {...h, timers, clients, callbacks};
+}
+
+for (const kind of ['code', 'delay', 'failure']) {
+  for (const action of ['continue', 'stop', 'reject']) {
+    test(`C6 terminal ${kind} preserves restarted owner: ${action}`, async () => {
+      const h = terminalRestartHarness(kind), p = h.plugin, wf = h.workflow;
+      let release, reject;
+      p.saveSettings = () => ['completed','failed'].includes(wf.status) && !release
+        ? new Promise((resolve, fail) => {release=resolve; reject=fail;}) : Promise.resolve();
+      const first = p.runWorkflow(wf), oldContext = p.workflowRuntime.get(wf.id);
+      // Delay and failed-Code persistence rejections propagate; successful Code
+      // catches its persistence error and ignores it once ownership has changed.
+      const settledFirst = first.then(() => null, error => error);
+      await drain();
+      if (kind === 'delay') { h.timers.find(t => t.ms === 0).fn(); await drain(); }
+      assert.equal(typeof release, 'function', 'old terminal save reached');
+      wf.steps = [{id:'task',stepKind:'task',taskId:'t',transitions:[{toStepId:'next',mode:'default'}]},
+        {id:'next',stepKind:'delay',delayValue:1,transitions:[]}];
+      await p.runWorkflow(wf); await drain();
+      const current = p.workflowRuntime.get(wf.id), handle = p.runningProcesses.get('t');
+      const identity = p.taskStopIdentity(h.task), before = JSON.stringify(wf), noticeCount = h.notices.length;
+      assert.notEqual(current, oldContext); assert.ok(handle); assert.equal(h.clients.length, 1);
+      if (action === 'reject') reject(Error('old save rejected')); else release();
+      const error = await settledFirst;
+      if (action === 'reject' && kind !== 'code') assert.match(error.message, /old save rejected/);
+      else assert.equal(error, null);
+      assert.equal(p.workflowRuntime.get(wf.id), current, 'new context survives old terminal save');
+      assert.equal(JSON.stringify(wf), before); assert.equal(p.runningProcesses.get('t'), handle);
+      assert.equal(p.taskStopIdentity(h.task).token, identity.token);
+      assert.equal(h.notices.length, noticeCount, 'no stale terminal notice');
+      let foreignKills = 0;
+      p.runningProcesses.set('foreign', {kill(){foreignKills++;}});
+      if (action === 'stop') {
+        await p.killWorkflow(wf.id);
+        assert.equal(h.clients[0].killed, 1); assert.equal(foreignKills, 0);
+        assert.equal(h.task.legacyExecution.stopState, 'unconfirmed');
+        assert.match(h.task.output, /external outcome unconfirmed/);
+        h.clients[0].onOutput('late stream'); h.clients[0].finish({exitCode:0,output:'late result'});
+        await drain(); await h.callbacks[0]({status:'completed',output:'late callback'}, 0);
+        assert.equal(wf.status, 'failed'); assert.equal(h.timers.filter(t => t.ms === 200).length, 0);
+        assert.notEqual(h.task.output, 'late result');
+      } else {
+        h.clients[0].finish({exitCode:0,output:'new result'}); await drain();
+        assert.equal(wf.steps[0].output, 'new result'); assert.equal(current.stepOutputs.get('task'), 'new result');
+        await h.callbacks[0]({status:'completed',output:'duplicate'}, 0);
+        assert.equal(wf.steps[0].output, 'new result');
+        const advances = h.timers.filter(t => t.ms === 200); assert.equal(advances.length, 1);
+        advances[0].fn(); await drain(); assert.equal(wf.steps[1].status, 'running');
+        await p.killWorkflow(wf.id); await drain();
+        const stopped = JSON.stringify(wf); advances[0].fn(); await drain();
+        assert.equal(JSON.stringify(wf), stopped); assert.equal(foreignKills, 0);
+      }
+    });
+  }
+  test(`C6 terminal ${kind} without restart keeps normal result and cleanup`, async () => {
+    const h = terminalRestartHarness(kind), p = h.plugin, wf = h.workflow;
+    const job = p.runWorkflow(wf); await drain();
+    if (kind === 'delay') h.timers.find(t => t.ms === 0).fn();
+    await job;
+    assert.equal(wf.status, kind === 'failure' ? 'failed' : 'completed');
+    assert.equal(p.workflowRuntime.has(wf.id), false);
+    assert.equal(p.workflowDelayControllers.has(wf.id), false);
+    assert.match(wf.steps[0].output, kind === 'failure' ? /old failure/ : kind === 'delay' ? /delay 0/ : /old result/);
+    assert.ok(h.notices.some(text => text.includes(`Workflow "C6 fixture" ${wf.status}.`)));
+  });
+}
+
+test('C6 old delay cleanup preserves the replacement delay controller', async () => {
+  const h = terminalRestartHarness('delay'), p = h.plugin, wf = h.workflow;
+  let release;
+  p.saveSettings = () => wf.status === 'completed' && !release ? new Promise(resolve => release=resolve) : Promise.resolve();
+  const first = p.runWorkflow(wf); await drain(); h.timers[0].fn(); await drain();
+  const second = p.runWorkflow(wf); await drain();
+  const context = p.workflowRuntime.get(wf.id), controller = p.workflowDelayControllers.get(wf.id);
+  release(); await first;
+  assert.equal(p.workflowRuntime.get(wf.id), context);
+  assert.equal(p.workflowDelayControllers.get(wf.id), controller); assert.equal(controller.signal.aborted, false);
+  h.timers[1].fn(); await second;
+  assert.equal(wf.status, 'completed'); assert.equal(p.workflowDelayControllers.has(wf.id), false);
+});
+
+for (const boundary of ['transition', 'stop', 'entry']) {
+  test(`C6 ${boundary} save cannot emit an old notice or advance after restart`, async () => {
+    const h = terminalRestartHarness('code'), p = h.plugin, wf = h.workflow;
+    let release, gated = false;
+    if (boundary === 'transition') wf.steps.push({id:'next',stepKind:'delay',delayValue:1,transitions:[]});
+    if (boundary === 'transition') wf.steps[0].transitions = [{toStepId:'next',mode:'default'}];
+    const realEntry = p.findEntryStep.bind(p);
+    if (boundary === 'entry') p.findEntryStep = () => null;
+    if (boundary === 'stop') {
+      wf.steps = [{id:'task',stepKind:'task',taskId:'t',transitions:[]}];
+      await p.runWorkflow(wf); await drain();
+    }
+    p.saveSettings = () => {
+      const atBoundary = boundary === 'transition' ? wf.currentStep === 1 : wf.status === 'failed';
+      if (!gated && atBoundary) {gated=true; return new Promise(resolve => release=resolve);}
+      return Promise.resolve();
+    };
+    const first = boundary === 'stop' ? p.killWorkflow(wf.id) : p.runWorkflow(wf);
+    await drain(); assert.equal(typeof release, 'function');
+    if (boundary === 'transition') await p.killWorkflow(wf.id);
+    p.findEntryStep = realEntry;
+    wf.steps = [{id:'replacement',stepKind:'delay',delayValue:1,transitions:[]}];
+    const second = p.runWorkflow(wf); await drain();
+    const before = JSON.stringify(wf), count = h.notices.length, context = p.workflowRuntime.get(wf.id);
+    release(); await first;
+    assert.equal(p.workflowRuntime.get(wf.id), context); assert.equal(JSON.stringify(wf), before);
+    assert.equal(h.notices.length, count); assert.equal(h.timers.filter(t => t.ms === 200).length, 0);
+    await p.killWorkflow(wf.id); await second;
+    if (h.clients[0]) {h.clients[0].finish({exitCode:0,output:'late'}); await drain();}
+  });
 }
 
 test('legacy stop requires a complete identity and never cancels a foreign workflow or occurrence', async () => {

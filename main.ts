@@ -3956,12 +3956,16 @@ export default class AutoOCPlugin extends Plugin {
       }
       const handle = attempt.handle;
       if (this.runningProcesses.get(id) === handle) this.runningProcesses.delete(id);
+      const ownerWorkflow = attempt.owner ? this.settings.workflows.find(item => item.id === attempt.owner!.workflowId) : undefined;
+      const ownerExecution = ownerWorkflow?.legacyExecution;
       attempt.stopPromise = (async () => {
         try { await handle?.kill(); metadata.stopState = "unconfirmed"; }
         catch (error) { metadata.stopState = "error"; metadata.stopError = this.redactSecrets(String(error)); }
         // Metadata belongs to this attempt, not to a replacement task/attempt.
         if (this.legacyAttempts?.get(id) === attempt && task.legacyExecution === metadata) {
           await this.saveSettings();
+          if (this.legacyAttempts?.get(id) !== attempt || task.legacyExecution !== metadata ||
+              ownerWorkflow?.legacyExecution !== ownerExecution) return "stop-requested";
           new Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` :
             "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
         }
@@ -4004,6 +4008,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const context = (this as any).workflowRuntime?.get(id);
     if (!context) return;
+    const execution = wf.legacyExecution;
     const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
     const attempt = step?.taskId ? this.legacyAttempts?.get(step.taskId) : undefined;
     const owned = !!attempt && attempt.owner?.context === context && attempt.identity.workflowId === id &&
@@ -4015,6 +4020,7 @@ export default class AutoOCPlugin extends Plugin {
     else if ((this as any).workflowRuntime?.get(id) === context) (this as any).workflowRuntime.delete(id);
     if ((this as any).workflowRuntime?.has(id)) return;
     await this.saveSettings();
+    if (wf.legacyExecution !== execution || (this as any).workflowRuntime?.has(id)) return;
     new Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
 
@@ -4459,6 +4465,7 @@ export default class AutoOCPlugin extends Plugin {
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
+      if ((this as any).workflowRuntime.get(wf.id) !== context) return;
       new Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
@@ -4732,6 +4739,9 @@ export default class AutoOCPlugin extends Plugin {
       if (wfRef) {
         wfRef.status = succeeded ? "completed" : "failed";
         await this.saveSettings();
+        // Terminal state permits another run while persistence is pending.
+        // Ownership (not running status) controls cleanup and terminal notices.
+        if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
         new Notice(succeeded
           ? `AutoOC: ✅ Workflow "${wfRef.name}" completed.`
           : `AutoOC: ❌ Workflow "${wfRef.name}" failed.`);
@@ -4745,6 +4755,7 @@ export default class AutoOCPlugin extends Plugin {
       if (nextIdx >= 0) {
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
+        if (!isCurrentExecution()) return;
         new Notice(`AutoOC: ⚡ Workflow "${wfRef.name}" → step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
         setTimeout(() => { if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId); }, 200);
       }
