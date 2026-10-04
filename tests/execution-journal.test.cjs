@@ -14,6 +14,32 @@ const {executeCode}=load('code-runtime');
 const {prepareWorkflowDefinition:prepare}=load('workflow-definition');
 const {runCodeWorkflowHost}=load('code-workflow-host');
 const hash='a'.repeat(64);
+test('terminal recovery separates edited definitions from historical results',()=>{
+  const {recoverWorkflowProgress,projectWorkflowProgress}=load('workflow-progress');
+  const original={id:'w',name:'Before',steps:[{id:'a',taskId:'t'}]},tasks=[{id:'t',prompt:'before'}];
+  const definition=prepare(original,tasks,{});
+  for(const phase of ['completed','failed']) {
+    const checkpoint={schemaVersion:1,runId:'run-1',workflowId:'w',definitionHash:definition.hash,revision:3,phase,nextStepId:null,steps:[{stepId:'a',status:phase,output:'historical'}]};
+    const edited={...original,name:'After',runtimeExecution:{runId:'run-1',revision:3},steps:[{id:'a',taskId:'replacement',output:'stale',status:'completed'}]};
+    const before=JSON.stringify(checkpoint);
+    const recovered=recoverWorkflowProgress(edited,[],{},checkpoint,'run-1');
+    assert.equal(recovered.name,'After');assert.equal(recovered.status,phase);
+    assert.equal(recovered.runtimeExecution.definitionHash,definition.hash);
+    assert.deepEqual(recovered.runtimeExecution.historicalSteps,checkpoint.steps);
+    assert.equal(recovered.steps[0].output,'');assert.equal(recovered.steps[0].status,'pending');
+    assert.equal(JSON.stringify(checkpoint),before);
+    assert.throws(()=>projectWorkflowProgress(edited,[],{},checkpoint,'run-1'));
+  }
+});
+test('terminal recovery still rejects identity, malformed checkpoints and stale revisions',()=>{
+  const {recoverWorkflowProgress}=load('workflow-progress');
+  const workflow={id:'w',steps:[],runtimeExecution:{runId:'run-1',revision:3}};
+  const checkpoint={schemaVersion:1,runId:'run-1',workflowId:'w',definitionHash:hash,revision:3,phase:'completed',nextStepId:null,steps:[]};
+  assert.equal(recoverWorkflowProgress(workflow,[],{},checkpoint,'run-1').status,'completed');
+  for(const invalid of [{...checkpoint,runId:'run-2'},{...checkpoint,workflowId:'other'},{...checkpoint,revision:2},{...checkpoint,phase:'in_flight'}]) {
+    assert.throws(()=>recoverWorkflowProgress(workflow,[],{},invalid,'run-1'));
+  }
+});
 async function fixture(fn){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-journal-')),lease=acquireExecutionLease(dir);
   try {await fn(lease,dir);} finally {lease.release();for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}

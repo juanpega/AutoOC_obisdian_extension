@@ -10,6 +10,7 @@ import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal
 import { readStopRequest } from "./workflow-stop";
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { preflightInstalledWorkflow } from "./workflow-preflight";
+import { validateProgressBinding } from "./workflow-progress";
 import { createWorkflowEvaluator } from "./workflow-evaluation";
 import type { VaultMutationBatchFactory } from "./code-vault-mutations";
 
@@ -60,7 +61,12 @@ export async function runInstalledWorkflow(options: {
   const replaceCompletedRunId = options.newExecution ? matches[0].runtimeExecution?.runId : undefined;
   if (replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(runtimeDirectory,replaceCompletedRunId);
-    if ((!virtual && previous.workflowId !== definition.workflow.id) || !["completed","failed"].includes(previous.phase)) {
+    const binding=matches[0].runtimeExecution;
+    // A task may last have run inside a workflow. Its saved binding identifies
+    // that run; a different standalone task's journal can never authorize it.
+    const previousId=virtual && !previous.workflowId.startsWith('@task:') ? binding.workflowId : definition.workflow.id;
+    validateProgressBinding({id:previousId,runtimeExecution:binding},previous,replaceCompletedRunId);
+    if (!["completed","failed"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
   }

@@ -1,6 +1,6 @@
 import { SettingsWriter } from "./settings-writer";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
-import { projectWorkflowProgress } from "./workflow-progress";
+import { projectWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { persistTaskHistory } from "./task-history";
 
@@ -31,10 +31,12 @@ export async function persistWorkflowProgress(options: {
   const matches = virtual ? [virtual] : config.workflows.filter((workflow:any) => workflow.id === durable.workflowId);
   if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
   // Persist only observed progress, never an assertion of ongoing activity.
-  let workflow = matches[0];
+  let workflow = virtual ? {...virtual,runtimeExecution:config.tasks.find((task:any)=>task.id === options.taskId).runtimeExecution} : matches[0];
   if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(options.runtimeDirectory,options.replaceCompletedRunId);
-    if (previous.workflowId !== durable.workflowId || !["completed","failed"].includes(previous.phase)) {
+    const previousId=virtual && !previous.workflowId.startsWith('@task:') ? workflow.runtimeExecution.workflowId : workflow.id;
+    validateProgressBinding({...workflow,id:previousId},previous,options.replaceCompletedRunId);
+    if (!virtual && previous.workflowId !== durable.workflowId || !["completed","failed"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
     workflow = {...workflow};
@@ -65,7 +67,7 @@ export async function persistWorkflowProgress(options: {
       ...(item.observed.codexThreadId ? {lastCodexThreadId:item.observed.codexThreadId} : {}),
       ...(item.observed.codexTurnId ? {lastCodexTurnId:item.observed.codexTurnId} : {}),
       pendingCodexApproval:item.observed.approval ? {...item.observed.approval,requestId:item.observed.approval.token} : undefined,
-      runtimeExecution:{runId:durable.runId,workflowId:durable.workflowId,stepId:item.stepId,revision:durable.revision,
+      runtimeExecution:{runId:durable.runId,workflowId:durable.workflowId,definitionHash:durable.definitionHash,stepId:item.stepId,revision:durable.revision,
         finishedAt:item.observed.finishedAt,
         requiresReconciliation:item.observed.status === "in_flight"}};
   });

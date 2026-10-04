@@ -5057,13 +5057,49 @@ async function runCodeWorkflowHost(options) {
 }
 
 // workflow-progress.ts
+function validateProgressBinding(workflow, checkpoint, expectedRunId) {
+  validateExecutionCheckpoint(checkpoint);
+  if (checkpoint.runId !== expectedRunId || checkpoint.workflowId !== workflow.id) throw new Error("Progress identity or definition mismatch");
+  const previous = workflow.runtimeExecution;
+  if (previous && (previous.runId !== checkpoint.runId || !Number.isSafeInteger(previous.revision) || previous.revision < 0 || previous.revision > checkpoint.revision)) throw new Error("Stale progress cannot replace current execution");
+  if (previous && (previous.workflowId !== void 0 && previous.workflowId !== checkpoint.workflowId || previous.definitionHash !== void 0 && previous.definitionHash !== checkpoint.definitionHash)) throw new Error("Progress binding identity mismatch");
+}
+function recoverWorkflowProgress(workflow, tasks, settings, checkpoint, expectedRunId, activelyExecuting = false) {
+  validateProgressBinding(workflow, checkpoint, expectedRunId);
+  if (!["completed", "failed"].includes(checkpoint.phase)) return projectWorkflowProgress(workflow, tasks, settings, checkpoint, expectedRunId, activelyExecuting);
+  let currentHash;
+  try {
+    currentHash = prepareWorkflowDefinition(workflow, tasks, settings).hash;
+  } catch (e) {
+  }
+  if (currentHash === checkpoint.definitionHash) return projectWorkflowProgress(workflow, tasks, settings, checkpoint, expectedRunId);
+  return {
+    ...workflow,
+    ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
+    status: checkpoint.phase,
+    currentStep: 0,
+    runtimeExecution: {
+      runId: checkpoint.runId,
+      workflowId: checkpoint.workflowId,
+      definitionHash: checkpoint.definitionHash,
+      revision: checkpoint.revision,
+      phase: checkpoint.phase,
+      requiresReconciliation: false,
+      definitionChanged: true,
+      historicalSteps: JSON.parse(JSON.stringify(checkpoint.steps))
+    },
+    // A hash alone cannot prove that a reused step ID still means the same task.
+    steps: workflow.steps.map((step) => {
+      const { lastRun, output, status, ...definition } = step;
+      return { ...definition, status: "pending", output: "" };
+    })
+  };
+}
 function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expectedRunId, activelyExecuting = false) {
   var _a;
-  validateExecutionCheckpoint(checkpoint);
+  validateProgressBinding(workflow, checkpoint, expectedRunId);
   const definition = prepareWorkflowDefinition(workflow, tasks, settings);
-  if (checkpoint.runId !== expectedRunId || checkpoint.workflowId !== workflow.id || checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
-  const previous = workflow.runtimeExecution;
-  if (previous && (previous.runId !== checkpoint.runId || previous.revision > checkpoint.revision)) throw new Error("Stale progress cannot replace current execution");
+  if (checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
   const last = new Map(checkpoint.steps.map((step) => [step.stepId, step]));
   if (checkpoint.steps.some((step) => !workflow.steps.some((known) => known.id === step.stepId))) throw new Error("Progress contains an unknown step");
   if (checkpoint.nextStepId && !workflow.steps.some((known) => known.id === checkpoint.nextStepId)) throw new Error("Progress next step is absent");
@@ -5073,7 +5109,7 @@ function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expected
     ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
     status: checkpoint.phase === "completed" ? "completed" : checkpoint.phase === "failed" ? "failed" : activelyExecuting ? "running" : "pending",
     currentStep: Math.max(0, workflow.steps.findIndex((step) => step.id === target)),
-    runtimeExecution: { runId: checkpoint.runId, revision: checkpoint.revision, phase: checkpoint.phase, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
+    runtimeExecution: { runId: checkpoint.runId, definitionHash: checkpoint.definitionHash, revision: checkpoint.revision, phase: checkpoint.phase, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
     steps: workflow.steps.map((step) => {
       const observed = last.get(step.id);
       return { ...step, ...(observed == null ? void 0 : observed.startedAt) ? { lastRun: observed.startedAt } : {}, status: (observed == null ? void 0 : observed.status) === "in_flight" ? activelyExecuting ? "running" : "pending" : (observed == null ? void 0 : observed.status) || "pending", output: (observed == null ? void 0 : observed.output) || "" };
@@ -5086,9 +5122,10 @@ function standaloneTaskWorkflow(taskId) {
   if (!taskId) throw new Error("Explicit task identity required");
   return { id: `@task:${taskId}`, name: "Standalone task", steps: [{ id: "task", stepKind: "task", taskId }] };
 }
-function projectStandaloneTask(task, tasks, settings, checkpoint, activelyExecuting = false) {
+function projectStandaloneTask(task, tasks, settings, checkpoint, activelyExecuting = false, recovery = false) {
   const workflow = { ...standaloneTaskWorkflow(task.id), runtimeExecution: task.runtimeExecution };
-  const projected = projectWorkflowProgress(workflow, tasks, settings, checkpoint, task.runtimeExecution.runId, activelyExecuting);
+  const projected = (recovery ? recoverWorkflowProgress : projectWorkflowProgress)(workflow, tasks, settings, checkpoint, task.runtimeExecution.runId, activelyExecuting);
+  if (checkpoint.steps.some((step) => step.stepId !== "task")) throw new Error("Standalone progress contains an unknown step");
   const observed = checkpoint.steps[checkpoint.steps.length - 1];
   return {
     ...task,
@@ -5187,10 +5224,12 @@ async function persistWorkflowProgress(options) {
   if (virtual && config.tasks.filter((task) => task.id === options.taskId).length !== 1) throw new Error("Missing or ambiguous task in catalog");
   const matches = virtual ? [virtual] : config.workflows.filter((workflow2) => workflow2.id === durable.workflowId);
   if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
-  let workflow = matches[0];
+  let workflow = virtual ? { ...virtual, runtimeExecution: config.tasks.find((task) => task.id === options.taskId).runtimeExecution } : matches[0];
   if (options.replaceCompletedRunId && ((_a = workflow.runtimeExecution) == null ? void 0 : _a.runId) === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
-    if (previous.workflowId !== durable.workflowId || !["completed", "failed"].includes(previous.phase)) {
+    const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
+    validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
+    if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
     workflow = { ...workflow };
@@ -5225,6 +5264,7 @@ async function persistWorkflowProgress(options) {
       runtimeExecution: {
         runId: durable.runId,
         workflowId: durable.workflowId,
+        definitionHash: durable.definitionHash,
         stepId: item.stepId,
         revision: durable.revision,
         finishedAt: item.observed.finishedAt,
@@ -5355,7 +5395,10 @@ async function runInstalledWorkflow(options) {
   const replaceCompletedRunId = options.newExecution ? (_a = matches[0].runtimeExecution) == null ? void 0 : _a.runId : void 0;
   if (replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(runtimeDirectory, replaceCompletedRunId);
-    if (!virtual && previous.workflowId !== definition.workflow.id || !["completed", "failed"].includes(previous.phase)) {
+    const binding = matches[0].runtimeExecution;
+    const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition.workflow.id;
+    validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId);
+    if (!["completed", "failed"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
   }
@@ -7460,14 +7503,31 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         const binding = wf.runtimeExecution;
         if (!binding) return wf;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
-        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id, binding.runId));
+        return recoverWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id, binding.runId));
       });
       this.settings.workflows = recovered;
       this.settings.tasks = this.settings.tasks.map((task) => {
         const binding = task.runtimeExecution;
         if (!binding) return task;
+        const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
+        validateProgressBinding({ id: binding.workflowId, runtimeExecution: binding }, checkpoint, binding.runId);
+        if (checkpoint.workflowId.startsWith("@task:") && checkpoint.workflowId !== standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
         if (binding.workflowId === standaloneTaskWorkflow(task.id).id) {
-          return projectStandaloneTask(task, this.settings.tasks, this.settings, readExecutionCheckpoint(runtime, binding.runId), this.ownsSharedRun(binding.workflowId, binding.runId));
+          return projectStandaloneTask(task, this.settings.tasks, this.settings, checkpoint, this.ownsSharedRun(binding.workflowId, binding.runId), true);
+        }
+        const observed = checkpoint.steps.filter((step2) => step2.stepId === binding.stepId).pop();
+        if (!observed) throw new Error("Bound task step is absent from its journal");
+        if (["completed", "failed"].includes(checkpoint.phase)) {
+          return {
+            ...task,
+            status: observed.status,
+            output: observed.output || "",
+            ...observed.startedAt ? { lastRun: observed.startedAt } : {},
+            ...observed.codexThreadId ? { lastCodexThreadId: observed.codexThreadId } : {},
+            ...observed.codexTurnId ? { lastCodexTurnId: observed.codexTurnId } : {},
+            pendingCodexApproval: void 0,
+            runtimeExecution: { ...binding, revision: checkpoint.revision, definitionHash: checkpoint.definitionHash, finishedAt: observed.finishedAt, requiresReconciliation: false }
+          };
         }
         const workflow = recovered.find((wf) => {
           var _a2;

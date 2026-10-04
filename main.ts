@@ -40,7 +40,7 @@ import { standaloneTaskWorkflow,projectStandaloneTask } from "./standalone-task"
 import { prepareWorkflowDefinition } from "./workflow-definition";
 import { supportsSharedWorkflow } from "./code-workflow-host";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
-import { projectWorkflowProgress } from "./workflow-progress";
+import { projectWorkflowProgress, recoverWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
@@ -2586,14 +2586,29 @@ export default class AutoOCPlugin extends Plugin {
         const binding = (wf as any).runtimeExecution;
         if (!binding) return wf;
         const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
-        return projectWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id,binding.runId));
+        return recoverWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id,binding.runId));
       });
       this.settings.workflows = recovered;
       this.settings.tasks = this.settings.tasks.map(task=>{
         const binding=(task as any).runtimeExecution;
         if (!binding) return task;
+        const checkpoint=readExecutionCheckpoint(runtime,binding.runId);
+        validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
+        if (checkpoint.workflowId.startsWith('@task:') && checkpoint.workflowId!==standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
         if (binding.workflowId===standaloneTaskWorkflow(task.id).id) {
-          return projectStandaloneTask(task,this.settings.tasks,this.settings,readExecutionCheckpoint(runtime,binding.runId),this.ownsSharedRun(binding.workflowId,binding.runId));
+          return projectStandaloneTask(task,this.settings.tasks,this.settings,checkpoint,this.ownsSharedRun(binding.workflowId,binding.runId),true);
+        }
+        const observed=checkpoint.steps.filter(step=>step.stepId===binding.stepId).pop();
+        if (!observed) throw new Error("Bound task step is absent from its journal");
+        if (["completed","failed"].includes(checkpoint.phase)) {
+          // The saved binding, rather than today's workflow steps, identifies
+          // this task's historical result even after a step was reassigned.
+          return {...task,status:observed.status as ScheduledTask["status"],output:observed.output || '',
+            ...(observed.startedAt ? {lastRun:observed.startedAt} : {}),
+            ...(observed.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
+            ...(observed.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),
+            pendingCodexApproval:undefined,
+            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,finishedAt:observed.finishedAt,requiresReconciliation:false}};
         }
         const workflow = recovered.find(wf=>wf.id===binding.workflowId && (wf as any).runtimeExecution?.runId===binding.runId);
         const step = workflow?.steps.find(step=>step.id===binding.stepId && step.taskId===task.id);

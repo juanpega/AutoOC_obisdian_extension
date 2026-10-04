@@ -15,6 +15,124 @@ function loader(overrides={}) {
   return load;
 }
 const load=loader(),{prepareWorkflowDefinition:prepare}=load('workflow-definition'),{runCodeWorkflowHost:run}=load('code-workflow-host');
+function pluginFor(root) {
+  const original=Module._load;
+  try {
+    Module._load=function(id,...args){if(id==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{}};return original.call(this,id,...args);};
+    const Plugin=require('../main.js').default,plugin=new Plugin();
+    plugin.app={vault:{adapter:{basePath:root},configDir:'.obsidian'}};plugin.manifest={id:'auto-oc'};
+    return plugin;
+  } finally {Module._load=original;}
+}
+test('edited terminal tasks and workflows reload and rerun without rewriting history',async t=>{
+  for(const kind of ['task','workflow']) for(const phase of ['completed','failed']) {
+    const changes={name:c=>{(kind==='task'?c.tasks[0]:c.workflows[0]).name='Edited';},
+      prompt:c=>{c.tasks[0].prompt='Edited prompt';},model:c=>{c.tasks[0].model='edited-model';},
+      global:c=>{c.defaultCodexModel='edited-default';c.taskTimeoutSeconds=900;}};
+    for(const [changeName,change] of Object.entries(changes)) await t.test(`${kind}/${phase}/${changeName}`,()=>fixture(async root=>{
+      const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');
+      fs.mkdirSync(directory,{recursive:true});const file=path.join(directory,'data.json');
+      const config={logsEnabled:true,maxLogsPerTask:100,tasks:[{id:'t',name:'Original task',taskKind:'code',prompt:'Original prompt',code:'output="controlled";'}],
+        workflows:kind==='workflow'?[{id:'w',name:'Original workflow',steps:[{id:'a',taskId:'t'}]}]:[]};
+      fs.writeFileSync(file,JSON.stringify(config));
+      const definitions=[],effects=[];
+      const host=loader({'workflow-task-adapters':{createWorkflowTaskAdapter:definition=>{
+        definitions.push(definition);
+        return {supports:()=>true,execute:async(task,prompt)=>{effects.push({task,prompt});return {succeeded:phase==='completed',output:'historical-result-'+effects.length};}};
+      }}})('installed-workflow-host').runInstalledWorkflow;
+      const options={vault:root,...(kind==='task'?{taskId:'t'}:{workflowId:'w'}),redact:s=>s};
+      const first=await host(options);assert.equal(first.phase,phase);
+      const journalFile=path.join(runtime,first.runId+'.json'),journalBefore=fs.readFileSync(journalFile);
+      const historyDir=path.join(root,'.opencode/logs/t'),historyFiles=fs.readdirSync(historyDir),historyBefore=new Map(historyFiles.map(f=>[f,fs.readFileSync(path.join(historyDir,f))]));
+      const edited=JSON.parse(fs.readFileSync(file));change(edited);fs.writeFileSync(file,JSON.stringify(edited));
+      const plugin=pluginFor(root);
+      plugin.reservePluginExecution();
+      try {
+        await plugin.loadSettings();
+        const recovered=kind==='task'?plugin.settings.tasks[0]:plugin.settings.workflows[0];
+        assert.equal(recovered.status,phase);assert.equal(recovered.runtimeExecution.runId,first.runId);
+        assert.equal(recovered.runtimeExecution.definitionHash,first.definitionHash);
+        assert.equal(plugin.settings.tasks[0].prompt,edited.tasks[0].prompt);
+        assert.equal(plugin.settings.tasks[0].output,'historical-result-1');
+        if(kind==='workflow') assert.deepEqual(recovered.runtimeExecution.historicalSteps,first.steps);
+        const bytes=fs.readFileSync(file);await plugin.saveSettings();await plugin.loadSettings();
+        assert.deepEqual(fs.readFileSync(journalFile),journalBefore);
+        for(const [f,contents] of historyBefore) assert.deepEqual(fs.readFileSync(path.join(historyDir,f)),contents);
+        assert.equal(effects.length,1);
+        assert.ok(bytes.length);
+      } finally {plugin.releasePluginExecution(false);}
+      await assert.rejects(host({...options,resumeRunId:first.runId}),/definition changed/);
+      assert.equal(effects.length,1);assert.deepEqual(fs.readFileSync(journalFile),journalBefore);
+      const second=await host({...options,newExecution:true});
+      assert.notEqual(second.runId,first.runId);assert.notEqual(second.definitionHash,first.definitionHash);
+      assert.equal(second.definitionHash,definitions.at(-1).hash);
+      assert.equal(effects.at(-1).task.prompt,edited.tasks[0].prompt);
+      assert.equal(effects.at(-1).task.model,edited.tasks[0].model);
+      if(changeName==='global') assert.equal(definitions.at(-1).settings.defaultCodexModel,'edited-default');
+      assert.deepEqual(fs.readFileSync(journalFile),journalBefore);
+      for(const [f,contents] of historyBefore) if(f!=='latest.log') assert.deepEqual(fs.readFileSync(path.join(historyDir,f)),contents);
+      const beforeLate=fs.readFileSync(file);
+      await assert.rejects(load('workflow-catalog-progress').persistWorkflowProgress({configurationFile:file,runtimeDirectory:runtime,checkpoint:first,expectedRunId:first.runId,...(kind==='task'?{taskId:'t'}:{})}));
+      assert.deepEqual(fs.readFileSync(file),beforeLate);
+    }));
+  }
+});
+
+test('reopening a structurally edited terminal workflow never assigns history to a replacement task',()=>fixture(async root=>{
+  const directory=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(directory,{recursive:true});
+  const file=path.join(directory,'data.json');
+  fs.writeFileSync(file,JSON.stringify({tasks:[{id:'old',taskKind:'code',code:'output="old-result";'},
+    {id:'replacement',taskKind:'code',code:'output="new-result";',status:'pending',output:''}],workflows:[{id:'w',steps:[{id:'a',taskId:'old'}]}]}));
+  const host=load('installed-workflow-host').runInstalledWorkflow;
+  const first=await host({vault:root,workflowId:'w',redact:s=>s});
+  const original=JSON.parse(fs.readFileSync(file)),plugin=pluginFor(root);
+  for(const steps of [[{id:'a',taskId:'replacement'}],[],[{id:'missing',taskId:'absent'}]]) {
+    const edited=structuredClone(original);edited.workflows[0].steps=steps;fs.writeFileSync(file,JSON.stringify(edited));
+    plugin.reservePluginExecution();try {
+      await plugin.loadSettings();assert.equal(plugin.settings.tasks[1].output,'');assert.equal(plugin.settings.tasks[1].status,'pending');
+      assert.equal(plugin.settings.tasks[0].output,original.tasks[0].output);assert.deepEqual(plugin.settings.workflows[0].runtimeExecution.historicalSteps,first.steps);
+    } finally {plugin.releasePluginExecution(false);}
+  }
+}));
+
+test('unfinished edited definitions remain rejected on reload and resume without effects',async t=>{
+  for(const kind of ['task','workflow']) for(const phase of ['ready','in_flight']) await t.test(`${kind}/${phase}`,()=>fixture(async root=>{
+    const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
+    const task={id:'t',taskKind:'code',code:'output="must not execute";',prompt:'before'},workflow=kind==='task'?load('standalone-task').standaloneTaskWorkflow('t'):{id:'w',steps:[{id:'a',taskId:'t'}]};
+    const config={tasks:[task],workflows:kind==='task'?[]:[workflow]},definition=prepare(workflow,[task],config);
+    const lease=load('execution-lease').acquireExecutionLease(runtime),journal=await load('execution-journal').ExecutionJournal.create(lease,workflow.id,definition.hash,workflow.steps[0].id);
+    if(phase==='in_flight')await journal.begin(workflow.steps[0].id);lease.release();
+    const state=journal.snapshot();(kind==='task'?task:workflow).runtimeExecution={runId:state.runId,workflowId:workflow.id,revision:state.revision};
+    task.prompt='changed';const file=path.join(directory,'data.json');fs.writeFileSync(file,JSON.stringify(config));
+    const before=fs.readFileSync(path.join(runtime,state.runId+'.json')),plugin=pluginFor(root);
+    plugin.reservePluginExecution();try {await assert.rejects(plugin.loadSettings(),/definition mismatch/);} finally {plugin.releasePluginExecution(false);}
+    let effects=0;
+    const host=loader({'workflow-task-adapters':{createWorkflowTaskAdapter:()=>({supports:()=>true,execute:async()=>{effects++;return {succeeded:true,output:'bad'};}})}})('installed-workflow-host').runInstalledWorkflow;
+    await assert.rejects(host({vault:root,...(kind==='task'?{taskId:'t'}:{workflowId:'w'}),resumeRunId:state.runId,redact:s=>s}),/definition changed/);
+    assert.equal(effects,0);assert.deepEqual(fs.readFileSync(path.join(runtime,state.runId+'.json')),before);
+  }));
+});
+
+test('task replacement validates historical bindings and rejects late publication with an unchanged definition',()=>fixture(async root=>{
+  const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(directory,{recursive:true});
+  const file=path.join(directory,'data.json');
+  fs.writeFileSync(file,JSON.stringify({tasks:[{id:'t',taskKind:'code',code:'output=1;'}],workflows:[{id:'w',steps:[{id:'a',taskId:'t'}]}]}));
+  const host=load('installed-workflow-host').runInstalledWorkflow;
+  const workflowRun=await host({vault:root,workflowId:'w',redact:s=>s});
+  const first=await host({vault:root,taskId:'t',newExecution:true,redact:s=>s});
+  assert.notEqual(workflowRun.runId,first.runId);
+  const second=await host({vault:root,taskId:'t',newExecution:true,redact:s=>s});
+  assert.equal(second.definitionHash,first.definitionHash);
+  const before=fs.readFileSync(file);
+  await assert.rejects(load('workflow-catalog-progress').persistWorkflowProgress({configurationFile:file,runtimeDirectory:runtime,checkpoint:first,expectedRunId:first.runId,taskId:'t'}),/Stale progress/);
+  assert.deepEqual(fs.readFileSync(file),before);
+  for(const mutate of [c=>{c.tasks[0].runtimeExecution.revision+=1;},c=>{c.tasks[0].runtimeExecution.workflowId='wrong';},c=>{c.tasks[0].id='other';}]) {
+    const config=JSON.parse(before);mutate(config);fs.writeFileSync(file,JSON.stringify(config));
+    const plugin=pluginFor(root);plugin.reservePluginExecution();
+    try {await assert.rejects(plugin.loadSettings(),/identity|Stale/);} finally {plugin.releasePluginExecution(false);}
+    await assert.rejects(host({vault:root,taskId:config.tasks[0].id,newExecution:true,redact:s=>s}),/identity|Stale/);
+  }
+}));
 test('autonomous task history survives resume and another run, honors logging, and freezes elapsed time',()=>fixture(async root=>{
   const directory=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(directory,{recursive:true});
   const file=path.join(directory,'data.json');
@@ -116,7 +234,7 @@ test('CLI history is listed by the plugin History modal and Log duration stays f
     assert.match(elapsed.textContent,/unavailable/);
   } finally {live?.onClose();plugin?.releasePluginExecution(false);Module._load=original;global.window=priorWindow;Date.now=priorNow;}
 }));
-test('CLI-first reopening preserves persisted defaults, journals and effects; real definition changes are rejected',async t=>{
+test('CLI-first reopening preserves terminal history after edits while resume stays strict',async t=>{
   const original=Module._load;let Plugin;
   try {
     Module._load=function(id,...args){if(id==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{}};return original.call(this,id,...args);};
@@ -152,7 +270,11 @@ test('CLI-first reopening preserves persisted defaults, journals and effects; re
         value=>{value.workflows[0].steps[0].code='output="changed";';},
       ]) {
         const changed=JSON.parse(persisted);change(changed);const text=JSON.stringify(changed);fs.writeFileSync(file,text);
-        await assert.rejects(reopen(),/Progress identity or definition mismatch/);
+        await reopen();
+        assert.equal(plugin.settings.workflows[0].runtimeExecution.definitionHash,JSON.parse(journalBefore).definitionHash);
+        assert.equal(plugin.settings.workflows[0].runtimeExecution.definitionChanged,true);
+        const rejected=cli('resume','--workflow','first','--run',run.runId);
+        assert.equal(rejected.status,1);assert.match(rejected.stderr,/definition changed/);
         assert.equal(fs.readFileSync(file,'utf8'),text);
         assert.equal(fs.readFileSync(journal,'utf8'),journalBefore);
         assert.equal(fs.readFileSync(path.join(root,'effect.txt'),'utf8'),'once');

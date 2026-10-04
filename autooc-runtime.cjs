@@ -1082,12 +1082,17 @@ async function runCodeWorkflowHost(options) {
 }
 
 // workflow-progress.ts
-function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expectedRunId, activelyExecuting = false) {
+function validateProgressBinding(workflow, checkpoint, expectedRunId) {
   validateExecutionCheckpoint(checkpoint);
-  const definition = prepareWorkflowDefinition(workflow, tasks, settings);
-  if (checkpoint.runId !== expectedRunId || checkpoint.workflowId !== workflow.id || checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
+  if (checkpoint.runId !== expectedRunId || checkpoint.workflowId !== workflow.id) throw new Error("Progress identity or definition mismatch");
   const previous = workflow.runtimeExecution;
-  if (previous && (previous.runId !== checkpoint.runId || previous.revision > checkpoint.revision)) throw new Error("Stale progress cannot replace current execution");
+  if (previous && (previous.runId !== checkpoint.runId || !Number.isSafeInteger(previous.revision) || previous.revision < 0 || previous.revision > checkpoint.revision)) throw new Error("Stale progress cannot replace current execution");
+  if (previous && (previous.workflowId !== void 0 && previous.workflowId !== checkpoint.workflowId || previous.definitionHash !== void 0 && previous.definitionHash !== checkpoint.definitionHash)) throw new Error("Progress binding identity mismatch");
+}
+function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expectedRunId, activelyExecuting = false) {
+  validateProgressBinding(workflow, checkpoint, expectedRunId);
+  const definition = prepareWorkflowDefinition(workflow, tasks, settings);
+  if (checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
   const last = new Map(checkpoint.steps.map((step) => [step.stepId, step]));
   if (checkpoint.steps.some((step) => !workflow.steps.some((known) => known.id === step.stepId))) throw new Error("Progress contains an unknown step");
   if (checkpoint.nextStepId && !workflow.steps.some((known) => known.id === checkpoint.nextStepId)) throw new Error("Progress next step is absent");
@@ -1097,7 +1102,7 @@ function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expected
     ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
     status: checkpoint.phase === "completed" ? "completed" : checkpoint.phase === "failed" ? "failed" : activelyExecuting ? "running" : "pending",
     currentStep: Math.max(0, workflow.steps.findIndex((step) => step.id === target)),
-    runtimeExecution: { runId: checkpoint.runId, revision: checkpoint.revision, phase: checkpoint.phase, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
+    runtimeExecution: { runId: checkpoint.runId, definitionHash: checkpoint.definitionHash, revision: checkpoint.revision, phase: checkpoint.phase, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
     steps: workflow.steps.map((step) => {
       const observed = last.get(step.id);
       return { ...step, ...observed?.startedAt ? { lastRun: observed.startedAt } : {}, status: observed?.status === "in_flight" ? activelyExecuting ? "running" : "pending" : observed?.status || "pending", output: observed?.output || "" };
@@ -1189,10 +1194,12 @@ async function persistWorkflowProgress(options) {
   if (virtual && config.tasks.filter((task) => task.id === options.taskId).length !== 1) throw new Error("Missing or ambiguous task in catalog");
   const matches = virtual ? [virtual] : config.workflows.filter((workflow2) => workflow2.id === durable.workflowId);
   if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
-  let workflow = matches[0];
+  let workflow = virtual ? { ...virtual, runtimeExecution: config.tasks.find((task) => task.id === options.taskId).runtimeExecution } : matches[0];
   if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
-    if (previous.workflowId !== durable.workflowId || !["completed", "failed"].includes(previous.phase)) {
+    const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
+    validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
+    if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
     workflow = { ...workflow };
@@ -1227,6 +1234,7 @@ async function persistWorkflowProgress(options) {
       runtimeExecution: {
         runId: durable.runId,
         workflowId: durable.workflowId,
+        definitionHash: durable.definitionHash,
         stepId: item.stepId,
         revision: durable.revision,
         finishedAt: item.observed.finishedAt,
@@ -2890,7 +2898,10 @@ async function runInstalledWorkflow(options) {
   const replaceCompletedRunId = options.newExecution ? matches[0].runtimeExecution?.runId : void 0;
   if (replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(runtimeDirectory, replaceCompletedRunId);
-    if (!virtual && previous.workflowId !== definition.workflow.id || !["completed", "failed"].includes(previous.phase)) {
+    const binding = matches[0].runtimeExecution;
+    const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition.workflow.id;
+    validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId);
+    if (!["completed", "failed"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
   }
