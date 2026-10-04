@@ -9025,17 +9025,24 @@ ${current.output}`;
     this.syncVisualBuilders();
   }
   async duplicateTask(task) {
+    const {
+      runtimeExecution,
+      legacyExecution,
+      lastCodexThreadId,
+      lastCodexTurnId,
+      pendingCodexApproval,
+      ...definition
+    } = task;
     const copy = {
-      ...task,
+      ...definition,
       id: generateId(),
       name: `${task.name} (copy)`,
+      scheduleDays: [...task.scheduleDays || []],
+      scheduleMonthDays: [...task.scheduleMonthDays || []],
       status: "pending",
       lastRun: "",
       output: "",
-      createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-      lastCodexThreadId: void 0,
-      lastCodexTurnId: void 0,
-      pendingCodexApproval: void 0
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
@@ -9072,11 +9079,24 @@ ${current.output}`;
     this.syncVisualBuilders();
   }
   async duplicateWorkflow(workflow) {
+    const { runtimeExecution, legacyExecution, ...definition } = workflow;
     const copy = {
-      ...workflow,
+      ...definition,
       id: generateId(),
       name: `${workflow.name} (copy)`,
-      steps: workflow.steps.map((step) => ({ ...step })),
+      steps: workflow.steps.map((step) => {
+        var _a;
+        return {
+          ...step,
+          transitions: (_a = step.transitions) == null ? void 0 : _a.map((transition) => ({ ...transition })),
+          position: step.position ? { ...step.position } : void 0,
+          status: "pending",
+          output: "",
+          lastRun: void 0
+        };
+      }),
+      scheduleDays: [...workflow.scheduleDays || []],
+      scheduleMonthDays: [...workflow.scheduleMonthDays || []],
       status: "pending",
       currentStep: -1,
       createdAt: (/* @__PURE__ */ new Date()).toISOString(),

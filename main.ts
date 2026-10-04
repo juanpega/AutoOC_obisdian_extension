@@ -4058,17 +4058,18 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async duplicateTask(task: ScheduledTask) {
+    const { runtimeExecution, legacyExecution, lastCodexThreadId, lastCodexTurnId,
+      pendingCodexApproval, ...definition } = task as ScheduledTask & { runtimeExecution?: unknown };
     const copy: ScheduledTask = {
-      ...task,
+      ...definition,
       id: generateId(),
       name: `${task.name} (copy)`,
+      scheduleDays: [...(task.scheduleDays || [])],
+      scheduleMonthDays: [...(task.scheduleMonthDays || [])],
       status: "pending",
       lastRun: "",
       output: "",
       createdAt: new Date().toISOString(),
-      lastCodexThreadId: undefined,
-      lastCodexTurnId: undefined,
-      pendingCodexApproval: undefined,
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
@@ -4111,11 +4112,21 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async duplicateWorkflow(workflow: Workflow) {
+    const { runtimeExecution, legacyExecution, ...definition } = workflow as Workflow & { runtimeExecution?: unknown };
     const copy: Workflow = {
-      ...workflow,
+      ...definition,
       id: generateId(),
       name: `${workflow.name} (copy)`,
-      steps: workflow.steps.map((step) => ({ ...step })),
+      steps: workflow.steps.map((step) => ({
+        ...step,
+        transitions: step.transitions?.map((transition) => ({ ...transition })),
+        position: step.position ? { ...step.position } : undefined,
+        status: "pending",
+        output: "",
+        lastRun: undefined,
+      })),
+      scheduleDays: [...(workflow.scheduleDays || [])],
+      scheduleMonthDays: [...(workflow.scheduleMonthDays || [])],
       status: "pending",
       currentStep: -1,
       createdAt: new Date().toISOString(),

@@ -25,6 +25,88 @@ function pluginFor(root, configDir='.obsidian', pluginId='auto-oc') {
     return plugin;
   } finally {Module._load=original;}
 }
+test('Duplicate creates independent executable definitions after completion and reload',async t=>{
+  for(const kind of ['task','workflow']) await t.test(kind,()=>fixture(async root=>{
+    const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');
+    fs.mkdirSync(directory,{recursive:true});const file=path.join(directory,'data.json');
+    fs.writeFileSync(file,JSON.stringify({logsEnabled:true,maxLogsPerTask:100,tasks:[{id:'t',name:'Original task',taskKind:'code',code:'output="task-result";'}],
+      workflows:[{id:'w',name:'Original workflow',steps:[{id:'a',stepKind:'code',code:'output="workflow-result";',transitions:[]}]}]}));
+    const collection=kind==='task'?'tasks':'workflows',method=kind==='task'?'duplicateTask':'duplicateWorkflow';
+    const plugin=pluginFor(root);await plugin.loadSettings();plugin.reservePluginExecution();
+    let first,original,copyId,journalBefore,historyBefore;
+    const historyDirectory=path.join(root,'.opencode/logs');
+    // Read only the synthetic history created by this fixture.
+    const history=()=>new Map(fs.existsSync(historyDirectory)?fs.readdirSync(historyDirectory,{recursive:true}).filter(f=>fs.statSync(path.join(historyDirectory,f)).isFile()).map(f=>[f,fs.readFileSync(path.join(historyDirectory,f))]):[]);
+    try {
+      first=await plugin.runSharedWorkflow(kind==='task'?'@task:t':'w',undefined,false,false,kind==='task'?'t':undefined);
+      assert.equal(first.phase,'completed');
+      original=structuredClone(plugin.settings[collection][0]);
+      journalBefore=fs.readFileSync(path.join(runtime,first.runId+'.json'));historyBefore=history();
+      if(kind==='task')assert.ok(historyBefore.size>0);
+      else assert.equal(JSON.parse(journalBefore).steps[0].status,'completed');
+      await plugin[method](plugin.settings[collection][0]);
+      assert.deepEqual(plugin.settings[collection][0],original);
+      const copy=plugin.settings[collection][1];copyId=copy.id;
+      assert.notEqual(copyId,original.id);assert.equal(copy.status,'pending');
+      assert.equal(copy.runtimeExecution,undefined);assert.equal(copy.legacyExecution,undefined);
+      assert.ok(!copy.lastRun);
+      if(kind==='task')assert.equal(copy.output,'');
+      else {assert.equal(copy.currentStep,-1);assert.equal(copy.steps[0].status,'pending');assert.equal(copy.steps[0].output,'');assert.equal(copy.steps[0].lastRun,undefined);}
+      assert.deepEqual(JSON.parse(fs.readFileSync(file))[collection][1],JSON.parse(JSON.stringify(copy)));
+    } finally {plugin.releasePluginExecution(false);}
+    const reopened=pluginFor(root);await reopened.loadSettings();reopened.reservePluginExecution();
+    try {
+      const second=await reopened.runSharedWorkflow(kind==='task'?'@task:'+copyId:copyId,undefined,false,false,kind==='task'?copyId:undefined);
+      assert.equal(second.phase,'completed');assert.notEqual(second.runId,first.runId);
+      assert.equal(second.workflowId,kind==='task'?'@task:'+copyId:copyId);
+      assert.match(second.steps[0].output,kind==='task'?/task-result$/:/workflow-result$/);
+      const checkpoint=JSON.parse(fs.readFileSync(path.join(runtime,second.runId+'.json')));
+      assert.equal(checkpoint.runId,second.runId);assert.equal(checkpoint.workflowId,second.workflowId);
+      assert.ok(!JSON.stringify(checkpoint).includes(first.runId));
+      const final=pluginFor(root);await final.loadSettings();
+      assert.deepEqual(final.settings[collection][0],original);
+      assert.equal(final.settings[collection][1].runtimeExecution.runId,second.runId);
+      assert.deepEqual(fs.readFileSync(path.join(runtime,first.runId+'.json')),journalBefore);
+      for(const [f,bytes] of historyBefore)assert.deepEqual(fs.readFileSync(path.join(historyDirectory,f)),bytes);
+    } finally {reopened.releasePluginExecution(false);}
+  }));
+});
+
+test('Duplicate strips legacy ownership and isolates mutable definition configuration',async t=>{
+  for(const legacy of [false,true]) await t.test('legacy='+legacy,()=>fixture(async root=>{
+    const directory=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(directory,{recursive:true});
+    fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[{id:'t',name:'Task',taskKind:'code',code:'output=1;',scheduleType:'weekly',scheduleDays:[1],scheduleMonthDays:[2]}],
+      workflows:[{id:'w',name:'Workflow',scheduleType:'weekly',scheduleDays:[3],scheduleMonthDays:[4],handoffOutput:true,steps:[{id:'a',stepKind:'task',taskId:'t',position:{x:1,y:2},transitions:[{toStepId:'b',mode:'default'}]},{id:'b',stepKind:'code',code:'output=2;',transitions:[]}]}]}));
+    const plugin=pluginFor(root);await plugin.loadSettings();plugin.reservePluginExecution();
+    try {
+      const task=plugin.settings.tasks[0],workflow=plugin.settings.workflows[0];
+      if(legacy) {
+        task.legacyExecution={token:'fixture-token',ownerToken:'fixture-owner',startedAt:'2026-01-01T00:00:00Z',stopState:'error',stopError:'fixture'};
+        task.lastCodexThreadId='old-thread';task.lastCodexTurnId='old-turn';task.pendingCodexApproval={requestId:1,kind:'command',summary:'fixture'};
+        workflow.legacyExecution={token:'workflow-token'};
+        for(const entry of [task,workflow,...workflow.steps])Object.assign(entry,{status:'completed',lastRun:'2026-01-01T00:00:00Z'});
+        task.output='old';for(const step of workflow.steps)step.output='old';
+      }
+      const originals=structuredClone([task,workflow]);
+      plugin.workflowRuntime=new Map([['w',{previousOutput:'original context'}]]);
+      const attempts=new Map(plugin.legacyAttempts),contexts=structuredClone(plugin.workflowRuntime);
+      await plugin.duplicateTask(task);await plugin.duplicateWorkflow(workflow);
+      const taskCopy=plugin.settings.tasks[1],workflowCopy=plugin.settings.workflows[1];
+      for(const copy of [taskCopy,workflowCopy]) {assert.equal(copy.legacyExecution,undefined);assert.equal(copy.runtimeExecution,undefined);assert.equal(copy.status,'pending');assert.ok(!copy.lastRun);}
+      for(const key of ['lastCodexThreadId','lastCodexTurnId','pendingCodexApproval'])assert.equal(taskCopy[key],undefined);
+      assert.equal(taskCopy.code,task.code);assert.equal(taskCopy.scheduleType,task.scheduleType);
+      assert.deepEqual(workflowCopy.steps.map(s=>s.id),['a','b']);assert.equal(workflowCopy.steps[0].taskId,'t');
+      assert.deepEqual(workflowCopy.steps[0].transitions,workflow.steps[0].transitions);assert.equal(workflowCopy.handoffOutput,true);
+      for(const step of workflowCopy.steps){assert.equal(step.status,'pending');assert.equal(step.output,'');assert.equal(step.lastRun,undefined);}
+      taskCopy.scheduleDays.push(5);taskCopy.scheduleMonthDays.push(6);
+      workflowCopy.scheduleDays.push(5);workflowCopy.scheduleMonthDays.push(6);
+      workflowCopy.steps[0].position.x=100;workflowCopy.steps[0].transitions[0].toStepId='a';workflowCopy.steps[1].transitions.push({toStepId:'a',mode:'default'});
+      assert.deepEqual([task,workflow],originals);
+      assert.deepEqual(plugin.legacyAttempts,attempts);assert.deepEqual(plugin.workflowRuntime,contexts);
+    } finally {plugin.releasePluginExecution(false);}
+  }));
+});
+
 test('selected installation runs plugin tasks and workflows without reading the alternative',async t=>{
   for(const kind of ['task','workflow']) for(const alternative of [false,true]) await t.test(`${kind}/alternative=${alternative}`,()=>fixture(async root=>{
     const configDir='custom/nested',pluginId=alternative?'custom-plugin':'auto-oc',selected=path.join(root,configDir,'plugins',pluginId),other=path.join(root,'.obsidian/plugins/auto-oc');
