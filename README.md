@@ -18,13 +18,16 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 - Obsidian Desktop with Community plugins enabled.
 - The CLI for your chosen engine installed and authenticated: OpenCode, Codex, or GitHub Copilot CLI.
 - Windows, macOS, or Linux.
-- `uv` only when using the optional local `autooc-mcp` helper.
 
 ## Install
 
 ### From a release
 
-Download a release package and place its contents in `<vault>/.obsidian/plugins/auto-oc/`. The plugin directory must contain `manifest.json`, `main.js`, and `styles.css`.
+Descarga el ZIP de la versión publicada y extrae su contenido en `<vault>/.obsidian/plugins/auto-oc/`. Debe contener los siete archivos: `main.js`, `manifest.json`, `styles.css`, `autooc-cli.cjs`, `autooc-runtime.cjs`, `skills/autooc-runtime/SKILL.md` y `release-integrity.json`. El paquete completo puede arrancar sin red.
+
+Desde 1.6.0, usa la actualización del propio plugin. Al recibir los tres archivos del actualizador antiguo, el nuevo `main.js` completa automáticamente el paquete antes de habilitar ejecuciones. Necesita red para ese primer completado y exige la misma versión y los mismos bytes del bundle. Un fallo de red o integridad informa del problema y permite reintentar; una transacción incierta conserva su marcador y respaldo y bloquea ejecución. No borres reservas ni journals para forzar la carga. Esta corrección solo estará disponible por actualización pública cuando se publique la versión 1.6.2; prepararla en esta rama no acredita su publicación.
+
+La recarga espera de forma acotada a que termine una escritura del catálogo iniciada por la vista antigua, tanto la escritura directa de 1.6.0 como el guardado atómico de 1.6.1. En este último caso observa la cola de guardados: solo admite un nuevo lock cuando ha comprobado que un temporal del guardado anterior pasó a ser el catálogo por renombrado atómico. Los avisos del directorio adelantan las comprobaciones, sin sustituirlas. Una transición no observada o incierta bloquea; tras terminar exige datos válidos y estables y fija su identidad. Un lock persistente, sustituido o inseguro, un cambio posterior del catálogo o efectos pendientes detienen el arranque sin sustituir datos por valores vacíos. Conserva la evidencia y el diagnóstico; no borres una reserva para forzar el reintento.
 
 Reload Obsidian, then enable **AutoOC — OpenCode Task Scheduler** in **Settings > Community plugins**.
 
@@ -38,7 +41,7 @@ npm run build
 node deploy.mjs "C:/path/to/your/vault"
 ```
 
-`node deploy.mjs` copies the already-built `manifest.json`, `main.js`, and `styles.css` artifacts to `<vault>/.obsidian/plugins/auto-oc/`. Run `npm run build` first, as shown above. Reload Obsidian after deploying. Use `npm run dev` for iterative bundling or `npm run build` for a production build.
+`node deploy.mjs` copia los siete artefactos ya compilados a `<vault>/.obsidian/plugins/auto-oc/`, conservando configuración e historial. Ejecuta antes `npm run build` y descarga el plugin sin ejecuciones pendientes. Usa `npm run dev` para compilación iterativa y `npm run build` para generar el paquete verificable.
 
 For iterative bundling, run:
 
@@ -83,7 +86,7 @@ For tasks that should continue until their completion criteria are met, enable R
 
 Secrets are kept outside Obsidian plugin settings at `<vault>/.obsidian/plugins/auto-oc/secrets.vault.json`. The optional PIN controls reveal, edit, and delete access; it is not the encryption key. AutoOC preserves user-entered secret display names; only the injected environment variable is normalized as `AUTOOC_*`. Secret values are injected only into the OpenCode child processes AutoOC starts.
 
-The optional `autooc-mcp` helper makes secret metadata and credential lookup available to OpenCode agents. Secret values are available only to OpenCode launched by AutoOC, which inherits them through the task process; manually launched OpenCode can see metadata but not values. Install [`uv`](https://docs.astral.sh/uv/) first, then use **Install autooc-mcp in OpenCode** in AutoOC's Secrets view and restart OpenCode. For MCP configuration details, use the canonical [OpenCode MCP documentation](https://opencode.ai/docs/mcp-servers/); implementation and data-flow details are in the [architecture](docs/architecture.md).
+El puente MCP local se retira en 1.6.2 para eliminar su carrera de arranque y descarga. AutoOC no modifica configuraciones ni credenciales de otros clientes. La ejecución autónoma sigue disponible con la CLI y la [skill distribuida](skills/autooc-runtime/SKILL.md), con Obsidian cerrado. El almacén de credenciales existente se conserva.
 
 ## Diagnostics And Troubleshooting
 
@@ -102,14 +105,14 @@ The commands in this README are the authoritative command reference for implemen
 
 ## Release Artifacts
 
-Create a distributable ZIP containing `manifest.json`, `main.js`, and `styles.css`:
+Crea el ZIP distribuible con los siete archivos enumerados en Instalación:
 
 ```powershell
 npm run build
 npm run pack:release
 ```
 
-The package is written to `release/auto-oc-<version>.zip` and the script prints its SHA-256 hash. Release packages and in-app updates require `manifest.json`, `main.js`, and `styles.css`. See the [release workflow](RELEASE_WORKFLOW.md), [publication checklist](PUBLISH_CHECKLIST.md), and [changelog](CHANGELOG.md).
+El paquete se guarda en `release/auto-oc-<version>.zip` y el script imprime su SHA-256. El descriptor verifica los seis artefactos restantes, su versión y sus hashes. Consulta el [workflow de publicación](RELEASE_WORKFLOW.md), la [lista de comprobaciones](PUBLISH_CHECKLIST.md) y el [changelog](CHANGELOG.md).
 
 ## Contributing
 

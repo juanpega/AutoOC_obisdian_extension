@@ -70,7 +70,7 @@ export function readExecutionLeaseOwner(runtimeDirectory:string) {
 // Only archive the reservation after the OS proves its owner is absent. The
 // unchanged journals still block every uncertain effect, including children
 // which may outlive that owner. This operation never resumes an execution.
-export function recoverExecutionLease(runtimeDirectory:string,expectedToken:string) {
+export function recoverExecutionLease(runtimeDirectory:string,expectedToken:string,assertSafe?:()=>void) {
   const root=fs.realpathSync(runtimeDirectory),guard=path.join(root,"lease-recovery.lock");
   fs.mkdirSync(guard);
   try {
@@ -79,6 +79,9 @@ export function recoverExecutionLease(runtimeDirectory:string,expectedToken:stri
     let absent=false;
     try {process.kill(owner.pid,0);} catch(error) {absent=(error as NodeJS.ErrnoException).code==='ESRCH';}
     if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
+    // Automatic callers must prove inactivity while holding the recovery guard.
+    // The explicit CLI recovery contract remains identity-bound and unchanged.
+    assertSafe?.();
     if (JSON.stringify(readExecutionLeaseOwner(root))!==JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
     const archived=`abandoned-lease-${owner.token}`;
     if (fs.existsSync(path.join(root,archived))) throw new Error("Recovery archive already exists");

@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import type { ExecutionLease } from "./execution-lease";
-import { readExecutionCheckpoint } from "./execution-journal";
+import { assertIdleJournals } from "./execution-idle";
 
 export const RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"] as const;
 export const RELEASE_DESCRIPTOR = "release-integrity.json";
@@ -27,7 +27,7 @@ export function verifyRelease(files: Record<string, Buffer>, expectedVersion: st
 // changes between requests; they do not replace trust in the configured origin.
 export async function downloadRelease(baseUrl: string, version: string, fetcher: typeof fetch = fetch) {
   const entries = await Promise.all([...RELEASE_FILES, RELEASE_DESCRIPTOR].map(async file => {
-    const response = await fetcher(`${baseUrl}/${file}?t=${Date.now()}`, { cache: "reload" });
+    const response = await fetcher(`${baseUrl}/${file}?t=${Date.now()}`, { cache: "reload", signal: AbortSignal.timeout(30_000) });
     if (!response.ok) throw new Error(`${file} HTTP ${response.status}`);
     return [file, Buffer.from(await response.arrayBuffer())] as const;
   }));
@@ -72,11 +72,7 @@ export function installRelease(options: {
   lease.assertOwned();
   const marker = path.join(lease.directory, "update-pending.json");
   if (fs.existsSync(marker)) throw new Error("Previous update requires recovery");
-  for (const name of fs.readdirSync(lease.directory)) {
-    if (!/^[a-f0-9-]+\.json$/.test(name)) continue;
-    const state = readExecutionCheckpoint(lease.directory, name.slice(0, -5));
-    if (!["completed", "failed"].includes(state.phase)) throw new Error("Unfinished execution blocks update");
-  }
+  assertIdleJournals(lease.directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
   const backup = path.join(lease.directory, `update-backup-${randomUUID()}`);

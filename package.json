@@ -1,6 +1,6 @@
 {
   "name": "auto-oc",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian",
   "main": "main.js",
   "files": [
@@ -13,7 +13,7 @@
     "release-integrity.json"
   ],
   "scripts": {
-    "test": "node --test tests/pre-pr-regressions.test.js tests/posix-launcher.test.js tests/codex-client.test.js tests/copilot-client.test.js tests/copilot-integration.test.js tests/settings-writer.test.js tests/workflow-routing.test.cjs tests/code-runtime.test.cjs tests/obsidian-vault-refresh.test.cjs tests/execution-lease.test.cjs tests/execution-journal.test.cjs tests/autooc-cli.test.cjs tests/runtime-bundle.test.cjs tests/cli-workflow-adapters.test.cjs tests/release-update.test.cjs tests/packaged-runtime.test.cjs tests/workflow-compatibility.test.cjs tests/candidate-scope.test.cjs tests/interactive-handoff.test.cjs",
+    "test": "node --test tests/pre-pr-regressions.test.js tests/posix-launcher.test.js tests/codex-client.test.js tests/copilot-client.test.js tests/copilot-integration.test.js tests/settings-writer.test.js tests/workflow-routing.test.cjs tests/code-runtime.test.cjs tests/obsidian-vault-refresh.test.cjs tests/execution-lease.test.cjs tests/execution-journal.test.cjs tests/autooc-cli.test.cjs tests/runtime-bundle.test.cjs tests/cli-workflow-adapters.test.cjs tests/release-update.test.cjs tests/packaged-runtime.test.cjs tests/workflow-compatibility.test.cjs tests/candidate-scope.test.cjs tests/interactive-handoff.test.cjs tests/plugin-lifecycle.test.cjs",
     "prebuild": "node scripts/inline-visual-builder.mjs",
     "predev": "node scripts/inline-visual-builder.mjs",
     "inline-vb": "node scripts/inline-visual-builder.mjs",
