@@ -21,7 +21,7 @@ test('runtime bundle accepts an explicit installation and retains the default wi
     const previous=fs.readFileSync(path.join(normal,'data.json'));
     assert.equal((await runInstalledWorkflow({...options,installationDirectory:selected,resumeRunId:first.runId})).runId,first.runId);
     assert.deepEqual(fs.readFileSync(path.join(normal,'data.json')),previous);
-    assert.equal(resolveInstalledWorkflowLocation(root,selected).runtimeDirectory,path.join(selected,'runtime'));
+    assert.equal(resolveInstalledWorkflowLocation(root,selected).runtimeDirectory,path.join(fs.realpathSync(selected),'runtime'));
     await assert.rejects(runInstalledWorkflow({...options,installationDirectory:'absent'}),/ENOENT/);
   } finally {
     assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-bundle-selection-'));fs.rmSync(root,{recursive:true});

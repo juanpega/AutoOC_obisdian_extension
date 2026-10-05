@@ -46,9 +46,11 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 
 test('observer reports completed vault writes synchronously, without content or sandbox access', t => {
   const root = fixture(t), mutations = [];
+  // Keep the lexical root as input so a temporary-directory alias is exercised.
+  const canonicalRoot = fs.realpathSync(root);
   const output = execute(root, 'const p=vault.write("Nueva carpeta/á nota.md", "uno"); vault.append("Nueva carpeta/á nota.md", " dos"); output=JSON.stringify([p,vault.read("Nueva carpeta/á nota.md"),typeof onVaultMutation]);', m => mutations.push(m));
-  assert.deepEqual(JSON.parse(output), [path.join(root,'Nueva carpeta/á nota.md'),'uno dos','undefined']);
-  assert.deepEqual(mutations, ['write','append'].map(operation => ({path:path.join(root,'Nueva carpeta/á nota.md'),operation})));
+  assert.deepEqual(JSON.parse(output), [path.join(canonicalRoot,'Nueva carpeta/á nota.md'),'uno dos','undefined']);
+  assert.deepEqual(mutations, ['write','append'].map(operation => ({path:path.join(canonicalRoot,'Nueva carpeta/á nota.md'),operation})));
   execute(root, 'files.write("files.md", "other"); files.append("files.md", "!");', m => mutations.push(m), {codeAllowFiles:true});
   assert.equal(mutations.length, 2);
 });
