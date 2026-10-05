@@ -2,6 +2,10 @@
 
 ## High-Level Overview
 
+La ubicación de la ejecución compartida se valida en `installed-workflow-location.ts`. `runInstalledWorkflow` acepta `installationDirectory` opcional (absoluto o relativo al vault); si se omite, usa `.obsidian/plugins/auto-oc`. Una selección explícita inválida falla sin alternativa. El resolvedor comprueba contención, componentes de directorio, catálogo y runtime sin crear archivos; solo el inicio de ejecución crea el runtime. Se rechazan enlaces simbólicos y junctions en los componentes de instalación.
+
+El plugin obtiene esa ubicación de `app.vault.configDir` y `manifest.id`, la vincula a su reserva y la reutiliza para guardar/cargar el catálogo, ejecutar, recuperar journals y responder aprobaciones. Una reserva de otra instalación se rechaza antes de leer el catálogo o iniciar efectos. Cambiar la selección durante la reserva requiere una recarga segura. El bundle autónomo exporta el resolvedor; la interfaz CLI mantiene su selección predeterminada explícita. Los servicios auxiliares y el almacén de secretos conservan su contrato existente.
+
 AutoOC is an Obsidian desktop plugin that schedules, runs, and monitors OpenCode CLI tasks from inside an Obsidian vault. The plugin is implemented primarily in `main.ts`, bundled into `main.js`, and loaded by Obsidian using `manifest.json`.
 
 The system has three main runtime surfaces:

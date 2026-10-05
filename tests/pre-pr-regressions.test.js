@@ -234,7 +234,7 @@ test("hidden launcher writes VBScript accepted by cscript with a quoted temporar
 
     const result = childProcess.spawnSync("cscript.exe", ["//Nologo", launcherFile], { encoding: "utf8", windowsHide: true });
     assert.equal(result.error, undefined, result.error?.message);
-    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.status, 0, [result.stdout,result.stderr].filter(Boolean).join("\n"));
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
   }
@@ -417,13 +417,13 @@ test("workflow prompt documents the canonical export contract", () => {
 
   assert.ok(prompt, "AUTOOC_WORKFLOW_PROMPT should exist in main.ts");
   assert.match(prompt, /"pluginVersion": "1\.5\.11"/);
-  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", or "1\.5\.0"/);
+  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", "1\.5\.0", or "1\.6\.0"/);
   assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
   assert.match(prompt, /Every task must include it, including taskKind "code"/);
   assert.match(prompt, /"codex" for Codex in ChatGPT/);
   assert.match(prompt, /reasoningEffort: optional for taskKind "codex"/);
   assert.match(prompt, /ChatGPT\/Codex app for taskKind "codex"/);
-  assert.match(prompt, /workflow may mix both engines/);
+  assert.match(prompt, /workflow may mix all three engines/);
   assert.match(prompt, /forceModel: true forces the selected model and does not apply the agent/);
   assert.match(prompt, /transitions array is the recommended canonical form/);
   assert.match(prompt, /MCP validator validates transitions when provided/);
@@ -515,10 +515,12 @@ test("runCodexTask captures output, opens interactive ChatGPT tasks, and resets 
   plugin.emitTaskUpdated = () => {};
   spawnCalls.length = 0;
   let callbacks;
+  let runArguments;
   plugin.createCodexClient = (_cwd, suppliedCallbacks) => {
     callbacks = suppliedCallbacks;
     return {
-      async run() {
+      async run(...args) {
+        runArguments = args;
         callbacks.onStarted({ threadId: "thread-1", turnId: "turn-1" });
         callbacks.onOutput("Implemented successfully");
         return { output: "Implemented successfully", threadId: "thread-1", turnId: "turn-1", status: "completed" };
@@ -537,6 +539,7 @@ test("runCodexTask captures output, opens interactive ChatGPT tasks, and resets 
   assert.match(task.output, /Implemented successfully/);
   assert.doesNotMatch(task.output, /\[engine: codex\]/);
   assert.equal(completion.exitCode, 0);
+  assert.equal(runArguments[3], "on-request");
   assert.ok(spawnCalls.some(([, args]) => args[0] === "app" && args[1] === "C:\\workspace"));
 });
 
@@ -555,8 +558,10 @@ test("runCodexTask writes Codex metadata to history without polluting workflow o
     plugin.settings.defaultCodexReasoningEffort = "medium";
     plugin.view = { resetDashboardTaskShift() {}, nudgeDashboardTask() {}, startGradualSink() {} };
     plugin.emitTaskUpdated = () => {};
+    let runArguments;
     plugin.createCodexClient = (_cwd, callbacks) => ({
-      async run() {
+      async run(...args) {
+        runArguments = args;
         callbacks.onStarted({ threadId: "thread-log", turnId: "turn-log" });
         callbacks.onOutput("Workflow-ready output");
         return { output: "Workflow-ready output", threadId: "thread-log", turnId: "turn-log", status: "completed" };
@@ -572,6 +577,7 @@ test("runCodexTask writes Codex metadata to history without polluting workflow o
     const logFile = fs.readdirSync(logDir).find((name) => name.endsWith(".log"));
     const log = fs.readFileSync(path.join(logDir, logFile), "utf8");
     assert.equal(task.output, "Workflow-ready output");
+    assert.equal(runArguments[3], "never");
     assert.match(log, /\[engine: codex\]/);
     assert.match(log, /\[thread: thread-log\]/);
     assert.match(log, /\[started: /);

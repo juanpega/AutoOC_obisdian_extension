@@ -1,3 +1,5 @@
+import { buildOpenCodeScript } from "./opencode-script";
+import { downloadRelease, installRelease, hasCompleteInstalledRelease } from "./release-update";
 import {
   App,
   ItemView,
@@ -23,6 +25,28 @@ import {
   openCodexNewThread,
   resolveCodexBin,
 } from "./codex-client";
+import { CopilotCliClient, checkCopilotInstallation, resolveCopilotBin } from "./copilot-client";
+import { workflowTaskPrompt } from "./workflow-handoff";
+import { executeCodexTask } from "./codex-execution";
+import { executeCode } from "./code-runtime";
+import { executeCodeTask } from "./code-task";
+import { runWithVaultMutations } from "./code-vault-mutations";
+import { ObsidianVaultRefresh } from "./obsidian-vault-refresh";
+import { EXECUTION_DEFAULTS } from "./execution-defaults";
+import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
+import { runInstalledWorkflow } from "./installed-workflow-host";
+import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime, type InstalledWorkflowLocation } from "./installed-workflow-location";
+import { answerWorkflowApproval } from "./workflow-approval";
+import { standaloneTaskWorkflow,projectStandaloneTask } from "./standalone-task";
+import { prepareWorkflowDefinition } from "./workflow-definition";
+import { supportsSharedWorkflow } from "./code-workflow-host";
+import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
+import { projectWorkflowProgress, recoverWorkflowProgress, validateProgressBinding } from "./workflow-progress";
+import { taskElapsedSeconds } from "./task-history";
+import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
+import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
+import { SettingsWriter } from "./settings-writer";
+import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
 // The visual builder is shipped as a self-contained HTML file under
 // `util/ui_workflow_builder/index.html`. A pre-build step
 // (scripts/inline-visual-builder.mjs) reads the file at build time and
@@ -35,371 +59,7 @@ import {
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const visualBuilderHtml: string = require("./visualBuilderHtml.generated").visualBuilderHtml;
 
-// Resolve the opencode binary. On Windows prefer .cmd so Electron finds it without
-// PATH. On macOS/Linux GUI apps (Obsidian) don't inherit the shell PATH, so probe the
-// common install locations explicitly before falling back to the bare command name.
-function resolveOpencodeBin(configured: string): string {
-  if (configured && configured !== "opencode") return configured;
-  const candidates: string[] = [];
-  if (os.platform() === "win32") {
-    // Common npm global path
-    candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
-  } else {
-    const home = process.env.HOME || "";
-    candidates.push(
-      `${home}/.bun/bin/opencode`,
-      `${home}/.local/bin/opencode`,
-      `${home}/.npm-global/bin/opencode`,
-      `${home}/bin/opencode`,
-      "/opt/homebrew/bin/opencode",
-      "/usr/local/bin/opencode",
-    );
-  }
-  const { accessSync, constants } = require("fs");
-  for (const candidate of candidates) {
-    try {
-      accessSync(candidate, constants.X_OK);
-      return candidate;
-    } catch { /* ignore */ }
-  }
-  return configured || "opencode";
-}
-
-function psSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, "''")}'`;
-}
-
-function commandPreviewArg(value: string): string {
-  return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value) ? value : `"${value.replace(/"/g, '\\"')}"`;
-}
-
-function shSingleQuoted(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function buildPowerShellEnvLines(env: Record<string, string>): string[] {
-  return Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `$env:${key} = ${psSingleQuoted(value)}`);
-}
-
-const HANDOFF_CONTEXT_LIMIT = 50000;
-const SAFE_CLI_PROMPT_LENGTH = 7500;
-
-function isWindows(): boolean {
-  return process.platform === "win32";
-}
-
-// Detached-script file extension for the current platform: PowerShell on
-// Windows, POSIX shell elsewhere.
-function scriptExt(): ".ps1" | ".sh" {
-  return isWindows() ? ".ps1" : ".sh";
-}
-
-// Environment exports for POSIX shell scripts. Values are single-quoted so
-// secrets and paths with shell metacharacters stay literal.
-function buildShEnvLines(env: Record<string, string>): string[] {
-  return Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `export ${key}=${shSingleQuoted(value)}`);
-}
-
-// Builds a shell command with every token shell-quoted, so paths and values
-// that contain spaces, quotes, or shell metacharacters survive the trip into
-// an interactive terminal (previously `cd ${cwd}` failed on spaces on macOS).
-function buildPosixLaunchCommand(bin: string, cwd: string, env: Record<string, string>, args: string[]): string {
-  const envPrefix = Object.entries(env)
-    .filter(([key]) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(key))
-    .map(([key, value]) => `${key}=${shSingleQuoted(value)}`)
-    .join(" ");
-  return `cd ${shSingleQuoted(cwd)} && ${envPrefix ? `${envPrefix} ` : ""}${[bin, ...args].map(shSingleQuoted).join(" ")}`;
-}
-
-// AppleScript string literal quoting. The embedded command is already
-// shell-quoted by buildPosixLaunchCommand, so only backslashes and double
-// quotes need escaping for the AppleScript string itself.
-function appleScriptQuoted(value: string): string {
-  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-}
-
-const LINUX_TERMINAL_CANDIDATES: Array<{ cmd: string; args: string[] }> = [
-  { cmd: "x-terminal-emulator", args: ["-e"] },
-  { cmd: "gnome-terminal", args: ["--"] },
-  { cmd: "konsole", args: ["-e"] },
-  { cmd: "xfce4-terminal", args: ["-e"] },
-  { cmd: "lxterminal", args: ["-e"] },
-  { cmd: "alacritty", args: ["-e"] },
-  { cmd: "xterm", args: ["-e"] },
-];
-
-function commandExists(cmd: string): boolean {
-  try {
-    const { execSync } = require("child_process");
-    execSync(`command -v ${shSingleQuoted(cmd)}`, { stdio: "ignore", timeout: 5000 });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-// First available terminal emulator on Linux. A user-configured command is
-// tried first, then common emulators, so x-terminal-emulator-only setups keep
-// working and distros without it fall back to gnome-terminal/konsole/xterm.
-function resolveLinuxTerminal(configured?: string): { cmd: string; args: string[] } | null {
-  if (configured && configured.trim()) {
-    const parts = configured.trim().split(/\s+/);
-    const cmd = parts.shift() as string;
-    if (commandExists(cmd)) return { cmd, args: [...parts, "-e"] };
-    return null;
-  }
-  for (const candidate of LINUX_TERMINAL_CANDIDATES) {
-    if (commandExists(candidate.cmd)) return candidate;
-  }
-  return null;
-}
-
-interface CliLaunchOptions {
-  onError?: (error: Error) => void;
-  linuxTerminal?: string;
-}
-
-function openOpencodeCli(
-  bin: string,
-  cwd: string,
-  env: Record<string, string> = {},
-  args: string[] = [],
-  options: CliLaunchOptions = {},
-): void {
-  if (isWindows()) {
-    const envScript = buildPowerShellEnvLines(env).join("; ");
-    const runCommand = args.length > 0
-      ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList`
-      : `& ${psSingleQuoted(bin)}`;
-    const command = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
-    const launcher = spawn(
-      "cmd.exe",
-      ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-      { detached: true, stdio: "ignore", windowsHide: false },
-    );
-    launcher.on?.("error", (error: Error) => options.onError?.(error));
-    launcher.unref();
-    return;
-  }
-
-  const command = buildPosixLaunchCommand(bin, cwd, env, args);
-
-  if (process.platform === "darwin") {
-    const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
-    const launcher = spawn("osascript", ["-e", script], { detached: true, stdio: "ignore" });
-    launcher.on?.("error", (error: Error) => options.onError?.(error));
-    launcher.unref();
-    return;
-  }
-
-  if (process.platform === "linux") {
-    const terminal = resolveLinuxTerminal(options.linuxTerminal);
-    if (!terminal) {
-      throw new Error(
-        "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)",
-      );
-    }
-    const launcher = spawn(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
-    launcher.on?.("error", (error: Error) => options.onError?.(error));
-    launcher.unref();
-    return;
-  }
-}
-
-function openOpencodeCliLongPromptWindows(
-  bin: string,
-  cwd: string,
-  env: Record<string, string>,
-  model: string,
-  agent: string,
-  prompt: string,
-): void {
-  const promptFile = path.join(cwd, `.autooc-prompt-${crypto.randomBytes(8).toString("hex")}.txt`);
-  fs.writeFileSync(promptFile, prompt, "utf8");
-  // ponytail: workspace file avoids temp-dir access surprises; one minute is enough after TUI startup.
-  setTimeout(() => {
-    try {
-      fs.unlinkSync(promptFile);
-    } catch {
-      // ignore cleanup errors
-    }
-  }, 60 * 1000);
-
-  const shortInstruction = `Read the full task prompt from ${promptFile} and follow it exactly.`;
-  const envScript = buildPowerShellEnvLines(env).join("; ");
-  const agentParts = agent ? `, "--agent", ${psSingleQuoted(agent)}` : "";
-  const command =
-    `${envScript ? `${envScript}; ` : ""}` +
-    `Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ` +
-    `$bin = ${psSingleQuoted(bin)}; ` +
-    `$argList = @("-m", ${psSingleQuoted(model)}${agentParts}, "--prompt", ${psSingleQuoted(shortInstruction)}); ` +
-    `& $bin @argList`;
-  const launcher = spawn(
-    "cmd.exe",
-    ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command],
-    { detached: true, stdio: "ignore", windowsHide: false },
-  );
-  launcher.unref();
-}
-
-type ProcessHandle = { kill: () => void };
-
-type HiddenProcessHandle = ProcessHandle & {
-  cleanup: (removeScript?: boolean) => void;
-  onError: (callback: (error: Error) => void) => void;
-};
-
-function launchHiddenPS(psScriptFile: string, pidFile?: string): HiddenProcessHandle {
-  const fs   = require("fs");
-  const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
-  const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
-  const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
-  const launcherScript = `Set sh = CreateObject("WScript.Shell")\r\n` +
-    `sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r\n`;
-  fs.writeFileSync(launcherFile, launcherScript, "utf8");
-  const { spawn } = require("child_process");
-  const child = spawn("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
-  child.unref();
-  // Clean up launcher files after PowerShell has had time to read them. This
-  // also limits exposure for launch scripts that contain temporary env vars.
-  const launcherTimer = setTimeout(() => { try { fs.unlinkSync(launcherFile); } catch { /* ignore */ } }, 10000);
-  // ponytail: 10-minute fallback cleanup so generated ps1 stays available for debugging.
-  const scriptTimer = setTimeout(() => { try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ } }, 600000);
-
-  const cleanup = (removeScript = false) => {
-    clearTimeout(launcherTimer);
-    clearTimeout(scriptTimer);
-    try { fs.unlinkSync(launcherFile); } catch { /* ignore */ }
-    if (removeScript) {
-      try { fs.unlinkSync(psScriptFile); } catch { /* ignore */ }
-    }
-  };
-
-  const kill = () => {
-    let killedChildTree = false;
-    if (child.pid) {
-      try {
-        const killer = spawn("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
-        killer.unref();
-        killedChildTree = true;
-      } catch { /* ignore */ }
-    }
-    if (!killedChildTree) {
-      try { child.kill(); } catch { /* ignore */ }
-    }
-    try {
-      const pid = fs.existsSync(effectivePidFile) ? String(fs.readFileSync(effectivePidFile, "utf8")).trim() : "";
-      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
-        const killer = spawn("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
-        killer.unref();
-      }
-    } catch { /* ignore */ }
-    cleanup(true);
-    try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
-  };
-
-  const callbacks: Array<(error: Error) => void> = [];
-  let launchError: Error | null = null;
-  child.on?.("error", (error: Error) => {
-    launchError = error;
-    cleanup(true);
-    callbacks.forEach((callback) => callback(error));
-  });
-
-  return {
-    kill,
-    cleanup,
-    onError: (callback) => {
-      if (launchError) callback(launchError);
-      else callbacks.push(callback);
-    },
-  };
-}
-
-// POSIX equivalent of launchHiddenPS: runs a shell script fully detached so the
-// Electron sandbox does not kill the child. Output capture lives inside the
-// script (temp files polled by the caller); cancellation kills the whole process
-// group; cleanup removes the script (and pid file) after a timeout or on kill.
-function launchHiddenSh(shScriptFile: string, pidFile?: string): HiddenProcessHandle {
-  const fs = require("fs");
-  const { spawn } = require("child_process");
-  const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
-  try { fs.chmodSync(shScriptFile, 0o700); } catch { /* ignore */ }
-  // detached:true on POSIX puts the child in its own process group, so a single
-  // kill(-pid) reaches the shell and every process it spawned (opencode, git…).
-  const child = spawn("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
-  child.unref();
-  // ponytail: 10-minute fallback cleanup so the generated sh stays available for debugging.
-  const scriptTimer = setTimeout(() => { try { fs.unlinkSync(shScriptFile); } catch { /* ignore */ } }, 600000);
-
-  const cleanup = (removeScript = false) => {
-    clearTimeout(scriptTimer);
-    if (removeScript) {
-      try { fs.unlinkSync(shScriptFile); } catch { /* ignore */ }
-    }
-  };
-
-  const kill = () => {
-    let killedChildTree = false;
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-        killedChildTree = true;
-      } catch { /* ignore */ }
-    }
-    if (!killedChildTree) {
-      try { child.kill("SIGKILL"); } catch { /* ignore */ }
-    }
-    try {
-      const pid = fs.existsSync(effectivePidFile) ? String(fs.readFileSync(effectivePidFile, "utf8")).trim() : "";
-      if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
-        try { process.kill(-Number(pid), "SIGKILL"); } catch { /* ignore */ }
-        try { process.kill(Number(pid), "SIGKILL"); } catch { /* ignore */ }
-      }
-    } catch { /* ignore */ }
-    cleanup(true);
-    try { fs.unlinkSync(effectivePidFile); } catch { /* ignore */ }
-  };
-
-  const callbacks: Array<(error: Error) => void> = [];
-  let launchError: Error | null = null;
-  child.on?.("error", (error: Error) => {
-    launchError = error;
-    cleanup(true);
-    callbacks.forEach((callback) => callback(error));
-  });
-
-  return {
-    kill,
-    cleanup,
-    onError: (callback) => {
-      if (launchError) callback(launchError);
-      else callbacks.push(callback);
-    },
-  };
-}
-
-// Cross-platform hidden launcher: PowerShell/VBScript on Windows, detached
-// /bin/sh on macOS/Linux.
-function launchHidden(scriptFile: string, pidFile?: string): HiddenProcessHandle {
-  return isWindows() ? launchHiddenPS(scriptFile, pidFile) : launchHiddenSh(scriptFile, pidFile);
-}
-
-function writeUtf8BomFile(filePath: string, content: string): void {
-  fs.writeFileSync(filePath, Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(content, "utf8")]));
-}
-
-function psUtf8Prelude(): string[] {
-  return [
-    `$utf8NoBom = New-Object System.Text.UTF8Encoding($false)`,
-    `[Console]::OutputEncoding = $utf8NoBom`,
-    `$OutputEncoding = $utf8NoBom`,
-  ];
-}
+import { resolveOpencodeBin, psSingleQuoted, commandPreviewArg, shSingleQuoted, buildPowerShellEnvLines, SAFE_CLI_PROMPT_LENGTH, isWindows, scriptExt, buildShEnvLines, buildPosixLaunchCommand, appleScriptQuoted, LINUX_TERMINAL_CANDIDATES, commandExists, resolveLinuxTerminal, CliLaunchOptions, openOpencodeCli, openOpencodeCliLongPromptWindows, ProcessHandle, HiddenProcessHandle, launchHiddenPS, launchHiddenSh, launchHidden, writeUtf8BomFile, psUtf8Prelude } from "./cli-launchers";
 
 function setupCodeTextarea(textarea: HTMLTextAreaElement): void {
   textarea.addClass("auto-oc-code-editor");
@@ -437,7 +97,7 @@ function renderCodePreview(parent: HTMLElement, code: string, maxChars = 600): v
   if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
 }
 
-const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode and Codex tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
@@ -454,11 +114,11 @@ Canonical complete export format:
   "workflows": []
 }
 
-For complete exports, schemaVersion must be exactly "1.0", "1.4.0", or "1.5.0". New exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
+For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", or "1.6.0". Exports containing Copilot tasks must use "1.6.0"; other new exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
-1. task: runs an OpenCode or Codex task prompt. A workflow may mix both engines.
+1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
 2. code: runs JavaScript in a sandbox.
 3. delay: pauses the workflow.
 
@@ -467,7 +127,8 @@ A task is reusable and can be referenced by workflows.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
@@ -774,8 +435,14 @@ async function copyTextToClipboard(text: string): Promise<void> {
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed";
 type IntervalUnit = "seconds" | "minutes" | "hours";
-type TaskKind = "opencode" | "codex" | "code";
-type DefaultAiEngine = "opencode" | "codex";
+type TaskKind = "opencode" | "codex" | "copilot" | "code";
+type LegacyOwner = { workflowId: string; stepId: string; stepIndex: number; context: object };
+type LegacyStopIdentity = { kind: "legacy"; token: string; taskId: string; workflowId?: string; stepId?: string; stepIndex?: number };
+type SharedStopIdentity = { kind: "shared"; taskId: string; runId: string; workflowId: string; stepId: string; stepIndex: number };
+type TaskStopIdentity = LegacyStopIdentity | SharedStopIdentity;
+type LegacyAttempt = { identity: LegacyStopIdentity; task: ScheduledTask; owner?: LegacyOwner; cancelled: boolean;
+  handle?: { kill(): unknown }; stopPromise?: Promise<string> };
+type DefaultAiEngine = "opencode" | "codex" | "copilot";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
 // Workflows are no longer strictly linear — each step declares its outgoing
@@ -827,6 +494,7 @@ interface WorkflowStep {
 }
 
 interface ScheduledTask {
+  legacyExecution?: LegacyStopIdentity & { startedAt: string; finishedAt?: string; stopState?: "requested" | "unconfirmed" | "error"; stopError?: string };
   id: string;
   taskKind?: TaskKind;
   name: string;
@@ -848,6 +516,7 @@ interface ScheduledTask {
   output: string;
   createdAt: string;       // ISO string;
   workingDirectory?: string; // Optional path override
+  requiresAutoOCSecrets?: boolean; // Shared runtime must reject this dependency.
   branch?: string;           // Git branch name
   createBranch?: boolean;    // Create branch if it doesn't exist
   code?: string;
@@ -859,6 +528,7 @@ interface ScheduledTask {
   codeAllowTerminal?: boolean;
   interactiveTerminal?: boolean;
   reasoningEffort?: string;
+  copilotAllowAllTools?: boolean;
   lastCodexThreadId?: string;
   lastCodexTurnId?: string;
   pendingCodexApproval?: {
@@ -871,6 +541,7 @@ interface ScheduledTask {
 type WorkflowStatus = "pending" | "running" | "completed" | "failed";
 
 interface Workflow {
+  legacyExecution?: { token: string };
   id: string;
   name: string;
   area?: string;
@@ -896,6 +567,8 @@ interface AutoOCSettings {
   workflows: Workflow[];
   opencodePath: string;
   codexPath: string;
+  copilotPath: string;
+  defaultCopilotModel: string;
   defaultAiEngine: DefaultAiEngine;
   defaultModel: string;
   defaultCodexModel: string;
@@ -962,7 +635,9 @@ function renderAreaSuggestions(
 //   - model (taken from the importer's system default)
 interface ExportTask {
   exportId: string;
+  requiresAutoOCSecrets?: boolean;
   taskKind?: TaskKind;
+  copilotAllowAllTools?: boolean;
   name: string;
   area?: string;
   prompt: string;
@@ -997,6 +672,53 @@ interface ExportWorkflowTransition {
   condition?: string;
   conditionLang?: "javascript";
   forceContinue?: boolean;
+}
+
+function getCopilotTaskValidationError(task: { taskKind?: unknown; copilotAllowAllTools?: unknown; interactiveTerminal?: unknown }): string | null {
+  if (task.copilotAllowAllTools !== undefined && (task.taskKind !== "copilot" || typeof task.copilotAllowAllTools !== "boolean")) {
+    return "copilotAllowAllTools must be a boolean and is only valid for Copilot tasks.";
+  }
+  if (task.taskKind === "copilot" && task.interactiveTerminal === true) {
+    return "Copilot tasks run in the background; interactiveTerminal must be false.";
+  }
+  return null;
+}
+
+function addCopilotTaskSettings(container: HTMLElement, draft: Partial<ScheduledTask>, defaultModel: string): void {
+  new Setting(container)
+    .setName("Copilot model")
+    .setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.")
+    .addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "")
+      .onChange((value) => { draft.model = value.trim(); }));
+  new Setting(container)
+    .setName("Allow tools automatically")
+    .setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.")
+    .addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true)
+      .onChange((value) => { draft.copilotAllowAllTools = value; }));
+}
+
+function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin): void {
+  container.createEl("h3", { text: "GitHub Copilot CLI" });
+  new Setting(container)
+    .setName("Copilot executable path")
+    .setDesc("Use copilot for auto-detection, or the absolute executable path. Sign in with copilot login in your terminal first.")
+    .addText((text) => text.setPlaceholder("copilot").setValue(plugin.settings.copilotPath || "copilot")
+      .onChange(async (value) => { plugin.settings.copilotPath = value.trim() || "copilot"; await plugin.saveSettings(); }))
+    .addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
+      try {
+        const bin = resolveCopilotBin(plugin.settings.copilotPath);
+        const cwd = plugin.settings.workingDirectory || (plugin.app.vault.adapter as any).basePath || ".";
+        const version = await checkCopilotInstallation(bin, cwd);
+        new Notice(`AutoOC: ${version}\n${bin}\nCLI detected. Account access is checked when a task runs.`, 10000);
+      } catch (error) {
+        new Notice(`AutoOC: could not start GitHub Copilot CLI — ${String(error)}`, 10000);
+      }
+    }));
+  new Setting(container)
+    .setName("Default Copilot model")
+    .setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.")
+    .addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "")
+      .onChange(async (value) => { plugin.settings.defaultCopilotModel = value.trim(); await plugin.saveSettings(); }));
 }
 
 interface ExportWorkflowStep {
@@ -1337,27 +1059,15 @@ function fetchAgentsSync(opencodePath: string, cwd?: string): { value: string; l
 }
 
 const DEFAULT_SETTINGS: AutoOCSettings = {
+  ...EXECUTION_DEFAULTS,
   tasks: [],
   workflows: [],
-  opencodePath: "opencode",
-  codexPath: "codex",
-  defaultAiEngine: "opencode",
-  defaultModel: "",
-  defaultCodexModel: "",
-  defaultCodexReasoningEffort: "medium",
-  defaultAgent: "build",
-  workingDirectory: "",
-  // {opencode} = binary path, {model} = provider/model, {prompt} = escaped prompt
-  cmdTemplate: '{opencode} run --model {model} -- "{prompt}"',
-  taskTimeoutSeconds: 7200,  // 2 h default
-  defaultInteractiveTerminal: false,
   logsEnabled: true,
   maxLogsPerTask: 50,
   logRetentionDays: 30,
   libraryUrl: "https://raw.githubusercontent.com/juanpega/AutoOC_obisdian_extension/main/library",
   dashboardPositions: {},
   dashboardTaskBubbleSize: "md",
-  linuxTerminal: "",
 };
 
 export const VIEW_TYPE = "auto-oc-view";
@@ -1526,6 +1236,8 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
   return {
     exportId,
     taskKind: task.taskKind,
+    copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : undefined,
+    requiresAutoOCSecrets: task.requiresAutoOCSecrets,
     name: task.name,
     area: task.area,
     prompt: task.prompt,
@@ -1630,168 +1342,7 @@ function nowTimeString(): string {
   return `${padTwo(now.getHours())}:${padTwo(now.getMinutes())}`;
 }
 
-function normalizeCommandOutput(text: string): string {
-  if (!text) return "";
-
-  // Remove ANSI color/control escape sequences
-  let cleaned = text.replace(/\x1B\[[0-9;]*[A-Za-z]/g, "");
-
-  // Best-effort fix for common mojibake (UTF-8 interpreted as Latin-1)
-  // Only apply when typical broken markers are present.
-  if (/[ÃÂâ€œâ€|â€|â€|â„¢|â€“|â€”]/.test(cleaned)) {
-    try {
-      cleaned = Buffer.from(cleaned, "latin1").toString("utf8");
-    } catch {
-      // keep cleaned as-is if conversion fails
-    }
-  }
-
-  return cleaned.trim();
-}
-
-function extractTouchedFiles(trace: string): string[] {
-  const files = new Set<string>();
-  for (const line of trace.split(/\r?\n/)) {
-    const match = line.match(/^[←→]\s+(?:Edit|Write|Read)\s+(.+)$/) || line.match(/^Index:\s+(.+)$/);
-    if (match?.[1]) files.add(match[1].trim());
-  }
-  return [...files];
-}
-
-function formatTaskOutput(stdout: string, stderr: string): string {
-  const cleanStdout = normalizeCommandOutput(stdout);
-  const cleanStderr = normalizeCommandOutput(stderr);
-  const parts: string[] = [];
-
-  if (cleanStdout) {
-    parts.push(`## Response\n\n${cleanStdout}`);
-  }
-
-  const touchedFiles = extractTouchedFiles(cleanStderr);
-  if (touchedFiles.length > 0) {
-    parts.push(`## Touched files\n\n${touchedFiles.map((f) => `- ${f}`).join("\n")}`);
-  }
-
-  if (cleanStderr) {
-    parts.push(`## OpenCode trace\n\n\`\`\`text\n${cleanStderr}\n\`\`\``);
-  }
-
-  return parts.join("\n\n---\n\n").trim();
-}
-
-function extractSection(output: string, title: string): string {
-  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const match = output.match(
-    new RegExp(`(?:^|\\r?\\n)## ${escaped}\\s*(?:\\r?\\n)+([\\s\\S]*?)(?=(?:\\r?\\n){2}---(?:\\r?\\n){2}## |$)`)
-  );
-  return match ? match[1].trim() : "";
-}
-
-function cleanWorkflowContext(output: string): string {
-  if (!output) return "";
-  return output
-    .replace(/\[exit code:.*?\]/g, "")
-    .replace(/\[starting detached process…\]/g, "")
-    .replace(/\[Workflow evaluation[^\]]*?\].*?(?=\n|$)/g, "")
-    .replace(/\[Workflow (failed|stopped)[^\]]*?\]/g, "")
-    .replace(/\.{3,}/g, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function extractContextForHandoff(output: string): string {
-  const cleaned = cleanWorkflowContext(output);
-  if (!cleaned) return "";
-
-  const response = extractSection(cleaned, "Response");
-  const touchedFiles = extractSection(cleaned, "Touched files");
-  const parts: string[] = [];
-
-  if (response) {
-    parts.push(`PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${response}`);
-    if (touchedFiles) {
-      parts.push(`DIAGNOSTIC ONLY — touched files (do not re-read unless the current task explicitly asks):\n\n${touchedFiles}`);
-    }
-  } else {
-    // No explicit Response section: use the cleaned output as the primary input,
-    // omitting the OpenCode trace so diagnostics don't leak into the handoff.
-    const primary = cleaned
-      .replace(/\n\n---\n\n## OpenCode trace[\s\S]*$/, "")
-      .replace(/^## OpenCode trace[\s\S]*$/, "")
-      .trim();
-    parts.push(`PRIMARY HANDOFF INPUT — use this as the main input for the current task:\n\n${primary}`);
-  }
-
-  return parts.join("\n\n").slice(0, HANDOFF_CONTEXT_LIMIT).trim();
-}
-
-function formatLogContent(text: string): string {
-  if (!text) return "";
-  return normalizeCommandOutput(text).replace(/\r\n/g, "\n");
-}
-
-function countReplacementChars(text: string): number {
-  return (text.match(/�/g) || []).length;
-}
-
-function decodeCp850(bytes: Buffer): string {
-  const map: Record<number, string> = {
-    0x80: "Ç", 0x81: "ü", 0x82: "é", 0x83: "â", 0x84: "ä", 0x85: "à", 0x86: "å", 0x87: "ç",
-    0x88: "ê", 0x89: "ë", 0x8a: "è", 0x8b: "ï", 0x8c: "î", 0x8d: "ì", 0x8e: "Ä", 0x8f: "Å",
-    0x90: "É", 0x91: "æ", 0x92: "Æ", 0x93: "ô", 0x94: "ö", 0x95: "ò", 0x96: "û", 0x97: "ù",
-    0x98: "ÿ", 0x99: "Ö", 0x9a: "Ü", 0x9b: "ø", 0x9c: "£", 0x9d: "Ø", 0x9e: "×", 0x9f: "ƒ",
-    0xa0: "á", 0xa1: "í", 0xa2: "ó", 0xa3: "ú", 0xa4: "ñ", 0xa5: "Ñ", 0xa6: "ª", 0xa7: "º",
-    0xa8: "¿", 0xa9: "®", 0xaa: "¬", 0xab: "½", 0xac: "¼", 0xad: "¡", 0xae: "«", 0xaf: "»",
-  };
-  let out = "";
-  for (const byte of bytes) {
-    if (byte < 0x80) out += String.fromCharCode(byte);
-    else out += map[byte] ?? String.fromCharCode(byte);
-  }
-  return out;
-}
-
-function decodeWindows1252(bytes: Buffer): string {
-  const map: Record<number, string> = {
-    0x80: "€", 0x82: "‚", 0x83: "ƒ", 0x84: "„", 0x85: "…", 0x86: "†", 0x87: "‡",
-    0x88: "ˆ", 0x89: "‰", 0x8a: "Š", 0x8b: "‹", 0x8c: "Œ", 0x8e: "Ž",
-    0x91: "‘", 0x92: "’", 0x93: "“", 0x94: "”", 0x95: "•", 0x96: "–", 0x97: "—",
-    0x98: "˜", 0x99: "™", 0x9a: "š", 0x9b: "›", 0x9c: "œ", 0x9e: "ž", 0x9f: "Ÿ",
-  };
-  let out = "";
-  for (const byte of bytes) {
-    if (byte < 0x80 || byte >= 0xa0) out += String.fromCharCode(byte);
-    else out += map[byte] ?? "";
-  }
-  return out;
-}
-
-function decodeCommandBuffer(bytes: Buffer): string {
-  if (bytes.length >= 2) {
-    if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString("utf16le");
-    if (bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes).swap16().toString("utf16le");
-  }
-
-  if (bytes.length > 4) {
-    let oddNulls = 0;
-    let evenNulls = 0;
-    for (let i = 0; i < bytes.length; i++) {
-      if (bytes[i] === 0) {
-        if (i % 2 === 0) evenNulls++;
-        else oddNulls++;
-      }
-    }
-    const nullRatio = (oddNulls + evenNulls) / bytes.length;
-    if (nullRatio > 0.2 && oddNulls > evenNulls * 4) return bytes.toString("utf16le");
-    if (nullRatio > 0.2 && evenNulls > oddNulls * 4) return Buffer.from(bytes).swap16().toString("utf16le");
-  }
-
-  const utf8 = bytes.toString("utf8");
-  if (countReplacementChars(utf8) === 0) return utf8;
-  const win1252 = decodeWindows1252(bytes);
-  const cp850 = decodeCp850(bytes);
-  return countReplacementChars(win1252) <= countReplacementChars(cp850) ? win1252 : cp850;
-}
+import { normalizeCommandOutput, extractTouchedFiles, formatTaskOutput, formatLogContent, countReplacementChars, decodeCp850, decodeWindows1252, decodeCommandBuffer } from "./command-output";
 
 function getOpencodeConfigPath(): string {
   return path.join(os.homedir(), ".config", "opencode", "opencode.json");
@@ -2110,7 +1661,7 @@ function formatTimestampForLog(): string {
 }
 
 function formatLogFilenameTimestamp(fileName: string): string {
-  const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
+  const match = fileName.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})(?:\.\d{3}_[a-zA-Z0-9-]+_\d+)?\.log$/);
   if (!match) return fileName.replace(/\.log$/, "");
   const [, year, month, day, hour, minute, second] = match;
   return `${day}/${month}/${year} ${hour}:${minute}:${second}`;
@@ -2310,6 +1861,8 @@ function isWorkflowDue(wf: Workflow): boolean {
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class AutoOCPlugin extends Plugin {
+  private legacyAttempts = new Map<string, LegacyAttempt>();
+  private settingsWriter = new SettingsWriter();
   settings!: AutoOCSettings;
   secretStore!: SecretStore;
   view?: AutoOCView;
@@ -2325,6 +1878,10 @@ export default class AutoOCPlugin extends Plugin {
   private dueCheckInProgress = false;
   // Workflows that have been manually stopped; checked in step callbacks to abort chaining
   private stoppingWorkflows = new Set<string>();
+  private workflowDelayControllers = new Map<string, AbortController>();
+  private pluginExecutionLease?: ExecutionLease;
+  private pluginExecutionLocation?: InstalledWorkflowLocation;
+  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint};
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
 
@@ -2335,7 +1892,9 @@ export default class AutoOCPlugin extends Plugin {
   updateInProgress = false;
 
   async onload() {
-    await this.loadSettings();
+    this.reservePluginExecution();
+    try { await this.loadSettings(); }
+    catch (error) { this.releasePluginExecution(false); throw error; }
     void this.startMcpBridge().catch((error: unknown) => console.warn("AutoOC MCP bridge failed to start", error));
     // Load models asynchronously to avoid blocking startup
     setTimeout(() => {
@@ -2424,6 +1983,14 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async onunload() {
+    this.vaultRefreshStopped = true;
+    this.vaultRefresh?.dispose();
+    const unresolved = !!this.sharedWorkflowExecution || this.runningProcesses.size > 0 || this.runningCodexClients.size > 0 ||
+      this.workflowDelayControllers.size > 0 || this.settings?.tasks?.some(task=>task.status === "running") ||
+      this.settings?.workflows?.some(workflow=>workflow.status === "running");
+    this.sharedWorkflowExecution?.controller.abort();
+    for (const controller of this.workflowDelayControllers.values()) controller.abort();
+    this.workflowDelayControllers.clear();
     await this.stopMcpBridge();
     // Kill all running processes cleanly when plugin unloads
     for (const [, proc] of this.runningProcesses) {
@@ -2433,6 +2000,103 @@ export default class AutoOCPlugin extends Plugin {
     for (const [, client] of this.runningCodexClients) client.dispose();
     this.runningCodexClients.clear();
     this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+    this.releasePluginExecution(!!unresolved);
+  }
+
+  // Reserve the vault for the whole plugin lifetime, including legacy tasks
+  // whose asynchronous completion outlives runTask/runWorkflow. The external
+  // host uses this same lease, so opening the plugin cannot race its effects.
+  private selectedExecutionLocation(requireOwnership = true): InstalledWorkflowLocation {
+    const base = (this.app.vault.adapter as any).basePath;
+    if (!base) throw new Error("AutoOC execution requires a local vault");
+    const configDir = this.app.vault.configDir, id = this.manifest?.id;
+    if (!configDir || path.isAbsolute(configDir) || !id || /[\\/:]/.test(id)) throw new Error("Invalid selected installation");
+    const location = resolveInstalledWorkflowLocation(base, `${configDir}/plugins/${id}`);
+    if (this.pluginExecutionLease) {
+      if (requireOwnership) this.pluginExecutionLease.assertOwned();
+      if (!this.pluginExecutionLocation || location.installationDirectory !== this.pluginExecutionLocation.installationDirectory ||
+          fs.realpathSync(this.pluginExecutionLease.directory) !== fs.realpathSync(location.runtimeDirectory)) {
+        throw new Error("Selected installation changed while reserved; reload safely");
+      }
+    }
+    return this.pluginExecutionLocation || location;
+  }
+
+  reservePluginExecution() {
+    const location = this.selectedExecutionLocation();
+    if (this.pluginExecutionLease) return;
+    ensureInstalledWorkflowRuntime(location);
+    this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory);
+    this.pluginExecutionLocation = location;
+  }
+
+  releasePluginExecution(unresolved: boolean) {
+    if (!this.pluginExecutionLease) return;
+    // kill()/dispose() requests do not prove external effects have stopped.
+    if (unresolved) return;
+    this.pluginExecutionLease.release();
+    this.pluginExecutionLease = undefined;
+    this.pluginExecutionLocation = undefined;
+  }
+
+  isWorkflowExecuting(workflowId:string):boolean {
+    if (this.sharedWorkflowExecution?.workflowId === workflowId) return true;
+    const workflow=this.settings.workflows.find(item=>item.id===workflowId);
+    return !!workflow && (!(workflow as any).runtimeExecution || !!workflow.legacyExecution) && workflow.status === "running";
+  }
+
+  async recoverSharedWorkflow(workflowId:string, expectedRunId:string) {
+    const workflow=this.settings.workflows.find(item=>item.id===workflowId);
+    const execution=(workflow as any)?.runtimeExecution;
+    if (!execution || execution.runId !== expectedRunId) throw new Error("Recovery identity changed; reload the workflow");
+    if (!["ready","in_flight"].includes(execution.phase)) throw new Error("Execution does not require recovery");
+    return await this.runSharedWorkflow(workflowId,expectedRunId,execution.phase === "in_flight");
+  }
+
+  async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
+    const location = this.selectedExecutionLocation();
+    if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
+    if (Array.from(this.legacyAttempts?.values() || []).some(attempt => !attempt.cancelled) ||
+        this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
+      throw new Error("Legacy tasks must finish before shared execution");
+    }
+    const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined};
+    this.sharedWorkflowExecution = execution;
+    try {
+      await this.saveSettings(false);
+      return await runInstalledWorkflow({
+        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
+        lease:this.pluginExecutionLease, signal:execution.controller.signal,
+        vaultMutations:()=>this.createVaultMutationBatch(),
+        redact:output=>this.redactSecrets(output),
+        onCheckpoint:async checkpoint=>{
+          if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
+          if (execution.runId && checkpoint.runId !== execution.runId || execution.checkpoint && checkpoint.revision < execution.checkpoint.revision) return;
+          execution.runId = checkpoint.runId;
+          execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
+          await this.loadSettings();
+          if (this.sharedWorkflowExecution !== execution) return;
+          this.refreshOpenViews();
+        },
+      });
+    } finally {
+      if (this.sharedWorkflowExecution === execution) this.sharedWorkflowExecution = undefined;
+      await this.loadSettings();
+      this.refreshOpenViews();
+    }
+  }
+
+  private ownsSharedRun(workflowId:string, runId:string):boolean {
+    if (this.sharedWorkflowExecution?.workflowId !== workflowId || this.sharedWorkflowExecution.runId !== runId || !this.pluginExecutionLease) return false;
+    try { this.pluginExecutionLease.assertOwned(); return true; } catch { return false; }
+  }
+
+  private refreshOpenViews():void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AutoOCView) leaf.view.refresh();
+    }
   }
 
   private getMcpBridgePath(): string {
@@ -2484,8 +2148,9 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private isTaskActive(task: ScheduledTask): boolean {
+    if (this.sharedWorkflowExecution?.taskId === task.id) return true;
     const canonical = this.settings.tasks.find((t) => t.id === task.id);
-    return canonical?.status === "running" || this.runningProcesses.has(task.id);
+    return !!this.legacyAttempts?.get(task.id) && !this.legacyAttempts.get(task.id)!.cancelled || canonical?.status === "running" || this.runningProcesses.has(task.id);
   }
 
   private getMcpRawWorkflowReferenceError(payload: unknown): string | null {
@@ -2533,7 +2198,9 @@ export default class AutoOCPlugin extends Plugin {
   private getMcpRawTaskPayloadError(payload: Record<string, unknown>): string | null {
     if ("steps" in payload) return "Raw task payloads must not include workflow steps; use kind \"workflow\".";
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (taskKind !== "opencode" && taskKind !== "codex" && taskKind !== "code") return "payload.taskKind must be \"opencode\", \"codex\", or \"code\".";
+    if (!["opencode", "codex", "copilot", "code"].includes(taskKind)) return "payload.taskKind must be opencode, codex, copilot, or code.";
+    const copilotError = getCopilotTaskValidationError(payload);
+    if (copilotError) return copilotError;
     if (payload.reasoningEffort !== undefined && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
       return "payload.reasoningEffort is only valid as a non-empty string for taskKind \"codex\".";
     }
@@ -2669,7 +2336,7 @@ export default class AutoOCPlugin extends Plugin {
     if (!payload || typeof payload !== "object") return null;
     if ("autoOCExport" in payload) return payload as AutoOCExportFile;
     const autoOCExport = {
-      schemaVersion: "1.5.0",
+      schemaVersion: (payload as ScheduledTask).taskKind === "copilot" ? "1.6.0" : "1.5.0",
       exportedAt: new Date().toISOString(),
       pluginVersion: this.manifest.version,
     };
@@ -2771,8 +2438,8 @@ export default class AutoOCPlugin extends Plugin {
           return send(200, { ok: true, id: item.id, name: item.name, status: "started" });
         }
         if (request.url === "/stop") {
-          if (kind === "task") await this.killTask(item.id); else await this.killWorkflow(item.id);
-          return send(200, { ok: true, id: item.id, name: item.name, status: "stopped" });
+          const status = kind === "task" ? await this.killTask(item.id, this.taskStopIdentity(item as ScheduledTask)) : (await this.killWorkflow(item.id), "stopped");
+          return send(200, { ok: true, id: item.id, name: item.name, status });
         }
         return send(404, { ok: false, error: "Unknown endpoint" });
       } catch (error) {
@@ -2922,8 +2589,11 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const location = (this.app.vault.adapter as any).basePath && this.app.vault.configDir && this.manifest?.id
+      ? this.selectedExecutionLocation(false) : undefined;
+    const localFile = location?.configurationFile;
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, localFile ? this.settingsWriter.load(localFile) : await this.loadData());
     this.secretStore = new SecretStore(vaultBasePath);
     try {
       this.secretStore.load();
@@ -2931,16 +2601,76 @@ export default class AutoOCPlugin extends Plugin {
       new Notice(`AutoOC: could not load secrets vault — ${String(e)}`);
       this.secretStore = new SecretStore(vaultBasePath);
     }
+    this.settings.tasks = this.settings.tasks.map(task => {
+      if (!task.legacyExecution) return task;
+      const attempt = this.legacyAttempts?.get(task.id);
+      if (attempt && attempt.task.legacyExecution?.token === task.legacyExecution.token) return attempt.task;
+      if (task.status !== "running") return task;
+      return {...task,status:"failed",pendingCodexApproval:undefined,
+        legacyExecution:{...task.legacyExecution,stopState:"unconfirmed"},
+        output:`${task.output || ""}\n[legacy owner unavailable; external outcome unconfirmed]`};
+    });
+    // Bound executions are recovered read-only before legacy migrations can
+    // change their definition or turn an unobserved run into a failure.
+    if (this.settings.workflows?.some(wf => (wf as any).runtimeExecution) || this.settings.tasks?.some(task=>(task as any).runtimeExecution)) {
+      const runtime = (location || this.selectedExecutionLocation()).runtimeDirectory;
+      const recovered = this.settings.workflows.map(wf => {
+        const binding = (wf as any).runtimeExecution;
+        if (wf.legacyExecution) {
+          if (binding) {
+            const checkpoint = readExecutionCheckpoint(runtime,binding.runId);
+            validateProgressBinding(wf,checkpoint,binding.runId);
+            if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+          }
+          return wf.status === "running" && !(this as any).workflowRuntime?.has(wf.id) ? {...wf,status:"failed" as const} : wf;
+        }
+        if (!binding) return wf;
+        const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
+        return recoverWorkflowProgress(wf, this.settings.tasks, this.settings, checkpoint, binding.runId, this.ownsSharedRun(wf.id,binding.runId));
+      });
+      this.settings.workflows = recovered;
+      this.settings.tasks = this.settings.tasks.map(task=>{
+        const binding=(task as any).runtimeExecution;
+        if (!binding) return task;
+        const checkpoint=readExecutionCheckpoint(runtime,binding.runId);
+        validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
+        if (task.legacyExecution) {
+          if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+          return task;
+        }
+        if (checkpoint.workflowId.startsWith('@task:') && checkpoint.workflowId!==standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
+        if (binding.workflowId===standaloneTaskWorkflow(task.id).id) {
+          return projectStandaloneTask(task,this.settings.tasks,this.settings,checkpoint,this.ownsSharedRun(binding.workflowId,binding.runId),true);
+        }
+        const observed=checkpoint.steps.filter(step=>step.stepId===binding.stepId).pop();
+        if (!observed) throw new Error("Bound task step is absent from its journal");
+        if (["completed","failed"].includes(checkpoint.phase)) {
+          // The saved binding, rather than today's workflow steps, identifies
+          // this task's historical result even after a step was reassigned.
+          return {...task,status:observed.status as ScheduledTask["status"],output:observed.output || '',
+            ...(observed.startedAt ? {lastRun:observed.startedAt} : {}),
+            ...(observed.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
+            ...(observed.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),
+            pendingCodexApproval:undefined,
+            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,finishedAt:observed.finishedAt,requiresReconciliation:false}};
+        }
+        const workflow = recovered.find(wf=>wf.id===binding.workflowId && (wf as any).runtimeExecution?.runId===binding.runId);
+        const step = workflow?.steps.find(step=>step.id===binding.stepId && step.taskId===task.id);
+        if (!step) return task;
+        return {...task,status:step.status,runtimeExecution:{...binding,requiresReconciliation:step.status==="pending" && (workflow as any).runtimeExecution.requiresReconciliation}};
+      });
+      return;
+    }
     delete (this.settings as any).chatHistory;
     delete (this.settings as any).chatModel;
     let changed = false;
     for (const task of this.settings.tasks) {
-      if (task.status === "running") {
+      if (task.status === "running" && !task.legacyExecution) {
         task.status = "failed";
         task.output = `${task.output || ""}\n[stale running state cleared on plugin load]`;
         changed = true;
       }
-      if (task.pendingCodexApproval) {
+      if (task.pendingCodexApproval && !task.legacyExecution) {
         delete task.pendingCodexApproval;
         changed = true;
       }
@@ -2960,7 +2690,7 @@ export default class AutoOCPlugin extends Plugin {
     // Stale workflow cleanup + migration for missing schedule fields
     if (!this.settings.workflows) this.settings.workflows = [];
     for (const wf of this.settings.workflows) {
-      if (wf.status === "running") {
+      if (wf.status === "running" && !(this as any).workflowRuntime?.has(wf.id)) {
         wf.status = "failed";
         changed = true;
       }
@@ -3016,7 +2746,7 @@ export default class AutoOCPlugin extends Plugin {
       this.settings.defaultModel = this.availableModels[0]?.value ?? "";
       changed = true;
     }
-    if (this.settings.defaultAiEngine !== "codex" && this.settings.defaultAiEngine !== "opencode") {
+    if (!["codex", "opencode", "copilot"].includes(this.settings.defaultAiEngine)) {
       this.settings.defaultAiEngine = "opencode";
       changed = true;
     }
@@ -3033,7 +2763,7 @@ export default class AutoOCPlugin extends Plugin {
       changed = true;
     }
     if (changed) {
-      await this.saveData(this.settings);
+      await this.saveSettings(false);
     }
   }
 
@@ -3137,7 +2867,13 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async saveSettings(refreshView = true) {
-    await this.saveData(this.settings);
+    const basePath = (this.app.vault.adapter as any).basePath;
+    if (basePath) {
+      const file = this.selectedExecutionLocation().configurationFile;
+      await this.settingsWriter.save(file, () => this.settings);
+    } else {
+      await this.saveData(this.settings);
+    }
     if (refreshView) this.view?.refresh();
   }
 
@@ -3173,12 +2909,14 @@ export default class AutoOCPlugin extends Plugin {
         throw new Error("Remote manifest has no version");
       }
       this.latestVersion = remoteVersion;
-      this.updateAvailable = compareVersions(remoteVersion, this.manifest.version) > 0;
+      const comparison = compareVersions(remoteVersion, this.manifest.version);
+      const incomplete = this.pluginExecutionLease && !hasCompleteInstalledRelease(path.dirname(this.pluginExecutionLease.directory), this.manifest.version);
+      this.updateAvailable = comparison > 0 || comparison === 0 && !!incomplete;
       this.view?.refresh();
       if (!silent) {
         new Notice(
           this.updateAvailable
-            ? `AutoOC: update available v${remoteVersion}.`
+            ? `AutoOC: install or repair the complete v${remoteVersion} package.`
             : `AutoOC: already up to date (v${this.manifest.version}).`
         );
       }
@@ -3192,6 +2930,11 @@ export default class AutoOCPlugin extends Plugin {
   async updatePlugin(): Promise<void> {
     if (this.updateInProgress) return;
     if (!this.latestVersion) return;
+    if (!this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size ||
+        this.settings.tasks.some(task => task.status === "running") || this.settings.workflows.some(workflow => workflow.status === "running")) {
+      new Notice("AutoOC: finish or reconcile executions before updating.");
+      return;
+    }
 
     const shouldUpdate = confirm(
       `AutoOC will download v${this.latestVersion} and try to reload the plugin automatically.\n\n` +
@@ -3205,25 +2948,9 @@ export default class AutoOCPlugin extends Plugin {
     new Notice("AutoOC: downloading update…");
 
     try {
-      const [mainJs, manifest, styles] = await Promise.all([
-        fetch(noCacheUrl(REMOTE_FILE_URLS.mainJs), { cache: "reload" }).then((r) => {
-          if (!r.ok) throw new Error(`main.js HTTP ${r.status}`);
-          return r.text();
-        }),
-        fetch(noCacheUrl(REMOTE_FILE_URLS.manifest), { cache: "reload" }).then((r) => {
-          if (!r.ok) throw new Error(`manifest.json HTTP ${r.status}`);
-          return r.text();
-        }),
-        fetch(noCacheUrl(REMOTE_FILE_URLS.styles), { cache: "reload" }).then((r) => {
-          if (!r.ok) throw new Error(`styles.css HTTP ${r.status}`);
-          return r.text();
-        }),
-      ]);
-
-      const pluginDir = `.obsidian/plugins/${this.manifest.id}`;
-      await this.app.vault.adapter.write(`${pluginDir}/main.js`, mainJs);
-      await this.app.vault.adapter.write(`${pluginDir}/manifest.json`, manifest);
-      await this.app.vault.adapter.write(`${pluginDir}/styles.css`, styles);
+      const files = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, this.latestVersion);
+      const pluginDir = path.dirname(this.pluginExecutionLease.directory);
+      installRelease({ directory: pluginDir, version: this.latestVersion, files, lease: this.pluginExecutionLease });
 
       new Notice(`AutoOC: updated to v${this.latestVersion}. Reloading plugin…`);
 
@@ -3240,7 +2967,7 @@ export default class AutoOCPlugin extends Plugin {
     } catch (e) {
       new Notice(`AutoOC: update failed — ${String(e)}`);
     } finally {
-      this.updateInProgress = false;
+      this.updateInProgress = !!this.pluginExecutionLease && fs.existsSync(path.join(this.pluginExecutionLease.directory, "update-pending.json"));
       this.view?.refresh();
     }
   }
@@ -3367,11 +3094,61 @@ export default class AutoOCPlugin extends Plugin {
   // Runs opencode via a fully-detached PowerShell process to avoid Electron's
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
+  private beginLegacyAttempt(task: ScheduledTask, owner?: LegacyOwner): LegacyAttempt {
+    this.legacyAttempts ??= new Map();
+    const current = this.settings.tasks.find(item => item.id === task.id);
+    if (!current || this.sharedWorkflowExecution || this.legacyAttempts.get(task.id) && !this.legacyAttempts.get(task.id)!.cancelled) {
+      throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+    }
+    const binding = (current as any).runtimeExecution;
+    if (binding) {
+      const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory, binding.runId);
+      validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
+      if (!["completed", "failed"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
+    }
+    if (owner && (this as any).workflowRuntime?.get(owner.workflowId) !== owner.context) throw new Error("Workflow execution changed");
+    const identity: LegacyStopIdentity = {kind:"legacy", token:require("crypto").randomUUID(), taskId:task.id,
+      ...(owner ? {workflowId:owner.workflowId,stepId:owner.stepId,stepIndex:owner.stepIndex} : {})};
+    const attempt: LegacyAttempt = {identity,task:current,owner,cancelled:false};
+    if (owner) {
+      const workflow = this.settings.workflows.find(item => item.id === owner.workflowId);
+      if (workflow) workflow.legacyExecution ??= {token:require("crypto").randomUUID()};
+    }
+    this.legacyAttempts.set(task.id, attempt);
+    current.legacyExecution = {...identity,startedAt:new Date().toISOString()};
+    delete current.pendingCodexApproval;
+    return attempt;
+  }
+
+  private isLegacyCurrent(attempt: LegacyAttempt): boolean {
+    const current = this.settings.tasks.find(item => item.id === attempt.identity.taskId);
+    if (current?.legacyExecution?.token === attempt.identity.token) attempt.task = current;
+    return !attempt.cancelled && this.legacyAttempts?.get(attempt.identity.taskId) === attempt &&
+      this.settings.tasks.find(item => item.id === attempt.identity.taskId) === attempt.task &&
+      attempt.task.legacyExecution?.token === attempt.identity.token &&
+      (!attempt.owner || (this as any).workflowRuntime?.get(attempt.owner.workflowId) === attempt.owner.context);
+  }
+
+  private legacyCompletion(attempt: LegacyAttempt, callback?: (task: ScheduledTask, code: number) => Promise<void>) {
+    return async (task: ScheduledTask, code: number) => {
+      if (!this.isLegacyCurrent(attempt)) return;
+      task = attempt.task;
+      task.legacyExecution!.finishedAt = new Date().toISOString();
+      await this.saveSettings();
+      if (!this.isLegacyCurrent(attempt)) return;
+      this.legacyAttempts.delete(task.id);
+      if (callback) await callback(task, code);
+    };
+  }
+
   async runTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
+    owner?: LegacyOwner,
   ) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     if (this.isTaskActive(this.settings.tasks[idx])) {
@@ -3381,16 +3158,34 @@ export default class AutoOCPlugin extends Plugin {
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
 
+    if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
+      const vault = (this.app.vault.adapter as any).basePath;
+      const workflow = standaloneTaskWorkflow(effectiveTask.id);
+      const definition = prepareWorkflowDefinition(workflow, this.settings.tasks, this.settings);
+      if (supportsSharedWorkflow(definition, createWorkflowTaskAdapter(definition, vault))) {
+        await this.runSharedWorkflow(workflow.id, undefined, false, true, effectiveTask.id);
+        return;
+      }
+    }
+
+    const attempt = this.beginLegacyAttempt(effectiveTask, owner);
+
     if ((effectiveTask.taskKind || "opencode") === "code") {
-      await this.runCodeTask(effectiveTask, onComplete);
+      await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
 
     if (effectiveTask.taskKind === "codex") {
-      void this.runCodexTask(effectiveTask, onComplete);
+      void this.runCodexTask(effectiveTask, onComplete, owner, attempt);
       return;
     }
 
+    if (effectiveTask.taskKind === "copilot") {
+      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt);
+      return;
+    }
+
+    onComplete = this.legacyCompletion(attempt, onComplete);
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
     if (branchWasProvided && typeof effectiveTask.branch !== "string") {
       this.settings.tasks[idx].status = "failed";
@@ -3441,11 +3236,37 @@ export default class AutoOCPlugin extends Plugin {
 
     if (effectiveTask.interactiveTerminal) {
       const current = this.settings.tasks[idx];
+      let settled = false;
+      let cancelled = false;
+      // Identity, not just task ID/status, prevents late callbacks from a
+      // stopped, deleted or relaunched task from completing another attempt.
+      const controller = { kill: () => { cancelled = true; settled = true; } };
+      attempt.handle = controller;
+      this.runningProcesses.set(task.id, controller);
+      const isCurrent = () => this.isLegacyCurrent(attempt) && !settled && this.runningProcesses.get(task.id) === controller &&
+        this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
+      const finish = async (error?: Error) => {
+        if (!isCurrent()) return;
+        settled = true;
+        current.status = error ? "failed" : "completed";
+        current.output = error
+          ? `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`
+          : "[interactive OpenCode CLI launch confirmed; agent task completion is not tracked]";
+        if (error) this.view?.startGradualSink(task.id);
+        await this.saveSettings();
+        // A stop/delete/relaunch during persistence invalidates continuation.
+        if (!this.isLegacyCurrent(attempt) || cancelled || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current ||
+          current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller) return;
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
+        new Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
+        if (onComplete) await onComplete(current, error ? -1 : 0);
+      };
       current.status = "running";
       current.lastRun = new Date().toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
       this.view?.resetDashboardTaskShift(task.id);
       await this.saveSettings();
+      if (!isCurrent()) return;
 
       try {
         let prompt = effectiveTask.prompt;
@@ -3454,40 +3275,21 @@ export default class AutoOCPlugin extends Plugin {
         }
         const bin = resolveOpencodeBin(this.settings.opencodePath);
         const agent = this.getEffectiveAgent(effectiveTask.agent);
-        const reportInteractiveFailure = async (error: Error) => {
-          const t = this.settings.tasks.find((candidate) => candidate.id === task.id);
-          if (!t) return;
-          t.status = "failed";
-          t.lastRun = new Date().toISOString();
-          t.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`;
-          this.view?.startGradualSink(task.id);
-          await this.saveSettings();
-          new Notice(`AutoOC: could not open CLI task "${task.name}".`);
-          if (onComplete) await onComplete(t, -1);
+        const launchOptions = {
+          onError: (error: Error) => { void finish(error); },
+          onLaunched: () => { void finish(); },
+          linuxTerminal: this.settings.linuxTerminal,
         };
         if (process.platform === "win32") {
-          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt);
+          openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt, launchOptions);
         } else {
           const args = ["-m", effectiveTask.model];
           if (!effectiveTask.forceModel) args.push("--agent", agent);
           args.push("--prompt", prompt);
-          openOpencodeCli(bin, taskCwd, secretEnv, args, {
-            onError: reportInteractiveFailure,
-            linuxTerminal: this.settings.linuxTerminal,
-          });
+          openOpencodeCli(bin, taskCwd, secretEnv, args, launchOptions);
         }
-        current.status = "completed";
-        current.output = "[opened interactive OpenCode CLI with preloaded prompt]";
-        await this.saveSettings();
-        new Notice(`AutoOC: opened CLI task "${task.name}".`);
-        if (onComplete) await onComplete(current, 0);
       } catch (e) {
-        current.status = "failed";
-        current.output = `[AutoOC] Could not open interactive OpenCode CLI: ${String(e)}`;
-        this.view?.startGradualSink(task.id);
-        await this.saveSettings();
-        new Notice(`AutoOC: could not open CLI task "${task.name}".`);
-        if (onComplete) await onComplete(current, -1);
+        await finish(e instanceof Error ? e : new Error(String(e)));
       }
       return;
     }
@@ -3498,6 +3300,7 @@ export default class AutoOCPlugin extends Plugin {
     this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
 
+    if (!this.isLegacyCurrent(attempt)) return;
     new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(effectiveTask);
@@ -3513,13 +3316,13 @@ export default class AutoOCPlugin extends Plugin {
       .trim();
 
     const tmpDir = require("os").tmpdir();
-    const outFile = require("path").join(tmpDir, `autooc-${task.id}.txt`);
-    const errFile = require("path").join(tmpDir, `autooc-${task.id}.err.txt`);
-    const doneFile = require("path").join(tmpDir, `autooc-${task.id}.done.txt`);
-    const pidFile = require("path").join(tmpDir, `autooc-${task.id}.pid`);
-    const promptFile = require("path").join(tmpDir, `autooc-${task.id}.prompt.txt`);
-    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}.full-prompt.txt`);
-    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}.full-prompt.txt`);
+    const outFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.txt`);
+    const errFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.err.txt`);
+    const doneFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.done.txt`);
+    const pidFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.pid`);
+    const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
+    const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
+    let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     const fs = require("fs");
 
     // Clean up any previous temp files
@@ -3574,85 +3377,9 @@ export default class AutoOCPlugin extends Plugin {
 
     const effectiveAgent = this.getEffectiveAgent(effectiveTask.agent);
 
-    let launchScript: string;
-    if (isWindows()) {
-      launchScript = [
-        `try {`,
-        `$PID | Set-Content -LiteralPath ${psSingleQuoted(pidFile)} -Encoding ASCII`,
-        ...psUtf8Prelude(),
-          `$env:USERPROFILE = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-          `$env:APPDATA     = ${psSingleQuoted(process.env.APPDATA || "")}`,
-          `$env:LOCALAPPDATA= ${psSingleQuoted(process.env.LOCALAPPDATA || "")}`,
-          `$env:PATH        = ${psSingleQuoted(process.env.PATH || "")}`,
-          `$env:HOME        = ${psSingleQuoted(process.env.USERPROFILE || "")}`,
-          ...buildPowerShellEnvLines(secretEnv),
-          `Set-Location -LiteralPath '${safeCwd}' -ErrorAction Stop`,
-          gitCmds ? gitCmds : "",
-        `$bin = ${psSingleQuoted(bin)}`,
-        `$binExt = [System.IO.Path]::GetExtension($bin)`,
-        `$psShim = if ($binExt -ieq '.cmd') { [System.IO.Path]::ChangeExtension($bin, '.ps1') } else { '' }`,
-        `$nodeScript = ''`,
-        `if ($psShim -and [System.IO.File]::Exists($psShim)) {`,
-        `$bin = $psShim`,
-        `} elseif ($binExt -ieq '.cmd') {`,
-        `$cmdText = Get-Content $bin -Raw -Encoding UTF8`,
-        `if ($cmdText -match '"([^"]+\\.exe)"\\s+%\\*') {`,
-        `$bin = $Matches[1]`,
-        `} elseif ($cmdText -match '"%_prog%"\\s+"%dp0%\\\\([^"]+)"\\s+%\\*') {`,
-        `$cmdDir = Split-Path -Parent $bin`,
-        `$nodeCandidate = Join-Path $cmdDir 'node.exe'`,
-        `$bin = if ([System.IO.File]::Exists($nodeCandidate)) { $nodeCandidate } else { 'node' }`,
-        `$nodeScript = Join-Path $cmdDir $Matches[1]`,
-        `} else {`,
-        `throw "Cannot safely parse npm command shim '$bin' for shell-sensitive prompt text."`,
-        `}`,
-        `}`,
-        `$model = ${psSingleQuoted(model)}`,
-        `$agent = ${psSingleQuoted(effectiveAgent)}`,
-        `$forceModel = ${effectiveTask.forceModel ? "$true" : "$false"}`,
-        `$prompt = Get-Content '${promptFile.replace(/'/g, "''")}' -Raw -Encoding UTF8`,
-        `$outFile = ${psSingleQuoted(outFile)}`,
-        `$errFile = ${psSingleQuoted(errFile)}`,
-        `$opencodeArgs = @()`,
-        `if ($nodeScript) {`,
-        `$opencodeArgs += $nodeScript`,
-        `}`,
-        `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
-        `if (-not $forceModel) {`,
-        `$opencodeArgs += @('--agent', $agent)`,
-        `}`,
-        `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
-         `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
-         `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
-         `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
-        `} catch {`,
-        `[System.IO.File]::WriteAllText('${outFile.replace(/'/g, "''")}', '', [System.Text.Encoding]::UTF8)`,
-        `[System.IO.File]::WriteAllText('${errFile.replace(/'/g, "''")}', $_.Exception.ToString(), [System.Text.Encoding]::UTF8)`,
-        `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', '-1', [System.Text.Encoding]::UTF8)`,
-        `}`,
-      ].filter(line => line !== "").join("\n");
-    } else {
-      const shEnv: Record<string, string> = {
-        ...secretEnv,
-        HOME: process.env.HOME || process.env.USERPROFILE || "",
-        PATH: process.env.PATH || "",
-      };
-      const agentArg = effectiveTask.forceModel ? "" : ` --agent ${shSingleQuoted(effectiveAgent)}`;
-      launchScript = [
-        `echo $$ > ${shSingleQuoted(pidFile)}`,
-        ...buildShEnvLines(shEnv),
-        `cd ${shSingleQuoted(taskCwd)} || { printf '%s' '-1' > ${shSingleQuoted(doneFile)}; printf '%s' 'cd failed' > ${shSingleQuoted(errFile)}; exit 1; }`,
-        gitCmds ? gitCmds : "",
-        `bin=${shSingleQuoted(bin)}`,
-        `prompt="$(cat ${shSingleQuoted(promptFile)} 2>/dev/null)"`,
-        `set -- --print-logs --log-level INFO --auto -m ${shSingleQuoted(model)}${agentArg} --dangerously-skip-permissions -- "$prompt"`,
-        `"$bin" run "$@" >> ${shSingleQuoted(outFile)} 2>> ${shSingleQuoted(errFile)}`,
-        `exit_code=$?`,
-        `printf '%s' "$exit_code" > ${shSingleQuoted(doneFile)}`,
-      ].filter(line => line !== "").join("\n");
-    }
+    const launchScript = buildOpenCodeScript({pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd});
 
-    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}${scriptExt()}`);
+    const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
     else fs.writeFileSync(scriptFile, launchScript, "utf8");
 
@@ -3672,7 +3399,7 @@ export default class AutoOCPlugin extends Plugin {
     let settled = false;
     let cancelled = false;
     let pollHandle: ReturnType<typeof setInterval> | null = null;
-    const wasManuallyStopped = (current: ScheduledTask) => cancelled || current.output.includes("[task stopped manually]");
+    const wasManuallyStopped = (current: ScheduledTask) => !this.isLegacyCurrent(attempt) || cancelled || current.output.includes("[task stopped manually]");
     const shouldAbortBeforeFinalMutation = (current: ScheduledTask) => wasManuallyStopped(current) || current.status !== "running";
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
@@ -3684,7 +3411,7 @@ export default class AutoOCPlugin extends Plugin {
       try { fs.unlinkSync(doneFile); } catch { /* ignore */ }
       try { fs.unlinkSync(pidFile); } catch { /* ignore */ }
     };
-    this.runningProcesses.set(task.id, {
+    const controller = {
       kill: () => {
         cancelled = true;
         settled = true;
@@ -3694,11 +3421,13 @@ export default class AutoOCPlugin extends Plugin {
         }
         hiddenProc.kill();
         cleanupTempFiles();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       },
-    });
+    };
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
     hiddenProc.onError(async (error) => {
-      if (settled) return;
+      if (!this.isLegacyCurrent(attempt) || settled) return;
       settled = true;
       if (pollHandle) clearInterval(pollHandle);
       const current = this.settings.tasks.find((candidate) => candidate.id === task.id);
@@ -3707,7 +3436,7 @@ export default class AutoOCPlugin extends Plugin {
       current.lastRun = new Date().toISOString();
       current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
       cleanupTempFiles();
-      this.runningProcesses.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       await this.saveSettings();
       new Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
@@ -3721,14 +3450,14 @@ export default class AutoOCPlugin extends Plugin {
 
     // Poll the output file every 3 s
     pollHandle = setInterval(async () => {
-      if (settled || cancelled) return;
+      if (!this.isLegacyCurrent(attempt) || settled || cancelled) return;
       const t = this.settings.tasks.find((x) => x.id === task.id);
       if (!t) {
         settled = true;
         if (pollHandle) clearInterval(pollHandle);
         pollHandle = null;
         cleanupTempFiles();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         return;
       }
       if (t.status !== "running" && !this.runningProcesses.has(task.id)) {
@@ -3744,6 +3473,7 @@ export default class AutoOCPlugin extends Plugin {
         timeoutWarned = true;
         t.output += `\n[⏱ timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings(false);
+        if (!this.isLegacyCurrent(attempt)) return;
         new Notice(`AutoOC: ⏱ "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
 
@@ -3753,7 +3483,7 @@ export default class AutoOCPlugin extends Plugin {
         if (pollHandle) clearInterval(pollHandle);
         pollHandle = null;
         hiddenProc.kill();
-        this.runningProcesses.delete(task.id);
+        if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
         cleanupTempFiles();
 
         if (shouldAbortBeforeFinalMutation(t)) return;
@@ -3787,7 +3517,7 @@ export default class AutoOCPlugin extends Plugin {
       settled = true;
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
-      this.runningProcesses.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
 
       const stdout = fs.existsSync(outFile) ? decodeCommandBuffer(fs.readFileSync(outFile)) : "";
       const stderr = fs.existsSync(errFile) ? decodeCommandBuffer(fs.readFileSync(errFile)) : "";
@@ -3825,13 +3555,114 @@ export default class AutoOCPlugin extends Plugin {
     }, 3000);
   }
 
+  async runCopilotTask(
+    task: ScheduledTask,
+    onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    owner?: LegacyOwner,
+    reserved?: LegacyAttempt,
+  ): Promise<void> {
+    const findCurrent = () => this.settings.tasks.find((candidate) => candidate.id === task.id);
+    let current = findCurrent();
+    if (!current) return;
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const cwd = task.workingDirectory || this.settings.workingDirectory || vaultBasePath;
+    const model = task.model?.trim() || this.settings.defaultCopilotModel || "";
+    const startedAt = new Date().toISOString();
+    let cancelled = false;
+    let client: CopilotCliClient | undefined;
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let exitCode = -1;
+    const controller = { kill: () => { cancelled = true; client?.dispose(); } };
+    current.status = "running";
+    current.lastRun = startedAt;
+    current.output = "[starting GitHub Copilot CLI task…]\n";
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
+    this.view?.resetDashboardTaskShift(task.id);
+    try {
+      await this.saveSettings();
+      if (!this.isLegacyCurrent(attempt) || cancelled) return;
+      const validationError = getCopilotTaskValidationError(task);
+      if (validationError) throw new Error(validationError);
+      if (!task.prompt?.trim()) throw new Error("Copilot task prompt is empty.");
+      client = this.createCopilotClient(cwd, (output) => {
+        const active = findCurrent();
+        if (!this.isLegacyCurrent(attempt) || cancelled || !active || active.status !== "running") return;
+        active.output = this.redactSecrets(output);
+        if (!saveTimer) {
+          saveTimer = setTimeout(() => {
+            saveTimer = undefined;
+            const activeTask = findCurrent();
+            if (!this.isLegacyCurrent(attempt) || cancelled || !activeTask || activeTask.status !== "running") return;
+            this.emitTaskUpdated(activeTask);
+            void this.saveSettings(false);
+          }, 750);
+        }
+      });
+      const result = await client.run(task.prompt, {
+        model,
+        allowAllTools: task.copilotAllowAllTools === true,
+        timeoutMs: Math.max(0, this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS) * 1000,
+        env: this.getSecretsEnv(),
+      });
+      current = findCurrent();
+      if (!this.isLegacyCurrent(attempt) || cancelled || !current || current.status !== "running") return;
+      exitCode = result.exitCode;
+      current.output = this.redactSecrets(result.output || (result.exitCode === 0 ? "(no output)" : ""));
+      if (result.exitCode !== 0) {
+        current.output += `\n[Copilot error: ${this.redactSecrets(result.error || `exit code ${result.exitCode}`)}]`;
+      }
+      current.status = exitCode === 0
+        ? (["daily", "weekly", "monthly", "interval"].includes(task.scheduleType) ? "pending" : "completed")
+        : "failed";
+    } catch (error) {
+      current = findCurrent();
+      if (!this.isLegacyCurrent(attempt) || cancelled || !current) return;
+      current.status = "failed";
+      current.output = `${current.output || ""}\n[Copilot error: ${this.redactSecrets(String(error))}]`;
+    } finally {
+      if (saveTimer) clearTimeout(saveTimer);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
+      if (!cancelled) client?.dispose();
+    }
+    current = findCurrent();
+    if (!this.isLegacyCurrent(attempt) || !current || cancelled) return;
+    if (current.status === "failed") this.view?.startGradualSink(task.id);
+    if (this.settings.logsEnabled) {
+      const metadata = `[engine: copilot]\n[model: ${this.redactSecrets(model || "default")}]\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]`;
+      saveLogToFile(vaultBasePath, task.id, `${metadata}\n\n${current.output}`);
+      cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
+      cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
+    }
+    await this.saveSettings();
+    if (!this.isLegacyCurrent(attempt)) return;
+    this.emitTaskUpdated(current);
+    new Notice(`AutoOC: ${exitCode === 0 ? "✅" : "❌"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
+    if (onComplete) await onComplete(current, exitCode);
+  }
+
+  createCopilotClient(cwd: string, onOutput: (output: string) => void): CopilotCliClient {
+    return new CopilotCliClient(resolveCopilotBin(this.settings.copilotPath), cwd, onOutput);
+  }
+
   async runCodexTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    owner?: LegacyOwner,
+    reserved?: LegacyAttempt,
   ): Promise<void> {
     const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
     if (idx === -1) return;
-    const current = this.settings.tasks[idx];
+    let current = this.settings.tasks[idx];
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const isCurrent = () => {
+      const owned = this.isLegacyCurrent(attempt);
+      if (owned) current = attempt.task;
+      return owned;
+    };
     if (!task.prompt?.trim()) {
       current.status = "failed";
       current.lastRun = new Date().toISOString();
@@ -3849,6 +3680,15 @@ export default class AutoOCPlugin extends Plugin {
     let cancelled = false;
     let saveTimer: ReturnType<typeof setTimeout> | null = null;
     let codexLogOutput = "";
+    let client: CodexAppServerClient | undefined;
+    const controller = {kill: async () => {
+      cancelled = true;
+      if (saveTimer) clearTimeout(saveTimer);
+      if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
+      await client?.interrupt();
+    }};
+    attempt.handle = controller;
+    this.runningProcesses.set(task.id, controller);
 
     current.status = "running";
     current.lastRun = startedAt;
@@ -3856,17 +3696,22 @@ export default class AutoOCPlugin extends Plugin {
     delete current.pendingCodexApproval;
     this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
+    if (!isCurrent()) return;
     new Notice(`AutoOC: running Codex task "${task.name}"…`);
 
     const scheduleSave = () => {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
-        void this.saveSettings(false);
-      }, 750);
+        if (!isCurrent()) return;
+        void this.saveSettings(false).catch(() => {
+          new Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
+        });
+      }, 10_000);
     };
-    const client = this.createCodexClient(taskCwd, {
+    client = this.createCodexClient(taskCwd, {
       onStarted: ({ threadId, turnId }) => {
+        if (!isCurrent()) return;
         current.lastCodexThreadId = threadId;
         current.lastCodexTurnId = turnId;
         if (task.interactiveTerminal) {
@@ -3879,14 +3724,14 @@ export default class AutoOCPlugin extends Plugin {
         scheduleSave();
       },
       onOutput: (output) => {
-        if (cancelled || current.status !== "running") return;
+        if (!isCurrent() || cancelled || current.status !== "running") return;
         current.output = this.redactSecrets(output || "[Codex is working…]");
         this.view?.nudgeDashboardTask(task.id, "up");
         this.emitTaskUpdated(current);
         scheduleSave();
       },
       onApproval: (approval) => {
-        if (cancelled || current.status !== "running") return;
+        if (!isCurrent() || cancelled || current.status !== "running") return;
         current.pendingCodexApproval = {
           requestId: approval.requestId,
           kind: approval.kind,
@@ -3899,20 +3744,13 @@ export default class AutoOCPlugin extends Plugin {
       },
     });
     this.runningCodexClients.set(task.id, client);
-    this.runningProcesses.set(task.id, {
-      kill: () => {
-        cancelled = true;
-        if (saveTimer) clearTimeout(saveTimer);
-        void client.interrupt();
-        this.runningCodexClients.delete(task.id);
-        this.runningProcesses.delete(task.id);
-      },
-    });
 
     let exitCode = -1;
     try {
-      const result = await client.run(task.prompt, model || undefined, reasoningEffort || undefined);
-      if (cancelled || current.status !== "running") return;
+      const result = await executeCodexTask(client, {
+        prompt: task.prompt, model, reasoningEffort, interactive: task.interactiveTerminal,
+      });
+      if (!isCurrent() || cancelled || current.status !== "running") return;
       current.lastCodexThreadId = result.threadId;
       current.lastCodexTurnId = result.turnId;
       delete current.pendingCodexApproval;
@@ -3936,9 +3774,9 @@ export default class AutoOCPlugin extends Plugin {
         this.view?.startGradualSink(task.id);
         new Notice(`AutoOC: ❌ Codex task "${task.name}" failed.`);
       }
-      codexLogOutput = `${metadata}\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${current.output}`;
+      codexLogOutput = `${metadata}\n[started: ${startedAt}]\n[finished: ${new Date().toISOString()}]\n\n${this.redactSecrets(result.transcript || current.output)}`;
     } catch (error) {
-      if (cancelled || current.output.includes("[task stopped manually]")) return;
+      if (!isCurrent() || cancelled || current.output.includes("[task stopped manually]")) return;
       current.status = "failed";
       delete current.pendingCodexApproval;
       current.output = `${current.output || ""}\n[Codex error: ${String(error)}]`.trim();
@@ -3948,17 +3786,19 @@ export default class AutoOCPlugin extends Plugin {
       new Notice(`AutoOC: ❌ Codex task "${task.name}" failed.`);
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
-      this.runningCodexClients.delete(task.id);
-      this.runningProcesses.delete(task.id);
+      if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
+      if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       client.dispose();
     }
 
+    if (!isCurrent()) return;
     if (this.settings.logsEnabled) {
       saveLogToFile(vaultBasePath, task.id, codexLogOutput || current.output);
       cleanupOldLogs(vaultBasePath, task.id, this.settings.maxLogsPerTask);
       cleanupLogsByAge(vaultBasePath, task.id, this.settings.logRetentionDays);
     }
     await this.saveSettings();
+    if (!isCurrent()) return;
     this.emitTaskUpdated(current);
     if (onComplete) await onComplete(current, exitCode);
   }
@@ -3972,6 +3812,13 @@ export default class AutoOCPlugin extends Plugin {
 
   async resolveCodexApproval(taskId: string, approved: boolean): Promise<void> {
     const task = this.settings.tasks.find((candidate) => candidate.id === taskId);
+    const execution=(task as any)?.runtimeExecution;
+    if(this.sharedWorkflowExecution && execution && task?.pendingCodexApproval) {
+      const directory=this.selectedExecutionLocation().runtimeDirectory;
+      if (!this.ownsSharedRun(execution.workflowId,execution.runId)) throw new Error("Approval does not belong to the active execution");
+      answerWorkflowApproval(directory,execution.runId,String(task.pendingCodexApproval.requestId),approved);
+      return;
+    }
     const client = this.runningCodexClients.get(taskId);
     const approval = task?.pendingCodexApproval;
     if (!task || !client || !approval) {
@@ -3988,13 +3835,32 @@ export default class AutoOCPlugin extends Plugin {
     this.emitTaskUpdated(task);
   }
 
+  private vaultRefresh?: ObsidianVaultRefresh;
+  private vaultRefreshStopped = false;
+  private codeTaskRuns = new Map<string, object>();
+
+  private createVaultMutationBatch() {
+    if (this.vaultRefreshStopped) throw new Error("Plugin unloaded before Code execution");
+    this.vaultRefresh ??= new ObsidianVaultRefresh((this.app.vault.adapter as any).basePath || ".", this.app.vault.adapter);
+    return this.vaultRefresh.createBatch();
+  }
+
   async runCodeTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    owner?: LegacyOwner,
+    reserved?: LegacyAttempt,
   ) {
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
-    const current = this.settings.tasks[idx];
+    let current = this.settings.tasks[idx];
+    const attempt = reserved || this.beginLegacyAttempt(task, owner);
+    onComplete = this.legacyCompletion(attempt, onComplete);
+    const isCurrent = () => {
+      const owned = this.isLegacyCurrent(attempt);
+      if (owned) current = attempt.task;
+      return owned;
+    };
     const code = current.code || current.prompt || "";
     if (!code.trim()) {
       current.status = "failed";
@@ -4007,6 +3873,8 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
+    const execution = {};
+    this.codeTaskRuns.set(current.id, execution);
     current.status = "running";
     current.lastRun = new Date().toISOString();
     current.output = "[running code task...]\n";
@@ -4015,71 +3883,14 @@ export default class AutoOCPlugin extends Plugin {
     new Notice(`AutoOC: running code task "${current.name}"...`);
 
     try {
-      const vm = require("vm");
-      const inputVar = current.codeInputVar || "input";
-      const outputVar = current.codeOutputVar || "output";
-      const defaultCwd = current.workingDirectory || this.settings.workingDirectory || vaultBasePath;
-      const resolveInVault = (p: string) => {
-        const resolved = path.resolve(vaultBasePath, p || ".");
-        const root = path.resolve(vaultBasePath);
-        if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-          throw new Error(`Path escapes vault: ${p}`);
-        }
-        return resolved;
-      };
-      const readText = (p: string) => fs.readFileSync(p, "utf8");
-      const writeText = (p: string, content: any) => {
-        fs.mkdirSync(path.dirname(p), { recursive: true });
-        fs.writeFileSync(p, String(content), "utf8");
-        return p;
-      };
-      const sandbox: Record<string, any> = {
-        input: "",
-        outputs: {},
-        JSON,
-        Math,
-        Date,
-        String,
-        Number,
-        Boolean,
-        Array,
-        Object,
-        RegExp,
-        console: { log: (...args: any[]) => { current.output += args.map(String).join(" ") + "\n"; } },
-      };
-      if (current.codeAllowVault) {
-        sandbox.vault = {
-          read: (p: string) => readText(resolveInVault(p)),
-          write: (p: string, content: any) => writeText(resolveInVault(p), content),
-          append: (p: string, content: any) => { const f = resolveInVault(p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, String(content), "utf8"); return f; },
-          exists: (p: string) => fs.existsSync(resolveInVault(p)),
-          list: (p = ".") => fs.readdirSync(resolveInVault(p)),
-        };
-      }
-      if (current.codeAllowFiles) {
-        sandbox.files = {
-          read: (p: string) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-          write: (p: string, content: any) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
-          append: (p: string, content: any) => { const f = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.appendFileSync(f, String(content), "utf8"); return f; },
-          exists: (p: string) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-          list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        };
-      }
-      if (current.codeAllowTerminal) {
-        const { execSync } = require("child_process");
-        sandbox.terminal = {
-          run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
-            cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-            timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
-            encoding: "utf8",
-          }),
-        };
-      }
-
-      const context = vm.createContext(sandbox);
-      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
-      const out = String(result == null ? "" : result);
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCodeTask({
+        ...current, code, vaultBase: vaultBasePath,
+        cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
+        log: (...args) => { if (!isCurrent()) return; current.output += args.map(String).join(" ") + "\n"; },
+        onVaultMutation,
+      }));
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = (current.output || "") + out;
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
@@ -4091,6 +3902,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       if (onComplete) await onComplete(current, 0);
     } catch (err) {
+      if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.status = "failed";
       current.output = (current.output || "") + `[code error: ${String(err)}]`;
       this.view?.startGradualSink(current.id);
@@ -4102,60 +3914,114 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       new Notice(`AutoOC: ❌ code task "${current.name}" failed.`);
       if (onComplete) await onComplete(current, -1);
+    } finally {
+      if (this.codeTaskRuns.get(current.id) === execution) this.codeTaskRuns.delete(current.id);
     }
   }
 
-  async killTask(id: string) {
-    const proc = this.runningProcesses.get(id);
-    if (proc) {
-      try { proc.kill(); } catch { /* ignore */ }
-      this.runningProcesses.delete(id);
-    }
-    const t = this.settings.tasks.find((x) => x.id === id);
-    if (t) {
-      t.status = "failed";
-      t.output += "\n[task stopped manually]";
-      if (this.settings.logsEnabled) {
-        const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
-        saveLogToFile(vaultBasePath, id, t.output);
-        cleanupOldLogs(vaultBasePath, id, this.settings.maxLogsPerTask);
-        cleanupLogsByAge(vaultBasePath, id, this.settings.logRetentionDays);
+  taskStopIdentity(task: ScheduledTask): TaskStopIdentity | undefined {
+    const attempt = this.legacyAttempts?.get(task.id);
+    if (attempt && task.legacyExecution?.token === attempt.identity.token) return {...attempt.identity};
+    if (task.legacyExecution) return {...task.legacyExecution};
+    const binding = (task as any).runtimeExecution;
+    return binding ? {kind:"shared",taskId:task.id,runId:binding.runId,workflowId:binding.workflowId,stepId:binding.stepId,stepIndex:binding.stepIndex} : undefined;
+  }
+
+  async killTask(id: string, observed?: TaskStopIdentity) {
+    const task = this.settings.tasks.find(item => item.id === id);
+    const registered = this.legacyAttempts?.get(id);
+    const attempt = task?.legacyExecution?.token === registered?.identity.token ? registered : undefined;
+    if (observed?.kind === "legacy" || attempt || task?.legacyExecution) {
+      const keys = ["kind", "token", "taskId", "workflowId", "stepId", "stepIndex"] as const;
+      if (!observed || observed.kind !== "legacy" || !attempt || !task ||
+          task.legacyExecution?.token !== attempt.identity.token || !observed.token || observed.taskId !== id ||
+          keys.some(key => observed[key] !== attempt.identity[key]) ||
+          attempt.owner && (this as any).workflowRuntime?.get(attempt.owner.workflowId) !== attempt.owner.context && !attempt.cancelled) {
+        throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
       }
-      await this.saveSettings();
+      if (attempt.stopPromise) return attempt.stopPromise;
+      // Invalidate continuation synchronously, before interruption or persistence can yield.
+      attempt.cancelled = true;
+      const metadata = task.legacyExecution!;
+      metadata.stopState = "requested";
+      delete task.pendingCodexApproval;
+      task.status = "failed";
+      task.output += "\n[stop requested; external outcome unconfirmed]";
+      if (attempt.owner) {
+        const wf = this.settings.workflows.find(item => item.id === attempt.owner!.workflowId);
+        if (wf && (this as any).workflowRuntime?.get(wf.id) === attempt.owner.context) {
+          wf.status = "failed";
+          (this as any).workflowRuntime.delete(wf.id);
+        }
+      }
+      const handle = attempt.handle;
+      if (this.runningProcesses.get(id) === handle) this.runningProcesses.delete(id);
+      const ownerWorkflow = attempt.owner ? this.settings.workflows.find(item => item.id === attempt.owner!.workflowId) : undefined;
+      const ownerExecution = ownerWorkflow?.legacyExecution;
+      attempt.stopPromise = (async () => {
+        try { await handle?.kill(); metadata.stopState = "unconfirmed"; }
+        catch (error) { metadata.stopState = "error"; metadata.stopError = this.redactSecrets(String(error)); }
+        // Metadata belongs to this attempt, not to a replacement task/attempt.
+        if (this.legacyAttempts?.get(id) === attempt && task.legacyExecution === metadata) {
+          await this.saveSettings();
+          if (this.legacyAttempts?.get(id) !== attempt || task.legacyExecution !== metadata ||
+              ownerWorkflow?.legacyExecution !== ownerExecution) return "stop-requested";
+          new Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` :
+            "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
+        }
+        return "stop-requested";
+      })();
+      return attempt.stopPromise;
     }
-    new Notice(`AutoOC: ⏹ Task stopped.`);
+    const binding = this.taskStopIdentity(task || {id} as ScheduledTask);
+    const execution = this.sharedWorkflowExecution;
+    if (observed || binding || execution?.taskId === id) {
+      if (observed && observed.kind !== "shared") throw new Error("Task execution changed or is not owned here");
+      const checkpoint = execution?.checkpoint;
+      const active = checkpoint?.steps[checkpoint.steps.length - 1];
+      const step = this.settings.workflows.find(workflow => workflow.id === observed?.workflowId)?.steps.find(step => step.id === observed?.stepId);
+      const sameBinding = observed && binding && Object.keys(observed).every(key => (observed as any)[key] === (binding as any)[key]);
+      const referencesTask = execution?.taskId === id || step?.taskId === id && (!step.stepKind || step.stepKind === "task");
+      if (!observed || observed.taskId !== id || !observed.runId || !observed.workflowId || !observed.stepId || !Number.isSafeInteger(observed.stepIndex) ||
+          !sameBinding || !execution || !checkpoint || !this.ownsSharedRun(observed.workflowId, observed.runId) ||
+          checkpoint.runId !== observed.runId || checkpoint.workflowId !== observed.workflowId || checkpoint.phase !== "in_flight" ||
+          checkpoint.nextStepId !== observed.stepId || active?.stepId !== observed.stepId || active.status !== "in_flight" ||
+          checkpoint.steps.length - 1 !== observed.stepIndex || !referencesTask) {
+        throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
+      }
+      if (!execution.controller.signal.aborted) {
+        execution.controller.abort();
+        new Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
+      }
+      return "stop-requested";
+    }
+    throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
   }
 
   async killWorkflow(id: string) {
+    if (this.sharedWorkflowExecution?.workflowId === id) {
+      this.sharedWorkflowExecution.controller.abort();
+      return;
+    }
     const wf = this.settings.workflows.find((w) => w.id === id);
     if (!wf) return;
 
-    this.stoppingWorkflows.add(id);
-
-    // Stop the currently running task in the workflow, if any
-    if (wf.status === "running" && wf.currentStep >= 0 && wf.currentStep < wf.steps.length) {
-      const currentStep = wf.steps[wf.currentStep];
-      const currentTask = this.settings.tasks.find((t) => t.id === currentStep?.taskId);
-      if (currentTask?.status === "running") {
-        await this.killTask(currentTask.id);
-      }
-    }
-
-    if (wf.status === "running") {
-      wf.status = "failed";
-      const stepLabel = wf.currentStep >= 0 ? ` at step ${wf.currentStep + 1}/${wf.steps.length}` : "";
-      wf.steps.forEach((step) => {
-        const task = this.settings.tasks.find((t) => t.id === step.taskId);
-        if (task && task.status === "running") {
-          task.status = "failed";
-          task.output += "\n[workflow stopped manually]";
-        }
-      });
-      await this.saveSettings();
-      new Notice(`AutoOC: ⏹ Workflow "${wf.name}" stopped${stepLabel}.`);
-    }
-
-    this.stoppingWorkflows.delete(id);
+    const context = (this as any).workflowRuntime?.get(id);
+    if (!context) return;
+    const execution = wf.legacyExecution;
+    const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
+    const attempt = step?.taskId ? this.legacyAttempts?.get(step.taskId) : undefined;
+    const owned = !!attempt && attempt.owner?.context === context && attempt.identity.workflowId === id &&
+      attempt.identity.stepId === step?.id && attempt.identity.stepIndex === stepIndex;
+    // Invalidate before awaiting a handle. Never sweep tasks by shared taskId.
+    wf.status = "failed";
+    this.workflowDelayControllers.get(id)?.abort();
+    if (owned) await this.killTask(attempt!.identity.taskId, {...attempt!.identity});
+    else if ((this as any).workflowRuntime?.get(id) === context) (this as any).workflowRuntime.delete(id);
+    if ((this as any).workflowRuntime?.has(id)) return;
+    await this.saveSettings();
+    if (wf.legacyExecution !== execution || (this as any).workflowRuntime?.has(id)) return;
+    new Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
 
   async runDueAll() {
@@ -4192,17 +4058,18 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async duplicateTask(task: ScheduledTask) {
+    const { runtimeExecution, legacyExecution, lastCodexThreadId, lastCodexTurnId,
+      pendingCodexApproval, ...definition } = task as ScheduledTask & { runtimeExecution?: unknown };
     const copy: ScheduledTask = {
-      ...task,
+      ...definition,
       id: generateId(),
       name: `${task.name} (copy)`,
+      scheduleDays: [...(task.scheduleDays || [])],
+      scheduleMonthDays: [...(task.scheduleMonthDays || [])],
       status: "pending",
       lastRun: "",
       output: "",
       createdAt: new Date().toISOString(),
-      lastCodexThreadId: undefined,
-      lastCodexTurnId: undefined,
-      pendingCodexApproval: undefined,
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
@@ -4245,11 +4112,21 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async duplicateWorkflow(workflow: Workflow) {
+    const { runtimeExecution, legacyExecution, ...definition } = workflow as Workflow & { runtimeExecution?: unknown };
     const copy: Workflow = {
-      ...workflow,
+      ...definition,
       id: generateId(),
       name: `${workflow.name} (copy)`,
-      steps: workflow.steps.map((step) => ({ ...step })),
+      steps: workflow.steps.map((step) => ({
+        ...step,
+        transitions: step.transitions?.map((transition) => ({ ...transition })),
+        position: step.position ? { ...step.position } : undefined,
+        status: "pending",
+        output: "",
+        lastRun: undefined,
+      })),
+      scheduleDays: [...(workflow.scheduleDays || [])],
+      scheduleMonthDays: [...(workflow.scheduleMonthDays || [])],
       status: "pending",
       currentStep: -1,
       createdAt: new Date().toISOString(),
@@ -4300,7 +4177,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const data: AutoOCExportFile = {
       autoOCExport: {
-        schemaVersion: "1.5.0",
+        schemaVersion: tasks.some((task) => task.taskKind === "copilot") ? "1.6.0" : "1.5.0",
         exportedAt: new Date().toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -4384,9 +4261,9 @@ export default class AutoOCPlugin extends Plugin {
     if (!data.autoOCExport) {
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
-    // Accept legacy schemas and the Codex-aware 1.5 schema.
+    // Accept legacy schemas, Codex 1.5 and Copilot 1.6 packages.
     const sv = data.autoOCExport.schemaVersion;
-    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0") {
+    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0" && sv !== "1.6.0") {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
@@ -4395,9 +4272,11 @@ export default class AutoOCPlugin extends Plugin {
 
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
-      if (importedTaskKind !== "opencode" && importedTaskKind !== "codex" && importedTaskKind !== "code") {
+      if (!["opencode", "codex", "copilot", "code"].includes(importedTaskKind)) {
         throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
       }
+      const copilotError = getCopilotTaskValidationError(et);
+      if (copilotError) throw new Error(`Task "${et.name}": ${copilotError}`);
       if (et.reasoningEffort !== undefined && (importedTaskKind !== "codex" || typeof et.reasoningEffort !== "string" || !et.reasoningEffort.trim())) {
         throw new Error(`Task "${et.name}" has reasoningEffort outside a Codex task.`);
       }
@@ -4407,10 +4286,12 @@ export default class AutoOCPlugin extends Plugin {
       const task: ScheduledTask = {
         id: generateId(),
         taskKind: importedTaskKind,
+        requiresAutoOCSecrets: et.requiresAutoOCSecrets,
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
         prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
-        model: importedTaskKind === "code" ? "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        model: importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        copilotAllowAllTools: importedTaskKind === "copilot" ? et.copilotAllowAllTools === true : undefined,
         agent: importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
         reasoningEffort: importedTaskKind === "codex" ? (et.reasoningEffort || this.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
@@ -4521,10 +4402,28 @@ export default class AutoOCPlugin extends Plugin {
     return { tasksImported, workflowsImported };
   }
 
+  async applyWorkflowCheckpoint(checkpoint: RunCheckpoint, expectedRunId: string, activelyExecuting = false) {
+    const index = this.settings.workflows.findIndex(w => w.id === checkpoint.workflowId);
+    if (index < 0) throw new Error("Workflow for execution progress is absent");
+    const projected = projectWorkflowProgress(this.settings.workflows[index], this.settings.tasks, this.settings, checkpoint, expectedRunId, activelyExecuting);
+    this.settings.workflows[index] = projected;
+    await this.saveSettings();
+  }
+
   async runWorkflow(workflow: Workflow) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+
+    if (this.settings.workflows.some(item => {
+      const execution = (item as any).runtimeExecution;
+      return execution && !["completed", "failed"].includes(execution.phase);
+    })) {
+      new Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
+      return;
+    }
 
     if (wf.status === "running") {
       new Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
@@ -4545,12 +4444,20 @@ export default class AutoOCPlugin extends Plugin {
       }
     }
 
+    if (this.pluginExecutionLease) {
+      const definition=prepareWorkflowDefinition(wf,this.settings.tasks,this.settings);
+      const vault=(this.app.vault.adapter as any).basePath;
+      if (supportsSharedWorkflow(definition,createWorkflowTaskAdapter(definition,vault))) {
+        await this.runSharedWorkflow(wf.id,undefined,false,true);
+        return;
+      }
+    }
+
+    wf.legacyExecution = {token:require("crypto").randomUUID()};
     // Initialize the runtime context that flows between steps.
     (this as any).workflowRuntime = (this as any).workflowRuntime || new Map();
-    (this as any).workflowRuntime.set(wf.id, {
-      stepOutputs: new Map<string, string>(),
-      stepIndex: 0,
-    });
+    const context = {stepOutputs:new Map<string, string>(),stepIndex:0};
+    (this as any).workflowRuntime.set(wf.id, context);
 
     wf.status = "running";
     wf.currentStep = 0;
@@ -4561,6 +4468,7 @@ export default class AutoOCPlugin extends Plugin {
       step.lastRun = "";
     });
     await this.saveSettings();
+    if ((this as any).workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     new Notice(`AutoOC: ⚡ Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
 
     // Find the entry step: one with no incoming transitions, or the first step.
@@ -4568,6 +4476,7 @@ export default class AutoOCPlugin extends Plugin {
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
+      if ((this as any).workflowRuntime.get(wf.id) !== context) return;
       new Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
@@ -4578,20 +4487,11 @@ export default class AutoOCPlugin extends Plugin {
   // step in the workflow. If multiple are candidates, picks the one with the
   // smallest position.x (visual order). Falls back to the first step.
   findEntryStep(wf: Workflow): WorkflowStep | null {
-    if (wf.steps.length === 0) return null;
-    const incoming = new Set<string>();
-    for (const s of wf.steps) {
-      for (const t of s.transitions || []) {
-        incoming.add(t.toStepId);
-      }
-    }
-    const candidates = wf.steps.filter((s) => !incoming.has(s.id));
-    if (candidates.length === 0) return wf.steps[0];
-    candidates.sort((a, b) => (a.position?.x ?? 0) - (b.position?.x ?? 0));
-    return candidates[0];
+    return findWorkflowEntry(wf.steps);
   }
 
   async runWorkflowStepById(workflowId: string, stepId: string): Promise<void> {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
     const wf = this.settings.workflows[wfIdx];
@@ -4622,50 +4522,17 @@ export default class AutoOCPlugin extends Plugin {
     lastSucceeded: boolean,
     transitions: WorkflowTransition[]
   ): Promise<{ nextStepId: string | null; reason: string }> {
-    if (!transitions || transitions.length === 0) {
-      // Default: linear +1 if it exists.
-      const next = wf.steps[currentStepIndex + 1];
-      if (next) return { nextStepId: next.id, reason: "linear" };
-      return { nextStepId: null, reason: "end" };
-    }
-    for (const t of transitions) {
-      const target = wf.steps.find((s) => s.id === t.toStepId);
-      if (!target) continue;
-      if (t.mode === "force" || t.forceContinue) {
-        return { nextStepId: t.toStepId, reason: "force" };
-      }
-      if (t.mode === "default") {
-        if (lastSucceeded) return { nextStepId: t.toStepId, reason: "default" };
-        continue;
-      }
-      if (t.mode === "eval") {
+    return resolveWorkflowTransition(wf.steps, currentStepIndex, lastOutput, lastSucceeded, transitions, this.getRuntimeOutputs(wf.id), {
+      evaluate: async (transition, target, input) => {
         new Notice(`AutoOC: Evaluating transition for "${wf.name}" → ${target.id}...`);
-        try {
-          const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-          const model = this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
-          const prompt = t.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
-          const evalFullPrompt = `${prompt}\n\nPrevious step output:\n---\n${lastOutput}\n---\n\nReply ONLY with YES or NO.`;
-          const evalResult = await this.evaluateWithOpencode(evalFullPrompt, model, cwd);
-          const isYes = /\bYES\b/i.test(evalResult.output) && !/\bNO\b/i.test(evalResult.output);
-          if (isYes) {
-            return { nextStepId: t.toStepId, reason: "eval:yes" };
-          }
-        } catch (err) {
-          new Notice(`AutoOC: eval error — ${String(err)}`);
-        }
-        continue;
-      }
-      if (t.mode === "conditional") {
-        try {
-          const ok = this.evaluateCondition(t.condition || "", lastOutput, this.getRuntimeOutputs(wf.id));
-          if (ok) return { nextStepId: t.toStepId, reason: "conditional:true" };
-        } catch (err) {
-          new Notice(`AutoOC: condition error — ${String(err)}`);
-        }
-        continue;
-      }
-    }
-    return { nextStepId: null, reason: "no-match" };
+        const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
+        const model = this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
+        const prompt = transition.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
+        const result = await this.evaluateWithOpencode(`${prompt}\n\nPrevious step output:\n---\n${input}\n---\n\nReply ONLY with YES or NO.`, model, cwd);
+        return result.output;
+      },
+      onError: (kind, error) => { new Notice(`AutoOC: ${kind} error — ${String(error)}`); },
+    });
   }
 
   getRuntimeOutputs(workflowId: string): Record<string, string> {
@@ -4682,29 +4549,11 @@ export default class AutoOCPlugin extends Plugin {
   // Variables exposed: input (last step output), outputs (map of stepId → output),
   // workflow (object with name/id), step (current step), require (Node require).
   evaluateCondition(expression: string, input: string, outputs: Record<string, string>): boolean {
-    if (!expression || !expression.trim()) return false;
-    const vm = require("vm");
-    const sandbox = {
-      input: input || "",
-      outputs,
-      String,
-      Number,
-      Boolean,
-      Array,
-      Object,
-      JSON,
-      Math,
-      Date,
-      RegExp,
-      console: { log: () => {} },
-    };
-    vm.createContext(sandbox);
-    const src = expression.trim().startsWith("return") ? `(function(){ ${expression} })()` : `(${expression})`;
-    const result = vm.runInContext(src, sandbox, { timeout: 500 });
-    return !!result;
+    return evaluateWorkflowCondition(expression, input, outputs);
   }
 
   async runWorkflowStep(wfIdx: number, stepIndex: number) {
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
@@ -4713,10 +4562,13 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       return;
     }
+    const context = (this as any).workflowRuntime?.get(wf.id);
     step.status = "running";
     step.lastRun = new Date().toISOString();
     step.output = "";
     await this.saveSettings();
+
+    if (!context || (this as any).workflowRuntime?.get(wf.id) !== context || wf.status !== "running") return;
 
     // Record the current step in the runtime.
     const rt = (this as any).workflowRuntime.get(wf.id);
@@ -4737,18 +4589,22 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDelayStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
-    const value = Math.max(0, step.delayValue || 0);
-    const unit = step.delayUnit || "seconds";
-    const ms = value * (unit === "hours" ? 3600_000 : unit === "minutes" ? 60_000 : 1000);
+    const spec = workflowDelay(step.delayValue, step.delayUnit);
     const ctx = (this as any).workflowRuntime.get(wf.id);
-    if (ctx) ctx.stepOutputs.set(step.id, `[delay ${value} ${unit}]`);
-    new Notice(`AutoOC: ⏱ Waiting ${value} ${unit} in "${wf.name}"...`);
-    if (this.stoppingWorkflows.has(wf.id)) {
-      await this.completeStep(wf, step, stepIndex, true, "[delay skipped: workflow stopped]");
-      return;
+    if (this.stoppingWorkflows.has(wf.id) || wf.status !== "running") return;
+    this.workflowDelayControllers.get(wf.id)?.abort();
+    const controller = new AbortController();
+    this.workflowDelayControllers.set(wf.id, controller);
+    new Notice(`AutoOC: ⏱ ${spec.output} in "${wf.name}"...`);
+    try {
+      await waitForWorkflowDelay(spec.milliseconds, controller.signal);
+      if (controller.signal.aborted || wf.status !== "running" || (this as any).workflowRuntime.get(wf.id) !== ctx) return;
+      await this.completeStep(wf, step, stepIndex, true, spec.output);
+    } catch (error) {
+      if (!controller.signal.aborted) throw error;
+    } finally {
+      if (this.workflowDelayControllers.get(wf.id) === controller) this.workflowDelayControllers.delete(wf.id);
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, ms));
-    await this.completeStep(wf, step, stepIndex, true, `[delay ${value} ${unit}]`);
   }
 
   async runCodeStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
@@ -4758,84 +4614,20 @@ export default class AutoOCPlugin extends Plugin {
     const inputVal = (ctx && ctx.stepOutputs.size > 0) ? Array.from(ctx.stepOutputs.values()).pop() : "";
     const outputs: Record<string, string> = {};
     if (ctx) for (const [k, v] of ctx.stepOutputs.entries()) outputs[k] = v;
-    const vm = require("vm");
-    const vaultBase = (this.app.vault.adapter as any).basePath || ".";
-    const defaultCwd = this.settings.workingDirectory || vaultBase;
-    const resolveInVault = (p: string) => {
-      const resolved = path.resolve(vaultBase, p || ".");
-      const root = path.resolve(vaultBase);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        throw new Error(`Path escapes vault: ${p}`);
-      }
-      return resolved;
-    };
-    const readText = (p: string) => fs.readFileSync(p, "utf8");
-    const writeText = (p: string, content: any) => {
-      fs.mkdirSync(path.dirname(p), { recursive: true });
-      fs.writeFileSync(p, String(content), "utf8");
-      return p;
-    };
-    const sandbox: Record<string, any> = {
-      input: inputVal,
-      outputs,
-      String, Number, Boolean, Array, Object, JSON, Math, Date, RegExp,
-      console: { log: () => {} },
-    };
-    if (step.codeAllowVault) {
-      sandbox.vault = {
-        basePath: vaultBase,
-        resolve: (p: string) => resolveInVault(p),
-        read: (p: string) => readText(resolveInVault(p)),
-        write: (p: string, content: any) => writeText(resolveInVault(p), content),
-        append: (p: string, content: any) => {
-          const full = resolveInVault(p);
-          fs.mkdirSync(path.dirname(full), { recursive: true });
-          fs.appendFileSync(full, String(content), "utf8");
-          return full;
-        },
-        exists: (p: string) => fs.existsSync(resolveInVault(p)),
-        list: (p = ".") => fs.readdirSync(resolveInVault(p)),
-      };
-    }
-    if (step.codeAllowFiles) {
-      sandbox.files = {
-        cwd: defaultCwd,
-        resolve: (p: string) => path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p || "."),
-        read: (p: string) => readText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        write: (p: string, content: any) => writeText(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p), content),
-        append: (p: string, content: any) => {
-          const full = path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p);
-          fs.mkdirSync(path.dirname(full), { recursive: true });
-          fs.appendFileSync(full, String(content), "utf8");
-          return full;
-        },
-        exists: (p: string) => fs.existsSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-        list: (p = ".") => fs.readdirSync(path.isAbsolute(p) ? path.resolve(p) : path.resolve(defaultCwd, p)),
-      };
-    }
-    if (step.codeAllowTerminal) {
-      const { execSync } = require("child_process");
-      sandbox.terminal = {
-        run: (command: string, options: { cwd?: string; timeoutMs?: number } = {}) => execSync(String(command), {
-          cwd: options.cwd ? (path.isAbsolute(options.cwd) ? options.cwd : path.resolve(defaultCwd, options.cwd)) : defaultCwd,
-          timeout: Math.min(Math.max(options.timeoutMs || 30_000, 1_000), 600_000),
-          encoding: "utf8",
-        }),
-      };
-    }
     try {
-      const context = vm.createContext(sandbox);
-      const code = step.code || "";
-      // Expose the configured variable names by aliasing `input` and `outputs`.
-      // We prepend a small preamble so the user can name their input/output
-      // variables freely while we still inject the standard ones.
-      const preamble = `var ${inputVar} = input; var ${outputVar} = "";`;
-      const result = vm.runInContext(preamble + "\n" + code + "\n;" + outputVar, context, { timeout: 900_000 });
-      const out = String(result == null ? "" : result);
+      const vaultBase = (this.app.vault.adapter as any).basePath || ".";
+      const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCode({
+        ...step, vaultBase, cwd: this.settings.workingDirectory || vaultBase,
+        code: step.code || "", input: inputVal, outputs,
+        codeInputVar: inputVar, codeOutputVar: outputVar,
+        onVaultMutation,
+      }));
+      if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
       if (ctx) ctx.stepOutputs.set(step.id, out);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
       await this.completeStep(wf, step, stepIndex, true, out);
     } catch (err) {
+      if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
       const msg = `[code error: ${String(err)}]`;
       if (ctx) ctx.stepOutputs.set(step.id, msg);
       new Notice(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`);
@@ -4844,6 +4636,12 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runTaskStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    const executionContext = (this as any).workflowRuntime?.get(wf.id);
+    const isCurrentExecution = () => executionContext !== undefined &&
+      (this as any).workflowRuntime?.get(wf.id) === executionContext &&
+      this.settings.workflows.find(w => w.id === wf.id)?.status === "running" &&
+      !this.stoppingWorkflows.has(wf.id);
+    if (!isCurrentExecution()) return;
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
@@ -4854,39 +4652,19 @@ export default class AutoOCPlugin extends Plugin {
     const task = this.settings.tasks[taskIdx];
     const taskOverrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {};
 
-    // Apply handoff from the most recent task/code step in the runtime.
-    if (wf.handoffOutput) {
-      const ctx = (this as any).workflowRuntime.get(wf.id);
-      if (ctx && ctx.stepOutputs.size > 0) {
-        const stepOutputs = ctx.stepOutputs as Map<string, string>;
-        const entries = Array.from(stepOutputs.entries());
-        const [previousStepId, previousOutputRaw] = entries[entries.length - 1];
-        const previousStep = wf.steps.find((s) => s.id === previousStepId);
-        const sourceLine = previousStep
-          ? `Source: step "${previousStep.name || previousStepId}" (${previousStep.stepKind}${previousStep.taskId ? ` -> task ${previousStep.taskId}` : ""})`
-          : `Source: step ${previousStepId}`;
-        const cleanOutput = extractContextForHandoff(String(previousOutputRaw || ""));
-        const contextBlock = [
-          "",
-          "=== WORKFLOW HANDOFF CONTEXT ===",
-          sourceLine,
-          "The previous step's output below is the PRIMARY INPUT for this task.",
-          "Touched files are DIAGNOSTIC ONLY — do not re-read them unless this task explicitly asks.",
-          "",
-          cleanOutput || String(previousOutputRaw || "").trim(),
-          "=== END WORKFLOW HANDOFF CONTEXT ===",
-        ].join("\n");
-        const capped = contextBlock.length > HANDOFF_CONTEXT_LIMIT
-          ? contextBlock.slice(0, HANDOFF_CONTEXT_LIMIT) + `\n... [truncated at ${HANDOFF_CONTEXT_LIMIT} chars]`
-          : contextBlock;
-        taskOverrides.prompt = `${task.prompt}\n${capped}`;
-      }
+    const entries = Array.from(executionContext.stepOutputs.entries()) as Array<[string, string]>;
+    const previous = entries.length ? entries[entries.length - 1] : undefined;
+    if (wf.handoffOutput && previous) {
+      taskOverrides.prompt = workflowTaskPrompt(task.prompt, wf, {stepId:previous[0],output:previous[1]});
     }
 
     wf.currentStep = stepIndex;
     await this.saveSettings();
-
+    if (!isCurrentExecution()) return;
+    let resultConsumed = false;
     await this.runTask(task, async (completedTask, exitCode) => {
+      if (!isCurrentExecution() || resultConsumed) return;
+      resultConsumed = true;
       const currentWf = this.settings.workflows.find((w) => w.id === wf.id);
       if (!currentWf || currentWf.status !== "running" || this.stoppingWorkflows.has(currentWf.id)) return;
       const currentStep = currentWf.steps[stepIndex];
@@ -4894,23 +4672,10 @@ export default class AutoOCPlugin extends Plugin {
       const ctx = (this as any).workflowRuntime.get(currentWf.id);
       if (ctx) ctx.stepOutputs.set(currentStep.id, lastOutput);
       const lastSucceeded = exitCode === 0 && completedTask.status !== "failed";
+      currentStep.status = lastSucceeded ? "completed" : "failed";
+      currentStep.output = lastOutput;
 
-      const transitions = currentStep.transitions && currentStep.transitions.length > 0
-        ? currentStep.transitions
-        : (() => {
-            // Legacy fallback: synthesize a single transition from the
-            // current step to the next step in array order using the
-            // transitionMode field.
-            const next = currentWf.steps[stepIndex + 1];
-            if (!next) return [];
-            const mode = (currentStep.transitionMode as TransitionMode) || "default";
-            return [{
-              toStepId: next.id,
-              mode,
-              evaluatePrompt: currentStep.evaluatePrompt,
-              forceContinue: currentStep.forceContinue,
-            } as WorkflowTransition];
-          })();
+      const transitions = workflowStepTransitions(currentWf.steps, stepIndex) as WorkflowTransition[];
 
       const { nextStepId, reason } = await this.resolveNextStep(
         currentWf,
@@ -4920,6 +4685,7 @@ export default class AutoOCPlugin extends Plugin {
         lastSucceeded,
         transitions
       );
+      if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
 
       if (!nextStepId) {
@@ -4952,40 +4718,41 @@ export default class AutoOCPlugin extends Plugin {
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       currentWf.currentStep = nextIdx;
       await this.saveSettings();
+      if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
       new Notice(`AutoOC: ⚡ Workflow "${currentWf.name}" → step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
+        if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
       }, 200);
-    }, taskOverrides);
+    }, taskOverrides, {workflowId:wf.id,stepId:step.id,stepIndex,context:executionContext});
   }
 
   // Complete a non-task step and move to the next one.
   async completeStep(wf: Workflow, step: WorkflowStep, stepIndex: number, succeeded: boolean, output: string) {
     const ctx = (this as any).workflowRuntime.get(wf.id);
+    const isCurrentExecution = () => ctx !== undefined && (this as any).workflowRuntime.get(wf.id) === ctx &&
+      this.settings.workflows.find(w => w.id === wf.id)?.status === "running" && !this.stoppingWorkflows.has(wf.id);
+    if (!isCurrentExecution()) return;
     if (ctx) ctx.stepOutputs.set(step.id, output);
     step.status = succeeded ? "completed" : "failed";
     step.output = output;
     step.lastRun = new Date().toISOString();
-    const transitions = step.transitions && step.transitions.length > 0
-      ? step.transitions
-      : (() => {
-          const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
-          if (!wfRef) return [];
-          const next = wfRef.steps[stepIndex + 1];
-          if (!next) return [];
-          return [{ toStepId: next.id, mode: "default" as TransitionMode }];
-        })();
+    const transitions = workflowStepTransitions(wf.steps, stepIndex) as WorkflowTransition[];
 
     const { nextStepId, reason } = await this.resolveNextStep(
       wf, step, stepIndex, output, succeeded, transitions
     );
+    if (!isCurrentExecution()) return;
 
     if (!nextStepId) {
       const wfRef = this.settings.workflows.find((w) => w.id === wf.id);
       if (wfRef) {
         wfRef.status = succeeded ? "completed" : "failed";
         await this.saveSettings();
+        // Terminal state permits another run while persistence is pending.
+        // Ownership (not running status) controls cleanup and terminal notices.
+        if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
         new Notice(succeeded
           ? `AutoOC: ✅ Workflow "${wfRef.name}" completed.`
           : `AutoOC: ❌ Workflow "${wfRef.name}" failed.`);
@@ -4999,8 +4766,9 @@ export default class AutoOCPlugin extends Plugin {
       if (nextIdx >= 0) {
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
+        if (!isCurrentExecution()) return;
         new Notice(`AutoOC: ⚡ Workflow "${wfRef.name}" → step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
-        setTimeout(() => this.runWorkflowStepById(wf.id, nextStepId), 200);
+        setTimeout(() => { if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId); }, 200);
       }
     }
   }
@@ -6585,6 +6353,19 @@ class AutoOCView extends ItemView {
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
+    const stopIdentity = this.plugin.taskStopIdentity(task);
+    const stopTask = async (button: HTMLButtonElement) => {
+      button.disabled = true;
+      const label = button.textContent;
+      try {
+        const result = await this.plugin.killTask(task.id, stopIdentity);
+        if (result === "stop-requested") button.textContent = "Stop requested…";
+      } catch (error) {
+        button.disabled = false;
+        button.textContent = label;
+        new Notice(`AutoOC: ${String(error)}`);
+      }
+    };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
     card.setAttr("data-auto-oc-task-id", task.id);
     
@@ -6596,12 +6377,12 @@ class AutoOCView extends ItemView {
         ? "Code"
         : task.taskKind === "codex"
           ? (task.interactiveTerminal ? "ChatGPT / Codex" : "Codex")
-          : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
+          : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`,
     });
     
     const badge = summary.createEl("span", {
-      text: task.pendingCodexApproval ? "waiting approval" : task.status,
+      text: task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -6617,8 +6398,7 @@ class AutoOCView extends ItemView {
       btnQuickStop.title = "Terminate process now";
       btnQuickStop.onclick = async (e) => {
         e.stopPropagation();
-        btnQuickStop.disabled = true;
-        await this.plugin.killTask(task.id);
+        await stopTask(btnQuickStop);
       };
     }
     if (task.pendingCodexApproval) {
@@ -6666,7 +6446,8 @@ class AutoOCView extends ItemView {
     const meta = details.createDiv("auto-oc-card-meta");
     const modelLabel = task.taskKind === "codex"
       ? this.plugin.availableCodexModels.find((m) => m.value === task.model)?.label ?? task.model ?? "Automatic"
-      : this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
+      : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic"
+        : this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🗂 ${task.area?.trim() || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
@@ -6674,6 +6455,9 @@ class AutoOCView extends ItemView {
       meta.createEl("span", { text: `✦ Codex · ${modelLabel || "Automatic"}` });
       if (task.interactiveTerminal) meta.createEl("span", { text: "ChatGPT app task" });
       meta.createEl("span", { text: `🧠 ${task.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort}` });
+    } else if (task.taskKind === "copilot") {
+      meta.createEl("span", { text: `GitHub Copilot CLI · ${modelLabel}` });
+      meta.createEl("span", { text: task.copilotAllowAllTools ? "Tools allowed automatically" : "Read-only tools" });
     } else {
       if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
       else meta.createEl("span", { text: "OpenCode" });
@@ -6738,9 +6522,7 @@ class AutoOCView extends ItemView {
       btnStop.title = "Terminate process now";
       btnStop.onclick = async (e) => {
         e.stopPropagation();
-        btnStop.disabled = true;
-        btnStop.textContent = "Stopping…";
-        await this.plugin.killTask(task.id);
+        await stopTask(btnStop);
       };
     }
     if (task.pendingCodexApproval) {
@@ -6954,13 +6736,14 @@ class AutoOCView extends ItemView {
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
-    btnQuickRun.title = workflow.status === "running" ? "Running" : "Run workflow";
-    btnQuickRun.disabled = workflow.status === "running";
-    btnQuickRun.onclick = (e) => {
+    btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
+    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready","in_flight"].includes((workflow as any).runtimeExecution?.phase);
+    btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runWorkflow(workflow);
+      try { await this.plugin.runWorkflow(workflow); }
+      catch (error) { new Notice(this.plugin.redactSecrets(String(error))); }
     };
-    if (workflow.status === "running") {
+    if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
       btnQuickStop.title = "Stop workflow now";
       btnQuickStop.onclick = async (e) => {
@@ -7029,7 +6812,7 @@ class AutoOCView extends ItemView {
       const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
       const stepName = stepLabel(step);
       const stepItem = stepsDiv.createDiv("auto-oc-workflow-task-detail");
-      const isCurrent = workflow.status === "running" && workflow.currentStep === i;
+      const isCurrent = this.plugin.isWorkflowExecuting(workflow.id) && workflow.currentStep === i;
       const isDone = workflow.currentStep > i || (workflow.status === "completed" && workflow.currentStep >= i);
       const icon = isDone ? "✅" : isCurrent ? "⏳" : "⬜";
 
@@ -7238,17 +7021,32 @@ class AutoOCView extends ItemView {
 
     const actions = details.createDiv("auto-oc-card-actions");
 
+    const durableExecution=(workflow as any).runtimeExecution;
+    const needsRecovery=durableExecution && ["ready","in_flight"].includes(durableExecution.phase);
+    if (needsRecovery && !this.plugin.isWorkflowExecuting(workflow.id)) {
+      const uncertain=durableExecution.phase === "in_flight";
+      actions.createEl("span", {text:uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps."});
+      const recover=actions.createEl("button", {text:uncertain ? "Verify previous result" : "Resume saved execution"});
+      recover.onclick=async(e)=>{
+        e.stopPropagation();recover.disabled=true;
+        try {await this.plugin.recoverSharedWorkflow(workflow.id,durableExecution.runId);}
+        catch(error) {new Notice(this.plugin.redactSecrets(String(error)));}
+        finally {this.refresh();}
+      };
+    }
+
     const btnRun = actions.createEl("button", {
-      text: workflow.status === "running" ? "⏳ Running…" : "▶ Run Workflow",
+      text: this.plugin.isWorkflowExecuting(workflow.id) ? "⏳ Running…" : "▶ Run Workflow",
       cls: "auto-oc-btn-run",
     });
-    btnRun.disabled = workflow.status === "running";
-    btnRun.onclick = (e) => {
+    btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
+    btnRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runWorkflow(workflow);
+      try { await this.plugin.runWorkflow(workflow); }
+      catch (error) { new Notice(this.plugin.redactSecrets(String(error))); }
     };
 
-    if (workflow.status === "running") {
+    if (this.plugin.isWorkflowExecuting(workflow.id)) {
       const btnStop = actions.createEl("button", {
         text: "⏹ Stop",
         cls: "auto-oc-btn-stop",
@@ -7458,6 +7256,7 @@ class VisualBuilderModal extends Modal {
           availableModels: this.plugin.availableModels,
           availableCodexModels: this.plugin.availableCodexModels,
           defaultAiEngine: this.plugin.settings.defaultAiEngine,
+          defaultCopilotModel: this.plugin.settings.defaultCopilotModel,
           defaultCodexModel: this.plugin.settings.defaultCodexModel,
           defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
           pluginVersion: this.plugin.manifest.version,
@@ -7481,6 +7280,7 @@ class VisualBuilderModal extends Modal {
         availableModels: this.plugin.availableModels,
         availableCodexModels: this.plugin.availableCodexModels,
         defaultAiEngine: this.plugin.settings.defaultAiEngine,
+        defaultCopilotModel: this.plugin.settings.defaultCopilotModel,
         defaultCodexModel: this.plugin.settings.defaultCodexModel,
         defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
         pluginVersion: this.plugin.manifest.version,
@@ -7511,6 +7311,10 @@ class VisualBuilderModal extends Modal {
       new Notice("Visual Builder: invalid state payload.");
       return;
     }
+    for (const task of state.tasks) {
+      const error = getCopilotTaskValidationError(task);
+      if (error) { new Notice(`Visual Builder: ${error}`); return; }
+    }
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
     const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
@@ -7526,12 +7330,15 @@ class VisualBuilderModal extends Modal {
       const lastRun = existing?.lastRun || "";
       const output = existing?.output || "";
       return {
+        ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
         taskKind,
         name: t.name || "Unnamed",
         area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
         prompt: t.prompt || "",
-        model: t.model !== undefined ? t.model : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
+        model: t.model !== undefined ? t.model : taskKind === "copilot" ? existing?.model ?? this.plugin.settings.defaultCopilotModel ?? "" : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
+        copilotAllowAllTools: taskKind === "copilot" ? (t.copilotAllowAllTools ?? existing?.copilotAllowAllTools) === true : undefined,
+        requiresAutoOCSecrets: t.requiresAutoOCSecrets ?? existing?.requiresAutoOCSecrets,
         agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
         reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
@@ -7573,6 +7380,7 @@ class VisualBuilderModal extends Modal {
       const status = existing?.status || "pending";
       const currentStep = existing?.currentStep ?? -1;
       return {
+        ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
         name: w.name || "Unnamed",
         area: w.area !== undefined ? (w.area || "") : (existing?.area || ""),
@@ -7917,7 +7725,7 @@ class CreateTaskModal extends Modal {
             prompt: "",
             model: plugin.settings.defaultAiEngine === "codex"
               ? plugin.getEffectiveCodexModel()
-              : plugin.getEffectiveDefaultModel(),
+              : plugin.settings.defaultAiEngine === "copilot" ? plugin.settings.defaultCopilotModel || "" : plugin.getEffectiveDefaultModel(),
             agent: plugin.getEffectiveAgent(),
             reasoningEffort: plugin.settings.defaultCodexReasoningEffort,
             useRalphLoop: false,
@@ -7956,20 +7764,29 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl)
       .setName("Task type")
-      .setDesc("Choose OpenCode, Codex in ChatGPT, an interactive OpenCode CLI, or local JavaScript.")
+      .setDesc("Choose OpenCode, Codex in ChatGPT, GitHub Copilot CLI, an interactive OpenCode CLI, or local JavaScript.")
       .addDropdown((dd) => {
         dd.addOption("opencode", "OpenCode task");
         dd.addOption("codex", "Codex task");
         dd.addOption("codex-app", "ChatGPT / Codex task");
+        dd.addOption("copilot", "GitHub Copilot CLI task");
         dd.addOption("code", "Code task");
         dd.addOption("cli", "OpenCode CLI task");
         dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v === "code" ? "code" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
+          this.draft.taskKind = v === "code" ? "code" : v === "copilot" ? "copilot" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
           this.draft.interactiveTerminal = v === "cli" || v === "codex-app";
           if (v === "codex" || v === "codex-app") {
             this.draft.model = "";
             this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
+          } else if (v === "copilot") {
+            this.draft.model = this.plugin.settings.defaultCopilotModel || "";
+            this.draft.agent = "";
+            this.draft.reasoningEffort = undefined;
+            this.draft.useRalphLoop = false;
+            this.draft.forceModel = false;
+            this.draft.branch = "";
+            this.draft.createBranch = false;
           } else if (v === "opencode" || v === "cli") {
             this.draft.model = this.plugin.getEffectiveDefaultModel();
           }
@@ -8034,13 +7851,13 @@ class CreateTaskModal extends Modal {
       promptNotice.style.display = "none";
       new Setting(contentEl)
         .setName("Prompt / Goal")
-        .setDesc(`Text to send to ${taskKind === "codex" ? "Codex" : "OpenCode"}`)
+        .setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`)
         .addTextArea((ta) => {
           const updatePromptNotice = (value: string) => {
             if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
               ta.inputEl.addClass("auto-oc-prompt-too-long");
               promptNotice.setText(
-                `CLI prompts over ${SAFE_CLI_PROMPT_LENGTH} characters are saved to a temporary workspace file, the OpenCode TUI is instructed to read it, and the file is deleted after 1 minute.`,
+                "On Windows, interactive CLI prompts are kept in an ignored session directory until the CLI exits. Launch confirmation does not mean the agent has finished the task.",
               );
               promptNotice.style.display = "block";
             } else {
@@ -8234,6 +8051,8 @@ class CreateTaskModal extends Modal {
           dd.setValue(current || "");
           dd.onChange((value) => (this.draft.reasoningEffort = value));
         });
+    } else if (taskKind === "copilot") {
+      addCopilotTaskSettings(contentEl, this.draft, this.plugin.settings.defaultCopilotModel);
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
       new Setting(contentEl)
@@ -8432,6 +8251,8 @@ class CreateTaskModal extends Modal {
                 taskKind: savingTaskKind,
                 interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
                 reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : undefined,
+                copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
+                ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
                 status: existing.status,
                 lastRun: existing.lastRun,
                 output: existing.output,
@@ -8449,6 +8270,7 @@ class CreateTaskModal extends Modal {
               area: this.draft.area ?? "",
               agent: savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
               reasoningEffort: savingTaskKind === "codex" ? (this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
+              copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
               forceModel: savingTaskKind === "opencode" ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
@@ -10044,7 +9866,7 @@ class ImportModal extends Modal {
       return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
     }
     const sv = data.autoOCExport.schemaVersion;
-    const SUPPORTED = ["1.0", "1.4.0", "1.5.0"];
+    const SUPPORTED = ["1.0", "1.4.0", "1.5.0", "1.6.0"];
     if (!sv) {
       errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
     } else if (!SUPPORTED.includes(sv)) {
@@ -10083,9 +9905,11 @@ class ImportModal extends Modal {
           errors.push(where + ".prompt is missing or empty.");
         }
         const taskKind = t.taskKind || "opencode";
-        if (!["opencode", "codex", "code"].includes(taskKind)) {
-          errors.push(where + ".taskKind is invalid. Expected opencode, codex, or code.");
+        if (!["opencode", "codex", "copilot", "code"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, codex, copilot, or code.");
         }
+        const copilotError = getCopilotTaskValidationError(t);
+        if (copilotError) errors.push(where + ": " + copilotError);
         if (t.reasoningEffort !== undefined && (taskKind !== "codex" || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
           errors.push(where + ".reasoningEffort is only valid for Codex tasks.");
         }
@@ -10353,8 +10177,10 @@ class LiveLogModal extends Modal {
     // Elapsed timer line
     const elapsedEl = header.createEl("p", { cls: "auto-oc-log-elapsed" });
     const updateElapsed = () => {
+      this.task = this.plugin.settings.tasks.find(task => task.id === this.task.id) || this.task;
       if (!this.task.lastRun) { elapsedEl.textContent = ""; return; }
-      const secs = Math.floor((Date.now() - new Date(this.task.lastRun).getTime()) / 1000);
+      const secs = taskElapsedSeconds(this.task);
+      if (secs === undefined) { elapsedEl.textContent = "⏱ Elapsed time: unavailable"; return; }
       const min = Math.floor(secs / 60);
       const sec = secs % 60;
       elapsedEl.textContent = `⏱ Elapsed time: ${min}m ${sec}s`;
@@ -11027,13 +10853,16 @@ class AutoOCSettingTab extends PluginSettingTab {
       .addDropdown((dropdown) => dropdown
         .addOption("opencode", "OpenCode")
         .addOption("codex", "Codex / ChatGPT")
+        .addOption("copilot", "GitHub Copilot CLI")
         .setValue(this.plugin.settings.defaultAiEngine)
         .onChange(async (value) => {
-          if (value === "opencode" || value === "codex") {
+          if (value === "opencode" || value === "codex" || value === "copilot") {
             this.plugin.settings.defaultAiEngine = value;
             await this.plugin.saveSettings();
           }
         }));
+
+    addCopilotGlobalSettings(containerEl, this.plugin);
 
     containerEl.createEl("h3", { text: "Codex / ChatGPT" });
     new Setting(containerEl)
@@ -11131,7 +10960,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Working Directory")
       .setDesc(
-        "Directory from which to launch OpenCode or Codex (empty = vault's current directory)"
+        "Directory from which to launch OpenCode, Codex or GitHub Copilot CLI (empty = vault's current directory)"
       )
       .addText((text) =>
         text

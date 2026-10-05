@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import { StringDecoder } from "string_decoder";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -23,10 +24,18 @@ export interface CodexApprovalRequest {
 
 export interface CodexRunResult {
   output: string;
+  transcript?: string;
   threadId: string;
   turnId: string;
   status: string;
   error?: string;
+}
+
+function codexResultOutput(messages: Array<{text:string;phase?:string;completed:boolean}>, status:string) {
+  const transcript=messages.map(item=>item.text).filter(Boolean).join("\n\n").trim();
+  const finals=messages.filter(item=>item.completed && item.phase==="final_answer");
+  const output=status==="completed" && finals.length ? finals.map(item=>item.text).join("\n\n").trim() : transcript;
+  return {output,...(output!==transcript?{transcript}:{})};
 }
 
 interface JsonRpcMessage {
@@ -46,6 +55,8 @@ interface PendingRequest {
 /** Small JSON-lines peer used by Codex App Server's stdio transport. */
 export class JsonLineRpcPeer {
   private buffer = "";
+  // stdout may split a UTF-8 character across data events. Keep bytes per peer.
+  private readonly decoder = new StringDecoder("utf8");
   private nextId = 1;
   private pending = new Map<string | number, PendingRequest>();
 
@@ -55,7 +66,7 @@ export class JsonLineRpcPeer {
   ) {}
 
   feed(chunk: string | Buffer): void {
-    this.buffer += chunk.toString();
+    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     while (true) {
       const newline = this.buffer.indexOf("\n");
       if (newline < 0) return;
@@ -164,6 +175,11 @@ export function buildCodexThreadUrl(threadId: string): string {
   return `codex://threads/${encodeURIComponent(threadId)}`;
 }
 
+export function openCodexThread(threadId:string):Promise<void> {
+  if(!threadId?.trim())throw new Error("Exact Codex thread identity is required");
+  return openCodexUrl(buildCodexThreadUrl(threadId));
+}
+
 function openCodexUrl(url: string): Promise<void> {
   const launcher = process.platform === "win32"
     ? {
@@ -217,11 +233,14 @@ export class CodexAppServerClient {
   private disposed = false;
   private stderr = "";
   private output = "";
+  private agentMessages = new Map<string, { text: string; phase?: string; completed: boolean }>();
   private threadId = "";
   private turnId = "";
   private completionResolve?: (result: CodexRunResult) => void;
   private completionReject?: (error: Error) => void;
   private approvals = new Map<string | number, CodexApprovalRequest>();
+  private reconcileTimer: ReturnType<typeof setInterval> | null = null;
+  private reconciling = false;
 
   constructor(
     private readonly bin: string,
@@ -230,7 +249,8 @@ export class CodexAppServerClient {
       onOutput?: (output: string) => void;
       onApproval?: (approval: CodexApprovalRequest) => void;
       onDiagnostic?: (message: string) => void;
-      onStarted?: (ids: { threadId: string; turnId: string }) => void;
+      onThreadCreated?: (ids: { threadId: string }) => Promise<void>;
+      onStarted?: (ids: { threadId: string; turnId: string }) => void | Promise<void>;
     } = {},
   ) {}
 
@@ -302,24 +322,35 @@ export class CodexAppServerClient {
     return threadId;
   }
 
-  async run(prompt: string, model?: string, effort?: string): Promise<CodexRunResult> {
+  async run(
+    prompt: string,
+    model?: string,
+    effort?: string,
+    approvalPolicy: "on-request" | "never" = "on-request",
+  ): Promise<CodexRunResult> {
     await this.initialize();
     this.output = "";
+    this.agentMessages.clear();
+    this.turnId = "";
     const threadResponse = await this.peer!.request("thread/start", {
       cwd: this.cwd,
       model: model || null,
-      approvalPolicy: "on-request",
+      approvalPolicy,
       sandbox: "workspace-write",
       ephemeral: false,
       serviceName: "AutoOC",
     });
     this.threadId = threadResponse?.thread?.id || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
+    // Persist identity before starting any agent effects. Failure stops here.
+    await this.callbacks.onThreadCreated?.({ threadId: this.threadId });
 
     const completion = new Promise<CodexRunResult>((resolve, reject) => {
       this.completionResolve = resolve;
       this.completionReject = reject;
     });
+    // A host may still be persisting identity when transport completion fails.
+    void completion.catch(() => {});
     let turnResponse: any;
     try {
       turnResponse = await this.peer!.request("turn/start", {
@@ -327,7 +358,7 @@ export class CodexAppServerClient {
         input: [{ type: "text", text: prompt }],
         model: model || null,
         effort: effort || null,
-        approvalPolicy: "on-request",
+        approvalPolicy,
         cwd: this.cwd,
       });
     } catch (error) {
@@ -337,8 +368,59 @@ export class CodexAppServerClient {
     }
     this.turnId = turnResponse?.turn?.id || "";
     if (!this.turnId) throw new Error("Codex did not return a turn id");
-    this.callbacks.onStarted?.({ threadId: this.threadId, turnId: this.turnId });
+    await this.callbacks.onStarted?.({ threadId: this.threadId, turnId: this.turnId });
+    if (this.completionResolve) {
+      this.reconcileTimer = setInterval(() => { void this.reconcileTurn(); }, 30_000);
+      this.reconcileTimer.unref?.();
+    }
     return completion;
+  }
+
+  private stopReconciliation(): void {
+    if (this.reconcileTimer) clearInterval(this.reconcileTimer);
+    this.reconcileTimer = null;
+  }
+
+  private async reconcileTurn(): Promise<void> {
+    if (this.disposed || this.reconciling || !this.completionResolve || !this.peer || !this.turnId) return;
+    this.reconciling = true;
+    const threadId = this.threadId, turnId = this.turnId;
+    try {
+      const turn = await this.readExistingTurn(threadId, turnId);
+      if (this.disposed || !this.completionResolve || threadId !== this.threadId || turnId !== this.turnId) return;
+      if (!turn || !["completed", "failed", "interrupted"].includes(turn.status)) return;
+      for (const item of turn.items || []) {
+        if (item.type === "agentMessage") this.handleMessage({ method: "item/completed", params: { threadId, item } });
+      }
+      this.handleMessage({ method: "turn/completed", params: { threadId, turn } });
+    } catch {
+      // A transient read failure is not evidence that the agent has stopped.
+      this.callbacks.onDiagnostic?.("[AutoOC] Could not reconcile Codex turn; retaining current state.\n");
+    } finally {
+      this.reconciling = false;
+    }
+  }
+
+  // Read only: reconnecting must never create a new thread or start a turn.
+  // Absence/mismatch is uncertainty, not evidence that effects did not occur.
+  async readExistingTurn(threadId: string, turnId: string): Promise<any> {
+    if (!threadId?.trim() || !turnId?.trim()) throw new Error("Exact Codex thread and turn identities are required");
+    await this.initialize();
+    const result = await this.peer!.request("thread/read", {threadId,includeTurns:true}, 15_000);
+    if (result?.thread?.id !== threadId) throw new Error("Codex thread identity mismatch");
+    const matches = result.thread.turns?.filter((turn:any) => turn.id === turnId);
+    if (!Array.isArray(matches) || matches.length !== 1) throw new Error("Exact Codex turn is unavailable");
+    return matches[0];
+  }
+
+  async readExistingResult(threadId:string,turnId:string):Promise<CodexRunResult> {
+    const turn=await this.readExistingTurn(threadId,turnId);
+    const messages=new Map<string,{text:string;phase?:string;completed:boolean}>();
+    for(const item of turn.items || []) if(item.type==="agentMessage" && typeof item.text==="string") {
+      messages.set(String(item.id || "legacy"),{text:item.text,phase:item.phase,completed:true});
+    }
+    const status=String(turn.status || "unknown");
+    return {...codexResultOutput([...messages.values()],status),threadId,turnId,status,error:turn.error?.message || turn.error?.additionalDetails};
   }
 
   getIds(): { threadId: string; turnId: string } {
@@ -372,6 +454,7 @@ export class CodexAppServerClient {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.stopReconciliation();
     this.peer?.rejectAll(new Error("Codex client closed"));
     this.completionReject?.(new Error("Codex client closed"));
     this.completionReject = undefined;
@@ -394,25 +477,42 @@ export class CodexAppServerClient {
     if (message.method === "item/agentMessage/delta") {
       const delta = String(message.params?.delta || "");
       if (delta) {
-        this.output += delta;
-        this.callbacks.onOutput?.(this.output);
+        const id = String(message.params?.itemId || "legacy");
+        const item = this.agentMessages.get(id) || { text: "", completed: false };
+        if (!item.completed) {
+          item.text += delta;
+          this.agentMessages.set(id, item);
+          this.publishAgentMessages();
+        }
       }
       return;
     }
-    if (message.method === "item/completed" && !this.output) {
+    if (message.method === "item/started" || message.method === "item/completed") {
       const item = message.params?.item;
       if (item?.type === "agentMessage" && typeof item.text === "string") {
-        this.output = item.text;
-        this.callbacks.onOutput?.(this.output);
+        const id = String(item.id || "legacy");
+        const previous = this.agentMessages.get(id);
+        const completed = message.method === "item/completed";
+        // item/completed is authoritative, including when a stream was retried
+        // or some deltas were missing. Never append its full text to a draft.
+        this.agentMessages.set(id, {
+          text: completed ? item.text : (previous?.text ?? item.text),
+          phase: item.phase ?? previous?.phase,
+          completed: completed || !!previous?.completed,
+        });
+        this.publishAgentMessages();
       }
       return;
     }
     if (message.method === "turn/completed") {
       const turn = message.params?.turn || {};
+      if (message.params?.threadId && message.params.threadId !== this.threadId) return;
+      if (this.turnId && turn.id && turn.id !== this.turnId) return;
+      this.stopReconciliation();
       const status = String(turn.status || "completed");
       const error = turn.error?.message || turn.error?.additionalDetails || undefined;
       this.completionResolve?.({
-        output: this.output.trim(),
+        ...codexResultOutput([...this.agentMessages.values()],status),
         threadId: this.threadId,
         turnId: turn.id || this.turnId,
         status,
@@ -421,6 +521,11 @@ export class CodexAppServerClient {
       this.completionResolve = undefined;
       this.completionReject = undefined;
     }
+  }
+
+  private publishAgentMessages(): void {
+    this.output = [...this.agentMessages.values()].map(item => item.text).filter(Boolean).join("\n\n");
+    this.callbacks.onOutput?.(this.output);
   }
 
   private toApproval(message: JsonRpcMessage): CodexApprovalRequest | null {
@@ -440,6 +545,7 @@ export class CodexAppServerClient {
   }
 
   private fail(error: Error): void {
+    this.stopReconciliation();
     this.peer?.rejectAll(error);
     this.completionReject?.(error);
     this.completionReject = undefined;
