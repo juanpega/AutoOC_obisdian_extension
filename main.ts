@@ -1,6 +1,8 @@
 import { samePhysicalPath } from "./path-identity";
 import { buildOpenCodeScript } from "./opencode-script";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease } from "./release-update";
+import { assertInstalledExecutionIdle, waitForInstalledCatalog } from "./execution-idle";
+const PLUGIN_BUILD_VERSION: string = require("./manifest.json").version;
 import {
   App,
   ItemView,
@@ -34,7 +36,7 @@ import { executeCodeTask } from "./code-task";
 import { runWithVaultMutations } from "./code-vault-mutations";
 import { ObsidianVaultRefresh } from "./obsidian-vault-refresh";
 import { EXECUTION_DEFAULTS } from "./execution-defaults";
-import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
+import { acquireExecutionLease, readExecutionLeaseOwner, recoverExecutionLease, type ExecutionLease } from "./execution-lease";
 import { runInstalledWorkflow } from "./installed-workflow-host";
 import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime, type InstalledWorkflowLocation } from "./installed-workflow-location";
 import { answerWorkflowApproval } from "./workflow-approval";
@@ -1891,108 +1893,218 @@ export default class AutoOCPlugin extends Plugin {
   updateAvailable = false;
   updateCheckError: string | null = null;
   updateInProgress = false;
+  private lifecycleStopped = false;
+  private startupPending = false;
+  private lifecycleTimers = new Set<ReturnType<typeof setTimeout>>();
+  private schedulerTimer?: number;
+  ready = false;
+
+  private lifecycleTimeout(callback: () => void, milliseconds: number): void {
+    const timer = setTimeout(() => {
+      this.lifecycleTimers.delete(timer);
+      if (!this.lifecycleStopped) callback();
+    }, milliseconds);
+    this.lifecycleTimers.add(timer);
+  }
+
+  private assertLifecycleOpen(): void {
+    if (this.lifecycleStopped) throw new Error("AutoOC instance is stopped");
+  }
+
+  isLifecycleStopped(): boolean {
+    return this.lifecycleStopped;
+  }
+
+  private assertExecutionIdle(): void {
+    if (this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size ||
+        this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites) {
+      throw new Error("Active execution or pending write requires reconciliation");
+    }
+    const location = this.selectedExecutionLocation();
+    assertInstalledExecutionIdle(location.installationDirectory, this.settings);
+  }
+
+  private async completeInstalledRelease(): Promise<() => void> {
+    const location = this.selectedExecutionLocation();
+    // Obsidian may reuse its cached 1.6.0 manifest after the legacy updater
+    // replaces the files. Trust the physical identity only after verification.
+    const manifestFile = path.join(location.installationDirectory, "manifest.json");
+    const manifestStat = fs.lstatSync(manifestFile);
+    if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1) throw new Error("Unsafe installed plugin manifest");
+    const startingManifest = fs.readFileSync(manifestFile);
+    const installedManifest = JSON.parse(startingManifest.toString("utf8"));
+    if (installedManifest.id !== "auto-oc" || installedManifest.id !== this.manifest.id || installedManifest.version !== PLUGIN_BUILD_VERSION) {
+      throw new Error("Installed plugin manifest identity or version differs from the bundle");
+    }
+    const mainFile = path.join(location.installationDirectory, "main.js");
+    const stat = fs.lstatSync(mainFile);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe installed plugin bundle");
+    const startingBundle = fs.readFileSync(mainFile);
+    const assertCatalog = await waitForInstalledCatalog(location.installationDirectory, () => {
+      this.assertLifecycleOpen();
+      this.selectedExecutionLocation();
+      for (const [file, bytes] of [[manifestFile, startingManifest], [mainFile, startingBundle]] as const) {
+        const current = fs.lstatSync(file);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs.readFileSync(file).equals(bytes)) {
+          throw new Error("Installed plugin identity changed during startup");
+        }
+      }
+    });
+    assertCatalog();
+    if (hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) {
+      Object.assign(this.manifest, installedManifest);
+      return assertCatalog;
+    }
+    this.assertExecutionIdle();
+    this.updateInProgress = true;
+    try {
+      const files = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, PLUGIN_BUILD_VERSION);
+      this.assertLifecycleOpen();
+      if (!files["main.js"].equals(startingBundle) || !fs.readFileSync(mainFile).equals(startingBundle)) {
+        throw new Error("Bootstrap revision differs from the starting plugin; retry with a coherent release");
+      }
+      if (!files["manifest.json"].equals(startingManifest) || !fs.readFileSync(manifestFile).equals(startingManifest)) {
+        throw new Error("Bootstrap manifest differs from the starting installation");
+      }
+      this.assertExecutionIdle();
+      assertCatalog();
+      installRelease({directory:location.installationDirectory, version:PLUGIN_BUILD_VERSION, files, lease:this.pluginExecutionLease!});
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package verification failed");
+      Object.assign(this.manifest, installedManifest);
+      return assertCatalog;
+    } finally {
+      this.updateInProgress = fs.existsSync(path.join(location.runtimeDirectory, "update-pending.json"));
+    }
+  }
 
   async onload() {
-    this.reservePluginExecution();
-    try { await this.loadSettings(); }
-    catch (error) { this.releasePluginExecution(false); throw error; }
-    void this.startMcpBridge().catch((error: unknown) => console.warn("AutoOC MCP bridge failed to start", error));
-    // Load models asynchronously to avoid blocking startup
-    setTimeout(() => {
-      this.refreshModels();
-      this.refreshAgents();
-      void this.refreshCodexModels();
-    }, 2000);
+    this.startupPending = true;
+    try {
+      this.reservePluginExecution();
+      const assertCatalog = await this.completeInstalledRelease();
+      this.assertLifecycleOpen();
+      // No async boundary between this proof and SettingsWriter's synchronous
+      // load, which records the exact version used for subsequent writes.
+      assertCatalog();
+      await this.loadSettings();
+      this.assertLifecycleOpen();
+      // The MCP bridge is retired. CLI and the distributed skill remain available.
+      // Load models asynchronously to avoid blocking startup
+      this.lifecycleTimeout(() => {
+        this.refreshModels();
+        this.refreshAgents();
+        void this.refreshCodexModels();
+      }, 2000);
 
-    this.registerView(VIEW_TYPE, (leaf) => {
-      this.view = new AutoOCView(leaf, this);
-      return this.view;
-    });
+      this.registerView(VIEW_TYPE, (leaf) => {
+        this.view = new AutoOCView(leaf, this);
+        return this.view;
+      });
 
-    this.addRibbonIcon("workflow", "AutoOC — Task Scheduler", () => {
-      this.toggleView();
-    });
+      this.addRibbonIcon("workflow", "AutoOC — Task Scheduler", () => {
+        this.toggleView();
+      });
 
-    this.addCommand({
-      id: "open-auto-oc",
-      name: "Open AutoOC Task Scheduler",
-      callback: () => this.activateView(),
-    });
+      this.addCommand({
+        id: "open-auto-oc",
+        name: "Open AutoOC Task Scheduler",
+        callback: () => this.activateView(),
+      });
 
-    this.addCommand({
-      id: "open-visual-builder",
-      name: "Open AutoOC Visual Builder",
-      callback: () => this.openVisualBuilder(),
-    });
+      this.addCommand({
+        id: "open-visual-builder",
+        name: "Open AutoOC Visual Builder",
+        callback: () => this.openVisualBuilder(),
+      });
 
-    this.addCommand({
-      id: "create-task",
-      name: "Create new AI task",
-      callback: () => new CreateTaskModal(this.app, this).open(),
-    });
+      this.addCommand({
+        id: "create-task",
+        name: "Create new AI task",
+        callback: () => new CreateTaskModal(this.app, this).open(),
+      });
 
-    this.addCommand({
-      id: "open-chatgpt-codex",
-      name: "Open ChatGPT / Codex in project folder",
-      callback: () => new CodexAppModal(this.app, this).open(),
-    });
+      this.addCommand({
+        id: "open-chatgpt-codex",
+        name: "Open ChatGPT / Codex in project folder",
+        callback: () => new CodexAppModal(this.app, this).open(),
+      });
 
-    this.addCommand({
-      id: "check-tasks-now",
-      name: "Check due tasks now",
-      callback: async () => {
-        await this.runDueAll();
-        new Notice("AutoOC: check completed.");
-      },
-    });
+      this.addCommand({
+        id: "check-tasks-now",
+        name: "Check due tasks now",
+        callback: async () => {
+          await this.runDueAll();
+          new Notice("AutoOC: check completed.");
+        },
+      });
 
-    this.addCommand({
-      id: "diagnose",
-      name: "AutoOC: Diagnostic — test opencode command",
-      callback: () => new DiagnosticModal(this.app, this).open(),
-    });
+      this.addCommand({
+        id: "diagnose",
+        name: "AutoOC: Diagnostic — test opencode command",
+        callback: () => new DiagnosticModal(this.app, this).open(),
+      });
 
-    this.addCommand({
-      id: "install-ralph-loop",
-      name: "AutoOC: Ralph Loop Assistant (install/activate)",
-      callback: async () => {
-        const result = await this.ensureRalphLoopPluginEnabled();
-        new Notice(
-          result.changed
-            ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
-            : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
-        );
-      },
-    });
+      this.addCommand({
+        id: "install-ralph-loop",
+        name: "AutoOC: Ralph Loop Assistant (install/activate)",
+        callback: async () => {
+          const result = await this.ensureRalphLoopPluginEnabled();
+          new Notice(
+            result.changed
+              ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
+              : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
+          );
+        },
+      });
 
-    this.addSettingTab(new AutoOCSettingTab(this.app, this));
+      this.addSettingTab(new AutoOCSettingTab(this.app, this));
 
-    // Scheduler: check every 5 seconds so interval schedules (seconds/minutes/hours) are responsive
-    this.registerInterval(
-      window.setInterval(() => this.runDueAll(), 5_000)
-    );
+      // Scheduler: check every 5 seconds so interval schedules (seconds/minutes/hours) are responsive
+      this.schedulerTimer = window.setInterval(() => { if (!this.lifecycleStopped) void this.runDueAll(); }, 5_000);
+      this.registerInterval(this.schedulerTimer);
 
-    // Initial check only after Obsidian has restored its layout, plus an extra
-    // margin so other plugins and the Electron environment settle before launch.
-    this.app.workspace.onLayoutReady(() => {
-      const startupTimer = window.setTimeout(() => this.runDueAll(), INITIAL_DUE_CHECK_DELAY_MS);
-      this.register(() => window.clearTimeout(startupTimer));
-    });
+      // Initial check only after Obsidian has restored its layout, plus an extra
+      // margin so other plugins and the Electron environment settle before launch.
+      this.app.workspace.onLayoutReady(() => {
+        if (!this.lifecycleStopped) this.lifecycleTimeout(() => { void this.runDueAll(); }, INITIAL_DUE_CHECK_DELAY_MS);
+      });
 
-    // Check for plugin updates in the background
-    setTimeout(() => this.checkForUpdates(true), 3_000);
+      // Check for plugin updates in the background
+      this.lifecycleTimeout(() => { void this.checkForUpdates(true); }, 3_000);
+      this.ready = true;
+    } catch (error) {
+      this.startupPending = false;
+      await this.onunload().catch(cleanup => console.warn("AutoOC startup cleanup retained reservation", cleanup));
+      // Component.unload also disposes Obsidian's registered views/commands/events.
+      // Calling only our lifecycle hook would leave partial host registrations.
+      try { this.unload?.(); }
+      catch (cleanup) { console.warn("AutoOC host registration cleanup failed", cleanup); }
+      new Notice(`AutoOC: startup failed — ${String(error)}`);
+      throw error;
+    } finally { this.startupPending = false; }
   }
 
   async onunload() {
+    this.lifecycleStopped = true;
+    this.ready = false;
+    for (const timer of this.lifecycleTimers) clearTimeout(timer);
+    this.lifecycleTimers.clear();
+    if (this.schedulerTimer !== undefined) window.clearInterval(this.schedulerTimer);
+    this.schedulerTimer = undefined;
     this.vaultRefreshStopped = true;
     this.vaultRefresh?.dispose();
-    const unresolved = !!this.sharedWorkflowExecution || this.runningProcesses.size > 0 || this.runningCodexClients.size > 0 ||
-      this.workflowDelayControllers.size > 0 || this.settings?.tasks?.some(task=>task.status === "running") ||
-      this.settings?.workflows?.some(workflow=>workflow.status === "running");
+    let unresolved = this.startupPending;
+    if (this.pluginExecutionLease) {
+      try { this.assertExecutionIdle(); }
+      catch (error) { unresolved = true; console.warn("AutoOC retained execution reservation", error); }
+    }
     this.sharedWorkflowExecution?.controller.abort();
     for (const controller of this.workflowDelayControllers.values()) controller.abort();
     this.workflowDelayControllers.clear();
-    await this.stopMcpBridge();
+    // Capture/close only this instance's bridge before relinquishing ownership.
+    // Obsidian does not wait for this promise; the synchronous prefix is critical.
+    const closingBridge = this.stopMcpBridge();
+    void closingBridge.catch(error => console.warn("AutoOC bridge close failed", error));
     // Kill all running processes cleanly when plugin unloads
     for (const [, proc] of this.runningProcesses) {
       proc.kill();
@@ -2000,8 +2112,11 @@ export default class AutoOCPlugin extends Plugin {
     this.runningProcesses.clear();
     for (const [, client] of this.runningCodexClients) client.dispose();
     this.runningCodexClients.clear();
-    this.app.workspace.detachLeavesOfType(VIEW_TYPE);
-    this.releasePluginExecution(!!unresolved);
+    if (this.pluginExecutionLease) {
+      this.app.workspace.detachLeavesOfType(VIEW_TYPE);
+      this.releasePluginExecution(!!unresolved);
+    }
+    await closingBridge;
   }
 
   // Reserve the vault for the whole plugin lifetime, including legacy tasks
@@ -2024,10 +2139,25 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   reservePluginExecution() {
+    this.assertLifecycleOpen();
     const location = this.selectedExecutionLocation();
     if (this.pluginExecutionLease) return;
     ensureInstalledWorkflowRuntime(location);
-    this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory);
+    try { this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+        recoverExecutionLease(location.runtimeDirectory, owner.token, () => {
+          assertInstalledExecutionIdle(location.installationDirectory);
+        });
+      } catch (recoveryError) {
+        // Preserve the public exclusion code while explaining why recovery was denied.
+        (recoveryError as NodeJS.ErrnoException).code ||= "EEXIST";
+        throw recoveryError;
+      }
+      this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory);
+    }
     this.pluginExecutionLocation = location;
   }
 
@@ -2067,6 +2197,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
+    this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
     const location = this.selectedExecutionLocation();
@@ -2118,41 +2249,13 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async startMcpBridge(): Promise<void> {
-    await this.stopMcpBridge();
-    this.mcpBridgeToken = crypto.randomBytes(24).toString("hex");
-    const server = http.createServer((request, response) => void this.handleMcpBridgeRequest(request, response));
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.off("error", reject);
-        resolve();
-      });
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      server.close();
-      throw new Error("Could not determine MCP bridge address");
-    }
-    try {
-      const bridgePath = this.getMcpBridgePath();
-      fs.mkdirSync(path.dirname(bridgePath), { recursive: true });
-      fs.writeFileSync(bridgePath, JSON.stringify({ url: `http://127.0.0.1:${address.port}`, token: this.mcpBridgeToken }), "utf8");
-      this.mcpBridgeServer = server;
-    } catch (error) {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
-      throw error;
-    }
+    // Retired in 1.6.2: no listener, descriptor or client configuration changes.
   }
 
   private async stopMcpBridge(): Promise<void> {
     const server = this.mcpBridgeServer;
     this.mcpBridgeServer = undefined;
     this.mcpBridgeToken = "";
-    try {
-      fs.unlinkSync(this.getMcpBridgePath());
-    } catch {
-      // The bridge file may not have been created yet.
-    }
     if (server) await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
@@ -2602,6 +2705,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async loadSettings() {
+    this.assertLifecycleOpen();
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
     const location = (this.app.vault.adapter as any).basePath && this.app.vault.configDir && this.manifest?.id
       ? this.selectedExecutionLocation(false) : undefined;
@@ -2880,6 +2984,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async saveSettings(refreshView = true) {
+    this.assertLifecycleOpen();
     const basePath = (this.app.vault.adapter as any).basePath;
     if (basePath) {
       const file = this.selectedExecutionLocation().configurationFile;
@@ -2912,11 +3017,13 @@ export default class AutoOCPlugin extends Plugin {
   // ── Version / update helpers ────────────────────────────────────────────────
 
   async checkForUpdates(silent = false): Promise<void> {
+    if (this.lifecycleStopped) return;
     try {
       this.updateCheckError = null;
       const res = await fetch(noCacheUrl(REMOTE_MANIFEST_URL), { cache: "reload" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      if (this.lifecycleStopped) return;
       const remoteVersion = data?.version;
       if (!remoteVersion || typeof remoteVersion !== "string") {
         throw new Error("Remote manifest has no version");
@@ -2941,8 +3048,11 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async updatePlugin(): Promise<void> {
+    this.assertLifecycleOpen();
     if (this.updateInProgress) return;
     if (!this.latestVersion) return;
+    try { this.assertExecutionIdle(); }
+    catch (error) { new Notice(`AutoOC: update blocked — ${String(error)}`); return; }
     if (!this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size ||
         this.settings.tasks.some(task => task.status === "running") || this.settings.workflows.some(workflow => workflow.status === "running")) {
       new Notice("AutoOC: finish or reconcile executions before updating.");
@@ -2962,6 +3072,8 @@ export default class AutoOCPlugin extends Plugin {
 
     try {
       const files = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, this.latestVersion);
+      this.assertLifecycleOpen();
+      this.assertExecutionIdle();
       const pluginDir = path.dirname(this.pluginExecutionLease.directory);
       installRelease({ directory: pluginDir, version: this.latestVersion, files, lease: this.pluginExecutionLease });
 
@@ -2973,6 +3085,8 @@ export default class AutoOCPlugin extends Plugin {
         await this.app.plugins.disablePlugin(this.manifest.id);
         // @ts-ignore — internal Obsidian API
         await this.app.plugins.enablePlugin(this.manifest.id);
+        // @ts-ignore — internal Obsidian API
+        if (!this.app.plugins.plugins?.[this.manifest.id]?.ready) throw new Error("New plugin instance did not become ready");
         new Notice("AutoOC: plugin reloaded.");
       } catch {
         new Notice("AutoOC: update saved. Restart Obsidian to finish.");
@@ -3108,6 +3222,7 @@ export default class AutoOCPlugin extends Plugin {
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   private beginLegacyAttempt(task: ScheduledTask, owner?: LegacyOwner): LegacyAttempt {
+    this.assertLifecycleOpen();
     this.legacyAttempts ??= new Map();
     const current = this.settings.tasks.find(item => item.id === task.id);
     if (!current || this.sharedWorkflowExecution || this.legacyAttempts.get(task.id) && !this.legacyAttempts.get(task.id)!.cancelled) {
@@ -3134,6 +3249,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private isLegacyCurrent(attempt: LegacyAttempt): boolean {
+    if (this.lifecycleStopped) return false;
     const current = this.settings.tasks.find(item => item.id === attempt.identity.taskId);
     if (current?.legacyExecution?.token === attempt.identity.token) attempt.task = current;
     return !attempt.cancelled && this.legacyAttempts?.get(attempt.identity.taskId) === attempt &&
@@ -3160,6 +3276,7 @@ export default class AutoOCPlugin extends Plugin {
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
     owner?: LegacyOwner,
   ) {
+    this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
@@ -3864,6 +3981,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ) {
+    this.assertLifecycleOpen();
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     let current = this.settings.tasks[idx];
@@ -4038,6 +4156,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDueAll() {
+    if (this.lifecycleStopped || this.startupPending || this.updateInProgress) return;
     if (this.dueCheckInProgress) return;
     this.dueCheckInProgress = true;
     try {
@@ -4424,6 +4543,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runWorkflow(workflow: Workflow) {
+    this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
@@ -4504,6 +4624,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runWorkflowStepById(workflowId: string, stepId: string): Promise<void> {
+    this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
@@ -4837,11 +4958,23 @@ class AutoOCView extends ItemView {
     }
   }
 
-  private async persistDashboardPositions() {
+  private async persistDashboardPositions(): Promise<"saved" | "skipped"> {
+    if (this.plugin.isLifecycleStopped()) return "skipped";
     const obj: Record<string, { x: number; y: number; size?: number; sizePx?: number }> = {};
     this.dashboardPositions.forEach((pos, key) => { obj[key] = pos; });
     this.plugin.settings.dashboardPositions = obj;
     await this.plugin.saveSettings(false);
+    return "saved";
+  }
+
+  private async persistDashboardPositionsSafely(): Promise<"saved" | "skipped" | "failed"> {
+    try {
+      return await this.persistDashboardPositions();
+    } catch {
+      // Do not log the exception: storage errors may contain configuration data.
+      console.warn("AutoOC: Dashboard positions could not be saved.");
+      return "failed";
+    }
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -4855,16 +4988,20 @@ class AutoOCView extends ItemView {
     this.render();
   }
   async onClose() {
-    this.unsubscribeTaskUpdated?.();
-    this.unsubscribeWorkflowUpdated?.();
-    this.unsubscribeTaskUpdated = undefined;
-    this.unsubscribeWorkflowUpdated = undefined;
-    await this.persistDashboardPositions();
-    this.dashboardResizeObserver?.disconnect();
-    this.dashboardResizeObserver = null;
-    this.sinkIntervals.forEach((iv) => clearInterval(iv));
-    this.sinkIntervals.clear();
-    this.dashboardTaskDriftDirection.clear();
+    try {
+      this.unsubscribeTaskUpdated?.();
+      this.unsubscribeWorkflowUpdated?.();
+    } finally {
+      this.unsubscribeTaskUpdated = undefined;
+      this.unsubscribeWorkflowUpdated = undefined;
+      this.dashboardResizeObserver?.disconnect();
+      this.dashboardResizeObserver = null;
+      this.sinkIntervals.forEach((iv) => clearInterval(iv));
+      this.sinkIntervals.clear();
+      this.dashboardTaskDriftDirection.clear();
+    }
+    // Stop callbacks synchronously, before waiting for an active instance's write.
+    await this.persistDashboardPositionsSafely();
   }
   refresh() { this.render(); }
 
@@ -5846,7 +5983,7 @@ class AutoOCView extends ItemView {
         clampBubbleToParent(child);
       });
       saveBubbleTreePositions(parent);
-      void this.persistDashboardPositions();
+      void this.persistDashboardPositionsSafely();
       });
     };
     const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
@@ -5900,7 +6037,7 @@ class AutoOCView extends ItemView {
         if (!movedAny) break;
       }
       saveBubbleTreePositions(parent);
-      void this.persistDashboardPositions();
+      void this.persistDashboardPositionsSafely();
       });
     };
     const hasBubbleOverlap = (parent: HTMLElement) => {

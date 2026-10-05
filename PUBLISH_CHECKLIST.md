@@ -2,7 +2,7 @@
 
 ## Pre-release
 - [ ] `npm install`
-- [ ] Update `manifest.json` and `package.json` to the same `<version>`
+- [ ] Igualar versión en `manifest.json`, `package.json` y raíz de `package-lock.json`
 - [ ] `npm test`
 - [ ] `npm run build`
 - [ ] Verify plugin works in Obsidian
@@ -10,7 +10,7 @@
 - [ ] Update README if needed
 
 ## Build release asset
-- [ ] `npm run pack:release` (after `npm run build`; packages existing `manifest.json`, `main.js`, and `styles.css`)
+- [ ] `npm run pack:release` después del build; verificar los siete archivos de `RELEASE_WORKFLOW.md`, descriptor y hashes
 - [ ] Confirm `release/auto-oc-<version>.zip` exists
 - [ ] Save SHA256 checksum
 
@@ -26,5 +26,7 @@
 - [ ] Publish release
 
 ## Post-release verification
-- [ ] Fresh install test using only release files (`manifest.json`, `main.js`, `styles.css`)
+- [ ] Instalación nueva en Obsidian real desde el ZIP completo, también sin red
+- [ ] Actualización iniciada por 1.6.0: completado automático, versión cargada y conservación de datos
+- [ ] Cierre normal y reapertura sin borrar reservas; rechazar propietario vivo y efectos inciertos
 - [ ] Validate task run, stop, log, diagnostic

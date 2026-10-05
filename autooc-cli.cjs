@@ -38,6 +38,10 @@ var SettingsWriter = class {
   constructor() {
     this.tail = Promise.resolve();
     this.observed = /* @__PURE__ */ new Map();
+    this.pending = 0;
+  }
+  get hasPendingWrites() {
+    return this.pending > 0;
   }
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
@@ -47,6 +51,7 @@ var SettingsWriter = class {
     return value === null ? null : JSON.parse(value);
   }
   save(file, snapshot) {
+    this.pending++;
     const operation = this.tail.then(async () => {
       file = path.resolve(file);
       await fs.promises.mkdir(path.dirname(file), { recursive: true });
@@ -75,9 +80,12 @@ var SettingsWriter = class {
         fs.unlinkSync(lock);
       }
     });
-    this.tail = operation.catch(() => {
+    const tracked = operation.finally(() => {
+      this.pending--;
     });
-    return operation;
+    this.tail = tracked.catch(() => {
+    });
+    return tracked;
   }
 };
 function readSettingsVersion(file) {
@@ -2087,7 +2095,7 @@ function readExecutionLeaseOwner(runtimeDirectory) {
   if (owner?.schemaVersion !== 1 || !/^[a-f0-9-]{36}$/.test(owner.token || "") || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !Number.isFinite(Date.parse(owner.createdAt))) throw new Error("Invalid execution lease owner");
   return { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
 }
-function recoverExecutionLease(runtimeDirectory, expectedToken) {
+function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
   const root = fs10.realpathSync(runtimeDirectory), guard = path9.join(root, "lease-recovery.lock");
   fs10.mkdirSync(guard);
   try {
@@ -2100,6 +2108,7 @@ function recoverExecutionLease(runtimeDirectory, expectedToken) {
       absent = error.code === "ESRCH";
     }
     if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
+    assertSafe?.();
     if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
     const archived = `abandoned-lease-${owner.token}`;
     if (fs10.existsSync(path9.join(root, archived))) throw new Error("Recovery archive already exists");
@@ -3026,7 +3035,7 @@ async function runInstalledWorkflow(options) {
 }
 
 // autooc-cli.ts
-var version = "1.6.1";
+var version = "1.6.2";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "approve" || command === "deny") {

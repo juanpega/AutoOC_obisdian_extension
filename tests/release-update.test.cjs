@@ -124,9 +124,13 @@ test('actual deployment installs runtime and skill, preserves configuration, exc
   verifyRelease(Object.fromEntries(names.map(name=>[name,fs.readFileSync(path.join(directory,name))])),JSON.parse(fs.readFileSync(path.join(directory,'manifest.json'))).version);
 });
 
-test('plugin repairs legacy three-file installation, blocks launches during download and reloads complete package',async t=>{
+test('new updater repairs an incomplete package, blocks launches and invokes real unload before reload',async t=>{
   const {root,directory}=fixture(t),Plugin=pluginClass(),p=new Plugin(),files=release();
-  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},plugins:{disablePlugin:async()=>{p.releasePluginExecution(false);},enablePlugin:async()=>{assert.ok(fs.existsSync(path.join(directory,'autooc-cli.cjs')));}}};
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{detachLeavesOfType(){}},plugins:{
+    plugins:{'auto-oc':{ready:true}},
+    disablePlugin:async()=>{void p.onunload();},
+    enablePlugin:async()=>{assert.ok(fs.existsSync(path.join(directory,'autooc-cli.cjs')));}
+  }};
   p.manifest={id:'auto-oc',version:'1.6.0'};p.settings={tasks:[],workflows:[]};p.reservePluginExecution();
   const priorFetch=global.fetch,priorConfirm=global.confirm;
   let requested=0;

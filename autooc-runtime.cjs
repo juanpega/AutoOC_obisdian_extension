@@ -182,7 +182,7 @@ function readExecutionLeaseOwner(runtimeDirectory) {
   if (owner?.schemaVersion !== 1 || !/^[a-f0-9-]{36}$/.test(owner.token || "") || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !Number.isFinite(Date.parse(owner.createdAt))) throw new Error("Invalid execution lease owner");
   return { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
 }
-function recoverExecutionLease(runtimeDirectory, expectedToken) {
+function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
   const root = fs2.realpathSync(runtimeDirectory), guard = path2.join(root, "lease-recovery.lock");
   fs2.mkdirSync(guard);
   try {
@@ -195,6 +195,7 @@ function recoverExecutionLease(runtimeDirectory, expectedToken) {
       absent = error.code === "ESRCH";
     }
     if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
+    assertSafe?.();
     if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
     const archived = `abandoned-lease-${owner.token}`;
     if (fs2.existsSync(path2.join(root, archived))) throw new Error("Recovery archive already exists");
@@ -218,6 +219,10 @@ var SettingsWriter = class {
   constructor() {
     this.tail = Promise.resolve();
     this.observed = /* @__PURE__ */ new Map();
+    this.pending = 0;
+  }
+  get hasPendingWrites() {
+    return this.pending > 0;
   }
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
@@ -227,6 +232,7 @@ var SettingsWriter = class {
     return value === null ? null : JSON.parse(value);
   }
   save(file, snapshot) {
+    this.pending++;
     const operation = this.tail.then(async () => {
       file = path3.resolve(file);
       await fs3.promises.mkdir(path3.dirname(file), { recursive: true });
@@ -255,9 +261,12 @@ var SettingsWriter = class {
         fs3.unlinkSync(lock);
       }
     });
-    this.tail = operation.catch(() => {
+    const tracked = operation.finally(() => {
+      this.pending--;
     });
-    return operation;
+    this.tail = tracked.catch(() => {
+    });
+    return tracked;
   }
 };
 function readSettingsVersion(file) {
@@ -2261,26 +2270,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
   }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
-  const fs18 = require("fs");
+  const fs19 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs18.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs19.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn4 } = require("child_process");
   const child = spawn4("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs18.unlinkSync(launcherFile);
+      fs19.unlinkSync(launcherFile);
     } catch {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs18.unlinkSync(psScriptFile);
+      fs19.unlinkSync(psScriptFile);
     } catch {
     }
   }, 6e5);
@@ -2288,12 +2297,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs18.unlinkSync(launcherFile);
+      fs19.unlinkSync(launcherFile);
     } catch {
     }
     if (removeScript) {
       try {
-        fs18.unlinkSync(psScriptFile);
+        fs19.unlinkSync(psScriptFile);
       } catch {
       }
     }
@@ -2315,7 +2324,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs18.existsSync(effectivePidFile) ? String(fs18.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs19.existsSync(effectivePidFile) ? String(fs19.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn4("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -2324,7 +2333,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs18.unlinkSync(effectivePidFile);
+      fs19.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -2345,18 +2354,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
   };
 }
 function launchHiddenSh(shScriptFile, pidFile) {
-  const fs18 = require("fs");
+  const fs19 = require("fs");
   const { spawn: spawn4 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs18.chmodSync(shScriptFile, 448);
+    fs19.chmodSync(shScriptFile, 448);
   } catch {
   }
   const child = spawn4("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs18.unlinkSync(shScriptFile);
+      fs19.unlinkSync(shScriptFile);
     } catch {
     }
   }, 6e5);
@@ -2364,7 +2373,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs18.unlinkSync(shScriptFile);
+        fs19.unlinkSync(shScriptFile);
       } catch {
       }
     }
@@ -2385,7 +2394,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs18.existsSync(effectivePidFile) ? String(fs18.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs19.existsSync(effectivePidFile) ? String(fs19.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -2400,7 +2409,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs18.unlinkSync(effectivePidFile);
+      fs19.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -3052,9 +3061,29 @@ async function runInstalledWorkflow(options) {
 }
 
 // release-update.ts
+var fs18 = __toESM(require("fs"));
+var path18 = __toESM(require("path"));
+var import_crypto7 = require("crypto");
+
+// execution-idle.ts
 var fs17 = __toESM(require("fs"));
 var path17 = __toESM(require("path"));
-var import_crypto7 = require("crypto");
+function assertIdleJournals(runtime) {
+  if (fs17.existsSync(path17.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  const checkpoints = /* @__PURE__ */ new Map();
+  for (const name of fs17.readdirSync(runtime)) {
+    if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
+    if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
+    const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
+    if (!["completed", "failed"].includes(state.phase) || state.steps.some((step) => step.status === "in_flight" || step.approval || step.result?.cancelled || step.evaluations?.some((item) => item.status !== "completed"))) {
+      throw new Error("Unfinished execution or uncertain effect requires reconciliation");
+    }
+    checkpoints.set(state.runId, state);
+  }
+  return checkpoints;
+}
+
+// release-update.ts
 var RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"];
 var RELEASE_DESCRIPTOR = "release-integrity.json";
 function verifyRelease(files, expectedVersion) {
@@ -3074,56 +3103,52 @@ function regularPath(root, relative4, create = false) {
   let current = root;
   const parts = relative4.split("/");
   for (let i = 0; i < parts.length; i++) {
-    current = path17.join(current, parts[i]);
+    current = path18.join(current, parts[i]);
     let stat;
     try {
-      stat = fs17.lstatSync(current);
+      stat = fs18.lstatSync(current);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
       throw new Error(`Unsafe release destination: ${relative4}`);
     }
-    if (!stat && i < parts.length - 1 && create) fs17.mkdirSync(current);
+    if (!stat && i < parts.length - 1 && create) fs18.mkdirSync(current);
   }
   return current;
 }
 function installRelease(options) {
   const { files, version, lease } = options;
   verifyRelease(files, version);
-  const directory = fs17.realpathSync(options.directory);
-  if (fs17.lstatSync(options.directory).isSymbolicLink() || path17.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
+  const directory = fs18.realpathSync(options.directory);
+  if (fs18.lstatSync(options.directory).isSymbolicLink() || path18.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
   lease.assertOwned();
-  const marker = path17.join(lease.directory, "update-pending.json");
-  if (fs17.existsSync(marker)) throw new Error("Previous update requires recovery");
-  for (const name of fs17.readdirSync(lease.directory)) {
-    if (!/^[a-f0-9-]+\.json$/.test(name)) continue;
-    const state = readExecutionCheckpoint(lease.directory, name.slice(0, -5));
-    if (!["completed", "failed"].includes(state.phase)) throw new Error("Unfinished execution blocks update");
-  }
+  const marker = path18.join(lease.directory, "update-pending.json");
+  if (fs18.existsSync(marker)) throw new Error("Previous update requires recovery");
+  assertIdleJournals(lease.directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
-  const backup = path17.join(lease.directory, `update-backup-${(0, import_crypto7.randomUUID)()}`);
-  fs17.mkdirSync(backup);
+  const backup = path18.join(lease.directory, `update-backup-${(0, import_crypto7.randomUUID)()}`);
+  fs18.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
   for (const name of names) {
     const source = regularPath(directory, name);
-    const bytes = fs17.existsSync(source) ? fs17.readFileSync(source) : void 0;
+    const bytes = fs18.existsSync(source) ? fs18.readFileSync(source) : void 0;
     previous.set(name, bytes);
     if (bytes) {
-      const target = path17.join(backup, name);
-      fs17.mkdirSync(path17.dirname(target), { recursive: true });
-      fs17.writeFileSync(target, bytes, { flag: "wx" });
+      const target = path18.join(backup, name);
+      fs18.mkdirSync(path18.dirname(target), { recursive: true });
+      fs18.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
-  const record = { schemaVersion: 1, version, backup: path17.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
-  fs17.writeFileSync(path17.join(backup, "recovery.json"), JSON.stringify(record));
-  const fd = fs17.openSync(marker, "wx");
+  const record = { schemaVersion: 1, version, backup: path18.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
+  fs18.writeFileSync(path18.join(backup, "recovery.json"), JSON.stringify(record));
+  const fd = fs18.openSync(marker, "wx");
   try {
-    fs17.writeFileSync(fd, JSON.stringify(record));
-    fs17.fsyncSync(fd);
+    fs18.writeFileSync(fd, JSON.stringify(record));
+    fs18.fsyncSync(fd);
   } finally {
-    fs17.closeSync(fd);
+    fs18.closeSync(fd);
   }
   const written = [];
   try {
@@ -3131,20 +3156,20 @@ function installRelease(options) {
       lease.assertOwned();
       const target = regularPath(directory, name, true);
       written.push(name);
-      fs17.writeFileSync(target, files[name]);
+      fs18.writeFileSync(target, files[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs17.readFileSync(regularPath(directory, name))]));
+    const installed = Object.fromEntries(names.map((name) => [name, fs18.readFileSync(regularPath(directory, name))]));
     verifyRelease(installed, version);
-    fs17.unlinkSync(marker);
+    fs18.unlinkSync(marker);
     return { version, backup, installed: names };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath(directory, name);
       const bytes = previous.get(name);
-      if (bytes !== void 0) fs17.writeFileSync(target, bytes);
-      else if (fs17.existsSync(target)) fs17.unlinkSync(target);
+      if (bytes !== void 0) fs18.writeFileSync(target, bytes);
+      else if (fs18.existsSync(target)) fs18.unlinkSync(target);
     }
-    fs17.unlinkSync(marker);
+    fs18.unlinkSync(marker);
     throw error;
   }
 }

@@ -53,3 +53,32 @@ test('a changed owner cannot be released by an old handle',()=>{
     assert.equal(JSON.parse(fs.readFileSync(owner)).token,'other');
   } finally {fs.writeFileSync(owner,before);lease.release();fs.rmdirSync(dir);}
 });
+
+test('recovery proof runs under exclusion, rejects unverifiable PID and rechecks identity',t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-lease-proof-'));
+  t.after(()=>{
+    assert.equal(path.dirname(fs.realpathSync(dir)),fs.realpathSync(os.tmpdir()));
+    assert.ok(path.basename(dir).startsWith('autooc-lease-proof-'));fs.rmSync(dir,{recursive:true});
+  });
+  const {spawnSync}=require('node:child_process');
+  const child=spawnSync(process.execPath,['-e',`require(${JSON.stringify(path.resolve(__dirname,'../autooc-runtime.cjs'))}).acquireExecutionLease(process.argv[1])`,dir],{encoding:'utf8'});
+  assert.equal(child.status,0,child.stderr);
+  const owner=mod.exports.readExecutionLeaseOwner(dir),ownerPath=path.join(dir,'execution.lock/owner.json');
+  const bytes=fs.readFileSync(ownerPath);const kill=process.kill;
+  try {
+    process.kill=()=>{throw Object.assign(Error('unverifiable'),{code:'EPERM'});};
+    assert.throws(()=>mod.exports.recoverExecutionLease(dir,owner.token,()=>assert.fail('proof must not run')),/live or cannot/);
+  }finally{process.kill=kill;}
+  assert.deepEqual(fs.readFileSync(ownerPath),bytes);
+  assert.throws(()=>mod.exports.recoverExecutionLease(dir,owner.token,()=>{
+    assert.throws(()=>acquire(dir),/recovery is in progress/);
+    assert.throws(()=>mod.exports.recoverExecutionLease(dir,owner.token),{code:'EEXIST'});
+    throw Error('uncertain journal');
+  }),/uncertain journal/);
+  assert.deepEqual(fs.readFileSync(ownerPath),bytes);
+  assert.throws(()=>mod.exports.recoverExecutionLease(dir,owner.token,()=>{
+    fs.writeFileSync(ownerPath,JSON.stringify({...owner,token:require('crypto').randomUUID()}));
+  }),/changed during recovery/);
+  assert.ok(fs.existsSync(path.join(dir,'execution.lock')));
+  assert.ok(!fs.existsSync(path.join(dir,`abandoned-lease-${owner.token}`)));
+});

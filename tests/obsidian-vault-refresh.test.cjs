@@ -201,16 +201,20 @@ test('classic callbacks cannot complete a stopped task or replacement workflow a
   }
 });
 
-test('plugin unload cancels pending refresh and prevents later Code writes', async t => {
-  const root=fixture(t),p=new Plugin();let job;
+test('plugin unload cancels pending refresh and preserves uncertain state without later Code writes', async t => {
+  const root=fixture(t),p=new Plugin();let job,saves=0;
   p.app={vault:{adapter:{basePath:root,queue:fn=>{job=fn;return new Promise(()=>{});},reconcileInternalFile:async()=>{throw Error('late refresh');}}},workspace:{detachLeavesOfType:()=>{}}};
-  p.saveSettings=async()=>{};p.stopMcpBridge=async()=>{};
+  p.saveSettings=async()=>{saves++;};p.stopMcpBridge=async()=>{};
   const task={id:'code',name:'Code',scheduleType:'once',codeAllowVault:true,code:'vault.append("unload.md","once");'};
   p.settings={tasks:[task],workflows:[],logsEnabled:false};
-  const pending=p.runCodeTask(task);await tick();await p.onunload();await pending;
-  assert.equal(task.status,'failed');assert.match(task.output,/persisted.*unloaded/);
-  await job();await p.runCodeTask(task);
-  assert.equal(task.status,'failed');assert.match(task.output,/unloaded before Code/);
+  const pending=p.runCodeTask(task);await tick();const before=JSON.stringify(task),savedBefore=saves;
+  await p.onunload();await pending;
+  // A late completion cannot rewrite the evidence or present an unobserved
+  // refresh as a finished effect after the instance has stopped.
+  assert.equal(JSON.stringify(task),before);assert.equal(task.status,'running');
+  assert.equal(saves,savedBefore);
+  await job();await assert.rejects(p.runCodeTask(task),/instance is stopped/);
+  assert.equal(JSON.stringify(task),before);assert.equal(saves,savedBefore);
   assert.equal(fs.readFileSync(path.join(root,'unload.md'),'utf8'),'once');
 });
 

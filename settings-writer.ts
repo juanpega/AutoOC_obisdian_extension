@@ -6,6 +6,8 @@ import { randomUUID } from "crypto";
 export class SettingsWriter {
   private tail: Promise<void> = Promise.resolve();
   private observed = new Map<string, string | null>();
+  private pending = 0;
+  get hasPendingWrites(): boolean { return this.pending > 0; }
 
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
@@ -16,6 +18,7 @@ export class SettingsWriter {
   }
 
   save(file: string, snapshot: () => unknown): Promise<void> {
+    this.pending++;
     const operation = this.tail.then(async () => {
       file = path.resolve(file);
       await fs.promises.mkdir(path.dirname(file), {recursive:true});
@@ -41,8 +44,9 @@ export class SettingsWriter {
         fs.unlinkSync(lock);
       }
     });
-    this.tail = operation.catch(() => {});
-    return operation;
+    const tracked = operation.finally(() => { this.pending--; });
+    this.tail = tracked.catch(() => {});
+    return tracked;
   }
 }
 
