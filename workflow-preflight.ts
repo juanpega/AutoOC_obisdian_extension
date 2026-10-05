@@ -1,19 +1,19 @@
 import * as fs from "fs";
 import * as path from "path";
+import { physicalPath, isWithinPhysicalPath } from "./path-identity";
 import type { PreparedWorkflow } from "./workflow-definition";
 import { validateBranchOptions, branchRepository } from "./workflow-branch";
 
 // Validate all steps before the journal or first Code effect. The installed
 // catalog is trusted input, but an explicit vault does not authorize other roots.
 export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:string) {
-  const root = fs.realpathSync(vault);
+  const root = physicalPath(vault);
   const checkDirectory = (value:unknown) => {
     if (value !== undefined && typeof value !== "string") throw new Error("Invalid working directory");
     const configured = value || root;
     if (!path.isAbsolute(configured as string)) throw new Error("Working directory must be absolute");
-    const directory = fs.realpathSync(configured as string);
-    const relative = path.relative(root,directory);
-    if (relative === ".." || relative.startsWith(".."+path.sep) || path.isAbsolute(relative)) throw new Error("Working directory is outside the selected vault");
+    const directory = physicalPath(configured as string);
+    if (!isWithinPhysicalPath(root,directory)) throw new Error("Working directory is outside the selected vault");
     if (!fs.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
   };
   checkDirectory(definition.settings.workingDirectory);

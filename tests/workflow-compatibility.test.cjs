@@ -15,6 +15,28 @@ function loader(overrides={}) {
   return load;
 }
 const load=loader(),{prepareWorkflowDefinition:prepare}=load('workflow-definition'),{runCodeWorkflowHost:run}=load('code-workflow-host');
+// Ask Windows for the actual alias; never manufacture a name or use a link.
+function shortWindowsPath(directory) {
+  assert.equal(process.platform,'win32');
+  assert.doesNotMatch(directory,/["%\r\n&|<>^!]/);
+  const short=execFileSync('cmd.exe',['/d','/c','for %I in (.) do @echo %~fsI'],{cwd:directory,encoding:'utf8',windowsHide:true}).trim();
+  assert.notEqual(short,directory,'Windows fixture volume must supply real 8.3 aliases');
+  assert.equal(fs.realpathSync.native(short),fs.realpathSync.native(directory));
+  return short;
+}
+test('Windows 8.3 branch preflight accepts mixed physical identities', {skip:process.platform!=='win32'},()=>fixture(async temporary=>{
+  const root=path.join(temporary,'Vault with long name');fs.mkdirSync(root);
+  const child=path.join(root,'Working directory');fs.mkdirSync(child);
+  const git=(...args)=>execFileSync('git',['-c',`safe.directory=${root}`,...args],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+  git('init');
+  const short=shortWindowsPath(root),shortChild=shortWindowsPath(child);
+  const {branchRepository}=load('workflow-branch'),{preflightInstalledWorkflow}=load('workflow-preflight');
+  for(const vault of [root,short]) for(const cwd of [child,shortChild]) {
+    assert.equal(branchRepository(cwd,vault),fs.realpathSync.native(root));
+    const definition=prepare({id:'w',handoffBranch:true,steps:[{id:'a',taskId:'t'}]},[{id:'t',taskKind:'code',branch:'feature',code:'output=1'}],{workingDirectory:cwd});
+    assert.doesNotThrow(()=>preflightInstalledWorkflow(definition,vault));
+  }
+}));
 function pluginFor(root, configDir='.obsidian', pluginId='auto-oc') {
   const original=Module._load;
   try {
@@ -25,6 +47,183 @@ function pluginFor(root, configDir='.obsidian', pluginId='auto-oc') {
     return plugin;
   } finally {Module._load=original;}
 }
+test('Windows 8.3 installation identity preserves link and lease restrictions', {skip:process.platform!=='win32'},()=>fixture(async root=>{
+  const selected=path.join(root,'Selected long directory/plugins/auto-oc');fs.mkdirSync(selected,{recursive:true});
+  const short=shortWindowsPath(root),shortSelected=shortWindowsPath(selected);
+  const {resolveInstalledWorkflowLocation:resolve,ensureInstalledWorkflowRuntime:ensure}=load('installed-workflow-location');
+  const expected=resolve(root,'Selected long directory/plugins/auto-oc');
+  for(const vault of [root,short]) for(const installation of [selected,shortSelected]) assert.deepEqual(resolve(vault,installation),expected);
+  ensure(expected);
+  const {acquireExecutionLease:acquire}=load('execution-lease');
+  const lease=acquire(path.join(shortSelected,'runtime'));
+  try {
+    assert.throws(()=>acquire(expected.runtimeDirectory),/EEXIST/);
+    const definition=prepare({id:'w',steps:[{id:'a',stepKind:'code',code:'output=1'}]},[],{});
+    const result=await run({definition,runtimeDirectory:expected.runtimeDirectory,vaultBase:root,lease,redact:s=>s});
+    assert.equal(result.phase,'completed');lease.assertOwned();
+  } finally {lease.release();}
+  const link=path.join(root,'linked');fs.symlinkSync(selected,link,'junction');
+  for(const vault of [root,short]) assert.throws(()=>resolve(vault,link),/regular directories/);
+}));
+function branchFixture(root, gate=false) {
+  const git=(...args)=>execFileSync('git',['-c',`safe.directory=${root}`,...args],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+  git('init');git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--allow-empty','-m','fixture');
+  git('branch','existing');
+  const installation=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(installation,{recursive:true});
+  const code='vault.append("effects.txt","A");'+(gate?'const deadline=Date.now()+20000; while(!vault.exists("release.txt")){if(Date.now()>deadline)throw Error("fixture gate timed out");}':'')+'output="first";';
+  const tasks=[{id:'t',name:'Task',taskKind:'code',branch:'feature',createBranch:true,codeAllowVault:true,code}];
+  const workflows=[{id:'w',name:'Workflow',handoffBranch:true,steps:[{id:'a',taskId:'t'},{id:'b',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","B");output=input;'}]}];
+  const file=path.join(installation,'data.json');fs.writeFileSync(file,JSON.stringify({tasks,workflows}));
+  return {git,file,installation,runtime:path.join(installation,'runtime'),tasks,workflows};
+}
+test('Windows 8.3 host and runtime bundle resume all alias directions without replay', {skip:process.platform!=='win32'},async t=>{
+  for(const bundled of [false,true]) for(const [startShort,endShort] of [[false,false],[true,true],[false,true],[true,false]]) {
+    await t.test(`${bundled?'bundle':'source'} ${startShort}->${endShort}`,()=>fixture(async root=>{
+      const data=branchFixture(root),short=shortWindowsPath(root),start=startShort?short:root,end=endShort?short:root;
+      const host=(bundled?require('../autooc-runtime.cjs'):load('installed-workflow-host')).runInstalledWorkflow;
+      const options={workflowId:'w',installationDirectory:data.installation,redact:s=>s};
+      const first=await host({...options,vault:start,maxSteps:1});
+      assert.equal(first.phase,'ready');assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A');
+      const branch=data.git('branch','--show-current');assert.match(branch,/^feature-/);
+      const final=await host({...options,vault:end,resumeRunId:first.runId});
+      assert.equal(final.phase,'completed');assert.equal(final.runId,first.runId);assert.equal(final.definitionHash,first.definitionHash);
+      assert.deepEqual(final.steps[0],first.steps[0]);assert.equal(data.git('branch','--show-current'),branch);
+      assert.deepEqual(await host({...options,vault:start,resumeRunId:first.runId}),final);
+      assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'AB');
+    }));
+  }
+});
+test('Windows 8.3 historical branch spelling is compared physically without rewriting history', {skip:process.platform!=='win32'},()=>fixture(async root=>{
+  const data=branchFixture(root),short=shortWindowsPath(root),record={directory:short,name:data.git('branch','--show-current')};
+  const original=structuredClone(record),saved=[];
+  const journal={snapshot:()=>({steps:[{branch:record}]}),recordBranch:async branch=>saved.push(branch)};
+  const {prepareTaskBranch,verifyWorkflowBranch}=load('workflow-branch');
+  verifyWorkflowBranch(journal,root);
+  await prepareTaskBranch(journal,{branch:'must-not-be-created',createBranch:true},root,short,true);
+  assert.deepEqual(record,original);assert.equal(saved.length,1);assert.equal(saved[0].name,record.name);
+  assert.equal(saved[0].directory,fs.realpathSync.native(root));assert.doesNotMatch(data.git('branch','--list'),/must-not-be-created/);
+}));
+test('Windows 8.3 plugin retains its reservation when the selected vault spelling changes', {skip:process.platform!=='win32'},()=>fixture(async root=>{
+  branchFixture(root);const short=shortWindowsPath(root),plugin=pluginFor(short);
+  plugin.app.vault.adapter.queue=async job=>job();
+  plugin.app.vault.adapter.reconcileInternalFile=async relative=>assert.equal(relative,'effects.txt');
+  await plugin.loadSettings();plugin.reservePluginExecution();
+  try {
+    const first=await plugin.runSharedWorkflow('w');assert.equal(first.phase,'completed',JSON.stringify(first.steps));
+    plugin.app.vault.adapter.basePath=root;
+    const resumed=await plugin.runSharedWorkflow('w',first.runId);
+    assert.equal(resumed.runId,first.runId);assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'AB');
+  } finally {plugin.releasePluginExecution(false);}
+}));
+test('Windows 8.3 public CLI stops and resumes across all alias directions', {skip:process.platform!=='win32'},async t=>{
+  const {spawn,spawnSync}=require('node:child_process'),cli=path.resolve(__dirname,'../autooc-cli.cjs');
+  const call=(...args)=>{
+    const result=spawnSync(process.execPath,[cli,...args],{encoding:'utf8',timeout:15000,windowsHide:true});
+    assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);
+  };
+  for(const [startShort,endShort] of [[false,false],[true,true],[false,true],[true,false]]) await t.test(`${startShort}->${endShort}`,()=>fixture(async root=>{
+    const data=branchFixture(root,true),short=shortWindowsPath(root),start=startShort?short:root,end=endShort?short:root;
+    const child=spawn(process.execPath,[cli,'run','--vault',start,'--workflow','w'],{windowsHide:true});
+    let stdout='',stderr='';child.stdout.on('data',chunk=>stdout+=chunk);child.stderr.on('data',chunk=>stderr+=chunk);
+    const finished=new Promise((resolve,reject)=>{child.once('error',reject);child.once('exit',code=>resolve(code));});
+    try {
+      const deadline=Date.now()+15000;
+      while(!fs.existsSync(path.join(root,'effects.txt')) && child.exitCode===null && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
+      assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A',stderr);
+      const status=call('status','--vault',end),observed=status.executions[0];
+      assert.equal(observed.phase,'in_flight');assert.equal(status.executionLockPresent,true);
+      const stop=call('stop','--vault',end,'--workflow','w','--run',observed.runId);assert.equal(stop.requested,true);
+      fs.writeFileSync(path.join(root,'release.txt'),'continue');
+      assert.equal(await finished,0,stderr);
+      const first=JSON.parse(stdout);assert.equal(first.runId,observed.runId);assert.equal(first.phase,'in_flight');
+      const snapshot=JSON.parse(fs.readFileSync(path.join(data.runtime,first.runId+'.json')));
+      assert.equal(snapshot.steps[0].result.succeeded,true);
+      const branch=data.git('branch','--show-current');
+      const final=call('resume','--vault',end,'--workflow','w','--run',first.runId);
+      assert.equal(final.phase,'completed');assert.equal(final.runId,first.runId);
+      const checkpoint=JSON.parse(fs.readFileSync(path.join(data.runtime,first.runId+'.json')));
+      assert.equal(checkpoint.definitionHash,snapshot.definitionHash);assert.deepEqual(checkpoint.steps[0].branch,snapshot.steps[0].branch);
+      assert.equal(data.git('branch','--show-current'),branch);
+      assert.equal(call('resume','--vault',start,'--workflow','w','--run',first.runId).phase,'completed');
+      assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'AB');
+    } finally {
+      fs.writeFileSync(path.join(root,'release.txt'),'continue');await finished;
+    }
+  }));
+  for(const createBranch of [false,true]) await t.test(`standalone task create=${createBranch}`,()=>fixture(async root=>{
+    const data=branchFixture(root),short=shortWindowsPath(root),config=JSON.parse(fs.readFileSync(data.file));
+    config.tasks[0].createBranch=createBranch;config.tasks[0].branch=createBranch?'feature':'existing';fs.writeFileSync(data.file,JSON.stringify(config));
+    const first=call('run','--vault',short,'--task','t');assert.equal(first.phase,'completed');
+    assert.equal(call('resume','--vault',root,'--task','t','--run',first.runId).runId,first.runId);
+    assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A');
+    assert.match(data.git('branch','--show-current'),createBranch?/^feature-/:/^existing$/);
+  }));
+});
+test('branch rejection preserves ready and observed checkpoints for explicit recovery',async t=>{
+  for(const observed of [false,true]) await t.test(observed?'observed result':'ready',()=>fixture(async root=>{
+    const data=branchFixture(root),host=load('installed-workflow-host').runInstalledWorkflow,controller=new AbortController();
+    const options={vault:root,workflowId:'w',redact:s=>s};
+    const first=await host({...options,maxSteps:1,signal:controller.signal,
+      vaultMutations:()=>({record:()=>{},flush:async()=>{if(observed)controller.abort();}})});
+    assert.equal(first.phase,observed?'in_flight':'ready');
+    const file=path.join(data.runtime,first.runId+'.json'),before=fs.readFileSync(file);
+    const branch=data.git('branch','--show-current');data.git('branch','-m','changed');
+    await assert.rejects(host({...options,resumeRunId:first.runId}),/branch changed/);
+    assert.deepEqual(fs.readFileSync(file),before,'denied recovery must not mutate the journal');
+    assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A');
+    data.git('branch','-m',branch);
+    const final=await host({...options,resumeRunId:first.runId});
+    assert.equal(final.phase,'completed');assert.equal(final.runId,first.runId);
+    assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'AB');
+  }));
+});
+
+test('branch continuity rejects changed branches and exterior recorded repositories before another effect',async t=>{
+  for(const mode of ['branch','exterior','definition','uncertain']) await t.test(mode,()=>fixture(async root=>{
+    const data=branchFixture(root),host=load('installed-workflow-host').runInstalledWorkflow;
+    const first=await host({vault:root,workflowId:'w',maxSteps:1,redact:s=>s});
+    const file=path.join(data.runtime,first.runId+'.json');
+    if(mode==='branch')data.git('branch','-m','changed');
+    if(mode==='exterior') {
+      const state=JSON.parse(fs.readFileSync(file));state.steps[0].branch.directory=path.dirname(root);fs.writeFileSync(file,JSON.stringify(state));
+    }
+    if(mode==='definition') {
+      const config=JSON.parse(fs.readFileSync(data.file));config.tasks[0].code='output="changed"';fs.writeFileSync(data.file,JSON.stringify(config));
+    }
+    if(mode==='uncertain') {
+      const {acquireExecutionLease}=load('execution-lease'),{ExecutionJournal}=load('execution-journal');
+      const lease=acquireExecutionLease(data.runtime);try {await ExecutionJournal.open(lease,first.runId,first.definitionHash).begin('b');} finally {lease.release();}
+    }
+    await assert.rejects(host({vault:root,workflowId:'w',resumeRunId:first.runId,redact:s=>s}),/branch changed|Git branch operation|outside|definition|reconciliation/i);
+    assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A');
+  }));
+});
+test('branch preflight rejects exterior git-dir and common-dir without branch or Code effects',async t=>{
+  for(const commonOnly of [false,true]) await t.test(commonOnly?'common-dir':'git-dir',()=>fixture(async root=>{
+    const original=branchFixture(root),vault=path.join(root,'isolated vault');
+    original.git('worktree','add','--detach',vault,'HEAD');
+    if(commonOnly) {
+      const metadata=execFileSync('git',['-C',vault,'rev-parse','--absolute-git-dir'],{encoding:'utf8'}).trim();
+      const internal=path.join(vault,'internal metadata');fs.cpSync(metadata,internal,{recursive:true});
+      fs.writeFileSync(path.join(internal,'commondir'),path.join(root,'.git')+'\n');
+      // Git marks this fixture file hidden on Windows; open the existing file
+      // without O_CREAT (which Windows rejects for hidden files).
+      const fd=fs.openSync(path.join(vault,'.git'),'r+');
+      try {fs.ftruncateSync(fd,0);fs.writeFileSync(fd,'gitdir: '+internal+'\n');} finally {fs.closeSync(fd);}
+    }
+    const installation=path.join(vault,'.obsidian/plugins/auto-oc');fs.mkdirSync(installation,{recursive:true});
+    fs.writeFileSync(path.join(installation,'data.json'),JSON.stringify({tasks:original.tasks,workflows:original.workflows}));
+    const head=original.git('rev-parse','HEAD'),branches=original.git('branch','--list');
+    const config=fs.readFileSync(path.join(installation,'data.json'));
+    for(const candidate of process.platform==='win32'?[vault,shortWindowsPath(vault)]:[vault]) {
+      await assert.rejects(load('installed-workflow-host').runInstalledWorkflow({vault:candidate,workflowId:'w',redact:s=>s}),/Git metadata is outside/);
+      assert.equal(fs.existsSync(path.join(installation,'runtime')),false);
+      assert.equal(fs.existsSync(path.join(vault,'effects.txt')),false);
+      assert.equal(original.git('rev-parse','HEAD'),head);assert.equal(original.git('branch','--list'),branches);
+      assert.deepEqual(fs.readFileSync(path.join(installation,'data.json')),config);
+    }
+  }));
+});
 test('Duplicate creates independent executable definitions after completion and reload',async t=>{
   for(const kind of ['task','workflow']) await t.test(kind,()=>fixture(async root=>{
     const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');
@@ -123,7 +322,8 @@ test('selected installation runs plugin tasks and workflows without reading the 
       const result=await plugin.runSharedWorkflow(kind==='task'?'@task:t':'w',undefined,false,false,kind==='task'?'t':undefined);
       assert.equal(result.phase,'completed');assert.match(result.steps[0].output,/\nselected$/);
       assert.equal(plugin.settings.tasks[0].output,result.steps[0].output);
-      assert.equal(plugin.pluginExecutionLease.directory,fs.realpathSync(path.join(selected,'runtime')));
+      const physicalRuntime=process.platform==='win32'?fs.realpathSync.native(path.join(selected,'runtime')):fs.realpathSync(path.join(selected,'runtime'));
+      assert.equal(plugin.pluginExecutionLease.directory,physicalRuntime);
       const bytes=fs.readFileSync(path.join(selected,'runtime',result.runId+'.json'));
       const reloaded=pluginFor(root,configDir,pluginId);await reloaded.loadSettings();
       assert.equal(reloaded.settings.tasks[0].runtimeExecution.runId,result.runId);
@@ -250,7 +450,8 @@ test('selected installation validation rejects missing, escaped and linked paths
       await assert.rejects(load('installed-workflow-host').runInstalledWorkflow({vault:root,installationDirectory:invalid,workflowId:'w',redact:s=>s}));
     }
     fs.writeFileSync(path.join(root,'file'),'');assert.throws(()=>resolve(root,'file/plugins/auto-oc'));
-    const location=resolve(root);assert.equal(location.installationDirectory,fs.realpathSync(valid));assert.equal(fs.existsSync(location.runtimeDirectory),false);
+    const physicalInstallation=process.platform==='win32'?fs.realpathSync.native(valid):fs.realpathSync(valid);
+    const location=resolve(root);assert.equal(location.installationDirectory,physicalInstallation);assert.equal(fs.existsSync(location.runtimeDirectory),false);
   });
   for(const component of ['custom','custom/nested','custom/nested/plugins','custom/nested/plugins/auto-oc','custom/nested/plugins/auto-oc/runtime','custom/nested/plugins/auto-oc/data.json']) await t.test(component,()=>fixture(async root=>{
     const selected=path.join(root,'custom/nested/plugins/auto-oc'),link=path.join(root,component),target=path.join(root,'target');

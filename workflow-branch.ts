@@ -1,4 +1,4 @@
-import * as fs from "fs";
+import { physicalPath, samePhysicalPath, isWithinPhysicalPath } from "./path-identity";
 import * as path from "path";
 import { execFileSync } from "child_process";
 import type { ExecutionJournal } from "./execution-journal";
@@ -20,13 +20,12 @@ function git(cwd:string,args:string[]) {
 }
 
 export function branchRepository(cwd:string,vault:string) {
-  const directory=fs.realpathSync(git(cwd,["rev-parse","--show-toplevel"]));
-  const relative=path.relative(fs.realpathSync(vault),directory);
-  if(relative === ".." || relative.startsWith(".."+path.sep) || path.isAbsolute(relative)) throw new Error("Git repository is outside the selected vault");
+  const directory=physicalPath(git(physicalPath(cwd),["rev-parse","--show-toplevel"]));
+  if(!isWithinPhysicalPath(vault,directory)) throw new Error("Git repository is outside the selected vault");
   // Linked worktrees can write Git metadata outside the authorized vault.
-  const metadata=fs.realpathSync(git(directory,["rev-parse","--absolute-git-dir"]));
-  const metadataRelative=path.relative(fs.realpathSync(vault),metadata);
-  if(metadataRelative === ".." || metadataRelative.startsWith(".."+path.sep) || path.isAbsolute(metadataRelative)) throw new Error("Git metadata is outside the selected vault");
+  const metadata=physicalPath(git(directory,["rev-parse","--absolute-git-dir"]));
+  const common=physicalPath(path.resolve(directory,git(directory,["rev-parse","--git-common-dir"])));
+  if(!isWithinPhysicalPath(vault,metadata) || !isWithinPhysicalPath(vault,common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
 }
 
@@ -37,7 +36,7 @@ export async function prepareTaskBranch(journal:ExecutionJournal,task:Readonly<R
   if(!previous && !task.branch?.trim() && !handoff) return;
   const directory=branchRepository(cwd,vault);
   if(previous) {
-    if(previous.directory!==directory || git(directory,["branch","--show-current"])!==previous.name) throw new Error("Workflow branch changed; reconcile before continuation");
+    if(!samePhysicalPath(branchRepository(previous.directory,vault),directory) || git(directory,["branch","--show-current"])!==previous.name) throw new Error("Workflow branch changed; reconcile before continuation");
   } else if(task.branch?.trim()) {
     const name=task.createBranch ? `${task.branch}-${state.runId.slice(0,8)}-${state.steps.length}` : task.branch;
     git(directory,task.createBranch ? ["checkout","-b",name] : ["checkout",name]);
@@ -47,7 +46,7 @@ export async function prepareTaskBranch(journal:ExecutionJournal,task:Readonly<R
   await journal.recordBranch({directory,name});
 }
 
-export function verifyWorkflowBranch(journal:ExecutionJournal) {
+export function verifyWorkflowBranch(journal:ExecutionJournal,vault:string) {
   const branch=[...journal.snapshot().steps].reverse().find(step=>step.branch)?.branch;
-  if(branch && git(branch.directory,["branch","--show-current"])!==branch.name)throw new Error("Workflow branch changed; reconcile before continuation");
+  if(branch && git(branchRepository(branch.directory,vault),["branch","--show-current"])!==branch.name)throw new Error("Workflow branch changed; reconcile before continuation");
 }

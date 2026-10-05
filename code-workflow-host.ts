@@ -1,3 +1,4 @@
+import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
 import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
 import { ExecutionJournal, type RunCheckpoint } from "./execution-journal";
@@ -58,12 +59,17 @@ export async function runCodeWorkflowHost(options: {
   if (!entry) throw new Error("Workflow has no entry step");
   const lease = options.lease || acquireExecutionLease(options.runtimeDirectory);
   lease.assertOwned();
-  if (fs.realpathSync(options.runtimeDirectory) !== lease.directory) throw new Error("Execution lease belongs to another runtime");
+  if (!samePhysicalPath(options.runtimeDirectory,lease.directory)) throw new Error("Execution lease belongs to another runtime");
   if (advancingLeases.has(lease)) throw new Error("Execution lease already has an advancing session");
   advancingLeases.add(lease);
   try {
     const resumed = options.resumeRunId === undefined ? undefined : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
+    // Reject changed branches before beginning a step or advancing a durable
+    // result. A denied resume must leave its checkpoint recoverable unchanged.
+    if (resumed && definition.workflow.handoffBranch && ["ready","in_flight"].includes(resumed.snapshot().phase)) {
+      verifyWorkflowBranch(resumed,options.vaultBase);
+    }
     if (resumed?.snapshot().phase === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result) {
       if (!options.reconcile || !options.tasks?.reconcile) throw new Error("Interrupted execution requires reconciliation; cannot replay effects");
       const step = steps.find(step => step.id === resumed.snapshot().nextStepId) as any;
@@ -93,7 +99,7 @@ export async function runCodeWorkflowHost(options: {
     const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
     return await advanceWorkflowSession(journal, definition, {
       async execute(step:any, input, outputs, signal) {
-        if(definition.workflow.handoffBranch)verifyWorkflowBranch(journal);
+        if(definition.workflow.handoffBranch)verifyWorkflowBranch(journal,options.vaultBase);
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find(task => task.id === step.taskId);
           if (!task || !options.tasks) throw new Error("Workflow task adapter is unavailable");

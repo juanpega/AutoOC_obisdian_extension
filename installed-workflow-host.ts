@@ -1,3 +1,4 @@
+import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
 import * as path from "path";
 import { SettingsWriter } from "./settings-writer";
@@ -40,7 +41,7 @@ export async function runInstalledWorkflow(options: {
   // The caller retains its lease, including on failure.
   if (options.lease) {
     options.lease.assertOwned();
-    if (fs.realpathSync(options.lease.directory) !== fs.realpathSync(runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
+    if (!samePhysicalPath(options.lease.directory,runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
   }
   const config:any = new SettingsWriter().load(configurationFile);
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
