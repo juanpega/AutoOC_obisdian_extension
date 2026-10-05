@@ -30,7 +30,7 @@ function fixture(t) {
     const p=new Plugin();p.manifest=JSON.parse(fs.readFileSync(path.join(directory,'manifest.json')));
     p.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{detachLeavesOfType(){},onLayoutReady(){}}};
     p.settings={tasks:[],workflows:[]};
-    p.loadSettings=async()=>{};p.registerView=()=>{};p.addRibbonIcon=()=>{};p.addCommand=()=>{};p.addSettingTab=()=>{};p.registerInterval=()=>{};p.register=()=>{};
+    p.loadSettings=async()=>{};p.registerView=(type,factory)=>{p.createDashboard=factory;};p.addRibbonIcon=()=>{};p.addCommand=()=>{};p.addSettingTab=()=>{};p.registerInterval=()=>{};p.register=()=>{};
     p.refreshModels=()=>{};p.refreshAgents=()=>{};p.refreshCodexModels=async()=>{};p.checkForUpdates=async()=>{};
     return p;
   };
@@ -42,6 +42,90 @@ function timers(t){
   global.setTimeout=fn=>{callbacks.push(fn);return 1;};
   t.after(()=>{global.window=old;global.setTimeout=st;});return callbacks;
 }
+function dashboard(t,p){
+  const view=p.createDashboard({}),events=[];
+  view.unsubscribeTaskUpdated=()=>events.push('tasks');
+  view.unsubscribeWorkflowUpdated=()=>events.push('workflows');
+  view.dashboardResizeObserver={disconnect:()=>events.push('observer')};
+  const interval=setInterval(()=>assert.fail('closed Dashboard animation ran'),60000);
+  t.after(()=>clearInterval(interval));view.sinkIntervals.set('task',interval);
+  view.dashboardTaskDriftDirection.set('task',1);
+  view.dashboardPositions.set('task',{x:12,y:34,sizePx:56});
+  const clean=()=>{
+    assert.deepEqual(events,['tasks','workflows','observer']);
+    assert.equal(view.unsubscribeTaskUpdated,undefined);assert.equal(view.unsubscribeWorkflowUpdated,undefined);
+    assert.equal(view.dashboardResizeObserver,null);assert.equal(view.sinkIntervals.size,0);
+    assert.equal(view.dashboardTaskDriftDirection.size,0);assert.equal(interval._destroyed,true);
+  };
+  return {view,clean};
+}
+test('C11 real Dashboard close resolves during unload and preserves an immediate successor',async t=>{
+  const callbacks=timers(t);const {create,directory,runtime}=fixture(t),first=create(),second=create();
+  await first.onload();const {view,clean}=dashboard(t,first);
+  const before=fs.readFileSync(path.join(directory,'data.json')),settings=JSON.stringify(first.settings);
+  let closing,finishBridge,writes=0;const save=first.saveSettings.bind(first);
+  first.saveSettings=(...args)=>{writes++;return save(...args);};
+  first.stopMcpBridge=()=>new Promise(resolve=>{finishBridge=resolve;});
+  first.app.workspace.detachLeavesOfType=()=>{closing=view.onClose().then(()=>({resolved:true}),error=>({resolved:false,error:String(error)}));};
+  const unloading=first.onunload();
+  try{
+    await second.onload();const owner=fs.readFileSync(path.join(runtime,'execution.lock/owner.json'));
+    finishBridge();await unloading;
+    assert.deepEqual(await closing,{resolved:true});clean();
+    assert.equal(writes,0);assert.equal(JSON.stringify(first.settings),settings);
+    for(const callback of [...callbacks])callback();
+    await view.onClose();clean();
+    assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);
+    assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),owner);
+    await assert.rejects(first.saveSettings(),/stopped/);
+  }finally{finishBridge();await unloading;await second.onunload();}
+});
+test('C11 active Dashboard saves positions through SettingsWriter and closes cleanly',async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create();await p.onload();
+  p.settings=p.settingsWriter.load(path.join(directory,'data.json'));
+  const {view,clean}=dashboard(t,p);
+  try{
+    assert.equal(await view.persistDashboardPositionsSafely(),'saved');
+    view.dashboardPositions.set('task',{x:78,y:90});
+    const closing=view.onClose();clean();await closing;
+    const saved=JSON.parse(fs.readFileSync(path.join(directory,'data.json')));
+    assert.deepEqual(saved.dashboardPositions,{task:{x:78,y:90}});assert.equal(saved.custom,'preserved');
+  }finally{await p.onunload();}
+});
+test('C11 persistence failure is reported without exposing errors or interrupting cleanup',async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create();await p.onload();
+  const {view,clean}=dashboard(t,p),before=fs.readFileSync(path.join(directory,'data.json'));
+  const warn=console.warn,diagnostics=[];console.warn=(...args)=>diagnostics.push(args);
+  const save=p.settingsWriter.save;p.settingsWriter.save=async()=>{throw Error('PRIVATE_CONFIGURATION_SENTINEL');};
+  try{
+    assert.equal(await view.persistDashboardPositionsSafely(),'failed');
+    await view.onClose();clean();
+    assert.equal(diagnostics.length,2);
+    for(const diagnostic of diagnostics)assert.deepEqual(diagnostic,['AutoOC: Dashboard positions could not be saved.']);
+    assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);
+  }finally{console.warn=warn;p.settingsWriter.save=save;await p.onunload();}
+});
+test('C11 a pending real Dashboard save retains ownership through unload',async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),p=create();await p.onload();
+  const {view,clean}=dashboard(t,p),ownerFile=path.join(runtime,'execution.lock/owner.json');
+  const owner=fs.readFileSync(ownerFile);const closing=view.onClose();clean();
+  assert.equal(p.settingsWriter.hasPendingWrites,true);
+  await p.onunload();assert.deepEqual(fs.readFileSync(ownerFile),owner);
+  assert.throws(()=>create().reservePluginExecution(),/live or cannot/);
+  await closing;assert.equal(p.settingsWriter.hasPendingWrites,false);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory,'data.json'))).dashboardPositions,{task:{x:12,y:34,sizePx:56}});
+  p.releasePluginExecution(false);
+});
+test('C11 late Dashboard adjustments skip snapshot mutation and writing after unload',async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create();await p.onload();const {view,clean}=dashboard(t,p);
+  let closing;p.app.workspace.detachLeavesOfType=()=>{closing=view.onClose();};
+  await p.onunload();await closing;clean();
+  const before=fs.readFileSync(path.join(directory,'data.json')),settings=JSON.stringify(p.settings);
+  view.dashboardPositions.set('late',{x:99,y:99});
+  assert.equal(await view.persistDashboardPositionsSafely(),'skipped');
+  await view.onClose();clean();assert.equal(JSON.stringify(p.settings),settings);
+  assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);
+});
 test('host may ignore unload promise: successor owns lease before delayed MCP close',async t=>{
   timers(t);const {create,runtime}=fixture(t),first=create();
   first.reservePluginExecution();let close;first.stopMcpBridge=()=>new Promise(resolve=>{close=resolve;});

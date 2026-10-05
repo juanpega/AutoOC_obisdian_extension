@@ -7237,6 +7237,9 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   assertLifecycleOpen() {
     if (this.lifecycleStopped) throw new Error("AutoOC instance is stopped");
   }
+  isLifecycleStopped() {
+    return this.lifecycleStopped;
+  }
   assertExecutionIdle() {
     if (this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites) {
       throw new Error("Active execution or pending write requires reconciliation");
@@ -10138,12 +10141,22 @@ var AutoOCView = class extends import_obsidian.ItemView {
     }
   }
   async persistDashboardPositions() {
+    if (this.plugin.isLifecycleStopped()) return "skipped";
     const obj = {};
     this.dashboardPositions.forEach((pos, key) => {
       obj[key] = pos;
     });
     this.plugin.settings.dashboardPositions = obj;
     await this.plugin.saveSettings(false);
+    return "saved";
+  }
+  async persistDashboardPositionsSafely() {
+    try {
+      return await this.persistDashboardPositions();
+    } catch (e) {
+      console.warn("AutoOC: Dashboard positions could not be saved.");
+      return "failed";
+    }
   }
   getViewType() {
     return VIEW_TYPE;
@@ -10162,16 +10175,19 @@ var AutoOCView = class extends import_obsidian.ItemView {
   }
   async onClose() {
     var _a, _b, _c;
-    (_a = this.unsubscribeTaskUpdated) == null ? void 0 : _a.call(this);
-    (_b = this.unsubscribeWorkflowUpdated) == null ? void 0 : _b.call(this);
-    this.unsubscribeTaskUpdated = void 0;
-    this.unsubscribeWorkflowUpdated = void 0;
-    await this.persistDashboardPositions();
-    (_c = this.dashboardResizeObserver) == null ? void 0 : _c.disconnect();
-    this.dashboardResizeObserver = null;
-    this.sinkIntervals.forEach((iv) => clearInterval(iv));
-    this.sinkIntervals.clear();
-    this.dashboardTaskDriftDirection.clear();
+    try {
+      (_a = this.unsubscribeTaskUpdated) == null ? void 0 : _a.call(this);
+      (_b = this.unsubscribeWorkflowUpdated) == null ? void 0 : _b.call(this);
+    } finally {
+      this.unsubscribeTaskUpdated = void 0;
+      this.unsubscribeWorkflowUpdated = void 0;
+      (_c = this.dashboardResizeObserver) == null ? void 0 : _c.disconnect();
+      this.dashboardResizeObserver = null;
+      this.sinkIntervals.forEach((iv) => clearInterval(iv));
+      this.sinkIntervals.clear();
+      this.dashboardTaskDriftDirection.clear();
+    }
+    await this.persistDashboardPositionsSafely();
   }
   refresh() {
     this.render();
@@ -11072,7 +11088,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           clampBubbleToParent(child);
         });
         saveBubbleTreePositions(parent);
-        void this.persistDashboardPositions();
+        void this.persistDashboardPositionsSafely();
       });
     };
     const settleBubbleCollisions = (parent, passes = 10) => {
@@ -11125,7 +11141,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           if (!movedAny) break;
         }
         saveBubbleTreePositions(parent);
-        void this.persistDashboardPositions();
+        void this.persistDashboardPositionsSafely();
       });
     };
     const hasBubbleOverlap = (parent) => {

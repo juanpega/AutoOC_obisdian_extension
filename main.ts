@@ -1911,6 +1911,10 @@ export default class AutoOCPlugin extends Plugin {
     if (this.lifecycleStopped) throw new Error("AutoOC instance is stopped");
   }
 
+  isLifecycleStopped(): boolean {
+    return this.lifecycleStopped;
+  }
+
   private assertExecutionIdle(): void {
     if (this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size ||
         this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites) {
@@ -4954,11 +4958,23 @@ class AutoOCView extends ItemView {
     }
   }
 
-  private async persistDashboardPositions() {
+  private async persistDashboardPositions(): Promise<"saved" | "skipped"> {
+    if (this.plugin.isLifecycleStopped()) return "skipped";
     const obj: Record<string, { x: number; y: number; size?: number; sizePx?: number }> = {};
     this.dashboardPositions.forEach((pos, key) => { obj[key] = pos; });
     this.plugin.settings.dashboardPositions = obj;
     await this.plugin.saveSettings(false);
+    return "saved";
+  }
+
+  private async persistDashboardPositionsSafely(): Promise<"saved" | "skipped" | "failed"> {
+    try {
+      return await this.persistDashboardPositions();
+    } catch {
+      // Do not log the exception: storage errors may contain configuration data.
+      console.warn("AutoOC: Dashboard positions could not be saved.");
+      return "failed";
+    }
   }
 
   getViewType() { return VIEW_TYPE; }
@@ -4972,16 +4988,20 @@ class AutoOCView extends ItemView {
     this.render();
   }
   async onClose() {
-    this.unsubscribeTaskUpdated?.();
-    this.unsubscribeWorkflowUpdated?.();
-    this.unsubscribeTaskUpdated = undefined;
-    this.unsubscribeWorkflowUpdated = undefined;
-    await this.persistDashboardPositions();
-    this.dashboardResizeObserver?.disconnect();
-    this.dashboardResizeObserver = null;
-    this.sinkIntervals.forEach((iv) => clearInterval(iv));
-    this.sinkIntervals.clear();
-    this.dashboardTaskDriftDirection.clear();
+    try {
+      this.unsubscribeTaskUpdated?.();
+      this.unsubscribeWorkflowUpdated?.();
+    } finally {
+      this.unsubscribeTaskUpdated = undefined;
+      this.unsubscribeWorkflowUpdated = undefined;
+      this.dashboardResizeObserver?.disconnect();
+      this.dashboardResizeObserver = null;
+      this.sinkIntervals.forEach((iv) => clearInterval(iv));
+      this.sinkIntervals.clear();
+      this.dashboardTaskDriftDirection.clear();
+    }
+    // Stop callbacks synchronously, before waiting for an active instance's write.
+    await this.persistDashboardPositionsSafely();
   }
   refresh() { this.render(); }
 
@@ -5963,7 +5983,7 @@ class AutoOCView extends ItemView {
         clampBubbleToParent(child);
       });
       saveBubbleTreePositions(parent);
-      void this.persistDashboardPositions();
+      void this.persistDashboardPositionsSafely();
       });
     };
     const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
@@ -6017,7 +6037,7 @@ class AutoOCView extends ItemView {
         if (!movedAny) break;
       }
       saveBubbleTreePositions(parent);
-      void this.persistDashboardPositions();
+      void this.persistDashboardPositionsSafely();
       });
     };
     const hasBubbleOverlap = (parent: HTMLElement) => {
