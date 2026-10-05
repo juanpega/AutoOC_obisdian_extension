@@ -49,7 +49,7 @@ test("Copilot process preserves quotes, newlines, cwd and environment without a 
   assert.equal(result.exitCode, 0);
   const parsed = JSON.parse(result.output);
   assert.equal(parsed.prompt, prompt);
-  assert.equal(path.resolve(parsed.cwd).toLowerCase(), path.resolve(os.tmpdir()).toLowerCase());
+  assert.equal(fs.realpathSync(parsed.cwd), fs.realpathSync(os.tmpdir()));
   assert.equal(parsed.secret, "fixture-value");
   assert.equal(lastLaunch.options.shell, false);
   assert.equal(lastLaunch.options.windowsHide, true);

@@ -5,6 +5,75 @@ const os=require('node:os');
 const path=require('node:path');
 const {spawnSync}=require('node:child_process');
 
+function pluginClass(){
+  const Module=require('node:module'), original=Module._load;
+  let Plugin;
+  try {
+    Module._load=function(name,...args){
+      if(name==='obsidian')return Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab','WorkspaceLeaf'].map(key=>[key,class {}]));
+      return original.call(this,name,...args);
+    };
+    Plugin=require('../main.js').default;
+  } finally {Module._load=original;}
+  return Plugin;
+}
+
+test('plugin resumes a durable Code result after Stop without replaying effects',async()=>{
+  const Plugin=pluginClass();
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-durable-stop-'));
+  const install=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(install,{recursive:true});
+  fs.writeFileSync(path.join(install,'data.json'),JSON.stringify({tasks:[],workflows:[{id:'recover',name:'Recover',steps:[
+    {id:'first',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once"); output="first";'},
+    {id:'last',stepKind:'code',code:'output=input+" last";'}
+  ]}]}));
+  const p=new Plugin();p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
+  try {
+    p.reservePluginExecution();await p.loadSettings();
+    // Stop after the real Code effect, before the host records its result and transitions.
+    p.createVaultMutationBatch=()=>({record:()=>{},flush:async()=>{p.sharedWorkflowExecution.controller.abort();}});
+    const partial=await p.runSharedWorkflow('recover');
+    assert.equal(partial.phase,'in_flight');assert.deepEqual(partial.steps[0].result,{succeeded:true,output:'first'});
+    assert.equal(partial.steps.length,1);
+    p.createVaultMutationBatch=()=>({record:()=>{},flush:async()=>{}});
+    assert.equal(p.sharedWorkflowRecoveryMode('recover',partial.runId),'resume');
+    const result=await p.recoverSharedWorkflow('recover',partial.runId);
+    assert.equal(result.phase,'completed');assert.equal(result.runId,partial.runId);
+    assert.equal(result.steps.length,2);assert.equal(result.steps[1].output,'first last');
+    assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'once');
+    assert.deepEqual(result.steps[0].result,partial.steps[0].result);
+  } finally {
+    p.releasePluginExecution(false);
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-durable-stop-'));
+    fs.rmSync(root,{recursive:true});
+  }
+});
+
+test('plugin blocks uncertain evaluation even with a durable Code result',async()=>{
+  const {prepareWorkflowDefinition,runCodeWorkflowHost,persistWorkflowProgress}=require('../autooc-runtime.cjs');
+  const Plugin=pluginClass(),p=new Plugin(),root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-uncertain-eval-'));
+  const install=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(install,'runtime'),file=path.join(install,'data.json');
+  fs.mkdirSync(runtime,{recursive:true});
+  const workflow={id:'eval',name:'Eval',steps:[{id:'first',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once");output="observed";',transitions:[{mode:'eval',toStepId:'last'}]},{id:'last',stepKind:'code',code:'output="last";'}]};
+  const config={tasks:[],workflows:[workflow]};fs.writeFileSync(file,JSON.stringify(config));
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
+  let checkpoint;
+  try {
+    await assert.rejects(runCodeWorkflowHost({definition:prepareWorkflowDefinition(workflow,[],config),runtimeDirectory:runtime,vaultBase:root,redact:s=>s,
+      evaluate:async()=>{throw Error('evaluation transport lost');},onCheckpoint:async state=>{
+        checkpoint=state;await persistWorkflowProgress({configurationFile:file,runtimeDirectory:runtime,checkpoint:state,expectedRunId:state.runId});
+      }}),/evaluation transport lost/);
+    p.reservePluginExecution();await p.loadSettings();
+    const journal=path.join(runtime,checkpoint.runId+'.json'),before=fs.readFileSync(journal);
+    assert.equal(p.sharedWorkflowRecoveryMode('eval',checkpoint.runId),'blocked');
+    await assert.rejects(p.recoverSharedWorkflow('eval',checkpoint.runId),/evaluation.*reconciliation/);
+    assert.deepEqual(fs.readFileSync(journal),before);assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'once');
+  } finally {
+    p.releasePluginExecution(false);
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-uncertain-eval-'));
+    fs.rmSync(root,{recursive:true});
+  }
+});
+
 test('runtime bundle accepts an explicit installation and retains the default without discovery',async()=>{
   const {runInstalledWorkflow,resolveInstalledWorkflowLocation}=require('../autooc-runtime.cjs');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-bundle-selection-'));
@@ -21,7 +90,8 @@ test('runtime bundle accepts an explicit installation and retains the default wi
     const previous=fs.readFileSync(path.join(normal,'data.json'));
     assert.equal((await runInstalledWorkflow({...options,installationDirectory:selected,resumeRunId:first.runId})).runId,first.runId);
     assert.deepEqual(fs.readFileSync(path.join(normal,'data.json')),previous);
-    assert.equal(resolveInstalledWorkflowLocation(root,selected).runtimeDirectory,path.join(selected,'runtime'));
+    const physicalSelected=process.platform==='win32'?fs.realpathSync.native(selected):fs.realpathSync(selected);
+    assert.equal(resolveInstalledWorkflowLocation(root,selected).runtimeDirectory,path.join(physicalSelected,'runtime'));
     await assert.rejects(runInstalledWorkflow({...options,installationDirectory:'absent'}),/ENOENT/);
   } finally {
     assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-bundle-selection-'));fs.rmSync(root,{recursive:true});

@@ -55,18 +55,45 @@ test('write failure rolls back artifacts; failed rollback leaves execution block
   for(const rollbackFails of [false,true]) {
     const {directory,runtime}=fixture(t),lease=acquireExecutionLease(runtime),files=release();
     fs.writeFileSync(path.join(directory,'main.js'),'old');
-    const write=fs.writeFileSync;let failed=false;
+    // installRelease resolves the existing installation before deriving targets.
+    // Keep directory lexical at the call boundary to exercise temporary aliases.
+    const canonicalDirectory=fs.realpathSync(directory);
+    const initialTarget=path.join(canonicalDirectory,'styles.css');
+    const rollbackTarget=path.join(canonicalDirectory,'main.js');
+    const createdTarget=path.join(canonicalDirectory,'manifest.json');
+    assert.equal(fs.existsSync(createdTarget),false);
+    const write=fs.writeFileSync;let initialFailures=0,rollbackFailures=0,createdBeforeFailure=false;
     try {
       fs.writeFileSync=function(file,...args){
-        if(file===path.join(directory,'manifest.json') && !failed){failed=true;throw Error('injected write failure');}
-        if(rollbackFails && failed && file===path.join(directory,'main.js'))throw Error('injected rollback failure');
+        if(file===initialTarget && initialFailures===0){
+          initialFailures++;
+          createdBeforeFailure=fs.existsSync(createdTarget) && fs.readFileSync(createdTarget).equals(files['manifest.json']);
+          throw Error('injected write failure');
+        }
+        if(rollbackFails && initialFailures>0 && file===rollbackTarget){rollbackFailures++;throw Error('injected rollback failure');}
         return write.call(this,file,...args);
       };
-      assert.throws(()=>installRelease({directory,version:'1.6.0',files,lease}),/injected/);
+      assert.throws(()=>installRelease({directory,version:'1.6.0',files,lease}),{message:rollbackFails?'injected rollback failure':'injected write failure'});
     }finally{fs.writeFileSync=write;lease.release();}
+    assert.equal(initialFailures,1);
+    assert.equal(rollbackFailures,rollbackFails?1:0);
+    assert.equal(createdBeforeFailure,true,'a previously absent artifact was written before the failure');
     assert.equal(fs.existsSync(path.join(runtime,'update-pending.json')),rollbackFails);
-    if(rollbackFails)assert.throws(()=>acquireExecutionLease(runtime),/Incomplete plugin update/);
-    else {assert.equal(fs.readFileSync(path.join(directory,'main.js'),'utf8'),'old');assert.ok(!fs.existsSync(path.join(directory,'manifest.json')));}
+    if(rollbackFails){
+      const marker=JSON.parse(fs.readFileSync(path.join(runtime,'update-pending.json'),'utf8'));
+      assert.equal(marker.schemaVersion,1);assert.equal(marker.version,'1.6.0');
+      assert.match(marker.backup,/^update-backup-[a-f0-9-]+$/);
+      const backup=path.join(runtime,marker.backup);
+      assert.equal(fs.readFileSync(path.join(backup,'main.js'),'utf8'),'old');
+      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(backup,'recovery.json'),'utf8')),marker);
+      assert.deepEqual(marker.files,[...RELEASE_FILES,RELEASE_DESCRIPTOR]);
+      assert.deepEqual(marker.absent,[...RELEASE_FILES,RELEASE_DESCRIPTOR].filter(name=>name!=='main.js'));
+      assert.throws(()=>acquireExecutionLease(runtime),/Incomplete plugin update/);
+    }
+    else {
+      assert.equal(fs.readFileSync(path.join(directory,'main.js'),'utf8'),'old');
+      for(const name of [...RELEASE_FILES,RELEASE_DESCRIPTOR].filter(name=>name!=='main.js'))assert.equal(fs.existsSync(path.join(directory,name)),false,name);
+    }
   }
 });
 test('unfinished run and linked artifact directory prevent update',t=>{

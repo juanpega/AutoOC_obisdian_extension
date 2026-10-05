@@ -1,5 +1,6 @@
 import * as fs from "fs";
 import * as path from "path";
+import { physicalPath } from "./path-identity";
 import type { VaultMutationBatch } from "./code-vault-mutations";
 
 // Obsidian 1.13.7: verified against a real FileSystemAdapter. These are
@@ -38,7 +39,19 @@ export class ObsidianVaultRefresh {
   }
 
   private relativeFile(file: string): string {
-    const root = fs.realpathSync(this.root);
+    if (!path.isAbsolute(file)) throw new Error("Refresh path escapes vault");
+    if (process.platform === "win32") {
+      // Inspect the original spelling before native resolution can hide a
+      // junction. Short names can appear in any component, including the file.
+      let current = path.parse(file).root;
+      for (const part of file.slice(current.length).split(/[\\/]/)) {
+        if (!part || part === "." || part === ".." || part.includes(":")) throw new Error("Invalid refresh path");
+        current = path.join(current, part);
+        if (fs.lstatSync(current).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
+      }
+      file = physicalPath(file);
+    }
+    const root = physicalPath(this.root);
     const relative = path.relative(root, file);
     if (!path.isAbsolute(file) || !relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) {
       throw new Error("Refresh path escapes vault");

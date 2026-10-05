@@ -10,6 +10,8 @@ function source(name) {
   const file = path.resolve(__dirname, '..', name + '.ts');
   const m = new Module(file, module);
   m.filename = file; m.paths = Module._nodeModulePaths(path.dirname(file));
+  const originalRequire = m.require.bind(m);
+  m.require = id => id.startsWith('./') ? source(id.slice(2)) : originalRequire(id);
   m._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), {
     compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020},
   }).outputText, file);
@@ -44,11 +46,45 @@ function adapter(root, reconcile = async () => {}) {
 }
 const tick = () => new Promise(resolve => setImmediate(resolve));
 
+test('Windows 8.3 refresh reconciles real long and short paths without replaying writes', {skip:process.platform!=='win32'}, async t => {
+  const temporary=fixture(t), root=path.join(temporary,'Vault with long name');
+  fs.mkdirSync(root);
+  const long=fs.realpathSync.native(root);
+  const short=require('node:child_process').execFileSync('cmd.exe',['/d','/c','for %I in (.) do @echo %~fsI'],{cwd:root,encoding:'utf8',windowsHide:true}).trim();
+  assert.notEqual(short,long); assert.equal(fs.realpathSync.native(short),long);
+  for (const selected of [long,short]) for (const writer of [long,short]) {
+    const seen=[], relative=`Long notes folder/note ${seen.length}.md`;
+    const refresh=new ObsidianVaultRefresh(selected,adapter(selected,async rel=>seen.push(rel)));
+    const before=fs.existsSync(path.join(root,relative))?fs.readFileSync(path.join(root,relative),'utf8'):'';
+    const batch=refresh.createBatch();
+    execute(writer,`vault.append(${JSON.stringify(relative)}, "once");`,batch.record);
+    const stat=fs.statSync(path.join(root,relative));
+    await batch.flush(); await batch.flush();
+    assert.deepEqual(seen,[relative]);
+    assert.equal(fs.readFileSync(path.join(root,relative),'utf8'),before+'once');
+    assert.equal(fs.statSync(path.join(root,relative)).mtimeMs,stat.mtimeMs);
+  }
+  const outside=path.join(temporary,'outside');fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'note.md'),'unchanged');
+  const inside=path.join(root,'Long notes folder');
+  for (const target of [inside,outside]) {
+    const link=path.join(root,target===inside?'inside-link':'outside-link');fs.symlinkSync(target,link,'junction');
+    const seen=[], refresh=new ObsidianVaultRefresh(short,adapter(short,async rel=>seen.push(rel)));
+    for (const file of [path.join(short,path.basename(link),'note.md'),short+'\\'+path.basename(link)+'\\..\\Long notes folder\\note 0.md',path.join(outside,'note.md')]) {
+      const batch=refresh.createBatch();batch.record({path:file,operation:'write'});
+      await assert.rejects(batch.flush(),/Linked refresh|Refresh path escapes vault|Invalid refresh/);
+      assert.deepEqual(seen,[]);
+    }
+  }
+  assert.equal(fs.readFileSync(path.join(outside,'note.md'),'utf8'),'unchanged');
+});
+
 test('observer reports completed vault writes synchronously, without content or sandbox access', t => {
   const root = fixture(t), mutations = [];
+  // Keep the lexical root as input so a temporary-directory alias is exercised.
+  const canonicalRoot = fs.realpathSync(root);
   const output = execute(root, 'const p=vault.write("Nueva carpeta/á nota.md", "uno"); vault.append("Nueva carpeta/á nota.md", " dos"); output=JSON.stringify([p,vault.read("Nueva carpeta/á nota.md"),typeof onVaultMutation]);', m => mutations.push(m));
-  assert.deepEqual(JSON.parse(output), [path.join(root,'Nueva carpeta/á nota.md'),'uno dos','undefined']);
-  assert.deepEqual(mutations, ['write','append'].map(operation => ({path:path.join(root,'Nueva carpeta/á nota.md'),operation})));
+  assert.deepEqual(JSON.parse(output), [path.join(canonicalRoot,'Nueva carpeta/á nota.md'),'uno dos','undefined']);
+  assert.deepEqual(mutations, ['write','append'].map(operation => ({path:path.join(canonicalRoot,'Nueva carpeta/á nota.md'),operation})));
   execute(root, 'files.write("files.md", "other"); files.append("files.md", "!");', m => mutations.push(m), {codeAllowFiles:true});
   assert.equal(mutations.length, 2);
 });

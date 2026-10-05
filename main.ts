@@ -1,3 +1,4 @@
+import { samePhysicalPath } from "./path-identity";
 import { buildOpenCodeScript } from "./opencode-script";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease } from "./release-update";
 import {
@@ -2014,8 +2015,8 @@ export default class AutoOCPlugin extends Plugin {
     const location = resolveInstalledWorkflowLocation(base, `${configDir}/plugins/${id}`);
     if (this.pluginExecutionLease) {
       if (requireOwnership) this.pluginExecutionLease.assertOwned();
-      if (!this.pluginExecutionLocation || location.installationDirectory !== this.pluginExecutionLocation.installationDirectory ||
-          fs.realpathSync(this.pluginExecutionLease.directory) !== fs.realpathSync(location.runtimeDirectory)) {
+      if (!this.pluginExecutionLocation || !samePhysicalPath(location.installationDirectory,this.pluginExecutionLocation.installationDirectory) ||
+          !samePhysicalPath(this.pluginExecutionLease.directory,location.runtimeDirectory)) {
         throw new Error("Selected installation changed while reserved; reload safely");
       }
     }
@@ -2045,12 +2046,24 @@ export default class AutoOCPlugin extends Plugin {
     return !!workflow && (!(workflow as any).runtimeExecution || !!workflow.legacyExecution) && workflow.status === "running";
   }
 
-  async recoverSharedWorkflow(workflowId:string, expectedRunId:string) {
+  sharedWorkflowRecoveryMode(workflowId:string, expectedRunId:string):"resume"|"reconcile"|"blocked" {
     const workflow=this.settings.workflows.find(item=>item.id===workflowId);
     const execution=(workflow as any)?.runtimeExecution;
     if (!execution || execution.runId !== expectedRunId) throw new Error("Recovery identity changed; reload the workflow");
     if (!["ready","in_flight"].includes(execution.phase)) throw new Error("Execution does not require recovery");
-    return await this.runSharedWorkflow(workflowId,expectedRunId,execution.phase === "in_flight");
+    const checkpoint=readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory,expectedRunId);
+    recoverWorkflowProgress(workflow,this.settings.tasks,this.settings,checkpoint,expectedRunId);
+    if (!["ready","in_flight"].includes(checkpoint.phase)) throw new Error("Execution does not require recovery");
+    if (checkpoint.phase === "ready") return "resume";
+    const last=checkpoint.steps[checkpoint.steps.length-1];
+    if (last.evaluations?.some(item=>item.status === "in_flight")) return "blocked";
+    return last.result ? "resume" : "reconcile";
+  }
+
+  async recoverSharedWorkflow(workflowId:string, expectedRunId:string) {
+    const mode=this.sharedWorkflowRecoveryMode(workflowId,expectedRunId);
+    if (mode === "blocked") throw new Error("Interrupted evaluation requires reconciliation; it cannot be replayed");
+    return await this.runSharedWorkflow(workflowId,expectedRunId,mode === "reconcile");
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
@@ -7024,9 +7037,12 @@ class AutoOCView extends ItemView {
     const durableExecution=(workflow as any).runtimeExecution;
     const needsRecovery=durableExecution && ["ready","in_flight"].includes(durableExecution.phase);
     if (needsRecovery && !this.plugin.isWorkflowExecuting(workflow.id)) {
-      const uncertain=durableExecution.phase === "in_flight";
-      actions.createEl("span", {text:uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps."});
+      let mode:"resume"|"reconcile"|"blocked"="blocked";
+      try {mode=this.plugin.sharedWorkflowRecoveryMode(workflow.id,durableExecution.runId);} catch { /* Invalid or stale evidence cannot authorize continuation. */ }
+      const uncertain=mode === "reconcile";
+      actions.createEl("span", {text:mode === "blocked" ? "Recovery blocked: saved evidence needs reconciliation." : uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps."});
       const recover=actions.createEl("button", {text:uncertain ? "Verify previous result" : "Resume saved execution"});
+      recover.disabled=mode === "blocked";
       recover.onclick=async(e)=>{
         e.stopPropagation();recover.disabled=true;
         try {await this.plugin.recoverSharedWorkflow(workflow.id,durableExecution.runId);}
