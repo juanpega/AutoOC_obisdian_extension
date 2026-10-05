@@ -1957,7 +1957,7 @@ var init_visualBuilderHtml_generated = __esm({
             if (t.mode === "conditional" && (!t.condition || !t.condition.trim())) {
               wIssues.push({ kind: "warn", msg: "Step " + (i+1) + " \u2192 step: conditional transition has no expression" });
             }
-            if (!wf.steps.find(x => x.id === t.toStepId)) {
+            if (!w.steps.find(x => x.id === t.toStepId)) {
               wIssues.push({ kind: "err", msg: "Step " + (i+1) + ": transition points to a missing step" });
             }
           }
