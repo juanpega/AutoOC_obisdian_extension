@@ -7,6 +7,12 @@ export class SettingsWriter {
   private tail: Promise<void> = Promise.resolve();
   private observed = new Map<string, string | null>();
   private pending = 0;
+  private writeFailure: unknown;
+
+  async drain(): Promise<void> {
+    await this.tail;
+    if (this.writeFailure) throw this.writeFailure;
+  }
   get hasPendingWrites(): boolean { return this.pending > 0; }
 
   // Read exactly the version against which subsequent writes are compared.
@@ -45,7 +51,7 @@ export class SettingsWriter {
       }
     });
     const tracked = operation.finally(() => { this.pending--; });
-    this.tail = tracked.catch(() => {});
+    this.tail = tracked.catch(error => { this.writeFailure = error; });
     return tracked;
   }
 }

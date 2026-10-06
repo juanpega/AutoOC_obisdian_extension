@@ -40,6 +40,10 @@ var SettingsWriter = class {
     this.observed = /* @__PURE__ */ new Map();
     this.pending = 0;
   }
+  async drain() {
+    await this.tail;
+    if (this.writeFailure) throw this.writeFailure;
+  }
   get hasPendingWrites() {
     return this.pending > 0;
   }
@@ -83,7 +87,8 @@ var SettingsWriter = class {
     const tracked = operation.finally(() => {
       this.pending--;
     });
-    this.tail = tracked.catch(() => {
+    this.tail = tracked.catch((error) => {
+      this.writeFailure = error;
     });
     return tracked;
   }
@@ -852,7 +857,13 @@ var CodexAppServerClient = class {
   async readExistingTurn(threadId, turnId) {
     if (!threadId?.trim() || !turnId?.trim()) throw new Error("Exact Codex thread and turn identities are required");
     await this.initialize();
-    const result = await this.peer.request("thread/read", { threadId, includeTurns: true }, 15e3);
+    let result;
+    try {
+      result = await this.peer.request("thread/read", { threadId, includeTurns: true }, 15e3);
+    } catch (error) {
+      if (!/^thread not loaded(?::|$)/i.test(String(error.message))) throw error;
+      result = await this.peer.request("thread/resume", { threadId }, 15e3);
+    }
     if (result?.thread?.id !== threadId) throw new Error("Codex thread identity mismatch");
     const matches = result.thread.turns?.filter((turn) => turn.id === turnId);
     if (!Array.isArray(matches) || matches.length !== 1) throw new Error("Exact Codex turn is unavailable");
@@ -3035,7 +3046,7 @@ async function runInstalledWorkflow(options) {
 }
 
 // autooc-cli.ts
-var version = "1.6.2";
+var version = "1.6.3";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "approve" || command === "deny") {

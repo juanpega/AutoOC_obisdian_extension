@@ -432,3 +432,14 @@ test('external reconciliation reads only the exact saved turn without launching 
   assert.deepEqual(calls,['thread/read','thread/read','thread/read']);
   assert.deepEqual(client.getIds(),{threadId:'',turnId:''});
 });
+
+
+test('cold app-server recovery loads only the existing thread and validates the saved turn',async()=>{
+ const client=new CodexAppServerClient('unused',process.cwd());client.initialize=async()=>{};
+ const calls=[];client.peer={request:async(method,params)=>{calls.push(method);assert.equal(params.threadId,'saved');if(method==='thread/read')throw Error('thread not loaded: saved');return {thread:{id:'saved',turns:[{id:'turn',status:'interrupted',items:[]}]}};}};
+ assert.equal((await client.readExistingTurn('saved','turn')).status,'interrupted');
+ assert.deepEqual(calls,['thread/read','thread/resume']);assert.deepEqual(client.getIds(),{threadId:'',turnId:''});
+ client.peer={request:async()=>{throw Error('access denied');}};await assert.rejects(client.readExistingTurn('saved','turn'),/access denied/);
+ client.peer={request:async m=>{if(m==='thread/read')throw Error('thread not loaded: saved');return {thread:{id:'other',turns:[]}};}};
+ await assert.rejects(client.readExistingTurn('saved','turn'),/mismatch/);
+});

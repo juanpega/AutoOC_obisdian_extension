@@ -110,9 +110,11 @@ test('C11 a pending real Dashboard save retains ownership through unload',async 
   const {view,clean}=dashboard(t,p),ownerFile=path.join(runtime,'execution.lock/owner.json');
   const owner=fs.readFileSync(ownerFile);const closing=view.onClose();clean();
   assert.equal(p.settingsWriter.hasPendingWrites,true);
-  await p.onunload();assert.deepEqual(fs.readFileSync(ownerFile),owner);
+  const unloading=p.onunload();assert.deepEqual(fs.readFileSync(ownerFile),owner);
   assert.throws(()=>create().reservePluginExecution(),/live or cannot/);
-  await closing;assert.equal(p.settingsWriter.hasPendingWrites,false);
+  await closing;await unloading;assert.equal(p.settingsWriter.hasPendingWrites,false);
+  assert.equal(fs.existsSync(ownerFile),false);
+  const successor=create();successor.reservePluginExecution();successor.releasePluginExecution(false);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory,'data.json'))).dashboardPositions,{task:{x:12,y:34,sizePx:56}});
   p.releasePluginExecution(false);
 });
@@ -478,7 +480,7 @@ for(const scenario of ['corrupt','invalid-catalog','journal','live-owner','owner
     const expected={corrupt:/valid and stable/, 'invalid-catalog':/Invalid execution catalog/,journal:/uncertain effect/,
       'live-owner':/live or cannot/, 'owner-changed':/lease|ownership/i,'file-replaced':/identity changed/,'manifest-changed':/identity changed/,cancel:/stopped/}[scenario];
     // Attach rejection handler before yielding to the host.
-    const rejected=assert.rejects(loading,expected);
+    const rejected=scenario==='live-owner' ? loading.then(()=>assert.match(p.startupError,expected)) : assert.rejects(loading,expected);
     if(['owner-changed','file-replaced','manifest-changed','cancel'].includes(scenario))mutation=(async()=>{
       await delay(30);
       if(scenario==='owner-changed'){
@@ -493,7 +495,7 @@ for(const scenario of ['corrupt','invalid-catalog','journal','live-owner','owner
       if(scenario==='cancel')await p.onunload();
     })();
     await rejected;await mutation;
-    assert.equal(p.ready,false);assert.equal(effects,0);assert.equal(requests,0);
+    assert.equal(p.ready,false);assert.equal(effects,scenario==='live-owner'?1:0);assert.equal(requests,0);
     assert.equal(fs.existsSync(path.join(directory,'autooc-cli.cjs')),false);
     assert.deepEqual(fs.readFileSync(path.join(directory,'main.js')),files['main.js']);
     if(owner)assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),owner);
@@ -585,9 +587,10 @@ test('queued settings write retains ownership until its result is known',async t
   timers(t);const {create,runtime}=fixture(t),p=create();p.reservePluginExecution();
   const writing=p.saveSettings();
   assert.equal(p.settingsWriter.hasPendingWrites,true);
-  await p.onunload();assert.ok(fs.existsSync(path.join(runtime,'execution.lock')));
+  const unloading=p.onunload();assert.ok(fs.existsSync(path.join(runtime,'execution.lock')));
   assert.throws(()=>create().reservePluginExecution(),/live or cannot/);
-  await writing;assert.equal(p.settingsWriter.hasPendingWrites,false);
+  await writing;await unloading;assert.equal(p.settingsWriter.hasPendingWrites,false);
+  assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),false);
   p.releasePluginExecution(false);
 });
 
@@ -649,3 +652,89 @@ for(const failure of ['404','timeout','descriptor','version','hash','revision','
     }else assert.ok(fs.existsSync(path.join(runtime,'execution.lock')));
   });
 }
+
+
+test('live CLI owner leaves a visible recovery view without scheduling or catalog mutation',async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),owner=create(),p=create();
+  owner.reservePluginExecution();const before=fs.readFileSync(path.join(directory,'data.json'));
+  const lease=fs.readFileSync(path.join(runtime,'execution.lock/owner.json'));
+  let ribbon=0,commands=0,loads=0,intervals=0;
+  p.addRibbonIcon=()=>ribbon++;p.addCommand=()=>commands++;p.loadSettings=async()=>loads++;p.registerInterval=()=>intervals++;
+  await p.onload();assert.equal(p.ready,false);assert.match(p.startupError,/live or cannot/);
+  assert.equal(ribbon,1);assert.equal(commands,1);assert.equal(loads,0);assert.equal(intervals,0);
+  const view=p.createDashboard({}),elements=[];
+  view.contentEl={empty(){},createEl(tag,options){const e={tag,...options};elements.push(e);return e;}};
+  await view.onOpen();assert.ok(elements.some(e=>e.text==='Retry loading AutoOC'));
+  await assert.rejects(p.saveSettings(),/stopped/);
+  await p.onunload();assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),lease);
+  assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);owner.releasePluginExecution(false);
+  const successor=create();await successor.onload();assert.equal(successor.ready,true);await successor.onunload();
+});
+
+test('failed pending settings write cannot release an uncertain reservation',async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),p=create();await p.onload();
+  const writing=p.settingsWriter.save(path.join(directory,'data.json'),()=>{throw Error('snapshot failed');});
+  const rejected=assert.rejects(writing,/snapshot failed/);const unloading=p.onunload();await rejected;await unloading;
+  assert.ok(fs.existsSync(path.join(runtime,'execution.lock')));
+});
+
+
+test('complete package opens with a preserved unfinished journal but cannot update it away',async t=>{
+ timers(t);const {create,runtime}=fixture(t),p=create();
+ const file=path.join(runtime,'proof.json'),journal=JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]});
+ fs.writeFileSync(file,journal);await p.onload();assert.equal(p.ready,true);
+ assert.throws(()=>p.assertExecutionIdle(),/uncertain effect/);assert.equal(fs.readFileSync(file,'utf8'),journal);await p.onunload();
+ assert.equal(fs.readFileSync(file,'utf8'),journal);
+});
+
+for (const change of ['none','journal','attempt','pending-write']) test('observed historical run unload: '+change, async t=>{
+ timers(t);const {create,runtime,directory}=fixture(t),p=create();
+ const file=path.join(runtime,'proof.json'),journal={schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]};
+ fs.writeFileSync(file,JSON.stringify(journal));await p.onload();assert.equal(p.ready,true);
+ if(change==='journal')fs.writeFileSync(file,JSON.stringify({...journal,revision:2}));
+ if(change==='attempt')p.executionAttempted=true;
+ if(change==='pending-write')fs.writeFileSync(path.join(directory,'data.json.write-lock'),'uncertain');
+ await p.onunload();assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),change!=='none');
+ assert.equal(JSON.parse(fs.readFileSync(file)).phase,'in_flight');
+ if(change==='none'){const successor=create();await successor.onload();assert.equal(successor.ready,true);await successor.onunload();}
+});
+
+test('Obsidian quit awaits a pending settings save before releasing an observed run',async t=>{
+ timers(t);const {create,runtime,directory}=fixture(t),p=create();let handler,cleanup;
+ p.app.workspace.on=(name,fn)=>{assert.equal(name,'quit');handler=fn;return {name};};p.registerEvent=()=>{};
+ fs.writeFileSync(path.join(runtime,'proof.json'),JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]}));
+ await p.onload();const file=path.join(directory,'data.json');p.settings=p.settingsWriter.load(file);
+ const writing=p.settingsWriter.save(file,()=>p.settings);handler({addPromise:promise=>{cleanup=promise;}});
+ assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),true);await writing;await cleanup;
+ assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),false);
+ const second=create();await second.onload();assert.equal(second.ready,true);await second.onunload();
+});
+
+test('complete package is reverified after asynchronous catalog stabilization',async t=>{
+ timers(t);const {create,directory}=fixture(t),p=create();const loading=p.onload();
+ fs.appendFileSync(path.join(directory,'autooc-runtime.cjs'),'\n// changed during startup');
+ await assert.rejects(loading,/package changed/);assert.equal(p.ready,false);
+});
+
+for(const timing of ['before-click','during-download']) test('Update preserves an open Dashboard save '+timing+' and reloads the full package',async t=>{
+ timers(t);const {create,directory}=fixture(t),p=create(),file=path.join(directory,'data.json');
+ const files=Object.fromEntries(names.map(n=>[n,fs.readFileSync(path.join(directory,n))]));
+ p.loadSettings=async()=>{p.settings=p.settingsWriter.load(file);};await p.onload();
+ const {view}=dashboard(t,p);view.refresh=()=>{};p.settings.tasks=[{id:'history',status:'completed',output:'keep-result'}];
+ p.latestVersion=p.manifest.version;let next,downloads=0,writing;
+ const priorFetch=global.fetch,priorConfirm=global.confirm;global.confirm=()=>true;
+ global.fetch=async url=>{const name=names.find(n=>url.includes('/'+n+'?'));assert.ok(name,url);downloads++;
+   if(timing==='during-download'&&downloads===7)writing=view.persistDashboardPositionsSafely();
+   return {ok:true,arrayBuffer:async()=>files[name]};};
+ p.app.workspace.detachLeavesOfType=()=>{void view.onClose();};
+ p.app.plugins={plugins:{'auto-oc':p},disablePlugin:async()=>{void p.onunload();},enablePlugin:async()=>{
+   next=create();next.loadSettings=async()=>{next.settings=next.settingsWriter.load(file);};await next.onload();p.app.plugins.plugins['auto-oc']=next;
+ }};
+ try {
+   if(timing==='before-click')writing=view.persistDashboardPositionsSafely();
+   await p.updatePlugin();await writing;
+   assert.equal(downloads,7,'Update must wait for the legitimate save, not silently return');assert.equal(next?.ready,true);
+   assert.equal(next.settings.tasks[0].output,'keep-result');assert.equal(fs.existsSync(file+'.write-lock'),false);
+   for(const name of names)assert.deepEqual(fs.readFileSync(path.join(directory,name)),files[name]);
+ } finally {global.fetch=priorFetch;global.confirm=priorConfirm;await p.onunload();if(next)await next.onunload();}
+});
