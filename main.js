@@ -38,7 +38,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.6.3",
+      version: "1.6.4",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -7298,6 +7298,46 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       }
     }
   }
+  observationProofPath(token) {
+    return path20.join(this.selectedExecutionLocation(false).runtimeDirectory, "plugin-observation-" + token + ".proof");
+  }
+  recordObservationProof() {
+    const lease = this.pluginExecutionLease;
+    lease.assertOwned();
+    const file = this.observationProofPath(lease.token);
+    const fd = fs20.openSync(file, "wx", 384);
+    try {
+      fs20.writeFileSync(fd, JSON.stringify({ schemaVersion: 1, token: lease.token, journalHash: require("crypto").createHash("sha256").update(this.observedJournalSnapshot).digest("hex") }));
+      fs20.fsyncSync(fd);
+    } finally {
+      fs20.closeSync(fd);
+    }
+    this.observationProof = file;
+  }
+  beginExecutionEffects() {
+    this.assertLifecycleOpen();
+    if (this.observationProof) {
+      this.pluginExecutionLease.assertOwned();
+      const file = this.observationProof;
+      if (fs20.existsSync(file)) fs20.unlinkSync(file);
+      this.observationProof = void 0;
+    }
+    this.executionAttempted = true;
+  }
+  assertClosedObservation(token) {
+    const location = this.selectedExecutionLocation(false);
+    if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package changed");
+    const file = this.observationProofPath(token), stat = fs20.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Invalid observation proof");
+    const proof = JSON.parse(fs20.readFileSync(file, "utf8"));
+    if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require("crypto").createHash("sha256").update(this.journalSnapshot()).digest("hex")) throw new Error("Observed execution state changed");
+    const settings = JSON.parse(fs20.readFileSync(location.configurationFile, "utf8"));
+    if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error("Execution requires reconciliation");
+    assertIdleCatalog({
+      tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
+      workflows: (settings.workflows || []).filter((entry) => !entry.runtimeExecution)
+    }, /* @__PURE__ */ new Map());
+  }
   async completeInstalledRelease() {
     const location = this.selectedExecutionLocation();
     const manifestFile = path20.join(location.installationDirectory, "manifest.json");
@@ -7369,6 +7409,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       await this.loadSettings();
       this.assertLifecycleOpen();
       this.observedJournalSnapshot = this.journalSnapshot();
+      this.recordObservationProof();
       this.lifecycleTimeout(() => {
         this.refreshModels();
         this.refreshAgents();
@@ -7442,6 +7483,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
           const cleanup = this.onunload().catch((error) => console.warn("AutoOC quit cleanup retained reservation", error));
           tasks.addPromise(cleanup);
         }));
+      }
+      if (typeof window.addEventListener === "function") {
+        const close = () => {
+          void this.onunload().catch((error) => console.warn("AutoOC window cleanup retained reservation", error));
+        };
+        window.addEventListener("beforeunload", close);
+        this.register(() => window.removeEventListener("beforeunload", close));
       }
       this.ready = true;
     } catch (error) {
@@ -7518,7 +7566,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       const plugins = this.app.plugins;
       await plugins.disablePlugin(this.manifest.id);
       await plugins.enablePlugin(this.manifest.id);
-    }));
+    }, this.closedSessionRecovery()));
     this.addRibbonIcon("workflow", "AutoOC \u2014 recovery required", () => {
       void open();
     });
@@ -7526,6 +7574,26 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       void open();
     } });
     new import_obsidian.Notice("AutoOC: execution is unavailable. Open AutoOC for recovery details.", 1e4);
+  }
+  closedSessionRecovery() {
+    try {
+      const location = this.selectedExecutionLocation(false);
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs20.existsSync(path20.join(location.runtimeDirectory, "update-pending.json"))) return;
+      const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+      try {
+        process.kill(owner.pid, 0);
+        return;
+      } catch (error) {
+        if (error.code !== "ESRCH") return;
+      }
+      return () => {
+        const current = this.selectedExecutionLocation(false);
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs20.existsSync(path20.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
+        recoverExecutionLease(current.runtimeDirectory, owner.token);
+      };
+    } catch (e) {
+      return;
+    }
   }
   // Reserve the vault for the whole plugin lifetime, including legacy tasks
   // whose asynchronous completion outlives runTask/runWorkflow. The external
@@ -7557,7 +7625,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       try {
         const owner = readExecutionLeaseOwner(location.runtimeDirectory);
         recoverExecutionLease(location.runtimeDirectory, owner.token, () => {
-          assertInstalledExecutionIdle(location.installationDirectory);
+          try {
+            assertInstalledExecutionIdle(location.installationDirectory);
+          } catch (error2) {
+            try {
+              this.assertClosedObservation(owner.token);
+            } catch (e) {
+              throw error2;
+            }
+          }
         });
       } catch (recoveryError) {
         recoveryError.code || (recoveryError.code = "EEXIST");
@@ -7601,7 +7677,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   async runSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId) {
     var _a;
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
@@ -8601,7 +8677,7 @@ DONE:%s
   // that the plugin polls every 3 s.
   beginLegacyAttempt(task, owner) {
     var _a, _b, _c;
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     (_a = this.legacyAttempts) != null ? _a : this.legacyAttempts = /* @__PURE__ */ new Map();
     const current = this.settings.tasks.find((item) => item.id === task.id);
@@ -9852,7 +9928,7 @@ ${current.output}`;
     await this.saveSettings();
   }
   async runWorkflow(workflow) {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -12911,10 +12987,11 @@ var SecretRevealModal = class extends import_obsidian.Modal {
   }
 };
 var AutoOCRecoveryView = class extends import_obsidian.ItemView {
-  constructor(leaf, reason, retry) {
+  constructor(leaf, reason, retry, recoverClosedSession) {
     super(leaf);
     this.reason = reason;
     this.retry = retry;
+    this.recoverClosedSession = recoverClosedSession;
   }
   getViewType() {
     return VIEW_TYPE;
@@ -12928,9 +13005,25 @@ var AutoOCRecoveryView = class extends import_obsidian.ItemView {
   async onOpen() {
     this.contentEl.empty();
     this.contentEl.createEl("h2", { text: "AutoOC needs attention" });
-    this.contentEl.createEl("p", { text: "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved." });
-    this.contentEl.createEl("pre", { text: this.reason });
-    this.contentEl.createEl("p", { text: "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it." });
+    this.contentEl.createEl("p", { text: this.recoverClosedSession ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved." : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved." });
+    const details = this.contentEl.createEl("pre", { text: this.reason });
+    details.style.whiteSpace = "pre-wrap";
+    details.style.overflowWrap = "anywhere";
+    this.contentEl.createEl("p", { text: this.recoverClosedSession ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation." : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it." });
+    if (this.recoverClosedSession) {
+      const recover = this.contentEl.createEl("button", { text: "Recover closed session and open AutoOC" });
+      recover.onclick = async () => {
+        if (!confirm("Recover the closed session and open AutoOC? The old reservation will be archived. No task will be resumed or repeated, and unfinished runs will remain pending.")) return;
+        recover.disabled = true;
+        try {
+          this.recoverClosedSession();
+          await this.retry();
+        } catch (error) {
+          new import_obsidian.Notice("AutoOC: " + String(error));
+          recover.disabled = false;
+        }
+      };
+    }
     const button = this.contentEl.createEl("button", { text: "Retry loading AutoOC" });
     button.onclick = async () => {
       button.disabled = true;

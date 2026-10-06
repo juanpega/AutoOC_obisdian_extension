@@ -1896,6 +1896,7 @@ export default class AutoOCPlugin extends Plugin {
   private lifecycleStopped = false;
   private startupPending = false;
   private observedJournalSnapshot?: string;
+  private observationProof?: string;
   private executionAttempted = false;
   private lifecycleTimers = new Set<ReturnType<typeof setTimeout>>();
   private schedulerTimer?: number;
@@ -1956,6 +1957,46 @@ export default class AutoOCPlugin extends Plugin {
           workflows:(settings.workflows || []).filter((entry:any) => !entry.runtimeExecution)}, new Map());
       }
     }
+  }
+
+  private observationProofPath(token: string): string {
+    return path.join(this.selectedExecutionLocation(false).runtimeDirectory, 'plugin-observation-' + token + '.proof');
+  }
+
+  private recordObservationProof(): void {
+    const lease = this.pluginExecutionLease!;
+    lease.assertOwned();
+    const file = this.observationProofPath(lease.token);
+    const fd = fs.openSync(file, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({schemaVersion:1,token:lease.token,journalHash:require('crypto').createHash('sha256').update(this.observedJournalSnapshot!).digest('hex')}));
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    this.observationProof = file;
+  }
+
+  private beginExecutionEffects(): void {
+    this.assertLifecycleOpen();
+    if (this.observationProof) {
+      this.pluginExecutionLease!.assertOwned();
+      const file = this.observationProof;
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      this.observationProof = undefined;
+    }
+    this.executionAttempted = true;
+  }
+
+  private assertClosedObservation(token: string): void {
+    const location = this.selectedExecutionLocation(false);
+    if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error('Installed package changed');
+    const file = this.observationProofPath(token), stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Invalid observation proof');
+    const proof = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require('crypto').createHash('sha256').update(this.journalSnapshot()).digest('hex')) throw new Error('Observed execution state changed');
+    const settings = JSON.parse(fs.readFileSync(location.configurationFile, 'utf8'));
+    if ([...(settings.tasks || []), ...(settings.workflows || [])].some(entry => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error('Execution requires reconciliation');
+    assertIdleCatalog({tasks:(settings.tasks || []).filter((entry:any) => !entry.runtimeExecution),
+      workflows:(settings.workflows || []).filter((entry:any) => !entry.runtimeExecution)}, new Map());
   }
 
   private async completeInstalledRelease(): Promise<() => void> {
@@ -2032,6 +2073,9 @@ export default class AutoOCPlugin extends Plugin {
       await this.loadSettings();
       this.assertLifecycleOpen();
       this.observedJournalSnapshot = this.journalSnapshot();
+      // A durable, owner-bound proof covers renderer termination without any
+      // unload event. Every execution entry removes it before its first effect.
+      this.recordObservationProof();
       // The MCP bridge is retired. CLI and the distributed skill remain available.
       // Load models asynchronously to avoid blocking startup
       this.lifecycleTimeout(() => {
@@ -2123,6 +2167,14 @@ export default class AutoOCPlugin extends Plugin {
           tasks.addPromise(cleanup);
         }));
       }
+      // Closing a vault window need not emit workspace quit. Start the same
+      // guarded cleanup synchronously before Electron destroys that renderer.
+      // Pending writes/effects still retain their reservation if not drained.
+      if (typeof window.addEventListener === 'function') {
+        const close = () => { void this.onunload().catch(error => console.warn('AutoOC window cleanup retained reservation', error)); };
+        window.addEventListener('beforeunload', close);
+        this.register(() => window.removeEventListener('beforeunload', close));
+      }
       this.ready = true;
     } catch (error) {
       this.startupPending = false;
@@ -2196,10 +2248,30 @@ export default class AutoOCPlugin extends Plugin {
       const plugins = (this.app as any).plugins;
       await plugins.disablePlugin(this.manifest.id);
       await plugins.enablePlugin(this.manifest.id);
-    }));
+    }, this.closedSessionRecovery()));
     this.addRibbonIcon("workflow", "AutoOC — recovery required", () => { void open(); });
     this.addCommand({id: "open-auto-oc", name: "Open AutoOC recovery", callback: () => { void open(); }});
     new Notice("AutoOC: execution is unavailable. Open AutoOC for recovery details.", 10000);
+  }
+
+  private closedSessionRecovery(): (() => void) | undefined {
+    try {
+      const location = this.selectedExecutionLocation(false);
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) ||
+          fs.existsSync(path.join(location.runtimeDirectory, 'update-pending.json'))) return;
+      const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+      try { process.kill(owner.pid, 0); return; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return; }
+      // This explicit UI action has the same contract as CLI recover-lease:
+      // archive only the exact absent owner; preserve all uncertain run state.
+      return () => {
+        const current = this.selectedExecutionLocation(false);
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) ||
+            !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) ||
+            fs.existsSync(path.join(current.runtimeDirectory, 'update-pending.json'))) throw new Error('Installation changed; retry loading AutoOC');
+        recoverExecutionLease(current.runtimeDirectory, owner.token);
+      };
+    } catch { return; }
   }
 
   // Reserve the vault for the whole plugin lifetime, including legacy tasks
@@ -2232,7 +2304,11 @@ export default class AutoOCPlugin extends Plugin {
       try {
         const owner = readExecutionLeaseOwner(location.runtimeDirectory);
         recoverExecutionLease(location.runtimeDirectory, owner.token, () => {
-          assertInstalledExecutionIdle(location.installationDirectory);
+          try { assertInstalledExecutionIdle(location.installationDirectory); }
+          catch (error) {
+            try { this.assertClosedObservation(owner.token); }
+            catch { throw error; }
+          }
         });
       } catch (recoveryError) {
         // Preserve the public exclusion code while explaining why recovery was denied.
@@ -2280,7 +2356,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
@@ -3299,7 +3375,7 @@ export default class AutoOCPlugin extends Plugin {
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   private beginLegacyAttempt(task: ScheduledTask, owner?: LegacyOwner): LegacyAttempt {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     this.legacyAttempts ??= new Map();
     const current = this.settings.tasks.find(item => item.id === task.id);
@@ -4621,7 +4697,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runWorkflow(workflow: Workflow) {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -7940,16 +8016,31 @@ class SecretRevealModal extends Modal {
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void) { super(leaf); }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC — recovery"; }
   getIcon() { return "workflow"; }
   async onOpen() {
     this.contentEl.empty();
     this.contentEl.createEl("h2", {text: "AutoOC needs attention"});
-    this.contentEl.createEl("p", {text: "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved."});
-    this.contentEl.createEl("pre", {text: this.reason});
-    this.contentEl.createEl("p", {text: "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
+    this.contentEl.createEl("p", {text: this.recoverClosedSession
+      ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved."
+      : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved."});
+    const details = this.contentEl.createEl("pre", {text: this.reason});
+    details.style.whiteSpace = 'pre-wrap';
+    details.style.overflowWrap = 'anywhere';
+    this.contentEl.createEl("p", {text: this.recoverClosedSession
+      ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
+      : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
+    if (this.recoverClosedSession) {
+      const recover = this.contentEl.createEl('button', {text: 'Recover closed session and open AutoOC'});
+      recover.onclick = async () => {
+        if (!confirm('Recover the closed session and open AutoOC? The old reservation will be archived. No task will be resumed or repeated, and unfinished runs will remain pending.')) return;
+        recover.disabled = true;
+        try { this.recoverClosedSession!(); await this.retry(); }
+        catch (error) { new Notice('AutoOC: ' + String(error)); recover.disabled = false; }
+      };
+    }
     const button = this.contentEl.createEl("button", {text: "Retry loading AutoOC"});
     button.onclick = async () => {
       button.disabled = true;

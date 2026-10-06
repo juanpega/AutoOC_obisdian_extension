@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "version": "1.6.3",
+  "version": "1.6.4",
   "sha256": {
-    "main.js": "aa2e7d2895c2a721fc8a9583f1f46f4a6114df559f8505259d9309fdc14f7f7c",
-    "manifest.json": "21452f16c930a74adc8811a9ab2141babfcf284500e031ccf24305de5c459328",
+    "main.js": "5192ecad3cd3539edcf06eb2511c123c7629776095fdbfb9dbdaa6e6e63f15b3",
+    "manifest.json": "97ac544ba4cd91536e50e67b93146d4036122dd0561255e1e4317783fbcf204d",
     "styles.css": "0d1c1764830d074b5b3d6befe0fb8ad3fed3e3de54e8d21b7ba53a1a365b3b93",
-    "autooc-cli.cjs": "59078eea0440a66798e8916949e8bbc6f2e3738ce6b95dc5ebdfabc35a70ed65",
+    "autooc-cli.cjs": "8724459c9db6c6e0ade4298d3416203f81ce806439e9fbbcbf903eb21ceb6a2d",
     "autooc-runtime.cjs": "c62f3c8aeeafe004b5a56e71e0e655af90838432efaa7408f6f25489ac855dcd",
     "skills/autooc-runtime/SKILL.md": "0779a4270388ef52f2f3a159e2a9ddd7f5423374cc719ba9d002e5277ff73b9e"
   }
