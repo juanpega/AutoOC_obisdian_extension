@@ -406,7 +406,14 @@ export class CodexAppServerClient {
   async readExistingTurn(threadId: string, turnId: string): Promise<any> {
     if (!threadId?.trim() || !turnId?.trim()) throw new Error("Exact Codex thread and turn identities are required");
     await this.initialize();
-    const result = await this.peer!.request("thread/read", {threadId,includeTurns:true}, 15_000);
+    let result: any;
+    try { result = await this.peer!.request("thread/read", {threadId,includeTurns:true}, 15_000); }
+    catch (error) {
+      // Some app-server builds cannot read a persisted thread until it is loaded.
+      // Reopen only the exact saved thread; never send turn/start during recovery.
+      if (!/^thread not loaded(?::|$)/i.test(String((error as Error).message))) throw error;
+      result = await this.peer!.request("thread/resume", {threadId}, 15_000);
+    }
     if (result?.thread?.id !== threadId) throw new Error("Codex thread identity mismatch");
     const matches = result.thread.turns?.filter((turn:any) => turn.id === turnId);
     if (!Array.isArray(matches) || matches.length !== 1) throw new Error("Exact Codex turn is unavailable");

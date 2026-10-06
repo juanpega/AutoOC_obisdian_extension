@@ -68,8 +68,17 @@ export function assertInstalledExecutionIdle(directory: string, memorySettings?:
 // catalog snapshot, startup may wait for the initial SettingsWriter queue
 // (1.6.1 atomic rename) or saveData truncation (1.6.0). This is read-only;
 // recovery, release and execution retain their synchronous fail-closed checks.
-export async function waitForInstalledCatalog(directory: string, assertOwner: () => void): Promise<() => void> {
+export async function waitForInstalledCatalog(directory: string, assertOwner: () => void, allowPendingRuns = false): Promise<() => void> {
   const file = path.join(directory, "data.json");
+  // A verified package may open its recovery-capable UI with unfinished runs.
+  // Installation/release/recovery proofs keep the stricter default idle checks.
+  const checkCatalog = (settings: any, checkpoints: Map<string, RunCheckpoint>) => {
+    if (!allowPendingRuns) return assertIdleCatalog(settings, checkpoints);
+    if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Invalid execution configuration");
+    for (const kind of ["tasks", "workflows"]) {
+      if (!Array.isArray(settings[kind] ?? []) || (settings[kind] ?? []).some((entry: any) => !entry || typeof entry.id !== "string")) throw new Error("Invalid execution catalog");
+    }
+  };
   const lock = file + ".write-lock";
   const identity = (stat: fs.Stats) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
   const directoryIdentity = identity(fs.lstatSync(directory));
@@ -191,12 +200,12 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
   try { while (true) {
     if (watchError) throw watchError;
     checkContext();
-    const checkpoints = assertIdleJournals(path.join(directory, "runtime"));
+    const checkpoints = allowPendingRuns ? new Map<string, RunCheckpoint>() : assertIdleJournals(path.join(directory, "runtime"));
     if (pendingWriter()) {
       // Atomic writers never truncate the installed catalog. Do not let a
       // finishing UI save hide already persisted uncertainty or corruption.
       const current = regularStat(file);
-      if (current) assertIdleCatalog(JSON.parse(fs.readFileSync(file, "utf8")), checkpoints);
+      if (current) assertIdleCatalog(JSON.parse(fs.readFileSync(file, "utf8")), assertIdleJournals(path.join(directory, "runtime")));
       if (performance.now() >= writerDeadline) throw new Error("Unfinished configuration write requires reconciliation; startup wait expired");
       stableSince = performance.now();
       await wait();
@@ -207,7 +216,7 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
     try { settings = value === null ? null : JSON.parse(value); }
     catch (error) { if (!(error instanceof SyntaxError)) throw error; valid = false; }
     // Retry syntax only, never invalid catalogs, uncertain journals or owners.
-    if (valid && value !== null) assertIdleCatalog(settings, checkpoints);
+    if (valid && value !== null) checkCatalog(settings, checkpoints);
     if (!valid || previous !== value) stableSince = performance.now();
     previous = valid ? value : undefined;
     if (writer && performance.now() >= writerDeadline) throw new Error("AutoOC configuration did not become valid and stable during startup; retry after the legacy writer finishes");
@@ -215,7 +224,7 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
       return () => {
         const current = read();
         if (current !== value) throw new Error("Configuration changed after startup validation; retry safely");
-        assertInstalledExecutionIdle(directory);
+        if (!allowPendingRuns) assertInstalledExecutionIdle(directory);
       };
     }
     if (performance.now() >= deadline && !writer) throw new Error("AutoOC configuration did not become valid and stable during startup; retry after the legacy writer finishes");
