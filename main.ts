@@ -47,6 +47,7 @@ import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
+import { abandonInstalledExecution } from "./execution-abandonment";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { SettingsWriter } from "./settings-writer";
 import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
@@ -436,7 +437,7 @@ async function copyTextToClipboard(text: string): Promise<void> {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
-type TaskStatus = "pending" | "running" | "completed" | "failed";
+type TaskStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 type IntervalUnit = "seconds" | "minutes" | "hours";
 type TaskKind = "opencode" | "codex" | "copilot" | "code";
 type LegacyOwner = { workflowId: string; stepId: string; stepIndex: number; context: object };
@@ -541,7 +542,7 @@ interface ScheduledTask {
   };
 }
 
-type WorkflowStatus = "pending" | "running" | "completed" | "failed";
+type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 
 interface Workflow {
   legacyExecution?: { token: string };
@@ -2897,7 +2898,7 @@ export default class AutoOCPlugin extends Plugin {
           if (binding) {
             const checkpoint = readExecutionCheckpoint(runtime,binding.runId);
             validateProgressBinding(wf,checkpoint,binding.runId);
-            if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+            if (!["completed","failed","abandoned"].includes(checkpoint.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
           }
           return wf.status === "running" && !(this as any).workflowRuntime?.has(wf.id) ? {...wf,status:"failed" as const} : wf;
         }
@@ -2912,7 +2913,7 @@ export default class AutoOCPlugin extends Plugin {
         const checkpoint=readExecutionCheckpoint(runtime,binding.runId);
         validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
         if (task.legacyExecution) {
-          if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+          if (!["completed","failed","abandoned"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
           return task;
         }
         if (checkpoint.workflowId.startsWith('@task:') && checkpoint.workflowId!==standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
@@ -2921,15 +2922,15 @@ export default class AutoOCPlugin extends Plugin {
         }
         const observed=checkpoint.steps.filter(step=>step.stepId===binding.stepId).pop();
         if (!observed) throw new Error("Bound task step is absent from its journal");
-        if (["completed","failed"].includes(checkpoint.phase)) {
+        if (["completed","failed","abandoned"].includes(checkpoint.phase)) {
           // The saved binding, rather than today's workflow steps, identifies
           // this task's historical result even after a step was reassigned.
-          return {...task,status:observed.status as ScheduledTask["status"],output:observed.output || '',
+          return {...task,status:(checkpoint.phase === "abandoned" && observed.status === "in_flight" ? "abandoned" : observed.status) as ScheduledTask["status"],output:observed.output || '',
             ...(observed.startedAt ? {lastRun:observed.startedAt} : {}),
             ...(observed.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
             ...(observed.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),
             pendingCodexApproval:undefined,
-            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,finishedAt:observed.finishedAt,requiresReconciliation:false}};
+            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,phase:checkpoint.phase,abandonment:checkpoint.abandonment,finishedAt:observed.finishedAt,requiresReconciliation:false}};
         }
         const workflow = recovered.find(wf=>wf.id===binding.workflowId && (wf as any).runtimeExecution?.runId===binding.runId);
         const step = workflow?.steps.find(step=>step.id===binding.stepId && step.taskId===task.id);
@@ -3386,7 +3387,7 @@ export default class AutoOCPlugin extends Plugin {
     if (binding) {
       const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory, binding.runId);
       validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
-      if (!["completed", "failed"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
+      if (!["completed", "failed", "abandoned"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
     }
     if (owner && (this as any).workflowRuntime?.get(owner.workflowId) !== owner.context) throw new Error("Workflow execution changed");
     const identity: LegacyStopIdentity = {kind:"legacy", token:require("crypto").randomUUID(), taskId:task.id,
@@ -3424,6 +3425,36 @@ export default class AutoOCPlugin extends Plugin {
     };
   }
 
+  async confirmAbandonTaskExecution(taskId:string):Promise<void> {
+    this.assertLifecycleOpen();
+    const task=this.settings.tasks.find(item=>item.id===taskId);
+    const binding=(task as any)?.runtimeExecution;
+    if(!binding || binding.workflowId!==standaloneTaskWorkflow(taskId).id) throw new Error('Select the owning workflow to resolve this execution');
+    const location=this.selectedExecutionLocation();
+    const observed=readExecutionCheckpoint(location.runtimeDirectory,binding.runId);
+    validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},observed,binding.runId);
+    const confirmed=await new ConfirmModal(this.app,'Abandon unfinished attempt?',
+      `Task: ${task!.name}. Attempt: ${observed.runId}. Its outcome is unknown. Confirm only after checking that its external process has ended. This preserves all history, does not stop processes, and does not mark success or start another task. Git Branch remains unchanged; clear it in Edit to use the current branch.`).openAndWait();
+    if(!confirmed)return;
+    this.assertLifecycleOpen();
+    if(this.updateInProgress || !this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size) throw new Error('An execution is still active; wait for it to finish');
+    const current=(this.settings.tasks.find(item=>item.id===taskId) as any)?.runtimeExecution;
+    if(current?.runId!==observed.runId || current?.revision!==binding.revision) throw new Error('Execution changed; inspect the task again');
+    const reservation={workflowId:observed.workflowId,taskId,runId:observed.runId,controller:new AbortController()};
+    this.sharedWorkflowExecution=reservation;
+    try {
+      await this.saveSettings(false);
+      this.beginExecutionEffects();
+      await abandonInstalledExecution({vault:location.vault,installationDirectory:location.installationDirectory,
+        lease:this.pluginExecutionLease,runId:observed.runId,workflowId:observed.workflowId,revision:observed.revision,
+        reason:'Explicit confirmation in the task card; unknown external outcome acknowledged',acknowledgedUnknownEffects:true});
+    } finally {
+      if(this.sharedWorkflowExecution===reservation)this.sharedWorkflowExecution=undefined;
+      await this.loadSettings();
+      this.refreshOpenViews();
+    }
+  }
+
   async runTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
@@ -3441,6 +3472,9 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
+
+    const binding=(effectiveTask as any).runtimeExecution;
+    if(!owner && binding?.requiresReconciliation) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
 
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
       const vault = (this.app.vault.adapter as any).basePath;
@@ -4707,7 +4741,7 @@ export default class AutoOCPlugin extends Plugin {
 
     if (this.settings.workflows.some(item => {
       const execution = (item as any).runtimeExecution;
-      return execution && !["completed", "failed"].includes(execution.phase);
+      return execution && !["completed", "failed", "abandoned"].includes(execution.phase);
     })) {
       new Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
       return;
@@ -5914,7 +5948,7 @@ class AutoOCView extends ItemView {
   }
 
   private renderDashboard(containerEl: HTMLElement) {
-    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed"];
+    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed", "abandoned"];
     const tasks = this.plugin.settings.tasks;
     const workflows = this.plugin.settings.workflows;
 
@@ -6625,7 +6659,7 @@ class AutoOCView extends ItemView {
     const statusSelect = filterBar.createEl("select", {
       cls: "auto-oc-status-select",
     });
-    const statuses = ["all", "pending", "running", "completed", "failed"];
+    const statuses = ["all", "pending", "running", "completed", "failed", "abandoned"];
     statuses.forEach(s => {
       const opt = statusSelect.createEl("option");
       opt.value = s;
@@ -6687,16 +6721,17 @@ class AutoOCView extends ItemView {
     });
     
     const badge = summary.createEl("span", {
-      text: task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
+      text: task.status === "abandoned" ? "abandoned · outcome unknown" : task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
     btnQuickRun.disabled = task.status === "running";
-    btnQuickRun.onclick = (e) => {
+    btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runTask(task);
+      try { await this.plugin.runTask(task); }
+      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
     };
     if (task.status === "running") {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
@@ -6809,14 +6844,24 @@ class AutoOCView extends ItemView {
 
     const actions = details.createDiv("auto-oc-card-actions");
 
+    if ((task as any).runtimeExecution?.requiresReconciliation && (task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && task.status !== 'running') {
+      const abandon = actions.createEl('button', {text:'Abandon attempt',cls:'auto-oc-btn-stop'});
+      abandon.onclick = async e => {
+        e.stopPropagation();
+        try { await this.plugin.confirmAbandonTaskExecution(task.id); }
+        catch(error) {new Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`),12000);}
+      };
+    }
+
     const btnRun = actions.createEl("button", {
       text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
     btnRun.disabled = task.status === "running";
-    btnRun.onclick = (e) => {
+    btnRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runTask(task);
+      try { await this.plugin.runTask(task); }
+      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
     };
 
     if (task.status === "running") {
@@ -6993,7 +7038,7 @@ class AutoOCView extends ItemView {
     const statusSelect = filterBar.createEl("select", {
       cls: "auto-oc-status-select",
     });
-    const statuses = ["all", "pending", "running", "completed", "failed"];
+    const statuses = ["all", "pending", "running", "completed", "failed", "abandoned"];
     statuses.forEach(s => {
       const opt = statusSelect.createEl("option");
       opt.value = s;
@@ -7036,7 +7081,7 @@ class AutoOCView extends ItemView {
     });
 
     const badge = summary.createEl("span", {
-      text: workflow.status,
+      text: workflow.status === "abandoned" ? "abandoned · outcome unknown" : workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");

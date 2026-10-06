@@ -15,7 +15,7 @@ export function validateBranchOptions(task:Readonly<Record<string,any>>) {
 }
 
 function git(cwd:string,args:string[]) {
-  try {return execFileSync("git",["-c",`safe.directory=${cwd.replace(/\\/g,"/")}`,...args],{cwd,encoding:"utf8",stdio:["ignore","pipe","pipe"],windowsHide:true}).trim();}
+  try {const output=execFileSync("git",["-c",`safe.directory=${cwd.replace(/\\/g,"/")}`,...args],{cwd,encoding:"utf8",stdio:["ignore","pipe","pipe"],windowsHide:true});return args.includes('-z')?output:output.trim();}
   catch {throw new Error("Git branch operation failed; working tree preserved, no forced checkout or cleanup");}
 }
 
@@ -27,6 +27,18 @@ export function branchRepository(cwd:string,vault:string) {
   const common=physicalPath(path.resolve(directory,git(directory,["rev-parse","--git-common-dir"])));
   if(!isWithinPhysicalPath(vault,metadata) || !isWithinPhysicalPath(vault,common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
+}
+
+export function preflightTaskBranch(task:Readonly<Record<string,any>>,cwd:string,vault:string) {
+  if(!task.branch?.trim() || task.createBranch)return;
+  const directory=branchRepository(cwd,vault);
+  if(git(directory,["branch","--show-current"])===task.branch)return;
+  const untracked=git(directory,["ls-files","--others","--exclude-standard","-z"]).split('\0').filter(Boolean);
+  const target=git(directory,["ls-tree","-r","--name-only","-z",task.branch]).split('\0').filter(Boolean);
+  const collision=untracked.some(file=>target.some(name=>name===file || name.startsWith(file+'/') || file.startsWith(name+'/')));
+  if(git(directory,["status","--porcelain","--untracked-files=no"]) || collision) {
+    throw new Error("Git Branch cannot switch while the working tree has uncommitted changes. Clear Git Branch to use the current branch, or commit/stash your work first. No task was started.");
+  }
 }
 
 export async function prepareTaskBranch(journal:ExecutionJournal,task:Readonly<Record<string,any>>,cwd:string,vault:string,handoff:boolean) {

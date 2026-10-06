@@ -241,7 +241,7 @@ function stopCardHarness(globals = {}) {
   const notices = [], elements = [], bundle = { exports: {} };
   class Stub {}
   const obsidian = { Plugin: Stub, Notice: class { constructor(text) { notices.push(text); } }, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; };', {
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; }; module.exports.setConfirmation = answer => { ConfirmModal.prototype.openAndWait = answer; };', {
     module: bundle, exports: bundle.exports, require: name => name === 'obsidian' ? obsidian : require(name),
     process, Buffer, console, AbortController, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
   });
@@ -271,8 +271,43 @@ function stopCardHarness(globals = {}) {
   };
   renderCard(task);
   return { plugin, task, workflow, notices, elements, stop: elements.find(el => el.text === '⏹'),
-    detailStop: elements.find(el => el.text === '⏹ Stop'), renderCard, Plugin: bundle.exports.default, Client: bundle.exports.TestClient, setRunner: bundle.exports.setRunner };
+    detailStop: elements.find(el => el.text === '⏹ Stop'), renderCard, Plugin: bundle.exports.default, Client: bundle.exports.TestClient, setRunner: bundle.exports.setRunner, setConfirmation: bundle.exports.setConfirmation };
 }
+
+test('task card abandons only the confirmed historical attempt after edits and permits a fresh task', async () => {
+  const os=require('node:os'), root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-card-abandon-'));
+  const h=stopCardHarness(), p=h.plugin;
+  delete p.sharedWorkflowExecution;delete p.pluginExecutionLease;delete p.saveSettings;
+  const install=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(install,'runtime');fs.mkdirSync(runtime,{recursive:true});
+  p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};p.redactSecrets=s=>s;
+  const state={schemaVersion:1,runId:'old-attempt',workflowId:'@task:t',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'task',steps:[{stepId:'task',status:'in_flight'}]};
+  const file=path.join(runtime,'old-attempt.json');fs.writeFileSync(file,JSON.stringify(state));
+  fs.writeFileSync(path.join(install,'data.json'),JSON.stringify({logsEnabled:false,workflows:[],tasks:[{id:'t',name:'Edited task',taskKind:'code',code:'output="fresh task succeeded";',prompt:'edited',scheduleType:'manual',runtimeExecution:{runId:state.runId,workflowId:state.workflowId,revision:1,definitionHash:state.definitionHash}}]}));
+  p.reservePluginExecution();
+  try {
+    await p.loadSettings();
+    await assert.rejects(p.runTask(p.settings.tasks[0]),/Unfinished attempt old-attempt/);
+    const card=h.renderCard({...p.settings.tasks[0],taskKind:'codex'}), button=card.find(el=>el.text==='Abandon attempt');assert.ok(button);
+    h.setConfirmation(async()=>false);await button.onclick({stopPropagation(){}});
+    assert.deepEqual(JSON.parse(fs.readFileSync(file)),state,'cancel is read-only');
+    h.setConfirmation(async()=>{p.sharedWorkflowExecution={workflowId:'other'};return true;});
+    await assert.rejects(p.confirmAbandonTaskExecution('t'),/still active/);delete p.sharedWorkflowExecution;
+    h.setConfirmation(async()=>{const changed={...state,revision:2};fs.writeFileSync(file,JSON.stringify(changed));return true;});
+    await assert.rejects(p.confirmAbandonTaskExecution('t'),/revision changed/);
+    assert.equal(JSON.parse(fs.readFileSync(file)).phase,'in_flight');
+    // The next confirmation observes the updated revision.
+    h.setConfirmation(async()=>true);await p.confirmAbandonTaskExecution('t');
+    const abandoned=JSON.parse(fs.readFileSync(file));assert.equal(abandoned.phase,'abandoned');assert.deepEqual(abandoned.steps,state.steps);
+    assert.equal(p.settings.tasks[0].status,'abandoned');assert.equal(p.settings.tasks[0].prompt,'edited');
+    p.pluginExecutionLease.assertOwned();
+    await p.runTask(p.settings.tasks[0]);
+    assert.equal(p.settings.tasks[0].status,'completed');assert.match(p.settings.tasks[0].output,/fresh task succeeded/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(file)),abandoned);
+  } finally {
+    p.releasePluginExecution(false);
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-card-abandon-'));fs.rmSync(root,{recursive:true,force:true});
+  }
+});
 
 function legacyHarness(kind = 'copilot', globals = {}) {
   const h = stopCardHarness(globals), p = h.plugin;
@@ -691,6 +726,25 @@ test('shared checkpoints cannot regress, change run or overwrite a replacement o
   assert.equal(loads, 2); assert.equal(p.sharedWorkflowExecution, replacement);
   finish(); await pending;
   assert.equal(p.sharedWorkflowExecution, replacement);
+});
+
+test('task GUI buttons surface blocked starts without changing status or swallowing rejection', async () => {
+  const h = stopCardHarness(), p = h.plugin;
+  delete p.sharedWorkflowExecution;
+  Object.assign(h.task, { status: 'pending', taskKind: 'opencode', interactiveTerminal: true, model: 'test/model' });
+  delete h.task.runtimeExecution;
+  p.redactSecrets = text => text.replace('PRIVATE_SENTINEL', '[redacted]');
+  let calls = 0;
+  p.runTask = async () => { calls++; throw Error('Previous execution requires continuation or reconciliation PRIVATE_SENTINEL'); };
+  const before = JSON.stringify(h.task);
+  for (const label of ['▶', '▶ Run']) {
+    await h.renderCard(h.task).find(el => el.text === label).onclick({ stopPropagation() {} });
+    assert.match(h.notices.at(-1) || '', /Previous execution requires continuation or reconciliation/);
+    assert.ok(!h.notices.at(-1).includes('PRIVATE_SENTINEL'));
+    assert.equal(JSON.stringify(h.task), before);
+  }
+  assert.equal(calls, 2);
+  assert.equal(h.notices.length, 2);
 });
 
 test('workflow GUI buttons report rejected preflight without effects; CLI still returns an error', async () => {

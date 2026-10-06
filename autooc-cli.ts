@@ -6,11 +6,20 @@ import { requestWorkflowStop } from "./workflow-stop";
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { recoverExecutionLease,readExecutionLeaseOwner } from "./execution-lease";
 import { answerWorkflowApproval } from "./workflow-approval";
+import { abandonInstalledExecution } from "./execution-abandonment";
 declare const AUTOOC_VERSION: string;
 const version = AUTOOC_VERSION;
 
 async function main(args: string[]) {
   const [command, ...rest] = args;
+  if(command === "abandon") {
+    const keys=["--vault","--workflow","--run","--revision","--reason","--acknowledge-unknown-effects"];
+    if(rest.length!==12 || keys.some((key,index)=>rest[index*2]!==key) || !/^(0|[1-9]\d*)$/.test(rest[7]) || rest[11]!=="true") {
+      throw new Error("Abandon requires --vault, --workflow (use @task:ID for a standalone task), --run, --revision, --reason and --acknowledge-unknown-effects true, in that order");
+    }
+    const result=await abandonInstalledExecution({vault:rest[1],workflowId:rest[3],runId:rest[5],revision:Number(rest[7]),reason:rest[9],acknowledgedUnknownEffects:true});
+    return {version,runId:result.runId,workflowId:result.workflowId,phase:result.phase,revision:result.revision,abandonment:result.abandonment};
+  }
   if(command==="approve" || command==="deny") {
     if(rest.length!==6 || rest[0]!=="--vault" || !path.isAbsolute(rest[1]) || rest[2]!=="--run" || rest[4]!=="--approval")throw new Error("Decision requires --vault, --run and exact --approval token");
     let directory=fs.realpathSync(rest[1]);
@@ -30,8 +39,8 @@ async function main(args: string[]) {
     }
     return {version,...recoverExecutionLease(directory,rest[3])};
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny"], taskSelection:true };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", experimental: true, foreground:true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection:true };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", experimental: true, foreground:true };
   if (["run","resume","reconcile","stop"].includes(command)) {
     const values = new Map<string,string>();
     const target = rest.includes("--task") ? "--task" : "--workflow";
@@ -85,7 +94,7 @@ async function main(args: string[]) {
   const summarize = (items: any[]) => items.map(item => {
     if (!item || typeof item.id !== "string" || typeof item.name !== "string") throw new Error("Invalid catalog entry.");
     const entry: {id: string; name: string; recordedStatus?: string} = { id: item.id, name: item.name };
-    if (command === "status") entry.recordedStatus = ["idle", "pending", "running", "completed", "failed", "cancelled"].includes(item.status) ? item.status : "unknown";
+    if (command === "status") entry.recordedStatus = ["idle", "pending", "running", "completed", "failed", "cancelled", "abandoned"].includes(item.status) ? item.status : "unknown";
     return entry;
   });
   let runtime:object = {};
@@ -107,8 +116,8 @@ async function main(args: string[]) {
           revision:state.revision,nextStepId:state.nextStepId,
           completedSteps:state.steps.filter(step=>step.status==='completed').length,
           failedSteps:state.steps.filter(step=>step.status==='failed').length,
-          requiresReconciliation:state.phase==='in_flight',
-          ...(state.steps.slice(-1)[0]?.approval ? {pendingApproval:state.steps.slice(-1)[0].approval} : {})});
+          requiresReconciliation:state.phase==='in_flight',abandonment:state.abandonment,
+          ...(state.phase==='in_flight' && state.steps.slice(-1)[0]?.approval ? {pendingApproval:state.steps.slice(-1)[0].approval} : {})});
       }
     }
     runtime = {executions,executionLockPresent,...(executionOwner ? {executionOwner} : {})};

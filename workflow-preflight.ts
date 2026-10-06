@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { physicalPath, isWithinPhysicalPath } from "./path-identity";
 import type { PreparedWorkflow } from "./workflow-definition";
-import { validateBranchOptions, branchRepository } from "./workflow-branch";
+import { validateBranchOptions, branchRepository, preflightTaskBranch } from "./workflow-branch";
 
 // Validate all steps before the journal or first Code effect. The installed
 // catalog is trusted input, but an explicit vault does not authorize other roots.
@@ -25,6 +25,9 @@ export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:str
     if(item.taskKind==="code" && item.interactiveTerminal===true)throw new Error("Code tasks cannot be interactive");
     validateBranchOptions(item);
     if(item.branch?.trim() || definition.workflow.handoffBranch) branchRepository(item.workingDirectory || definition.settings.workingDirectory || root,root);
+    // A standalone task starts now. Later workflow steps may intentionally
+    // commit existing changes before switching branches; do not pre-judge them.
+    if(definition.workflow.id.startsWith('@task:')) preflightTaskBranch(item,item.workingDirectory || definition.settings.workingDirectory || root,root);
   }
   for (const task of definition.tasks) {
     if(task.taskKind==='code') continue;

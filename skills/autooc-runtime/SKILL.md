@@ -5,6 +5,16 @@ description: Consultar, iniciar, detener y recuperar tareas o workflows de AutoO
 
 # AutoOC desde un agente
 
+## Explicit abandonment (1.6.5+)
+
+If an old result cannot be recovered, obtain explicit human authorization to accept its unknown effects. Close or disable the plugin and inspect the exact run ID, workflow ID and revision. Never steal a live execution lease. Then use:
+
+```powershell
+node $cliPath abandon --vault $vaultPath --workflow WORKFLOW_ID --run RUN_ID --revision REVISION --reason 'Human-authorized abandonment; outcome unknown' --acknowledge-unknown-effects true
+```
+
+For standalone tasks, use `@task:TASK_ID` as the workflow identity. This preserves all step evidence and a snapshot of the original checkpoint. The new state is `abandoned`, with an unknown outcome. Subsequent new work is permitted; resuming the abandoned identity is forbidden. The command does not kill external processes or prove their effects stopped. Never abandon automatically, report it as success, or substitute it for available reconciliation.
+
 ## Compatibilidad y disponibilidad
 
 Guía del componente incluido en el candidato 1.6.2. La CLI informa `version: 1.6.2` y `experimental: true`: comprobar `version` y `help` antes de usarla. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. El almacén de secrets de AutoOC sigue aplazado en la interfaz autónoma.
