@@ -279,8 +279,20 @@ test('plugin startup recovers a bound checkpoint read-only and blocks legacy rep
     assert.equal(fs.readFileSync(path.join(runtime,checkpoint.runId+'.json'),'utf8'),before);
     stored.workflows[0].steps[0].code='output="changed";';
     fs.writeFileSync(file,JSON.stringify(stored));
-    await assert.rejects(p.loadSettings(),/definition mismatch/);assert.equal(saves,0);
+    // Edited definitions remain visible, but never authorize replay of the old run.
+    await p.loadSettings();assert.equal(saves,0);
     assert.equal(p.settings.workflows[0].steps[0].code,'output="changed";');
+    const recovered=p.settings.workflows[0];
+    assert.equal(recovered.runtimeExecution.definitionChanged,true);
+    assert.equal(recovered.runtimeExecution.requiresReconciliation,true);
+    assert.deepEqual(recovered.runtimeExecution.historicalSteps,checkpoint.steps);
+    assert.ok(recovered.steps.every(step=>step.status==='pending' && step.output===''));
+    await assert.rejects(runCodeWorkflowHost({
+      definition:prepareWorkflowDefinition(recovered,[],p.settings),runtimeDirectory:runtime,
+      vaultBase:dir,redact:s=>s,resumeRunId:checkpoint.runId,
+    }),/Execution identity or definition changed/);
+    assert.equal(fs.readFileSync(path.join(runtime,checkpoint.runId+'.json'),'utf8'),before);
+    assert.equal(fs.readFileSync(file,'utf8'),JSON.stringify(stored));
   } finally {
     for(const file of fs.readdirSync(runtime)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,file));}
     fs.rmdirSync(runtime);fs.unlinkSync(path.join(path.dirname(runtime),'data.json'));fs.rmdirSync(path.dirname(runtime));fs.rmdirSync(path.join(dir,'.obsidian','plugins'));fs.rmdirSync(path.join(dir,'.obsidian'));fs.rmdirSync(dir);

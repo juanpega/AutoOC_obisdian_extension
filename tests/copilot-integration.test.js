@@ -202,7 +202,9 @@ test("Visual Builder controls persist the connected graph and preserve history t
       const journalFile = path.join(runtime, historyRun.runId + ".json");
       const journalBefore = fs.readFileSync(journalFile);
       const filesBefore = fs.readdirSync(runtime).sort();
-      const before = structuredClone(plugin.settings);
+      // The persistence boundary is JSON: absent optional values are not stored.
+      // Compare all serializable history, including any actual abandonment record.
+      const before = JSON.parse(JSON.stringify(plugin.settings));
       for (const method of ["runTask", "runWorkflow", "runSharedWorkflow", "resetWorkflow"]) {
         plugin[method] = () => assert.fail("Saving must not execute or reset: " + method);
       }
@@ -277,7 +279,7 @@ test("Visual Builder controls persist the connected graph and preserve history t
       assert.deepEqual(savedGraph.runtimeExecution.historicalSteps, JSON.parse(journalBefore).steps);
       assert.equal(savedGraph.currentStep, 0);
       assert.ok(savedGraph.steps.every(step => step.status === "pending" && step.output === ""));
-      assert.deepEqual(reopened.settings.tasks[0].runtimeExecution, before.tasks[0].runtimeExecution);
+      assert.deepEqual(JSON.parse(JSON.stringify(reopened.settings.tasks[0].runtimeExecution)), before.tasks[0].runtimeExecution);
       assert.deepEqual(fs.readFileSync(journalFile), journalBefore);
       assert.deepEqual(fs.readdirSync(runtime).sort(), filesBefore);
       const reopenedModal = new VisualBuilderModal(reopened.app, reopened);
