@@ -14,6 +14,27 @@ const {executeCode}=load('code-runtime');
 const {prepareWorkflowDefinition:prepare}=load('workflow-definition');
 const {runCodeWorkflowHost}=load('code-workflow-host');
 const hash='a'.repeat(64);
+test('explicit abandonment preserves uncertain evidence and cannot resume or hide a changed revision', async()=>fixture(async lease=>{
+  const definition=prepare({id:'abandoned',steps:[{id:'a',stepKind:'code',code:'output="must not repeat";'}]},[],{});
+  const journal=await J.create(lease,'abandoned',definition.hash,'a');
+  await journal.begin('a');await journal.recordCodexThread('a','thread','turn');
+  const before=journal.snapshot();
+  await assert.rejects(journal.abandon(before.revision+1,'Human decision',true),/changed/);
+  await assert.rejects(journal.abandon(before.revision,'Human decision',false),/acknowledg/);
+  await journal.abandon(before.revision,'Human decision',true);
+  const after=journal.snapshot();
+  assert.equal(after.phase,'abandoned');assert.equal(after.nextStepId,null);
+  assert.deepEqual(after.steps,before.steps);assert.equal(after.abandonment.outcome,'unknown');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(lease.directory,after.abandonment.snapshot),'utf8')),before);
+  await assert.rejects(journal.begin('a'),/not ready/);
+  let effects=0;
+  const result=await advance(journal,definition,{execute:async()=>{effects++;},redact:s=>s});
+  assert.equal(effects,0);assert.equal(result.phase,'abandoned');
+  await assert.rejects(journal.abandon(after.revision,'Again',true),/terminal/);
+  const next=await runCodeWorkflowHost({definition:prepare({id:'new',steps:[{id:'b',stepKind:'code',code:'output="new";'}]},[],{}),runtimeDirectory:lease.directory,vaultBase:lease.directory,lease,redact:s=>s});
+  assert.equal(next.phase,'completed');assert.deepEqual(journal.snapshot(),after);
+  fs.unlinkSync(path.join(lease.directory,after.abandonment.snapshot));
+}));
 test('terminal recovery separates edited definitions from historical results',()=>{
   const {recoverWorkflowProgress,projectWorkflowProgress}=load('workflow-progress');
   const original={id:'w',name:'Before',steps:[{id:'a',taskId:'t'}]},tasks=[{id:'t',prompt:'before'}];

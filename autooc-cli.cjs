@@ -151,7 +151,7 @@ async function atomicSettingsWrite(file, data, io = fs.promises) {
 var writes = /* @__PURE__ */ new Map();
 function validateExecutionCheckpoint(value) {
   const validDate = (date) => date === void 0 || typeof date === "string" && Number.isFinite(Date.parse(date));
-  if (!value || value.schemaVersion !== 1 || !/^[a-zA-Z0-9-]+$/.test(value.runId || "") || typeof value.workflowId !== "string" || !value.workflowId || !/^[a-f0-9]{64}$/.test(value.definitionHash || "") || !Number.isSafeInteger(value.revision) || value.revision < 0 || !["ready", "in_flight", "completed", "failed"].includes(value.phase) || !(value.nextStepId === null || typeof value.nextStepId === "string" && value.nextStepId.length > 0) || !Array.isArray(value.steps) || !validDate(value.createdAt)) throw new Error("Invalid execution checkpoint");
+  if (!value || value.schemaVersion !== 1 || !/^[a-zA-Z0-9-]+$/.test(value.runId || "") || typeof value.workflowId !== "string" || !value.workflowId || !/^[a-f0-9]{64}$/.test(value.definitionHash || "") || !Number.isSafeInteger(value.revision) || value.revision < 0 || !["ready", "in_flight", "completed", "failed", "abandoned"].includes(value.phase) || !(value.nextStepId === null || typeof value.nextStepId === "string" && value.nextStepId.length > 0) || !Array.isArray(value.steps) || !validDate(value.createdAt)) throw new Error("Invalid execution checkpoint");
   for (const [index, step] of value.steps.entries()) {
     if (step?.branch && (typeof step.branch.directory !== "string" || !path2.isAbsolute(step.branch.directory) || typeof step.branch.name !== "string" || !step.branch.name)) throw new Error("Invalid branch checkpoint");
     if (step?.result && (typeof step.result.succeeded !== "boolean" || typeof step.result.output !== "string" || step.result.cancelled !== void 0 && (typeof step.result.cancelled !== "boolean" || step.result.cancelled && step.result.succeeded))) throw new Error("Invalid observed result");
@@ -165,7 +165,9 @@ function validateExecutionCheckpoint(value) {
       throw new Error("Invalid step checkpoint");
   }
   const last = value.steps[value.steps.length - 1];
-  if (value.phase === "in_flight" !== (last?.status === "in_flight") || value.phase === "in_flight" && value.nextStepId !== last.stepId || ["ready", "in_flight"].includes(value.phase) && value.nextStepId === null || ["completed", "failed"].includes(value.phase) && value.nextStepId !== null)
+  const abandoned = value.phase === "abandoned", decision = value.abandonment;
+  if (abandoned ? !decision || typeof decision.at !== "string" || !validDate(decision.at) || typeof decision.reason !== "string" || !decision.reason.trim() || decision.reason.length > 1e3 || decision.outcome !== "unknown" || decision.acknowledgedUnknownEffects !== true || !["ready", "in_flight"].includes(decision.previousPhase) || typeof decision.previousNextStepId !== "string" || !decision.previousNextStepId || !Number.isSafeInteger(decision.previousRevision) || decision.previousRevision !== value.revision - 1 || decision.snapshot !== `abandonment-${value.runId}-${decision.previousRevision}.snapshot` || decision.previousPhase === "in_flight" !== (last?.status === "in_flight") || decision.previousPhase === "in_flight" && decision.previousNextStepId !== last?.stepId : decision !== void 0) throw new Error("Invalid abandonment decision");
+  if (!abandoned && value.phase === "in_flight" !== (last?.status === "in_flight") || value.phase === "in_flight" && value.nextStepId !== last.stepId || ["ready", "in_flight"].includes(value.phase) && value.nextStepId === null || ["completed", "failed", "abandoned"].includes(value.phase) && value.nextStepId !== null)
     throw new Error("Inconsistent execution checkpoint");
 }
 function readExecutionCheckpoint(directory, runId) {
@@ -210,6 +212,40 @@ var ExecutionJournal = class _ExecutionJournal {
   }
   snapshot() {
     return JSON.parse(JSON.stringify(this.state));
+  }
+  abandon(expectedRevision, reason, acknowledgedUnknownEffects) {
+    return this.update((state) => {
+      if (state.revision !== expectedRevision) throw new Error("Execution revision changed; inspect again");
+      if (!["ready", "in_flight"].includes(state.phase)) throw new Error("Execution is already terminal");
+      if (acknowledgedUnknownEffects !== true) throw new Error("Explicit acknowledgement of unknown effects is required");
+      if (typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("A concise abandonment reason is required");
+      const snapshot = `abandonment-${state.runId}-${state.revision}.snapshot`, file = path2.join(this.lease.directory, snapshot);
+      const original = JSON.stringify(state);
+      if (fs2.existsSync(file)) {
+        const stat = fs2.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs2.readFileSync(file, "utf8") !== original) throw new Error("Abandonment snapshot changed");
+      } else {
+        const fd = fs2.openSync(file, "wx", 384);
+        try {
+          fs2.writeFileSync(fd, original);
+          fs2.fsyncSync(fd);
+        } finally {
+          fs2.closeSync(fd);
+        }
+      }
+      state.abandonment = {
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        reason: reason.trim(),
+        outcome: "unknown",
+        acknowledgedUnknownEffects: true,
+        previousPhase: state.phase,
+        previousNextStepId: state.nextStepId,
+        previousRevision: state.revision,
+        snapshot
+      };
+      state.phase = "abandoned";
+      state.nextStepId = null;
+    });
   }
   update(change) {
     const operation = (writes.get(this.file) || Promise.resolve()).then(async () => {
@@ -2430,7 +2466,8 @@ function validateBranchOptions(task) {
 }
 function git(cwd, args) {
   try {
-    return (0, import_child_process4.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+    const output = (0, import_child_process4.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    return args.includes("-z") ? output : output.trim();
   } catch {
     throw new Error("Git branch operation failed; working tree preserved, no forced checkout or cleanup");
   }
@@ -2442,6 +2479,17 @@ function branchRepository(cwd, vault) {
   const common = physicalPath(path10.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
   if (!isWithinPhysicalPath(vault, metadata) || !isWithinPhysicalPath(vault, common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
+}
+function preflightTaskBranch(task, cwd, vault) {
+  if (!task.branch?.trim() || task.createBranch) return;
+  const directory = branchRepository(cwd, vault);
+  if (git(directory, ["branch", "--show-current"]) === task.branch) return;
+  const untracked = git(directory, ["ls-files", "--others", "--exclude-standard", "-z"]).split("\0").filter(Boolean);
+  const target = git(directory, ["ls-tree", "-r", "--name-only", "-z", task.branch]).split("\0").filter(Boolean);
+  const collision = untracked.some((file) => target.some((name) => name === file || name.startsWith(file + "/") || file.startsWith(name + "/")));
+  if (git(directory, ["status", "--porcelain", "--untracked-files=no"]) || collision) {
+    throw new Error("Git Branch cannot switch while the working tree has uncommitted changes. Clear Git Branch to use the current branch, or commit/stash your work first. No task was started.");
+  }
 }
 async function prepareTaskBranch(journal, task, cwd, vault, handoff) {
   validateBranchOptions(task);
@@ -2542,6 +2590,7 @@ async function runCodeWorkflowHost(options) {
   advancingLeases.add(lease);
   try {
     const resumed = options.resumeRunId === void 0 ? void 0 : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
+    if (resumed?.snapshot().phase === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
     if (resumed && definition.workflow.handoffBranch && ["ready", "in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed, options.vaultBase);
@@ -2571,7 +2620,9 @@ async function runCodeWorkflowHost(options) {
       if (fs12.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
       const prior = JSON.parse(fs12.readFileSync(lease.directory + "/" + file, "utf8"));
       ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
-      if (prior.runId !== options.resumeRunId && !["completed", "failed"].includes(prior.phase)) throw new Error("Previous execution requires continuation or reconciliation");
+      if (prior.runId !== options.resumeRunId && !["completed", "failed", "abandoned"].includes(prior.phase)) {
+        throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
+      }
     }
     const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
     return await advanceWorkflowSession(journal, definition, {
@@ -2646,12 +2697,12 @@ function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expected
   return {
     ...workflow,
     ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
-    status: checkpoint.phase === "completed" ? "completed" : checkpoint.phase === "failed" ? "failed" : activelyExecuting ? "running" : "pending",
+    status: checkpoint.phase === "abandoned" ? "abandoned" : checkpoint.phase === "completed" ? "completed" : checkpoint.phase === "failed" ? "failed" : activelyExecuting ? "running" : "pending",
     currentStep: Math.max(0, workflow.steps.findIndex((step) => step.id === target)),
-    runtimeExecution: { runId: checkpoint.runId, definitionHash: checkpoint.definitionHash, revision: checkpoint.revision, phase: checkpoint.phase, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
+    runtimeExecution: { runId: checkpoint.runId, definitionHash: checkpoint.definitionHash, revision: checkpoint.revision, phase: checkpoint.phase, abandonment: checkpoint.abandonment, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
     steps: workflow.steps.map((step) => {
       const observed = last.get(step.id);
-      return { ...step, ...observed?.startedAt ? { lastRun: observed.startedAt } : {}, status: observed?.status === "in_flight" ? activelyExecuting ? "running" : "pending" : observed?.status || "pending", output: observed?.output || "" };
+      return { ...step, ...observed?.startedAt ? { lastRun: observed.startedAt } : {}, status: observed?.status === "in_flight" ? checkpoint.phase === "abandoned" ? "abandoned" : activelyExecuting ? "running" : "pending" : observed?.status || "pending", output: observed?.output || "" };
     })
   };
 }
@@ -2745,7 +2796,7 @@ async function persistWorkflowProgress(options) {
     const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
     const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
     validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
-    if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed"].includes(previous.phase)) {
+    if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed", "abandoned"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
     workflow = { ...workflow };
@@ -2754,7 +2805,7 @@ async function persistWorkflowProgress(options) {
   const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
   if (preserveLegacy) {
     validateProgressBinding(matches[0], durable, options.expectedRunId);
-    if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+    if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
   }
   const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
   const observedTasks = /* @__PURE__ */ new Map();
@@ -2771,23 +2822,23 @@ async function persistWorkflowProgress(options) {
     if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
     if (task.legacyExecution && previous?.runId === durable.runId) {
       validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable, options.expectedRunId);
-      if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+      if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
       return task;
     }
     if (previous && previous.runId !== durable.runId) {
       if (item.observed.status !== "in_flight") return task;
       const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
-      if (!["completed", "failed"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
+      if (!["completed", "failed", "abandoned"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
     }
     return {
       ...task,
       legacyExecution: void 0,
-      status: item.observed.status === "in_flight" ? "pending" : item.observed.status,
+      status: item.observed.status === "in_flight" ? durable.phase === "abandoned" ? "abandoned" : "pending" : item.observed.status,
       ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
       output: item.observed.output || "",
       ...item.observed.codexThreadId ? { lastCodexThreadId: item.observed.codexThreadId } : {},
       ...item.observed.codexTurnId ? { lastCodexTurnId: item.observed.codexTurnId } : {},
-      pendingCodexApproval: item.observed.approval ? { ...item.observed.approval, requestId: item.observed.approval.token } : void 0,
+      pendingCodexApproval: durable.phase !== "abandoned" && item.observed.approval ? { ...item.observed.approval, requestId: item.observed.approval.token } : void 0,
       runtimeExecution: {
         runId: durable.runId,
         workflowId: durable.workflowId,
@@ -2796,7 +2847,9 @@ async function persistWorkflowProgress(options) {
         stepIndex: item.stepIndex,
         revision: durable.revision,
         finishedAt: item.observed.finishedAt,
-        requiresReconciliation: item.observed.status === "in_flight"
+        phase: durable.phase,
+        abandonment: durable.abandonment,
+        requiresReconciliation: durable.phase !== "abandoned" && item.observed.status === "in_flight"
       }
     };
   });
@@ -2832,7 +2885,7 @@ async function requestWorkflowStop(directory, runId) {
   const stat = fs14.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
   const state = readExecutionCheckpoint(directory, runId);
-  if (["completed", "failed"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
+  if (["completed", "failed", "abandoned"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
   readStopRequest(directory, runId);
   const requestId = (0, import_crypto6.randomUUID)();
   await atomicSettingsWrite(path13.join(directory, runId + ".stop.json"), { schemaVersion: 1, runId, requestId });
@@ -2861,6 +2914,7 @@ function preflightInstalledWorkflow(definition, vault) {
     if (item.taskKind === "code" && item.interactiveTerminal === true) throw new Error("Code tasks cannot be interactive");
     validateBranchOptions(item);
     if (item.branch?.trim() || definition.workflow.handoffBranch) branchRepository(item.workingDirectory || definition.settings.workingDirectory || root, root);
+    if (definition.workflow.id.startsWith("@task:")) preflightTaskBranch(item, item.workingDirectory || definition.settings.workingDirectory || root, root);
   }
   for (const task of definition.tasks) {
     if (task.taskKind === "code") continue;
@@ -2993,7 +3047,7 @@ async function runInstalledWorkflow(options) {
     const binding = matches[0].runtimeExecution;
     const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition.workflow.id;
     validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId);
-    if (!["completed", "failed"].includes(previous.phase)) {
+    if (!["completed", "failed", "abandoned"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
   }
@@ -3045,10 +3099,36 @@ async function runInstalledWorkflow(options) {
   }
 }
 
+// execution-abandonment.ts
+async function abandonInstalledExecution(options) {
+  if (!Number.isSafeInteger(options.revision) || options.revision < 0) throw new Error("Exact observed revision is required");
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const lease = options.lease || acquireExecutionLease(location.runtimeDirectory);
+  try {
+    lease.assertOwned();
+    if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
+    const state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+    if (state.workflowId !== options.workflowId) throw new Error("Execution belongs to another workflow or task");
+    const journal = ExecutionJournal.open(lease, state.runId, state.definitionHash);
+    await journal.abandon(options.revision, options.reason, options.acknowledgedUnknownEffects);
+    return journal.snapshot();
+  } finally {
+    if (!options.lease) lease.release();
+  }
+}
+
 // autooc-cli.ts
-var version = "1.6.3";
+var version = "1.6.5";
 async function main(args) {
   const [command, ...rest] = args;
+  if (command === "abandon") {
+    const keys = ["--vault", "--workflow", "--run", "--revision", "--reason", "--acknowledge-unknown-effects"];
+    if (rest.length !== 12 || keys.some((key, index) => rest[index * 2] !== key) || !/^(0|[1-9]\d*)$/.test(rest[7]) || rest[11] !== "true") {
+      throw new Error("Abandon requires --vault, --workflow (use @task:ID for a standalone task), --run, --revision, --reason and --acknowledge-unknown-effects true, in that order");
+    }
+    const result = await abandonInstalledExecution({ vault: rest[1], workflowId: rest[3], runId: rest[5], revision: Number(rest[7]), reason: rest[9], acknowledgedUnknownEffects: true });
+    return { version, runId: result.runId, workflowId: result.workflowId, phase: result.phase, revision: result.revision, abandonment: result.abandonment };
+  }
   if (command === "approve" || command === "deny") {
     if (rest.length !== 6 || rest[0] !== "--vault" || !path17.isAbsolute(rest[1]) || rest[2] !== "--run" || rest[4] !== "--approval") throw new Error("Decision requires --vault, --run and exact --approval token");
     let directory = fs17.realpathSync(rest[1]);
@@ -3069,8 +3149,8 @@ async function main(args) {
     }
     return { version, ...recoverExecutionLease(directory, rest[3]) };
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny"], taskSelection: true };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", experimental: true, foreground: true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection: true };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", experimental: true, foreground: true };
   if (["run", "resume", "reconcile", "stop"].includes(command)) {
     const values = /* @__PURE__ */ new Map();
     const target = rest.includes("--task") ? "--task" : "--workflow";
@@ -3137,7 +3217,7 @@ async function main(args) {
   const summarize = (items) => items.map((item) => {
     if (!item || typeof item.id !== "string" || typeof item.name !== "string") throw new Error("Invalid catalog entry.");
     const entry = { id: item.id, name: item.name };
-    if (command === "status") entry.recordedStatus = ["idle", "pending", "running", "completed", "failed", "cancelled"].includes(item.status) ? item.status : "unknown";
+    if (command === "status") entry.recordedStatus = ["idle", "pending", "running", "completed", "failed", "cancelled", "abandoned"].includes(item.status) ? item.status : "unknown";
     return entry;
   });
   let runtime = {};
@@ -3167,7 +3247,8 @@ async function main(args) {
           completedSteps: state.steps.filter((step) => step.status === "completed").length,
           failedSteps: state.steps.filter((step) => step.status === "failed").length,
           requiresReconciliation: state.phase === "in_flight",
-          ...state.steps.slice(-1)[0]?.approval ? { pendingApproval: state.steps.slice(-1)[0].approval } : {}
+          abandonment: state.abandonment,
+          ...state.phase === "in_flight" && state.steps.slice(-1)[0]?.approval ? { pendingApproval: state.steps.slice(-1)[0].approval } : {}
         });
       }
     }

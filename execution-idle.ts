@@ -14,6 +14,9 @@ export function assertIdleJournals(runtime: string): Map<string, RunCheckpoint> 
     if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
     if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
+    // A validated human abandonment accepts uncertainty explicitly. It is not
+    // evidence of success or process termination, but releases orchestration.
+    if (state.phase === "abandoned") { checkpoints.set(state.runId, state); continue; }
     if (!["completed", "failed"].includes(state.phase) || state.steps.some(step =>
       step.status === "in_flight" || step.approval || step.result?.cancelled || step.evaluations?.some(item => item.status !== "completed"))) {
       throw new Error("Unfinished execution or uncertain effect requires reconciliation");

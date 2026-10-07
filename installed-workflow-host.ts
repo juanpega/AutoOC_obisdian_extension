@@ -66,7 +66,7 @@ export async function runInstalledWorkflow(options: {
     // that run; a different standalone task's journal can never authorize it.
     const previousId=virtual && !previous.workflowId.startsWith('@task:') ? binding.workflowId : definition.workflow.id;
     validateProgressBinding({id:previousId,runtimeExecution:binding},previous,replaceCompletedRunId);
-    if (!["completed","failed"].includes(previous.phase)) {
+    if (!["completed","failed","abandoned"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
   }

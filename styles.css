@@ -738,6 +738,7 @@
 .auto-oc-badge-running   { background: #f59e0b20; color: #f59e0b; }
 .auto-oc-badge-completed { background: #10b98120; color: #10b981; }
 .auto-oc-badge-failed    { background: #ef444420; color: #ef4444; }
+.auto-oc-badge-abandoned { background: #f59e0b20; color: #f59e0b; }
 
 .auto-oc-badge-clickable {
   cursor: pointer;

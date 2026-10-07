@@ -15,6 +15,32 @@ function loader(overrides={}) {
   return load;
 }
 const load=loader(),{prepareWorkflowDefinition:prepare}=load('workflow-definition'),{runCodeWorkflowHost:run}=load('code-workflow-host');
+test('dirty branch switch is rejected before a run is created, while current-branch support remains allowed',()=>fixture(async root=>{
+  const git=(...args)=>execFileSync('git',['-c',`safe.directory=${root}`,...args],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
+  git('init','-b','work');fs.writeFileSync(path.join(root,'tracked.txt'),'original');git('add','tracked.txt');
+  git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','fixture');git('checkout','-b','dev');
+  fs.writeFileSync(path.join(root,'tracked.txt'),'different branch');git('add','tracked.txt');
+  git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','other branch');git('checkout','work');
+  fs.writeFileSync(path.join(root,'tracked.txt'),'unsaved changes');
+  const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
+  const task={id:'buddy',name:'Buddy',taskKind:'opencode',interactiveTerminal:true,prompt:'Support',model:'test/model',branch:'dev'};
+  fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[task],workflows:[],opencodePath:path.join(root,'must-not-launch-missing.exe')}));
+  const {runInstalledWorkflow}=load('installed-workflow-host');
+  await assert.rejects(runInstalledWorkflow({vault:root,taskId:'buddy',newExecution:true,redact:s=>s}),/Git Branch.*uncommitted changes/);
+  assert.deepEqual(fs.readdirSync(runtime),[],'no journal, no stuck execution');
+  assert.equal(git('branch','--show-current'),'work');assert.equal(fs.readFileSync(path.join(root,'tracked.txt'),'utf8'),'unsaved changes');
+  const {preflightInstalledWorkflow}=load('workflow-preflight');
+  for(const branch of ['work',undefined]) {
+    const definition=prepare({id:'@task:buddy',steps:[{id:'task',taskId:'buddy'}]},[{...task,branch}],{});
+    assert.doesNotThrow(()=>preflightInstalledWorkflow(definition,root));
+  }
+  git('restore','tracked.txt');git('rm','tracked.txt');
+  git('-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','-m','remove only in fixture work branch');
+  fs.writeFileSync(path.join(root,'tracked.txt'),'untracked content must survive');
+  await assert.rejects(runInstalledWorkflow({vault:root,taskId:'buddy',newExecution:true,redact:s=>s}),/Git Branch.*uncommitted changes/);
+  assert.deepEqual(fs.readdirSync(runtime),[]);
+  assert.equal(fs.readFileSync(path.join(root,'tracked.txt'),'utf8'),'untracked content must survive');
+}));
 // Ask Windows for the actual alias; never manufacture a name or use a link.
 function shortWindowsPath(directory) {
   assert.equal(process.platform,'win32');
@@ -534,7 +560,7 @@ test('reopening a structurally edited terminal workflow never assigns history to
   }
 }));
 
-test('unfinished edited definitions remain rejected on reload and resume without effects',async t=>{
+test('unfinished edited definitions remain visible on reload but reject resume and new runs without effects',async t=>{
   for(const kind of ['task','workflow']) for(const phase of ['ready','in_flight']) await t.test(`${kind}/${phase}`,()=>fixture(async root=>{
     const directory=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
     const task={id:'t',taskKind:'code',code:'output="must not execute";',prompt:'before'},workflow=kind==='task'?load('standalone-task').standaloneTaskWorkflow('t'):{id:'w',steps:[{id:'a',taskId:'t'}]};
@@ -544,10 +570,18 @@ test('unfinished edited definitions remain rejected on reload and resume without
     const state=journal.snapshot();(kind==='task'?task:workflow).runtimeExecution={runId:state.runId,workflowId:workflow.id,revision:state.revision};
     task.prompt='changed';const file=path.join(directory,'data.json');fs.writeFileSync(file,JSON.stringify(config));
     const before=fs.readFileSync(path.join(runtime,state.runId+'.json')),plugin=pluginFor(root);
-    plugin.reservePluginExecution();try {await assert.rejects(plugin.loadSettings(),/definition mismatch/);} finally {plugin.releasePluginExecution(false);}
+    plugin.reservePluginExecution();try {
+      await plugin.loadSettings();
+      const item=kind==='task'?plugin.settings.tasks[0]:plugin.settings.workflows[0];
+      assert.equal(item.runtimeExecution.definitionChanged,true);
+      assert.equal(item.runtimeExecution.requiresReconciliation,true);
+      assert.equal(item.status,'pending');
+      assert.deepEqual(item.runtimeExecution.historicalSteps,state.steps);
+    } finally {plugin.releasePluginExecution(false);}
     let effects=0;
     const host=loader({'workflow-task-adapters':{createWorkflowTaskAdapter:()=>({supports:()=>true,execute:async()=>{effects++;return {succeeded:true,output:'bad'};}})}})('installed-workflow-host').runInstalledWorkflow;
     await assert.rejects(host({vault:root,...(kind==='task'?{taskId:'t'}:{workflowId:'w'}),resumeRunId:state.runId,redact:s=>s}),/definition changed/);
+    await assert.rejects(host({vault:root,...(kind==='task'?{taskId:'t'}:{workflowId:'w'}),newExecution:true,redact:s=>s}),/unfinished execution/);
     assert.equal(effects,0);assert.deepEqual(fs.readFileSync(path.join(runtime,state.runId+'.json')),before);
   }));
 });

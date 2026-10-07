@@ -47,6 +47,7 @@ import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
+import { abandonInstalledExecution } from "./execution-abandonment";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { SettingsWriter } from "./settings-writer";
 import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
@@ -436,7 +437,7 @@ async function copyTextToClipboard(text: string): Promise<void> {
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
-type TaskStatus = "pending" | "running" | "completed" | "failed";
+type TaskStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 type IntervalUnit = "seconds" | "minutes" | "hours";
 type TaskKind = "opencode" | "codex" | "copilot" | "code";
 type LegacyOwner = { workflowId: string; stepId: string; stepIndex: number; context: object };
@@ -541,7 +542,7 @@ interface ScheduledTask {
   };
 }
 
-type WorkflowStatus = "pending" | "running" | "completed" | "failed";
+type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 
 interface Workflow {
   legacyExecution?: { token: string };
@@ -1896,6 +1897,7 @@ export default class AutoOCPlugin extends Plugin {
   private lifecycleStopped = false;
   private startupPending = false;
   private observedJournalSnapshot?: string;
+  private observationProof?: string;
   private executionAttempted = false;
   private lifecycleTimers = new Set<ReturnType<typeof setTimeout>>();
   private schedulerTimer?: number;
@@ -1956,6 +1958,46 @@ export default class AutoOCPlugin extends Plugin {
           workflows:(settings.workflows || []).filter((entry:any) => !entry.runtimeExecution)}, new Map());
       }
     }
+  }
+
+  private observationProofPath(token: string): string {
+    return path.join(this.selectedExecutionLocation(false).runtimeDirectory, 'plugin-observation-' + token + '.proof');
+  }
+
+  private recordObservationProof(): void {
+    const lease = this.pluginExecutionLease!;
+    lease.assertOwned();
+    const file = this.observationProofPath(lease.token);
+    const fd = fs.openSync(file, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, JSON.stringify({schemaVersion:1,token:lease.token,journalHash:require('crypto').createHash('sha256').update(this.observedJournalSnapshot!).digest('hex')}));
+      fs.fsyncSync(fd);
+    } finally { fs.closeSync(fd); }
+    this.observationProof = file;
+  }
+
+  private beginExecutionEffects(): void {
+    this.assertLifecycleOpen();
+    if (this.observationProof) {
+      this.pluginExecutionLease!.assertOwned();
+      const file = this.observationProof;
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+      this.observationProof = undefined;
+    }
+    this.executionAttempted = true;
+  }
+
+  private assertClosedObservation(token: string): void {
+    const location = this.selectedExecutionLocation(false);
+    if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error('Installed package changed');
+    const file = this.observationProofPath(token), stat = fs.lstatSync(file);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Invalid observation proof');
+    const proof = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require('crypto').createHash('sha256').update(this.journalSnapshot()).digest('hex')) throw new Error('Observed execution state changed');
+    const settings = JSON.parse(fs.readFileSync(location.configurationFile, 'utf8'));
+    if ([...(settings.tasks || []), ...(settings.workflows || [])].some(entry => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error('Execution requires reconciliation');
+    assertIdleCatalog({tasks:(settings.tasks || []).filter((entry:any) => !entry.runtimeExecution),
+      workflows:(settings.workflows || []).filter((entry:any) => !entry.runtimeExecution)}, new Map());
   }
 
   private async completeInstalledRelease(): Promise<() => void> {
@@ -2032,6 +2074,9 @@ export default class AutoOCPlugin extends Plugin {
       await this.loadSettings();
       this.assertLifecycleOpen();
       this.observedJournalSnapshot = this.journalSnapshot();
+      // A durable, owner-bound proof covers renderer termination without any
+      // unload event. Every execution entry removes it before its first effect.
+      this.recordObservationProof();
       // The MCP bridge is retired. CLI and the distributed skill remain available.
       // Load models asynchronously to avoid blocking startup
       this.lifecycleTimeout(() => {
@@ -2123,6 +2168,14 @@ export default class AutoOCPlugin extends Plugin {
           tasks.addPromise(cleanup);
         }));
       }
+      // Closing a vault window need not emit workspace quit. Start the same
+      // guarded cleanup synchronously before Electron destroys that renderer.
+      // Pending writes/effects still retain their reservation if not drained.
+      if (typeof window.addEventListener === 'function') {
+        const close = () => { void this.onunload().catch(error => console.warn('AutoOC window cleanup retained reservation', error)); };
+        window.addEventListener('beforeunload', close);
+        this.register(() => window.removeEventListener('beforeunload', close));
+      }
       this.ready = true;
     } catch (error) {
       this.startupPending = false;
@@ -2196,10 +2249,30 @@ export default class AutoOCPlugin extends Plugin {
       const plugins = (this.app as any).plugins;
       await plugins.disablePlugin(this.manifest.id);
       await plugins.enablePlugin(this.manifest.id);
-    }));
+    }, this.closedSessionRecovery()));
     this.addRibbonIcon("workflow", "AutoOC — recovery required", () => { void open(); });
     this.addCommand({id: "open-auto-oc", name: "Open AutoOC recovery", callback: () => { void open(); }});
     new Notice("AutoOC: execution is unavailable. Open AutoOC for recovery details.", 10000);
+  }
+
+  private closedSessionRecovery(): (() => void) | undefined {
+    try {
+      const location = this.selectedExecutionLocation(false);
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) ||
+          fs.existsSync(path.join(location.runtimeDirectory, 'update-pending.json'))) return;
+      const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+      try { process.kill(owner.pid, 0); return; }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return; }
+      // This explicit UI action has the same contract as CLI recover-lease:
+      // archive only the exact absent owner; preserve all uncertain run state.
+      return () => {
+        const current = this.selectedExecutionLocation(false);
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) ||
+            !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) ||
+            fs.existsSync(path.join(current.runtimeDirectory, 'update-pending.json'))) throw new Error('Installation changed; retry loading AutoOC');
+        recoverExecutionLease(current.runtimeDirectory, owner.token);
+      };
+    } catch { return; }
   }
 
   // Reserve the vault for the whole plugin lifetime, including legacy tasks
@@ -2232,7 +2305,11 @@ export default class AutoOCPlugin extends Plugin {
       try {
         const owner = readExecutionLeaseOwner(location.runtimeDirectory);
         recoverExecutionLease(location.runtimeDirectory, owner.token, () => {
-          assertInstalledExecutionIdle(location.installationDirectory);
+          try { assertInstalledExecutionIdle(location.installationDirectory); }
+          catch (error) {
+            try { this.assertClosedObservation(owner.token); }
+            catch { throw error; }
+          }
         });
       } catch (recoveryError) {
         // Preserve the public exclusion code while explaining why recovery was denied.
@@ -2280,7 +2357,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
@@ -2821,7 +2898,7 @@ export default class AutoOCPlugin extends Plugin {
           if (binding) {
             const checkpoint = readExecutionCheckpoint(runtime,binding.runId);
             validateProgressBinding(wf,checkpoint,binding.runId);
-            if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+            if (!["completed","failed","abandoned"].includes(checkpoint.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
           }
           return wf.status === "running" && !(this as any).workflowRuntime?.has(wf.id) ? {...wf,status:"failed" as const} : wf;
         }
@@ -2836,7 +2913,7 @@ export default class AutoOCPlugin extends Plugin {
         const checkpoint=readExecutionCheckpoint(runtime,binding.runId);
         validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
         if (task.legacyExecution) {
-          if (!["completed","failed"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+          if (!["completed","failed","abandoned"].includes(checkpoint.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
           return task;
         }
         if (checkpoint.workflowId.startsWith('@task:') && checkpoint.workflowId!==standaloneTaskWorkflow(task.id).id) throw new Error("Standalone task identity mismatch");
@@ -2845,15 +2922,15 @@ export default class AutoOCPlugin extends Plugin {
         }
         const observed=checkpoint.steps.filter(step=>step.stepId===binding.stepId).pop();
         if (!observed) throw new Error("Bound task step is absent from its journal");
-        if (["completed","failed"].includes(checkpoint.phase)) {
+        if (["completed","failed","abandoned"].includes(checkpoint.phase)) {
           // The saved binding, rather than today's workflow steps, identifies
           // this task's historical result even after a step was reassigned.
-          return {...task,status:observed.status as ScheduledTask["status"],output:observed.output || '',
+          return {...task,status:(checkpoint.phase === "abandoned" && observed.status === "in_flight" ? "abandoned" : observed.status) as ScheduledTask["status"],output:observed.output || '',
             ...(observed.startedAt ? {lastRun:observed.startedAt} : {}),
             ...(observed.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
             ...(observed.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),
             pendingCodexApproval:undefined,
-            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,finishedAt:observed.finishedAt,requiresReconciliation:false}};
+            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,phase:checkpoint.phase,abandonment:checkpoint.abandonment,finishedAt:observed.finishedAt,requiresReconciliation:false}};
         }
         const workflow = recovered.find(wf=>wf.id===binding.workflowId && (wf as any).runtimeExecution?.runId===binding.runId);
         const step = workflow?.steps.find(step=>step.id===binding.stepId && step.taskId===task.id);
@@ -3299,7 +3376,7 @@ export default class AutoOCPlugin extends Plugin {
   // restricted environment killing the child. Output is written to a temp file
   // that the plugin polls every 3 s.
   private beginLegacyAttempt(task: ScheduledTask, owner?: LegacyOwner): LegacyAttempt {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     this.legacyAttempts ??= new Map();
     const current = this.settings.tasks.find(item => item.id === task.id);
@@ -3310,7 +3387,7 @@ export default class AutoOCPlugin extends Plugin {
     if (binding) {
       const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory, binding.runId);
       validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},checkpoint,binding.runId);
-      if (!["completed", "failed"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
+      if (!["completed", "failed", "abandoned"].includes(checkpoint.phase)) throw new Error("Shared execution must be reconciled before legacy reuse");
     }
     if (owner && (this as any).workflowRuntime?.get(owner.workflowId) !== owner.context) throw new Error("Workflow execution changed");
     const identity: LegacyStopIdentity = {kind:"legacy", token:require("crypto").randomUUID(), taskId:task.id,
@@ -3348,6 +3425,36 @@ export default class AutoOCPlugin extends Plugin {
     };
   }
 
+  async confirmAbandonTaskExecution(taskId:string):Promise<void> {
+    this.assertLifecycleOpen();
+    const task=this.settings.tasks.find(item=>item.id===taskId);
+    const binding=(task as any)?.runtimeExecution;
+    if(!binding || binding.workflowId!==standaloneTaskWorkflow(taskId).id) throw new Error('Select the owning workflow to resolve this execution');
+    const location=this.selectedExecutionLocation();
+    const observed=readExecutionCheckpoint(location.runtimeDirectory,binding.runId);
+    validateProgressBinding({id:binding.workflowId,runtimeExecution:binding},observed,binding.runId);
+    const confirmed=await new ConfirmModal(this.app,'Abandon unfinished attempt?',
+      `Task: ${task!.name}. Attempt: ${observed.runId}. Its outcome is unknown. Confirm only after checking that its external process has ended. This preserves all history, does not stop processes, and does not mark success or start another task. Git Branch remains unchanged; clear it in Edit to use the current branch.`).openAndWait();
+    if(!confirmed)return;
+    this.assertLifecycleOpen();
+    if(this.updateInProgress || !this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size) throw new Error('An execution is still active; wait for it to finish');
+    const current=(this.settings.tasks.find(item=>item.id===taskId) as any)?.runtimeExecution;
+    if(current?.runId!==observed.runId || current?.revision!==binding.revision) throw new Error('Execution changed; inspect the task again');
+    const reservation={workflowId:observed.workflowId,taskId,runId:observed.runId,controller:new AbortController()};
+    this.sharedWorkflowExecution=reservation;
+    try {
+      await this.saveSettings(false);
+      this.beginExecutionEffects();
+      await abandonInstalledExecution({vault:location.vault,installationDirectory:location.installationDirectory,
+        lease:this.pluginExecutionLease,runId:observed.runId,workflowId:observed.workflowId,revision:observed.revision,
+        reason:'Explicit confirmation in the task card; unknown external outcome acknowledged',acknowledgedUnknownEffects:true});
+    } finally {
+      if(this.sharedWorkflowExecution===reservation)this.sharedWorkflowExecution=undefined;
+      await this.loadSettings();
+      this.refreshOpenViews();
+    }
+  }
+
   async runTask(
     task: ScheduledTask,
     onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
@@ -3365,6 +3472,9 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
+
+    const binding=(effectiveTask as any).runtimeExecution;
+    if(!owner && binding?.requiresReconciliation) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
 
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
       const vault = (this.app.vault.adapter as any).basePath;
@@ -4621,7 +4731,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runWorkflow(workflow: Workflow) {
-    this.executionAttempted = true;
+    this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -4631,7 +4741,7 @@ export default class AutoOCPlugin extends Plugin {
 
     if (this.settings.workflows.some(item => {
       const execution = (item as any).runtimeExecution;
-      return execution && !["completed", "failed"].includes(execution.phase);
+      return execution && !["completed", "failed", "abandoned"].includes(execution.phase);
     })) {
       new Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
       return;
@@ -5838,7 +5948,7 @@ class AutoOCView extends ItemView {
   }
 
   private renderDashboard(containerEl: HTMLElement) {
-    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed"];
+    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed", "abandoned"];
     const tasks = this.plugin.settings.tasks;
     const workflows = this.plugin.settings.workflows;
 
@@ -6549,7 +6659,7 @@ class AutoOCView extends ItemView {
     const statusSelect = filterBar.createEl("select", {
       cls: "auto-oc-status-select",
     });
-    const statuses = ["all", "pending", "running", "completed", "failed"];
+    const statuses = ["all", "pending", "running", "completed", "failed", "abandoned"];
     statuses.forEach(s => {
       const opt = statusSelect.createEl("option");
       opt.value = s;
@@ -6611,16 +6721,17 @@ class AutoOCView extends ItemView {
     });
     
     const badge = summary.createEl("span", {
-      text: task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
+      text: task.status === "abandoned" ? "abandoned · outcome unknown" : task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
     btnQuickRun.disabled = task.status === "running";
-    btnQuickRun.onclick = (e) => {
+    btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runTask(task);
+      try { await this.plugin.runTask(task); }
+      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
     };
     if (task.status === "running") {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
@@ -6733,14 +6844,24 @@ class AutoOCView extends ItemView {
 
     const actions = details.createDiv("auto-oc-card-actions");
 
+    if ((task as any).runtimeExecution?.requiresReconciliation && (task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && task.status !== 'running') {
+      const abandon = actions.createEl('button', {text:'Abandon attempt',cls:'auto-oc-btn-stop'});
+      abandon.onclick = async e => {
+        e.stopPropagation();
+        try { await this.plugin.confirmAbandonTaskExecution(task.id); }
+        catch(error) {new Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`),12000);}
+      };
+    }
+
     const btnRun = actions.createEl("button", {
       text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
     btnRun.disabled = task.status === "running";
-    btnRun.onclick = (e) => {
+    btnRun.onclick = async (e) => {
       e.stopPropagation();
-      this.plugin.runTask(task);
+      try { await this.plugin.runTask(task); }
+      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
     };
 
     if (task.status === "running") {
@@ -6917,7 +7038,7 @@ class AutoOCView extends ItemView {
     const statusSelect = filterBar.createEl("select", {
       cls: "auto-oc-status-select",
     });
-    const statuses = ["all", "pending", "running", "completed", "failed"];
+    const statuses = ["all", "pending", "running", "completed", "failed", "abandoned"];
     statuses.forEach(s => {
       const opt = statusSelect.createEl("option");
       opt.value = s;
@@ -6960,7 +7081,7 @@ class AutoOCView extends ItemView {
     });
 
     const badge = summary.createEl("span", {
-      text: workflow.status,
+      text: workflow.status === "abandoned" ? "abandoned · outcome unknown" : workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -7940,16 +8061,31 @@ class SecretRevealModal extends Modal {
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void) { super(leaf); }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC — recovery"; }
   getIcon() { return "workflow"; }
   async onOpen() {
     this.contentEl.empty();
     this.contentEl.createEl("h2", {text: "AutoOC needs attention"});
-    this.contentEl.createEl("p", {text: "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved."});
-    this.contentEl.createEl("pre", {text: this.reason});
-    this.contentEl.createEl("p", {text: "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
+    this.contentEl.createEl("p", {text: this.recoverClosedSession
+      ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved."
+      : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved."});
+    const details = this.contentEl.createEl("pre", {text: this.reason});
+    details.style.whiteSpace = 'pre-wrap';
+    details.style.overflowWrap = 'anywhere';
+    this.contentEl.createEl("p", {text: this.recoverClosedSession
+      ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
+      : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
+    if (this.recoverClosedSession) {
+      const recover = this.contentEl.createEl('button', {text: 'Recover closed session and open AutoOC'});
+      recover.onclick = async () => {
+        if (!confirm('Recover the closed session and open AutoOC? The old reservation will be archived. No task will be resumed or repeated, and unfinished runs will remain pending.')) return;
+        recover.disabled = true;
+        try { this.recoverClosedSession!(); await this.retry(); }
+        catch (error) { new Notice('AutoOC: ' + String(error)); recover.disabled = false; }
+      };
+    }
     const button = this.contentEl.createEl("button", {text: "Retry loading AutoOC"});
     button.onclick = async () => {
       button.disabled = true;

@@ -14,6 +14,7 @@ export function projectStandaloneTask(task:any,tasks:any[],settings:Record<strin
   if (checkpoint.steps.some(step=>step.stepId !== 'task')) throw new Error("Standalone progress contains an unknown step");
   const observed=checkpoint.steps[checkpoint.steps.length-1];
   return {...task,status:projected.status,output:observed?.output || '',
+    ...(checkpoint.phase === 'abandoned' ? {pendingCodexApproval:undefined} : {}),
     ...(observed?.startedAt ? {lastRun:observed.startedAt} : {}),
     ...(observed?.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
     ...(observed?.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),

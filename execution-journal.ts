@@ -4,7 +4,7 @@ import { randomUUID } from "crypto";
 import { atomicSettingsWrite } from "./settings-writer";
 import type { ExecutionLease } from "./execution-lease";
 
-type Phase = "ready" | "in_flight" | "completed" | "failed";
+type Phase = "ready" | "in_flight" | "completed" | "failed" | "abandoned";
 const writes = new Map<string, Promise<unknown>>();
 export interface RunCheckpoint {
   schemaVersion: 1;
@@ -14,6 +14,7 @@ export interface RunCheckpoint {
   revision: number;
   createdAt?: string;
   phase: Phase;
+  abandonment?: {at:string;reason:string;outcome:"unknown";acknowledgedUnknownEffects:true;previousPhase:"ready"|"in_flight";previousNextStepId:string;previousRevision:number;snapshot:string};
   nextStepId: string | null;
   steps: Array<{ stepId: string; status: "in_flight" | "completed" | "failed"; output?: string; startedAt?:string; finishedAt?:string; codexThreadId?: string; codexTurnId?: string;
     branch?: {directory:string;name:string};
@@ -29,7 +30,7 @@ export function validateExecutionCheckpoint(value: any): asserts value is RunChe
       typeof value.workflowId !== "string" || !value.workflowId ||
       !/^[a-f0-9]{64}$/.test(value.definitionHash || "") ||
       !Number.isSafeInteger(value.revision) || value.revision < 0 ||
-      !["ready", "in_flight", "completed", "failed"].includes(value.phase) ||
+      !["ready", "in_flight", "completed", "failed", "abandoned"].includes(value.phase) ||
       !(value.nextStepId === null || typeof value.nextStepId === "string" && value.nextStepId.length > 0) ||
       !Array.isArray(value.steps) || !validDate(value.createdAt)) throw new Error("Invalid execution checkpoint");
   for (const [index, step] of value.steps.entries()) {
@@ -48,10 +49,19 @@ export function validateExecutionCheckpoint(value: any): asserts value is RunChe
       throw new Error("Invalid step checkpoint");
   }
   const last = value.steps[value.steps.length - 1];
-  if ((value.phase === "in_flight") !== (last?.status === "in_flight") ||
+  const abandoned=value.phase === "abandoned", decision=value.abandonment;
+  if (abandoned ? !decision || typeof decision.at!=="string" || !validDate(decision.at) ||
+      typeof decision.reason!=="string" || !decision.reason.trim() || decision.reason.length>1000 || decision.outcome!=="unknown" || decision.acknowledgedUnknownEffects!==true ||
+      !["ready","in_flight"].includes(decision.previousPhase) || typeof decision.previousNextStepId!=="string" || !decision.previousNextStepId ||
+      !Number.isSafeInteger(decision.previousRevision) || decision.previousRevision!==value.revision-1 ||
+      decision.snapshot!==`abandonment-${value.runId}-${decision.previousRevision}.snapshot` ||
+      (decision.previousPhase==="in_flight")!==(last?.status==="in_flight") ||
+      decision.previousPhase==="in_flight" && decision.previousNextStepId!==last?.stepId
+    : decision!==undefined) throw new Error("Invalid abandonment decision");
+  if ((!abandoned && (value.phase === "in_flight") !== (last?.status === "in_flight")) ||
       (value.phase === "in_flight" && value.nextStepId !== last.stepId) ||
       (["ready", "in_flight"].includes(value.phase) && value.nextStepId === null) ||
-      (["completed", "failed"].includes(value.phase) && value.nextStepId !== null))
+      (["completed", "failed", "abandoned"].includes(value.phase) && value.nextStepId !== null))
     throw new Error("Inconsistent execution checkpoint");
 }
 
@@ -96,6 +106,27 @@ export class ExecutionJournal {
   }
 
   snapshot(): RunCheckpoint { return JSON.parse(JSON.stringify(this.state)); }
+
+  abandon(expectedRevision:number, reason:string, acknowledgedUnknownEffects:boolean):Promise<void> {
+    return this.update(state=>{
+      if(state.revision!==expectedRevision)throw new Error("Execution revision changed; inspect again");
+      if(!["ready","in_flight"].includes(state.phase))throw new Error("Execution is already terminal");
+      if(acknowledgedUnknownEffects!==true)throw new Error("Explicit acknowledgement of unknown effects is required");
+      if(typeof reason!=="string" || !reason.trim() || reason.length>1000)throw new Error("A concise abandonment reason is required");
+      const snapshot=`abandonment-${state.runId}-${state.revision}.snapshot`, file=path.join(this.lease.directory,snapshot);
+      const original=JSON.stringify(state);
+      if(fs.existsSync(file)) {
+        const stat=fs.lstatSync(file);
+        if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || fs.readFileSync(file,'utf8')!==original)throw new Error("Abandonment snapshot changed");
+      } else {
+        const fd=fs.openSync(file,'wx',0o600);
+        try {fs.writeFileSync(fd,original);fs.fsyncSync(fd);} finally {fs.closeSync(fd);}
+      }
+      state.abandonment={at:new Date().toISOString(),reason:reason.trim(),outcome:"unknown",acknowledgedUnknownEffects:true,
+        previousPhase:state.phase as "ready"|"in_flight",previousNextStepId:state.nextStepId!,previousRevision:state.revision,snapshot};
+      state.phase="abandoned";state.nextStepId=null;
+    });
+  }
 
   private update(change: (next: RunCheckpoint) => void): Promise<void> {
     const operation = (writes.get(this.file) || Promise.resolve()).then(async () => {

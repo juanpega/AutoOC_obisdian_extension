@@ -21,7 +21,7 @@ export async function requestWorkflowStop(directory:string,runId:string) {
   const stat=fs.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
   const state=readExecutionCheckpoint(directory,runId);
-  if (["completed","failed"].includes(state.phase)) return {runId,requested:false,phase:state.phase};
+  if (["completed","failed","abandoned"].includes(state.phase)) return {runId,requested:false,phase:state.phase};
   readStopRequest(directory,runId); // Refuse malformed or linked request files.
   const requestId=randomUUID();
   await atomicSettingsWrite(path.join(directory,runId+".stop.json"),{schemaVersion:1,runId,requestId});

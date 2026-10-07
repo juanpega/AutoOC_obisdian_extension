@@ -36,7 +36,7 @@ export async function persistWorkflowProgress(options: {
     const previous = readExecutionCheckpoint(options.runtimeDirectory,options.replaceCompletedRunId);
     const previousId=virtual && !previous.workflowId.startsWith('@task:') ? workflow.runtimeExecution.workflowId : workflow.id;
     validateProgressBinding({...workflow,id:previousId},previous,options.replaceCompletedRunId);
-    if (!virtual && previous.workflowId !== durable.workflowId || !["completed","failed"].includes(previous.phase)) {
+    if (!virtual && previous.workflowId !== durable.workflowId || !["completed","failed","abandoned"].includes(previous.phase)) {
       throw new Error("Cannot replace an unfinished execution");
     }
     workflow = {...workflow};
@@ -45,7 +45,7 @@ export async function persistWorkflowProgress(options: {
   const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
   if (preserveLegacy) {
     validateProgressBinding(matches[0], durable, options.expectedRunId);
-    if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+    if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
   }
   const projected = preserveLegacy ? matches[0] : {...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId),legacyExecution:undefined};
   const observedTasks = new Map<string,{stepId:string;stepIndex:number;observed:RunCheckpoint["steps"][number]}>();
@@ -62,24 +62,24 @@ export async function persistWorkflowProgress(options: {
     if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
     if (task.legacyExecution && previous?.runId === durable.runId) {
       validateProgressBinding({id:previous.workflowId,runtimeExecution:previous},durable,options.expectedRunId);
-      if (!["completed", "failed"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+      if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
       return task;
     }
     if (previous && previous.runId !== durable.runId) {
       // Reopening an old terminal journal must not overwrite a later task run.
       if (item.observed.status !== "in_flight") return task;
       const prior = readExecutionCheckpoint(options.runtimeDirectory,previous.runId);
-      if (!["completed","failed"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
+      if (!["completed","failed","abandoned"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
     }
-    return {...task,legacyExecution:undefined,status:item.observed.status === "in_flight" ? "pending" : item.observed.status,
+    return {...task,legacyExecution:undefined,status:item.observed.status === "in_flight" ? (durable.phase === "abandoned" ? "abandoned" : "pending") : item.observed.status,
       ...(item.observed.startedAt ? {lastRun:item.observed.startedAt} : {}),
       output:item.observed.output || "",
       ...(item.observed.codexThreadId ? {lastCodexThreadId:item.observed.codexThreadId} : {}),
       ...(item.observed.codexTurnId ? {lastCodexTurnId:item.observed.codexTurnId} : {}),
-      pendingCodexApproval:item.observed.approval ? {...item.observed.approval,requestId:item.observed.approval.token} : undefined,
+      pendingCodexApproval:durable.phase !== "abandoned" && item.observed.approval ? {...item.observed.approval,requestId:item.observed.approval.token} : undefined,
       runtimeExecution:{runId:durable.runId,workflowId:durable.workflowId,definitionHash:durable.definitionHash,stepId:item.stepId,stepIndex:item.stepIndex,revision:durable.revision,
         finishedAt:item.observed.finishedAt,
-        requiresReconciliation:item.observed.status === "in_flight"}};
+        phase:durable.phase,abandonment:durable.abandonment,requiresReconciliation:durable.phase !== "abandoned" && item.observed.status === "in_flight"}};
   });
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? projected : workflow)};
   await writer.save(options.configurationFile, () => next);

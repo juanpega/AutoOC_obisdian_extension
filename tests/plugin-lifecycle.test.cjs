@@ -663,8 +663,9 @@ test('live CLI owner leaves a visible recovery view without scheduling or catalo
   await p.onload();assert.equal(p.ready,false);assert.match(p.startupError,/live or cannot/);
   assert.equal(ribbon,1);assert.equal(commands,1);assert.equal(loads,0);assert.equal(intervals,0);
   const view=p.createDashboard({}),elements=[];
-  view.contentEl={empty(){},createEl(tag,options){const e={tag,...options};elements.push(e);return e;}};
+  view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};
   await view.onOpen();assert.ok(elements.some(e=>e.text==='Retry loading AutoOC'));
+  assert.equal(elements.some(e=>e.text==='Recover closed session and open AutoOC'),false);
   await assert.rejects(p.saveSettings(),/stopped/);
   await p.onunload();assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),lease);
   assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);owner.releasePluginExecution(false);
@@ -737,4 +738,71 @@ for(const timing of ['before-click','during-download']) test('Update preserves a
    assert.equal(next.settings.tasks[0].output,'keep-result');assert.equal(fs.existsSync(file+'.write-lock'),false);
    for(const name of names)assert.deepEqual(fs.readFileSync(path.join(directory,name)),files[name]);
  } finally {global.fetch=priorFetch;global.confirm=priorConfirm;await p.onunload();if(next)await next.onunload();}
+});
+
+test('closed session can be recovered explicitly from the UI without replaying an unfinished run',async t=>{
+ timers(t);const {create,runtime,directory}=fixture(t),p=create();
+ const ended=spawnSync(process.execPath,['-e','process.exit(0)']);assert.equal(ended.status,0);
+ const token=require('crypto').randomUUID(),lock=path.join(runtime,'execution.lock');fs.mkdirSync(lock);
+ const owner=JSON.stringify({schemaVersion:1,token,pid:ended.pid,createdAt:new Date().toISOString()});
+ fs.writeFileSync(path.join(lock,'owner.json'),owner);
+ const file=path.join(runtime,'proof.json'),journal=JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]});
+ fs.writeFileSync(file,journal);const catalog=fs.readFileSync(path.join(directory,'data.json'));
+ await p.onload();assert.equal(p.ready,false);assert.equal(fs.readFileSync(path.join(lock,'owner.json'),'utf8'),owner);
+ const view=p.createDashboard({}),elements=[];
+ view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};
+ await view.onOpen();const button=elements.find(e=>e.text==='Recover closed session and open AutoOC');assert.ok(button,'A dead session needs a usable recovery action');
+ let next,reloads=0;const oldConfirm=global.confirm;t.after(()=>{global.confirm=oldConfirm;});
+ p.app.plugins={disablePlugin:async()=>{reloads++;await p.onunload();},enablePlugin:async()=>{next=create();await next.onload();}};
+ global.confirm=()=>false;await button.onclick();assert.equal(reloads,0);assert.equal(fs.readFileSync(path.join(lock,'owner.json'),'utf8'),owner);
+ global.confirm=()=>true;await button.onclick();assert.equal(next.ready,true);
+ assert.equal(fs.readFileSync(path.join(runtime,'abandoned-lease-'+token,'owner.json'),'utf8'),owner);
+ assert.equal(fs.readFileSync(file,'utf8'),journal);assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),catalog);
+ assert.throws(()=>next.assertExecutionIdle(),/uncertain effect/);await next.onunload();assert.equal(fs.existsSync(lock),false);
+});
+
+for(const activity of ['observed','attempted','pending-write']) test('window close synchronously releases only an idle observation: '+activity,async t=>{
+ timers(t);let handler;global.window.addEventListener=(name,fn)=>{assert.equal(name,'beforeunload');handler=fn;};global.window.removeEventListener=()=>{};
+ const {create,runtime,directory}=fixture(t),p=create();
+ fs.writeFileSync(path.join(runtime,'proof.json'),JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]}));
+ await p.onload();assert.equal(typeof handler,'function');
+ if(activity==='attempted')p.executionAttempted=true;
+ if(activity==='pending-write')fs.writeFileSync(path.join(directory,'data.json.write-lock'),'uncertain');
+ handler();assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),activity!=='observed');
+ assert.equal(p.lifecycleStopped,true);
+});
+
+for(const change of ['none','journal','attempt','missing-proof','wrong-token','live-owner','pending-write','legacy']) test('renderer termination recovers only unchanged observation: '+change,async t=>{
+ timers(t);const {create,runtime,directory}=fixture(t),p=create();
+ const file=path.join(runtime,'proof.json'),journal={schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]};
+ fs.writeFileSync(file,JSON.stringify(journal));await p.onload();
+ const ownerFile=path.join(runtime,'execution.lock/owner.json'),owner=JSON.parse(fs.readFileSync(ownerFile));
+ const proof=p.observationProofPath(owner.token);
+ if(change==='attempt')p.beginExecutionEffects();
+ if(change==='journal')fs.writeFileSync(file,JSON.stringify({...journal,revision:2}));
+ if(change==='missing-proof')fs.unlinkSync(proof);
+ if(change==='wrong-token')fs.writeFileSync(proof,JSON.stringify({...JSON.parse(fs.readFileSync(proof)),token:require('crypto').randomUUID()}));
+ if(change==='pending-write')fs.writeFileSync(path.join(directory,'data.json.write-lock'),'uncertain');
+ if(change==='legacy')fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[{id:'legacy',legacyExecution:{token:'uncertain'}}],workflows:[]}));
+ const ended=spawnSync(process.execPath,['-e','process.exit(0)']);assert.equal(ended.status,0);
+ if(change!=='live-owner')fs.writeFileSync(ownerFile,JSON.stringify({...owner,pid:ended.pid}));
+ p.lifecycleStopped=true; // Renderer gone: intentionally no unload callback.
+ const before=fs.readFileSync(file),catalog=fs.readFileSync(path.join(directory,'data.json'));
+ const next=create();await next.onload();assert.equal(next.ready,change==='none');
+ assert.deepEqual(fs.readFileSync(file),before);assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),catalog);
+ if(change==='none'){assert.throws(()=>next.assertExecutionIdle(),/uncertain effect/);await next.onunload();}
+});
+
+for(const mutation of ['owner','pid','package','update']) test('closed session recovery rechecks '+mutation+' before archiving',async t=>{
+ timers(t);const {create,runtime,directory}=fixture(t),p=create();
+ const ended=spawnSync(process.execPath,['-e','process.exit(0)']);assert.equal(ended.status,0);
+ const token=require('crypto').randomUUID(),lock=path.join(runtime,'execution.lock'),file=path.join(lock,'owner.json');fs.mkdirSync(lock);
+ const owner={schemaVersion:1,token,pid:ended.pid,createdAt:new Date().toISOString()};fs.writeFileSync(file,JSON.stringify(owner));
+ const recover=p.closedSessionRecovery();assert.equal(typeof recover,'function');
+ if(mutation==='owner')fs.writeFileSync(file,JSON.stringify({...owner,token:require('crypto').randomUUID()}));
+ if(mutation==='pid')fs.writeFileSync(file,JSON.stringify({...owner,pid:process.pid}));
+ if(mutation==='package')fs.appendFileSync(path.join(directory,'main.js'),'\n// changed');
+ if(mutation==='update')fs.writeFileSync(path.join(runtime,'update-pending.json'),'{}');
+ const before=fs.readFileSync(file);assert.throws(()=>recover(),/identity|live|changed/);
+ assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(path.join(runtime,'abandoned-lease-'+token)),false);
 });

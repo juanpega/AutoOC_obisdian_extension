@@ -64,6 +64,7 @@ export async function runCodeWorkflowHost(options: {
   advancingLeases.add(lease);
   try {
     const resumed = options.resumeRunId === undefined ? undefined : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
+    if (resumed?.snapshot().phase === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
     // Reject changed branches before beginning a step or advancing a durable
     // result. A denied resume must leave its checkpoint recoverable unchanged.
@@ -94,7 +95,9 @@ export async function runCodeWorkflowHost(options: {
       if (fs.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
       const prior = JSON.parse(fs.readFileSync(lease.directory + "/" + file, "utf8"));
       ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
-      if (prior.runId !== options.resumeRunId && !["completed", "failed"].includes(prior.phase)) throw new Error("Previous execution requires continuation or reconciliation");
+      if (prior.runId !== options.resumeRunId && !["completed", "failed", "abandoned"].includes(prior.phase)) {
+        throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
+      }
     }
     const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
     return await advanceWorkflowSession(journal, definition, {

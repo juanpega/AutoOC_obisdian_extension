@@ -9,6 +9,7 @@ export { runInstalledWorkflow } from "./installed-workflow-host";
 export { resolveInstalledWorkflowLocation } from "./installed-workflow-location";
 export type { InstalledWorkflowLocation } from "./installed-workflow-location";
 export { requestWorkflowStop } from "./workflow-stop";
+export { abandonInstalledExecution } from "./execution-abandonment";
 export { answerWorkflowApproval } from "./workflow-approval";
 export { createWorkflowEvaluator } from "./workflow-evaluation";
 export { installRelease, verifyRelease, RELEASE_FILES, RELEASE_DESCRIPTOR } from "./release-update";
