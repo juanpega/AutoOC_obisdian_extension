@@ -1,6 +1,6 @@
 ---
 name: autooc-runtime
-description: Consultar, iniciar, detener y recuperar tareas o workflows de AutoOC desde un agente mediante el componente incluido con el plugin, con Obsidian cerrado.
+description: Consultar, iniciar, detener y recuperar tareas o workflows de AutoOC desde un agente mediante la CLI, con ejecución autónoma o a través del plugin abierto.
 ---
 
 # AutoOC desde un agente
@@ -17,7 +17,7 @@ For standalone tasks, use `@task:TASK_ID` as the workflow identity. This preserv
 
 ## Compatibilidad y disponibilidad
 
-Guía del componente incluido en el candidato 1.6.2. La CLI informa `version: 1.6.2` y `experimental: true`: comprobar `version` y `help` antes de usarla. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. El almacén de secrets de AutoOC sigue aplazado en la interfaz autónoma.
+Comprobar `version` y `help` de la instalación antes de usarla; la CLI mantiene `experimental: true`. `pluginRequests: 1` identifica el protocolo para ejecutar con el plugin abierto, que requiere también un plugin compatible. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. El almacén de secrets de AutoOC sigue aplazado en la interfaz autónoma.
 
 El puente MCP local se retira; la CLI y esta skill siguen incluidas sin instalar otro producto AutoOC. Un arranque desde los tres archivos entregados por el actualizador 1.6.0 completa el paquete automáticamente con red y verificación de versión/hashes. El paquete completo no necesita red para cargar. La recuperación automática del plugin solo archiva un propietario muerto con identidad estable y ausencia demostrada de efectos pendientes; nunca reanuda tareas por sí sola. El contrato explícito `recover-lease` de la CLI descrito abajo se conserva.
 
@@ -45,7 +45,11 @@ node CLI run --vault VAULT --task TASK_ID
 
 `run` solicita una ejecución nueva en primer plano. Devuelve JSON con `runId`, `workflowId`, `phase` y `nextStepId`. Para tareas individuales, el identificador interno de workflow es `@task:TASK_ID`; no se añade ningún workflow al catálogo. Conservar el `runId` y seguir usando `--task TASK_ID` para esa tarea. `failed` devuelve salida 1; SIGINT/SIGTERM solicitan interrupción y no prueban ausencia de efectos.
 
-El plugin debe estar descargado: el build mantiene una reserva durante toda su vida. La convivencia con el plugin activado está aplazada. No lanzar otro ejecutor sobre una ejecución existente. Una ejecución incompleta bloquea nuevos efectos, incluso de otro workflow.
+Con un plugin compatible abierto, `run`, `resume` y `reconcile` le entregan la petición localmente. El plugin conserva la reserva, ejecuta con el coordinador común y actualiza el Dashboard en cada checkpoint. Abrir el Dashboard permite observar los pasos, estados y resultados; no hace falta cerrar Obsidian. La CLI espera el resultado JSON por stdout y emite progreso resumido por stderr con `host: "obsidian"`. Los permisos y límites de los tipos de tarea siguen vigentes.
+
+Con el plugin descargado y sin reserva, la CLI ejecuta autónomamente como antes. Una reserva sin receptor compatible, un propietario muerto o incierto y una ejecución incompleta siguen bloqueando: no borrar locks ni lanzar otro ejecutor. Cerrar solo el Dashboard no cambia el propietario. Los comandos `stop`, `approve` y `deny` conservan su protocolo de identidad exacta; `abandon` sigue requiriendo descargar el plugin o usar su acción explícita en la UI.
+
+La comunicación usa únicamente archivos bajo `runtime/cli-TOKEN/`, sin red ni MCP. Las peticiones caducan a los 30 segundos si no se aceptan. La aceptación se registra antes de ejecutar; los archivos `.request` y `.receipt` conservan evidencia y nunca se reproducen automáticamente. Ante pérdida de conexión, timeout o interrupción, conservar el ID de petición y `runId` comunicado, consultar `status` y el recibo antes de reintentar. SIGINT/SIGTERM solicitan cancelación cooperativa; cerrar la terminal abruptamente puede dejar la ejecución activa en Obsidian. Descargar/cerrar el plugin durante la ejecución interrumpe su host y puede requerir reconciliación; no transfiere una ejecución en curso a otro proceso.
 
 Code, Codex y las tareas OpenCode/Copilot utilizan el coordinador común. OpenCode interactivo registra la apertura confirmada por el lanzador del sistema, no el resultado del trabajo humano. Codex interactivo abre el hilo exacto en la aplicación y espera el resultado real del turno; las aprobaciones se responden por la CLI o los botones del plugin que posee la ejecución. No abrir otro hilo para sustituirlo. Si falla la apertura, conservar la identidad y reconciliar el resultado antes de reanudar.
 

@@ -11,6 +11,36 @@ mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file));
 mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText, file);
 const { atomicSettingsWrite, SettingsWriter } = mod.exports;
 
+test('large unchanged catalogs avoid repeated JSON conversion on load and save', async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-large-settings-')),target=path.join(dir,'data.json');
+  const payload='large-catalog-'.repeat(100000),initial={payload,revision:0};
+  fs.writeFileSync(target,JSON.stringify(initial,null,2));
+  const parse=JSON.parse,stringify=JSON.stringify;
+  let parsedBytes=0,serializedBytes=0;
+  JSON.parse=function(text,...args){if(typeof text==='string'&&text.includes(payload))parsedBytes+=text.length;return parse.call(this,text,...args);};
+  JSON.stringify=function(value,...args){const text=stringify.call(this,value,...args);if(text?.includes(payload))serializedBytes+=text.length;return text;};
+  try{
+    const writer=new SettingsWriter(),loaded=writer.load(target);
+    await writer.save(target,()=>({...loaded,revision:1}));
+    assert.ok(parsedBytes < payload.length*1.1,`parsed ${parsedBytes} bytes for a ${payload.length}-byte catalog`);
+    assert.ok(serializedBytes < payload.length*1.1,`serialized ${serializedBytes} bytes for a ${payload.length}-byte catalog`);
+    assert.deepEqual(parse(fs.readFileSync(target,'utf8')),{payload,revision:1});
+  } finally {JSON.parse=parse;JSON.stringify=stringify;fs.unlinkSync(target);fs.rmdirSync(dir);}
+});
+
+test('format-only external edits remain compatible, but changed data is rejected',async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-format-settings-')),target=path.join(dir,'data.json');
+  try{
+    fs.writeFileSync(target,'{"revision":0,"unrelated":"keep"}');
+    const writer=new SettingsWriter();writer.load(target);
+    fs.writeFileSync(target,'{ "revision": 0, "unrelated": "keep" }');
+    await writer.save(target,()=>({revision:1,unrelated:'keep'}));
+    fs.writeFileSync(target,'{ "revision": 1, "unrelated": "external" }');
+    await assert.rejects(writer.save(target,()=>({revision:2,unrelated:'keep'})),/changed externally/);
+    assert.equal(JSON.parse(fs.readFileSync(target)).unrelated,'external');
+  }finally{fs.unlinkSync(target);fs.rmdirSync(dir);}
+});
+
 test('Windows replacement retries transient denial without repeating serialization', {skip:process.platform !== 'win32'}, async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-retry-')),target=path.join(dir,'data.json');
   try {

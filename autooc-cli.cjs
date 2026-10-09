@@ -22,8 +22,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // autooc-cli.ts
-var fs17 = __toESM(require("fs"));
-var path17 = __toESM(require("path"));
+var fs18 = __toESM(require("fs"));
+var path18 = __toESM(require("path"));
 
 // execution-journal.ts
 var fs2 = __toESM(require("fs"));
@@ -50,9 +50,10 @@ var SettingsWriter = class {
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
   load(file) {
-    const value = readSettingsVersion(file);
-    this.observed.set(path.resolve(file), value);
-    return value === null ? null : JSON.parse(value);
+    const text = readSettingsText(file);
+    const value = parseSettings(text);
+    this.observed.set(path.resolve(file), text);
+    return value;
   }
   save(file, snapshot) {
     this.pending++;
@@ -69,13 +70,19 @@ var SettingsWriter = class {
         fs.closeSync(descriptor);
       }
       try {
-        const current = readSettingsVersion(file);
-        if (this.observed.has(file) && this.observed.get(file) !== current) {
-          throw new Error("AutoOC configuration changed externally; reload before saving");
+        const current = readSettingsText(file);
+        if (!this.observed.has(file)) {
+          parseSettings(current);
+        } else if (this.observed.get(file) !== current) {
+          const currentValue = parseSettings(current);
+          const previous = this.observed.get(file);
+          if (previous === null || current === null || JSON.stringify(parseSettings(previous)) !== JSON.stringify(currentValue)) {
+            throw new Error("AutoOC configuration changed externally; reload before saving");
+          }
         }
-        const serialized = JSON.stringify(snapshot());
+        const serialized = JSON.stringify(snapshot(), null, 2);
         if (serialized === void 0) throw new Error("Settings are not serializable");
-        await atomicSettingsWrite(file, JSON.parse(serialized));
+        await atomicSettingsTextWrite(file, serialized);
         this.observed.set(file, serialized);
       } finally {
         if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock, "utf8") !== token) {
@@ -93,12 +100,12 @@ var SettingsWriter = class {
     return tracked;
   }
 };
-function readSettingsVersion(file) {
+function readSettingsText(file) {
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Configuration must be a regular file");
     try {
-      return JSON.stringify(JSON.parse(fs.readFileSync(file, "utf8")));
+      return fs.readFileSync(file, "utf8");
     } catch {
       throw new Error("Cannot read valid AutoOC configuration");
     }
@@ -107,9 +114,20 @@ function readSettingsVersion(file) {
     throw error;
   }
 }
+function parseSettings(text) {
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Cannot read valid AutoOC configuration");
+  }
+}
 async function atomicSettingsWrite(file, data, io = fs.promises) {
   const text = JSON.stringify(data, null, 2);
   if (text === void 0) throw new Error("Settings are not serializable");
+  await atomicSettingsTextWrite(file, text, io);
+}
+async function atomicSettingsTextWrite(file, text, io = fs.promises) {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path.dirname(file), { recursive: true });
   let handle;
@@ -1529,26 +1547,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
   }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
-  const fs18 = require("fs");
+  const fs19 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs18.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs19.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn4 } = require("child_process");
   const child = spawn4("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs18.unlinkSync(launcherFile);
+      fs19.unlinkSync(launcherFile);
     } catch {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs18.unlinkSync(psScriptFile);
+      fs19.unlinkSync(psScriptFile);
     } catch {
     }
   }, 6e5);
@@ -1556,12 +1574,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs18.unlinkSync(launcherFile);
+      fs19.unlinkSync(launcherFile);
     } catch {
     }
     if (removeScript) {
       try {
-        fs18.unlinkSync(psScriptFile);
+        fs19.unlinkSync(psScriptFile);
       } catch {
       }
     }
@@ -1583,7 +1601,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs18.existsSync(effectivePidFile) ? String(fs18.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs19.existsSync(effectivePidFile) ? String(fs19.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn4("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -1592,7 +1610,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs18.unlinkSync(effectivePidFile);
+      fs19.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -1613,18 +1631,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
   };
 }
 function launchHiddenSh(shScriptFile, pidFile) {
-  const fs18 = require("fs");
+  const fs19 = require("fs");
   const { spawn: spawn4 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs18.chmodSync(shScriptFile, 448);
+    fs19.chmodSync(shScriptFile, 448);
   } catch {
   }
   const child = spawn4("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs18.unlinkSync(shScriptFile);
+      fs19.unlinkSync(shScriptFile);
     } catch {
     }
   }, 6e5);
@@ -1632,7 +1650,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs18.unlinkSync(shScriptFile);
+        fs19.unlinkSync(shScriptFile);
       } catch {
       }
     }
@@ -1653,7 +1671,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs18.existsSync(effectivePidFile) ? String(fs18.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs19.existsSync(effectivePidFile) ? String(fs19.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -1668,7 +1686,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs18.unlinkSync(effectivePidFile);
+      fs19.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -2021,8 +2039,8 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
             if (!fs9.existsSync(doneFile)) return;
             const exit = fs9.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
-            const read = (file) => fs9.existsSync(file) ? decodeCommandBuffer(fs9.readFileSync(file)) : "";
-            const output = formatTaskOutput(read(outFile), read(errFile));
+            const read2 = (file) => fs9.existsSync(file) ? decodeCommandBuffer(fs9.readFileSync(file)) : "";
+            const output = formatTaskOutput(read2(outFile), read2(errFile));
             known = true;
             finish();
             resolve7({ succeeded: exit === "0", output: output || "(no output)" });
@@ -2407,14 +2425,14 @@ ${contextBlock}`;
 }
 
 // workflow-recovery.ts
-async function reconcileWorkflowTask(journal, definition, read, host) {
+async function reconcileWorkflowTask(journal, definition, read2, host) {
   const state = journal.snapshot();
   const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks, definition.settings);
   if (verified.hash !== definition.hash || state.definitionHash !== verified.hash || state.workflowId !== verified.workflow.id) throw new Error("Recovery definition mismatch");
   if (state.phase !== "in_flight") return state;
   const step = state.steps[state.steps.length - 1];
   if (!step.codexThreadId || !step.codexTurnId) throw new Error("Exact Codex identity is unavailable; manual reconciliation required");
-  const result = await read(step.codexThreadId, step.codexTurnId);
+  const result = await read2(step.codexThreadId, step.codexTurnId);
   if (result.threadId !== step.codexThreadId || result.turnId !== step.codexTurnId) throw new Error("Recovery execution identity mismatch");
   if (!["completed", "failed", "interrupted"].includes(result.status)) return state;
   if (typeof result.output !== "string") throw new Error("Recovery output is unavailable");
@@ -3117,8 +3135,107 @@ async function abandonInstalledExecution(options) {
   }
 }
 
+// cli-plugin-requests.ts
+var fs17 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
+var import_crypto7 = require("crypto");
+function executionSummary(state) {
+  const { runId, workflowId, phase, revision, nextStepId } = state;
+  return { runId, workflowId, phase, revision, nextStepId };
+}
+function regularDirectory3(directory) {
+  const stat = fs17.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs17.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
+}
+function read(file) {
+  const stat = fs17.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) throw new Error("Unsafe CLI request file");
+  return JSON.parse(fs17.readFileSync(file, "utf8"));
+}
+function write(file, value) {
+  const fd = fs17.openSync(file, "wx", 384);
+  try {
+    fs17.writeFileSync(fd, JSON.stringify(value));
+    fs17.fsyncSync(fd);
+  } finally {
+    fs17.closeSync(fd);
+  }
+}
+function replace(file, value) {
+  if (fs17.existsSync(file)) read(file);
+  const temp = file + "." + (0, import_crypto7.randomUUID)() + ".tmp";
+  write(temp, value);
+  try {
+    fs17.renameSync(temp, file);
+  } finally {
+    if (fs17.existsSync(temp)) fs17.unlinkSync(temp);
+  }
+}
+function validCommand(value) {
+  const id = (v) => typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\0\r\n]/.test(v);
+  return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
+}
+async function requestPluginExecution(runtime, command, signal, onProgress) {
+  if (!fs17.existsSync(path17.join(runtime, "execution.lock"))) return void 0;
+  const root = fs17.realpathSync(runtime);
+  regularDirectory3(root);
+  const owner = readExecutionLeaseOwner(root), directory = path17.join(root, "cli-" + owner.token);
+  if (!fs17.existsSync(directory)) throw new Error("AutoOC execution is reserved; the owner does not support CLI requests. Inspect status before retrying");
+  const check = () => {
+    regularDirectory3(directory);
+    const current = readExecutionLeaseOwner(root);
+    if (current.token !== owner.token || current.pid !== owner.pid) throw new Error("CLI request owner changed");
+    const host = read(path17.join(directory, "host"));
+    if (host.protocol !== 1 || host.owner !== owner.token || host.pid !== owner.pid) throw new Error("Invalid CLI request host");
+    process.kill(owner.pid, 0);
+  };
+  check();
+  if (signal?.aborted) throw new Error("CLI request cancelled before submission");
+  const id = (0, import_crypto7.randomUUID)(), expiresAt = Date.now() + 3e4;
+  const file = path17.join(directory, id + ".request"), resultFile = path17.join(directory, id + ".receipt");
+  if (!validCommand(command)) throw new Error("Invalid CLI command");
+  replace(file, { protocol: 1, owner: owner.token, id, expiresAt, ...command });
+  let accepted = false, lastProgress = "", runId = command.runId;
+  for (; ; ) {
+    try {
+      regularDirectory3(directory);
+      if (fs17.existsSync(resultFile)) {
+        const result = read(resultFile);
+        if (result.protocol !== 1 || result.owner !== owner.token || result.id !== id) throw new Error("CLI receipt identity changed");
+        if (!["accepted", "running", "completed", "rejected", "failed"].includes(result.status)) throw new Error("Invalid CLI receipt status");
+        const checkpoint = result.checkpoint;
+        if (checkpoint && (typeof checkpoint.runId !== "string" || !/^[a-zA-Z0-9-]+$/.test(checkpoint.runId) || checkpoint.workflowId !== (command.taskId ? "@task:" + command.taskId : command.workflowId) || command.runId && checkpoint.runId !== command.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision < 0 || !["ready", "in_flight", "completed", "failed", "abandoned"].includes(checkpoint.phase) || !(checkpoint.nextStepId === null || typeof checkpoint.nextStepId === "string"))) throw new Error("Invalid CLI receipt checkpoint");
+        if (result.checkpoint) {
+          runId = result.checkpoint.runId;
+          const serialized = JSON.stringify(result.checkpoint);
+          if (serialized !== lastProgress) {
+            lastProgress = serialized;
+            onProgress?.(executionSummary(result.checkpoint));
+          }
+        }
+        if (result.status === "completed") {
+          if (!checkpoint) throw new Error("Missing CLI result checkpoint");
+          return executionSummary(checkpoint);
+        }
+        if (result.status === "rejected" || result.status === "failed") throw new Error(result.error);
+        accepted = true;
+      }
+      if (signal?.aborted) {
+        write(path17.join(directory, id + ".cancel"), { id });
+        throw new Error("CLI wait interrupted; cooperative cancellation requested");
+      }
+      check();
+      if (!accepted && Date.now() > expiresAt) throw new Error("CLI request expired before acceptance");
+    } catch (error) {
+      const reason = error instanceof Error && !error.code ? error.message : "CLI request host is unavailable";
+      throw new Error(`${reason}. Request ${id}${runId ? `, run ${runId}` : ""}; inspect status and receipt before any retry`);
+    }
+    await new Promise((resolve7) => setTimeout(resolve7, 100));
+  }
+}
+
 // autooc-cli.ts
-var version = "1.6.5";
+var version = "1.6.6";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "abandon") {
@@ -3130,26 +3247,26 @@ async function main(args) {
     return { version, runId: result.runId, workflowId: result.workflowId, phase: result.phase, revision: result.revision, abandonment: result.abandonment };
   }
   if (command === "approve" || command === "deny") {
-    if (rest.length !== 6 || rest[0] !== "--vault" || !path17.isAbsolute(rest[1]) || rest[2] !== "--run" || rest[4] !== "--approval") throw new Error("Decision requires --vault, --run and exact --approval token");
-    let directory = fs17.realpathSync(rest[1]);
+    if (rest.length !== 6 || rest[0] !== "--vault" || !path18.isAbsolute(rest[1]) || rest[2] !== "--run" || rest[4] !== "--approval") throw new Error("Decision requires --vault, --run and exact --approval token");
+    let directory = fs18.realpathSync(rest[1]);
     for (const part of [".obsidian", "plugins", "auto-oc", "runtime"]) {
-      directory = path17.join(directory, part);
-      const stat = fs17.lstatSync(directory);
+      directory = path18.join(directory, part);
+      const stat = fs18.lstatSync(directory);
       if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
     }
     return { version, ...answerWorkflowApproval(directory, rest[3], rest[5], command === "approve") };
   }
   if (command === "recover-lease") {
-    if (rest.length !== 4 || rest[0] !== "--vault" || !path17.isAbsolute(rest[1]) || rest[2] !== "--owner" || !rest[3]) throw new Error("Lease recovery requires explicit absolute vault and observed --owner identity");
-    let directory = fs17.realpathSync(rest[1]);
+    if (rest.length !== 4 || rest[0] !== "--vault" || !path18.isAbsolute(rest[1]) || rest[2] !== "--owner" || !rest[3]) throw new Error("Lease recovery requires explicit absolute vault and observed --owner identity");
+    let directory = fs18.realpathSync(rest[1]);
     for (const part of [".obsidian", "plugins", "auto-oc", "runtime"]) {
-      directory = path17.join(directory, part);
-      const stat = fs17.lstatSync(directory);
+      directory = path18.join(directory, part);
+      const stat = fs18.lstatSync(directory);
       if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
     }
     return { version, ...recoverExecutionLease(directory, rest[3]) };
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection: true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection: true, pluginRequests: 1 };
   if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", experimental: true, foreground: true };
   if (["run", "resume", "reconcile", "stop"].includes(command)) {
     const values = /* @__PURE__ */ new Map();
@@ -3162,11 +3279,11 @@ async function main(args) {
       values.set(key, value);
     }
     if (command === "stop") {
-      if (!path17.isAbsolute(values.get("--vault"))) throw new Error("Explicit absolute vault required");
-      let directory = fs17.realpathSync(values.get("--vault"));
+      if (!path18.isAbsolute(values.get("--vault"))) throw new Error("Explicit absolute vault required");
+      let directory = fs18.realpathSync(values.get("--vault"));
       for (const part of [".obsidian", "plugins", "auto-oc", "runtime"]) {
-        directory = path17.join(directory, part);
-        const stat = fs17.lstatSync(directory);
+        directory = path18.join(directory, part);
+        const stat = fs18.lstatSync(directory);
         if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
       }
       const state = readExecutionCheckpoint(directory, values.get("--run"));
@@ -3179,7 +3296,14 @@ async function main(args) {
     process.on("SIGINT", abort);
     process.on("SIGTERM", abort);
     try {
-      const result = await runInstalledWorkflow({
+      const location2 = resolveInstalledWorkflowLocation(values.get("--vault"));
+      const delegated = await requestPluginExecution(location2.runtimeDirectory, {
+        command,
+        workflowId: values.get("--workflow"),
+        taskId: values.get("--task"),
+        runId: values.get("--run")
+      }, controller.signal, (state) => process.stderr.write(JSON.stringify({ event: "progress", host: "obsidian", ...state }) + "\n"));
+      const result = delegated || await runInstalledWorkflow({
         vault: values.get("--vault"),
         workflowId: values.get("--workflow"),
         taskId: values.get("--task"),
@@ -3197,19 +3321,19 @@ async function main(args) {
       process.off("SIGTERM", abort);
     }
   }
-  if (!["list", "status"].includes(command) || rest.length !== 2 || rest[0] !== "--vault" || !path17.isAbsolute(rest[1])) {
+  if (!["list", "status"].includes(command) || rest.length !== 2 || rest[0] !== "--vault" || !path18.isAbsolute(rest[1])) {
     throw new Error("Use help for supported commands; an explicit absolute --vault is required.");
   }
-  const vault = fs17.realpathSync(rest[1]);
+  const vault = fs18.realpathSync(rest[1]);
   let location = vault;
   for (const part of [".obsidian", "plugins", "auto-oc", "data.json"]) {
-    location = path17.join(location, part);
-    if (fs17.lstatSync(location).isSymbolicLink()) throw new Error("Linked installation paths are unsupported.");
+    location = path18.join(location, part);
+    if (fs18.lstatSync(location).isSymbolicLink()) throw new Error("Linked installation paths are unsupported.");
   }
-  if (!fs17.statSync(location).isFile()) throw new Error("Configuration is not a regular file.");
+  if (!fs18.statSync(location).isFile()) throw new Error("Configuration is not a regular file.");
   let config;
   try {
-    config = JSON.parse(fs17.readFileSync(location, "utf8"));
+    config = JSON.parse(fs18.readFileSync(location, "utf8"));
   } catch {
     throw new Error("Cannot read valid AutoOC configuration.");
   }
@@ -3222,20 +3346,20 @@ async function main(args) {
   });
   let runtime = {};
   if (command === "status") {
-    const directory = path17.join(path17.dirname(location), "runtime");
+    const directory = path18.join(path18.dirname(location), "runtime");
     const executions = [];
     let executionLockPresent = false;
     let executionOwner;
-    if (fs17.existsSync(directory)) {
-      if (fs17.lstatSync(directory).isSymbolicLink() || !fs17.statSync(directory).isDirectory()) throw new Error("Invalid runtime directory");
-      executionLockPresent = fs17.existsSync(path17.join(directory, "execution.lock"));
+    if (fs18.existsSync(directory)) {
+      if (fs18.lstatSync(directory).isSymbolicLink() || !fs18.statSync(directory).isDirectory()) throw new Error("Invalid runtime directory");
+      executionLockPresent = fs18.existsSync(path18.join(directory, "execution.lock"));
       if (executionLockPresent) {
         try {
           executionOwner = readExecutionLeaseOwner(directory);
         } catch {
         }
       }
-      for (const file of fs17.readdirSync(directory).sort()) {
+      for (const file of fs18.readdirSync(directory).sort()) {
         if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
         const state = readExecutionCheckpoint(directory, file.slice(0, -5));
         executions.push({
