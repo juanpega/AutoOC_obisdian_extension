@@ -4,7 +4,7 @@ import * as path from "path";
 import { SettingsWriter } from "./settings-writer";
 import { prepareWorkflowDefinition } from "./workflow-definition";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
-import { runCodeWorkflowHost } from "./code-workflow-host";
+import { runCodeWorkflowHost, type WorkflowTaskOutput } from "./code-workflow-host";
 import { persistWorkflowProgress } from "./workflow-catalog-progress";
 import type { ExecutionLease } from "./execution-lease";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
@@ -31,6 +31,7 @@ export async function runInstalledWorkflow(options: {
   redact: (output:string) => string;
   lease?: ExecutionLease;
   onCheckpoint?: (checkpoint:RunCheckpoint)=>Promise<void>;
+  onTaskOutput?: (event:WorkflowTaskOutput)=>void;
   vaultMutations?: VaultMutationBatchFactory;
 }) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
@@ -92,6 +93,7 @@ export async function runInstalledWorkflow(options: {
     maxSteps:options.maxSteps, signal:controller.signal, redact:options.redact,
     lease:options.lease,
     vaultMutations:options.vaultMutations,
+    onTaskOutput:options.onTaskOutput,
     tasks:createWorkflowTaskAdapter(definition,vault,options.vaultMutations),
     evaluate:createWorkflowEvaluator(definition,vault,controller.signal),
     onCheckpoint:async checkpoint=>{
