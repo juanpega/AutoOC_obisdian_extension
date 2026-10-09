@@ -38,7 +38,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.6.6",
+      version: "1.6.7",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -5044,7 +5044,7 @@ function createCopilotWorkflowAdapter(definition, vault) {
 }
 function createOpenCodeWorkflowAdapter(definition, vault) {
   const supports = (task) => !task.taskKind || task.taskKind === "opencode";
-  return { supports, async execute(task, prompt, signal) {
+  return { supports, async execute(task, prompt, signal, _recordThread, interaction) {
     if (!supports(task)) throw new Error("Unsupported OpenCode task");
     if (signal == null ? void 0 : signal.aborted) throw new Error("OpenCode cancelled before launch");
     const taskCwd = task.workingDirectory || definition.settings.workingDirectory || vault;
@@ -5088,17 +5088,26 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
+        const read2 = (file) => fs14.existsSync(file) ? decodeCommandBuffer(fs14.readFileSync(file)) : "";
+        let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
+          var _a;
           try {
             if (timeout > 0 && Date.now() - started > timeout) {
               abort();
               return;
             }
-            if (!fs14.existsSync(doneFile)) return;
+            const completed = fs14.existsSync(doneFile);
+            if (!completed && (!(interaction == null ? void 0 : interaction.onOutput) || Date.now() < nextOutputAt)) return;
+            const output = formatTaskOutput(read2(outFile), read2(errFile));
+            if (output !== lastOutput) {
+              lastOutput = output;
+              (_a = interaction == null ? void 0 : interaction.onOutput) == null ? void 0 : _a.call(interaction, output);
+            }
+            nextOutputAt = Date.now() + 500;
+            if (!completed) return;
             const exit = fs14.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
-            const read2 = (file) => fs14.existsSync(file) ? decodeCommandBuffer(fs14.readFileSync(file)) : "";
-            const output = formatTaskOutput(read2(outFile), read2(errFile));
             known = true;
             finish();
             resolve7({ succeeded: exit === "0", output: output || "(no output)" });
@@ -5599,11 +5608,25 @@ async function runCodeWorkflowHost(options) {
             definition.workflow,
             previous ? { stepId: previous.stepId, output: previous.output || "" } : void 0
           );
-          return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
-            var _a2;
-            await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
-            await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, journal.snapshot()));
-          }, { approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint) });
+          let observing = true;
+          try {
+            return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
+              var _a2;
+              await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
+              await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, journal.snapshot()));
+            }, {
+              approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint),
+              onOutput: options.onTaskOutput ? (output) => {
+                if (!observing || (signal == null ? void 0 : signal.aborted)) return;
+                lease.assertOwned();
+                const state = journal.snapshot();
+                if (state.phase !== "in_flight" || state.steps.length - 1 !== stepIndex || state.steps[stepIndex].stepId !== step.id) return;
+                options.onTaskOutput({ runId: state.runId, workflowId: state.workflowId, taskId: task.id, stepId: step.id, stepIndex, output: options.redact(output) });
+              } : void 0
+            });
+          } finally {
+            observing = false;
+          }
         }
         if (step.stepKind === "delay") {
           const spec = workflowDelay(step.delayValue, step.delayUnit);
@@ -6030,6 +6053,7 @@ async function runInstalledWorkflow(options) {
       redact: options.redact,
       lease: options.lease,
       vaultMutations: options.vaultMutations,
+      onTaskOutput: options.onTaskOutput,
       tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
       evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
       onCheckpoint: async (checkpoint) => {
@@ -7948,7 +7972,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     if (Array.from(((_a = this.legacyAttempts) == null ? void 0 : _a.values()) || []).some((attempt) => !attempt.cancelled) || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
-    const execution = { workflowId, taskId, runId: void 0, controller: new AbortController(), checkpoint: void 0 };
+    const execution = { workflowId, taskId, runId: void 0, controller: new AbortController(), checkpoint: void 0, liveOutput: void 0 };
     this.sharedWorkflowExecution = execution;
     const abort = () => execution.controller.abort();
     external == null ? void 0 : external.signal.addEventListener("abort", abort, { once: true });
@@ -7967,6 +7991,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         signal: execution.controller.signal,
         vaultMutations: () => this.createVaultMutationBatch(),
         redact: (output) => this.redactSecrets(output),
+        onTaskOutput: (event) => {
+          if (this.lifecycleStopped || this.sharedWorkflowExecution !== execution || execution.controller.signal.aborted || event.runId !== execution.runId || event.workflowId !== workflowId) return;
+          execution.liveOutput = event;
+        },
         onCheckpoint: async (checkpoint) => {
           if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
           if (execution.runId && checkpoint.runId !== execution.runId || execution.checkpoint && checkpoint.revision < execution.checkpoint.revision) return;
@@ -7994,6 +8022,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     } catch (e) {
       return false;
     }
+  }
+  taskLogOutput(task) {
+    var _a;
+    const execution = this.sharedWorkflowExecution, live = execution == null ? void 0 : execution.liveOutput, state = execution == null ? void 0 : execution.checkpoint;
+    const binding = task.runtimeExecution;
+    if (!this.lifecycleStopped && live && (state == null ? void 0 : state.phase) === "in_flight" && task.status === "running" && live.taskId === task.id && live.runId === state.runId && live.workflowId === state.workflowId && live.stepIndex === state.steps.length - 1 && live.stepId === ((_a = state.steps[live.stepIndex]) == null ? void 0 : _a.stepId) && (binding == null ? void 0 : binding.runId) === live.runId && binding.stepIndex === live.stepIndex && binding.stepId === live.stepId) return live.output;
+    return task.output || "";
   }
   refreshOpenViews() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
@@ -15477,7 +15512,7 @@ var LiveLogModal = class extends import_obsidian.Modal {
       this.statusEl.className = "auto-oc-log-status auto-oc-badge-" + latest.status;
     }
     if (this.renderEl) {
-      const newContent = latest.output || "(no output yet\u2026)";
+      const newContent = this.plugin.taskLogOutput(latest) || "(no output yet\u2026)";
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();

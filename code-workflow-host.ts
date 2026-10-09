@@ -16,10 +16,20 @@ import { prepareTaskBranch, verifyWorkflowBranch } from "./workflow-branch";
 import { awaitWorkflowApproval } from "./workflow-approval";
 const advancingLeases = new WeakSet<ExecutionLease>();
 
+// Transient display snapshot, never a durable result or a routing input.
+export interface WorkflowTaskOutput {
+  runId: string;
+  workflowId: string;
+  taskId: string;
+  stepId: string;
+  stepIndex: number;
+  output: string;
+}
+
 export interface WorkflowTaskAdapter {
   supports(task: Readonly<Record<string, any>>): boolean;
   reconcile?(task: Readonly<Record<string, any>>,threadId:string,turnId:string):Promise<{threadId:string;turnId:string;status:string;output:string}>;
-  execute(task: Readonly<Record<string, any>>, prompt: string, signal?: AbortSignal, recordThread?: (threadId:string,turnId?:string)=>Promise<void>, interaction?: {approve:(request:CodexApprovalRequest,signal?:AbortSignal)=>Promise<boolean>}): Promise<{succeeded:boolean;output:string;cancelled?:boolean}>;
+  execute(task: Readonly<Record<string, any>>, prompt: string, signal?: AbortSignal, recordThread?: (threadId:string,turnId?:string)=>Promise<void>, interaction?: {approve:(request:CodexApprovalRequest,signal?:AbortSignal)=>Promise<boolean>;onOutput?:(output:string)=>void}): Promise<{succeeded:boolean;output:string;cancelled?:boolean}>;
 }
 
 export function supportsSharedWorkflow(definition:PreparedWorkflow,tasks?:WorkflowTaskAdapter):boolean {
@@ -44,6 +54,7 @@ export async function runCodeWorkflowHost(options: {
   evaluate?: WorkflowSessionHost["evaluate"];
   redact: (text: string) => string;
   onCheckpoint?: (checkpoint:RunCheckpoint) => Promise<void>;
+  onTaskOutput?: (event:WorkflowTaskOutput) => void;
   lease?: ExecutionLease;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
@@ -112,10 +123,22 @@ export async function runCodeWorkflowHost(options: {
           const previous = completed[completed.length - 1];
           const prompt = workflowTaskPrompt(task.prompt || "", definition.workflow,
             previous ? {stepId:previous.stepId,output:previous.output || ""} : undefined);
-          return await options.tasks.execute(task, prompt, signal, async(threadId,turnId) => {
-            await journal.recordCodexThread(step.id, threadId,turnId,stepIndex);
-            await options.onCheckpoint?.(journal.snapshot());
-          },{approve:(request,lifetime)=>awaitWorkflowApproval(journal,options.runtimeDirectory,request,options.redact,lifetime || signal,options.onCheckpoint)});
+          let observing = true;
+          try {
+            return await options.tasks.execute(task, prompt, signal, async(threadId,turnId) => {
+              await journal.recordCodexThread(step.id, threadId,turnId,stepIndex);
+              await options.onCheckpoint?.(journal.snapshot());
+            },{
+              approve:(request,lifetime)=>awaitWorkflowApproval(journal,options.runtimeDirectory,request,options.redact,lifetime || signal,options.onCheckpoint),
+              onOutput:options.onTaskOutput ? output=>{
+                if (!observing || signal?.aborted) return;
+                lease.assertOwned();
+                const state = journal.snapshot();
+                if (state.phase !== "in_flight" || state.steps.length - 1 !== stepIndex || state.steps[stepIndex].stepId !== step.id) return;
+                options.onTaskOutput!({runId:state.runId,workflowId:state.workflowId,taskId:task.id,stepId:step.id,stepIndex,output:options.redact(output)});
+              } : undefined,
+            });
+          } finally { observing = false; }
         }
         if (step.stepKind === "delay") {
           const spec = workflowDelay(step.delayValue, step.delayUnit);

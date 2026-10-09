@@ -43,7 +43,7 @@ import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime, type 
 import { answerWorkflowApproval } from "./workflow-approval";
 import { standaloneTaskWorkflow,projectStandaloneTask } from "./standalone-task";
 import { prepareWorkflowDefinition } from "./workflow-definition";
-import { supportsSharedWorkflow } from "./code-workflow-host";
+import { supportsSharedWorkflow, type WorkflowTaskOutput } from "./code-workflow-host";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { taskElapsedSeconds } from "./task-history";
@@ -1888,7 +1888,7 @@ export default class AutoOCPlugin extends Plugin {
   private cliRequestHost?: ReturnType<typeof createPluginRequestHost>;
   private cliRequestTimer?: number;
   private pluginExecutionLocation?: InstalledWorkflowLocation;
-  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint};
+  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint;liveOutput?:WorkflowTaskOutput};
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
 
@@ -2401,7 +2401,7 @@ export default class AutoOCPlugin extends Plugin {
         this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
-    const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined};
+    const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined,liveOutput:undefined as WorkflowTaskOutput | undefined};
     this.sharedWorkflowExecution = execution;
     const abort = () => execution.controller.abort();
     external?.signal.addEventListener("abort", abort, {once:true});
@@ -2413,6 +2413,11 @@ export default class AutoOCPlugin extends Plugin {
         lease:this.pluginExecutionLease, signal:execution.controller.signal,
         vaultMutations:()=>this.createVaultMutationBatch(),
         redact:output=>this.redactSecrets(output),
+        onTaskOutput:event=>{
+          if (this.lifecycleStopped || this.sharedWorkflowExecution !== execution || execution.controller.signal.aborted ||
+              event.runId !== execution.runId || event.workflowId !== workflowId) return;
+          execution.liveOutput = event;
+        },
         onCheckpoint:async checkpoint=>{
           if (this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
           if (execution.runId && checkpoint.runId !== execution.runId || execution.checkpoint && checkpoint.revision < execution.checkpoint.revision) return;
@@ -2435,6 +2440,16 @@ export default class AutoOCPlugin extends Plugin {
   private ownsSharedRun(workflowId:string, runId:string):boolean {
     if (this.sharedWorkflowExecution?.workflowId !== workflowId || this.sharedWorkflowExecution.runId !== runId || !this.pluginExecutionLease) return false;
     try { this.pluginExecutionLease.assertOwned(); return true; } catch { return false; }
+  }
+
+  taskLogOutput(task:ScheduledTask):string {
+    const execution=this.sharedWorkflowExecution,live=execution?.liveOutput,state=execution?.checkpoint;
+    const binding=(task as any).runtimeExecution;
+    if (!this.lifecycleStopped && live && state?.phase === "in_flight" && task.status === "running" &&
+        live.taskId === task.id && live.runId === state.runId && live.workflowId === state.workflowId &&
+        live.stepIndex === state.steps.length - 1 && live.stepId === state.steps[live.stepIndex]?.stepId &&
+        binding?.runId === live.runId && binding.stepIndex === live.stepIndex && binding.stepId === live.stepId) return live.output;
+    return task.output || "";
   }
 
   private refreshOpenViews():void {
@@ -10670,7 +10685,7 @@ class LiveLogModal extends Modal {
     }
 
     if (this.renderEl) {
-      const newContent = latest.output || "(no output yet…)";
+      const newContent = this.plugin.taskLogOutput(latest) || "(no output yet…)";
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();

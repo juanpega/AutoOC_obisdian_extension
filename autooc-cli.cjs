@@ -1986,7 +1986,7 @@ function createCopilotWorkflowAdapter(definition, vault) {
 }
 function createOpenCodeWorkflowAdapter(definition, vault) {
   const supports = (task) => !task.taskKind || task.taskKind === "opencode";
-  return { supports, async execute(task, prompt, signal) {
+  return { supports, async execute(task, prompt, signal, _recordThread, interaction) {
     if (!supports(task)) throw new Error("Unsupported OpenCode task");
     if (signal?.aborted) throw new Error("OpenCode cancelled before launch");
     const taskCwd = task.workingDirectory || definition.settings.workingDirectory || vault;
@@ -2030,17 +2030,25 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
+        const read2 = (file) => fs9.existsSync(file) ? decodeCommandBuffer(fs9.readFileSync(file)) : "";
+        let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
           try {
             if (timeout > 0 && Date.now() - started > timeout) {
               abort();
               return;
             }
-            if (!fs9.existsSync(doneFile)) return;
+            const completed = fs9.existsSync(doneFile);
+            if (!completed && (!interaction?.onOutput || Date.now() < nextOutputAt)) return;
+            const output = formatTaskOutput(read2(outFile), read2(errFile));
+            if (output !== lastOutput) {
+              lastOutput = output;
+              interaction?.onOutput?.(output);
+            }
+            nextOutputAt = Date.now() + 500;
+            if (!completed) return;
             const exit = fs9.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
-            const read2 = (file) => fs9.existsSync(file) ? decodeCommandBuffer(fs9.readFileSync(file)) : "";
-            const output = formatTaskOutput(read2(outFile), read2(errFile));
             known = true;
             finish();
             resolve7({ succeeded: exit === "0", output: output || "(no output)" });
@@ -2658,10 +2666,24 @@ async function runCodeWorkflowHost(options) {
             definition.workflow,
             previous ? { stepId: previous.stepId, output: previous.output || "" } : void 0
           );
-          return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
-            await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
-            await options.onCheckpoint?.(journal.snapshot());
-          }, { approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint) });
+          let observing = true;
+          try {
+            return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
+              await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
+              await options.onCheckpoint?.(journal.snapshot());
+            }, {
+              approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint),
+              onOutput: options.onTaskOutput ? (output) => {
+                if (!observing || signal?.aborted) return;
+                lease.assertOwned();
+                const state = journal.snapshot();
+                if (state.phase !== "in_flight" || state.steps.length - 1 !== stepIndex || state.steps[stepIndex].stepId !== step.id) return;
+                options.onTaskOutput({ runId: state.runId, workflowId: state.workflowId, taskId: task.id, stepId: step.id, stepIndex, output: options.redact(output) });
+              } : void 0
+            });
+          } finally {
+            observing = false;
+          }
         }
         if (step.stepKind === "delay") {
           const spec = workflowDelay(step.delayValue, step.delayUnit);
@@ -3100,6 +3122,7 @@ async function runInstalledWorkflow(options) {
       redact: options.redact,
       lease: options.lease,
       vaultMutations: options.vaultMutations,
+      onTaskOutput: options.onTaskOutput,
       tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
       evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
       onCheckpoint: async (checkpoint) => {
@@ -3235,7 +3258,7 @@ async function requestPluginExecution(runtime, command, signal, onProgress) {
 }
 
 // autooc-cli.ts
-var version = "1.6.6";
+var version = "1.6.7";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "abandon") {
