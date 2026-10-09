@@ -1,4 +1,5 @@
 import { samePhysicalPath } from "./path-identity";
+import {createPluginRequestHost} from "./cli-plugin-requests";
 import { buildOpenCodeScript } from "./opencode-script";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease } from "./release-update";
 import { assertInstalledExecutionIdle, assertIdleCatalog, waitForInstalledCatalog } from "./execution-idle";
@@ -1884,6 +1885,8 @@ export default class AutoOCPlugin extends Plugin {
   private stoppingWorkflows = new Set<string>();
   private workflowDelayControllers = new Map<string, AbortController>();
   private pluginExecutionLease?: ExecutionLease;
+  private cliRequestHost?: ReturnType<typeof createPluginRequestHost>;
+  private cliRequestTimer?: number;
   private pluginExecutionLocation?: InstalledWorkflowLocation;
   private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint};
   private mcpBridgeServer?: http.Server;
@@ -2177,6 +2180,17 @@ export default class AutoOCPlugin extends Plugin {
         this.register(() => window.removeEventListener('beforeunload', close));
       }
       this.ready = true;
+      this.startCliRequests();
+      this.cliRequestTimer = window.setInterval(() => {
+        try { this.cliRequestHost?.poll(); }
+        catch {
+          if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
+          this.cliRequestTimer = undefined;
+          try { this.cliRequestHost?.close(); } catch { /* Preserve unresolved ownership. */ }
+          console.warn("AutoOC CLI request reception stopped; inspect execution ownership before retrying");
+        }
+      }, 200);
+      this.registerInterval(this.cliRequestTimer);
     } catch (error) {
       this.startupPending = false;
       await this.onunload().catch(cleanup => console.warn("AutoOC startup cleanup retained reservation", cleanup));
@@ -2192,6 +2206,11 @@ export default class AutoOCPlugin extends Plugin {
   async onunload() {
     this.lifecycleStopped = true;
     this.ready = false;
+    if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
+    this.cliRequestTimer = undefined;
+    try { this.cliRequestHost?.close(); }
+    catch { console.warn("AutoOC CLI request host closed with unresolved ownership"); }
+    this.cliRequestHost = undefined;
     for (const timer of this.lifecycleTimers) clearTimeout(timer);
     this.lifecycleTimers.clear();
     if (this.schedulerTimer !== undefined) window.clearInterval(this.schedulerTimer);
@@ -2356,7 +2375,22 @@ export default class AutoOCPlugin extends Plugin {
     return await this.runSharedWorkflow(workflowId,expectedRunId,mode === "reconcile");
   }
 
-  async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string) {
+  private startCliRequests(): void {
+    this.assertLifecycleOpen();
+    this.cliRequestHost = createPluginRequestHost(this.pluginExecutionLease!, async (request, signal, progress) => {
+      this.assertLifecycleOpen();
+      try {
+        return await this.runSharedWorkflow(request.taskId ? standaloneTaskWorkflow(request.taskId).id : request.workflowId!,
+          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress});
+      } catch (error) {
+        if (!this.lifecycleStopped) new Notice(`AutoOC: CLI request failed — ${this.redactSecrets(String(error))}`);
+        throw error;
+      }
+    });
+  }
+
+  async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void}) {
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -2369,6 +2403,9 @@ export default class AutoOCPlugin extends Plugin {
     }
     const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined};
     this.sharedWorkflowExecution = execution;
+    const abort = () => execution.controller.abort();
+    external?.signal.addEventListener("abort", abort, {once:true});
+    if (external?.signal.aborted) abort();
     try {
       await this.saveSettings(false);
       return await runInstalledWorkflow({
@@ -2384,9 +2421,11 @@ export default class AutoOCPlugin extends Plugin {
           await this.loadSettings();
           if (this.sharedWorkflowExecution !== execution) return;
           this.refreshOpenViews();
+          external?.progress(checkpoint);
         },
       });
     } finally {
+      external?.signal.removeEventListener("abort", abort);
       if (this.sharedWorkflowExecution === execution) this.sharedWorkflowExecution = undefined;
       await this.loadSettings();
       this.refreshOpenViews();

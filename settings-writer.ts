@@ -18,9 +18,10 @@ export class SettingsWriter {
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
   load(file: string): unknown {
-    const value = readSettingsVersion(file);
-    this.observed.set(path.resolve(file), value);
-    return value === null ? null : JSON.parse(value);
+    const text = readSettingsText(file);
+    const value = parseSettings(text);
+    this.observed.set(path.resolve(file), text);
+    return value;
   }
 
   save(file: string, snapshot: () => unknown): Promise<void> {
@@ -35,13 +36,22 @@ export class SettingsWriter {
       try { fs.writeFileSync(descriptor, token); fs.fsyncSync(descriptor); }
       finally { fs.closeSync(descriptor); }
       try {
-        const current = readSettingsVersion(file);
-        if (this.observed.has(file) && this.observed.get(file) !== current) {
-          throw new Error("AutoOC configuration changed externally; reload before saving");
+        const current = readSettingsText(file);
+        if (!this.observed.has(file)) {
+          parseSettings(current); // An unobserved invalid file must never be overwritten.
+        } else if (this.observed.get(file) !== current) {
+          // Normal saves compare the exact validated bytes. Only an external
+          // rewrite needs the old semantic comparison (whitespace is harmless).
+          const currentValue = parseSettings(current);
+          const previous = this.observed.get(file)!;
+          if (previous === null || current === null ||
+              JSON.stringify(parseSettings(previous)) !== JSON.stringify(currentValue)) {
+            throw new Error("AutoOC configuration changed externally; reload before saving");
+          }
         }
-        const serialized = JSON.stringify(snapshot());
+        const serialized = JSON.stringify(snapshot(), null, 2);
         if (serialized === undefined) throw new Error("Settings are not serializable");
-        await atomicSettingsWrite(file, JSON.parse(serialized));
+        await atomicSettingsTextWrite(file, serialized);
         this.observed.set(file, serialized);
       } finally {
         if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== token) {
@@ -56,11 +66,11 @@ export class SettingsWriter {
   }
 }
 
-function readSettingsVersion(file: string): string | null {
+function readSettingsText(file: string): string | null {
   try {
     const stat = fs.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Configuration must be a regular file");
-    try { return JSON.stringify(JSON.parse(fs.readFileSync(file,"utf8"))); }
+    try { return fs.readFileSync(file,"utf8"); }
     catch { throw new Error("Cannot read valid AutoOC configuration"); }
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
@@ -68,9 +78,21 @@ function readSettingsVersion(file: string): string | null {
   }
 }
 
+function parseSettings(text: string | null): unknown {
+  if (text === null) return null;
+  try { return JSON.parse(text); }
+  catch { throw new Error("Cannot read valid AutoOC configuration"); }
+}
+
 export async function atomicSettingsWrite(file: string, data: unknown, io = fs.promises): Promise<void> {
   const text = JSON.stringify(data, null, 2);
   if (text === undefined) throw new Error("Settings are not serializable");
+  await atomicSettingsTextWrite(file, text, io);
+}
+
+// The snapshot has already been serialized once; keep those bytes immutable
+// across asynchronous writes and retries without another JSON round trip.
+async function atomicSettingsTextWrite(file: string, text: string, io = fs.promises): Promise<void> {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path.dirname(file), { recursive: true });
   let handle: Awaited<ReturnType<typeof io.open>> | undefined;

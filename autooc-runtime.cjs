@@ -232,9 +232,10 @@ var SettingsWriter = class {
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
   load(file) {
-    const value = readSettingsVersion(file);
-    this.observed.set(path3.resolve(file), value);
-    return value === null ? null : JSON.parse(value);
+    const text = readSettingsText(file);
+    const value = parseSettings(text);
+    this.observed.set(path3.resolve(file), text);
+    return value;
   }
   save(file, snapshot) {
     this.pending++;
@@ -251,13 +252,19 @@ var SettingsWriter = class {
         fs3.closeSync(descriptor);
       }
       try {
-        const current = readSettingsVersion(file);
-        if (this.observed.has(file) && this.observed.get(file) !== current) {
-          throw new Error("AutoOC configuration changed externally; reload before saving");
+        const current = readSettingsText(file);
+        if (!this.observed.has(file)) {
+          parseSettings(current);
+        } else if (this.observed.get(file) !== current) {
+          const currentValue = parseSettings(current);
+          const previous = this.observed.get(file);
+          if (previous === null || current === null || JSON.stringify(parseSettings(previous)) !== JSON.stringify(currentValue)) {
+            throw new Error("AutoOC configuration changed externally; reload before saving");
+          }
         }
-        const serialized = JSON.stringify(snapshot());
+        const serialized = JSON.stringify(snapshot(), null, 2);
         if (serialized === void 0) throw new Error("Settings are not serializable");
-        await atomicSettingsWrite(file, JSON.parse(serialized));
+        await atomicSettingsTextWrite(file, serialized);
         this.observed.set(file, serialized);
       } finally {
         if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
@@ -275,12 +282,12 @@ var SettingsWriter = class {
     return tracked;
   }
 };
-function readSettingsVersion(file) {
+function readSettingsText(file) {
   try {
     const stat = fs3.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Configuration must be a regular file");
     try {
-      return JSON.stringify(JSON.parse(fs3.readFileSync(file, "utf8")));
+      return fs3.readFileSync(file, "utf8");
     } catch {
       throw new Error("Cannot read valid AutoOC configuration");
     }
@@ -289,9 +296,20 @@ function readSettingsVersion(file) {
     throw error;
   }
 }
+function parseSettings(text) {
+  if (text === null) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error("Cannot read valid AutoOC configuration");
+  }
+}
 async function atomicSettingsWrite(file, data, io = fs3.promises) {
   const text = JSON.stringify(data, null, 2);
   if (text === void 0) throw new Error("Settings are not serializable");
+  await atomicSettingsTextWrite(file, text, io);
+}
+async function atomicSettingsTextWrite(file, text, io = fs3.promises) {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path3.dirname(file), { recursive: true });
   let handle;

@@ -7,6 +7,8 @@ import { standaloneTaskWorkflow } from "./standalone-task";
 import { recoverExecutionLease,readExecutionLeaseOwner } from "./execution-lease";
 import { answerWorkflowApproval } from "./workflow-approval";
 import { abandonInstalledExecution } from "./execution-abandonment";
+import {requestPluginExecution} from "./cli-plugin-requests";
+import {resolveInstalledWorkflowLocation} from "./installed-workflow-location";
 declare const AUTOOC_VERSION: string;
 const version = AUTOOC_VERSION;
 
@@ -39,7 +41,7 @@ async function main(args: string[]) {
     }
     return {version,...recoverExecutionLease(directory,rest[3])};
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection:true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection:true, pluginRequests:1 };
   if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", experimental: true, foreground:true };
   if (["run","resume","reconcile","stop"].includes(command)) {
     const values = new Map<string,string>();
@@ -68,7 +70,11 @@ async function main(args: string[]) {
     const abort = ()=>controller.abort();
     process.on("SIGINT",abort);process.on("SIGTERM",abort);
     try {
-      const result = await runInstalledWorkflow({vault:values.get("--vault")!,workflowId:values.get("--workflow"),taskId:values.get("--task"),
+      const location=resolveInstalledWorkflowLocation(values.get("--vault")!);
+      const delegated=await requestPluginExecution(location.runtimeDirectory,{
+        command:command as "run"|"resume"|"reconcile",workflowId:values.get("--workflow"),taskId:values.get("--task"),runId:values.get("--run")
+      },controller.signal,state=>process.stderr.write(JSON.stringify({event:"progress",host:"obsidian",...state})+"\n"));
+      const result = delegated || await runInstalledWorkflow({vault:values.get("--vault")!,workflowId:values.get("--workflow"),taskId:values.get("--task"),
         resumeRunId:values.get("--run"),newExecution:command === "run",reconcile:command === "reconcile",
         signal:controller.signal,redact:text=>text});
       if (controller.signal.aborted) process.exitCode=130;
