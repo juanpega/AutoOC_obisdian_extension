@@ -262,7 +262,7 @@ for(const valid of [true,false]) test(`slow cooperative startup ${valid?'accepts
   t.mock.method(performance,'now',()=>realNow()+processingMs);
   t.mock.method(fs.promises,'open',async function(target,...args){
     const handle=await open.call(this,target,...args);
-    if(path.resolve(String(target))===path.resolve(file)){
+    if(fs.realpathSync.native(String(target))===fs.realpathSync.native(file)){
       const read=handle.read.bind(handle);
       const readFile=handle.readFile.bind(handle);
       const observe=bytes=>{if(!observed&&bytes){observed=true;processingMs+=3000;}};
@@ -515,11 +515,31 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
     sinkIntervals:new Map(),dashboardTaskDriftDirection:new Map()};
   const originalRename=fs.promises.rename,originalMkdir=fs.promises.mkdir,delay=require('node:timers/promises').setTimeout;
   let entered,finish,count=0;const tokens=new Set();
+  const observedTemporaries=new Set(),temporaryWaiters=new Map(),lstat=fs.lstatSync;
+  const physicalDirectory=fs.realpathSync.native(directory);
+  const temporaryKey=target=>path.join(fs.realpathSync.native(path.dirname(String(target))),path.basename(String(target)));
+  t.mock.method(fs,'lstatSync',function(target,...args){
+    const stat=lstat.call(this,target,...args),name=path.basename(String(target));
+    if(name.startsWith('data.json.')&&name.endsWith('.tmp')&&fs.realpathSync.native(path.dirname(String(target)))===physicalDirectory){
+      const key=temporaryKey(target);observedTemporaries.add(key);temporaryWaiters.get(key)?.();
+    }
+    return stat;
+  });
+  const waitForObservation=async from=>{
+    const key=temporaryKey(from);if(observedTemporaries.has(key))return;
+    const controller=new AbortController();
+    try{await Promise.race([new Promise(resolve=>temporaryWaiters.set(key,resolve)),
+      delay(2000,undefined,{signal:controller.signal}).then(()=>{throw Error('Catalog observer did not inspect the queued temporary before commit');})]);}
+    finally{controller.abort();temporaryWaiters.delete(key);}
+  };
   const firstRename=new Promise(resolve=>entered=resolve),allowFirst=new Promise(resolve=>finish=resolve);
   fs.promises.rename=async function(from,to){
     if(path.resolve(to)===path.resolve(file)){
       count++;tokens.add(fs.readFileSync(file+'.write-lock','utf8'));
       if(count===1){entered();await allowFirst;}else if(pace)await delay(pace);
+      // This positive case exercises observed handovers, not OS notification
+      // coalescing. Missing inode proof must still fail closed in the product.
+      if(count<=writes)await waitForObservation(from);
     }
     return originalRename.call(this,from,to);
   };
@@ -539,7 +559,7 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
   await Promise.race([watching,loading]);await delay(60);finish();await Promise.all(jobs);
   const error=await loading;
   try {
-    assert.equal(error,null);assert.equal(successor.ready,true);assert.equal(tokens.size,writes);
+    assert.equal(error,null);assert.equal(successor.ready,true);assert.equal(tokens.size,writes);assert.equal(observedTemporaries.size,writes);
     assert.deepEqual(successor.settings.dashboardPositions,{history:{x:11,y:22}});
     assert.equal(fs.existsSync(file+'.write-lock'),false);
     await successor.settingsWriter.save(file,()=>({...successor.settings,successorSaved:true}));
