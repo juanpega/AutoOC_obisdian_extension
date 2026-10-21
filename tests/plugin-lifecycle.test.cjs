@@ -2,6 +2,7 @@ const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),Module=require('node:module');
 const {spawnSync}=require('node:child_process');
+const cp=require('node:child_process');
 const root=path.resolve(__dirname,'..');
 const names=['main.js','manifest.json','styles.css','autooc-cli.cjs','autooc-runtime.cjs','skills/autooc-runtime/SKILL.md','release-integrity.json'];
 function loadPlugin(file=path.join(root,'main.js')) {
@@ -42,6 +43,249 @@ function timers(t){
   global.setTimeout=fn=>{callbacks.push(fn);return 1;};
   t.after(()=>{global.window=old;global.setTimeout=st;});return callbacks;
 }
+
+test('live plugin edits workflow through CLI mailbox and retains settings, history and ownership',{timeout:15000},async t=>{
+ timers(t);const {create,directory,runtime}=fixture(t),p=create(),file=path.join(directory,'data.json');
+ const workflow={id:'edit-fixture',name:'before',description:'original',status:'completed',steps:[{id:'s',stepKind:'code',code:'output=1',codeAllowVault:false,status:'completed',output:'kept history'}]};
+ fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[workflow],custom:'preserved'}));
+ await p.onload();assert.equal(p.ready,true);p.settings=p.settingsWriter.load(file);
+ p.app.workspace.getLeavesOfType=()=>[];
+ const owner=fs.readFileSync(path.join(runtime,'execution.lock/owner.json'),'utf8');
+ const exported=JSON.parse(cp.execFileSync(process.execPath,[path.join(directory,'autooc-cli.cjs'),'export-workflow','--vault',path.dirname(path.dirname(path.dirname(directory))),'--workflow','edit-fixture','--out',path.join(directory,'export.json')],{encoding:'utf8',windowsHide:true}));
+ const patch=path.join(directory,'patch.json');fs.writeFileSync(patch,JSON.stringify({expectedHash:exported.expectedHash,changes:{description:'edited with Obsidian open',stepChanges:[{id:'s',code:'output=2'}]}}));
+ const child=cp.spawn(process.execPath,[path.join(directory,'autooc-cli.cjs'),'edit-workflow','--vault',path.dirname(path.dirname(path.dirname(directory))),'--workflow','edit-fixture','--patch',patch],{windowsHide:true});
+ t.after(()=>{if(child.exitCode===null)child.kill();});
+ let stdout='',stderr='';child.stdout.on('data',c=>stdout+=c);child.stderr.on('data',c=>stderr+=c);
+ const done=new Promise(resolve=>child.on('close',code=>resolve(code))),poll=setInterval(()=>void p.cliRequestHost.poll(),10);
+ try {assert.equal(await done,0,stderr);await p.cliRequestHost.drain();const result=JSON.parse(stdout);assert.equal(result.workflowId,workflow.id);assert.equal(p.settings.workflows[0].description,'edited with Obsidian open');assert.equal(p.settings.workflows[0].steps[0].output,'kept history');assert.equal(JSON.parse(fs.readFileSync(file)).custom,'preserved');assert.equal(fs.readFileSync(path.join(runtime,'execution.lock/owner.json'),'utf8'),owner);}
+ finally{clearInterval(poll);await p.onunload();}
+});
+
+function historicalCatalog(directory,runtime,count=8) {
+  // Entirely synthetic terminal journals. Every workflow references a task;
+  // definitions are deliberately large while historical results remain intact.
+  const {prepareWorkflowDefinition}=require('../autooc-runtime.cjs');
+  const text=('synthetic code \\\n😀;').repeat(180000);
+  const tasks=[{id:'synthetic-task',taskKind:'code',code:text,status:'completed',output:'old task result'}];
+  const config={tasks,workflows:[],defaultModel:'fixture',defaultAiEngine:'codex'};
+  for(let i=0;i<count;i++){
+    const wf={id:'synthetic-'+i,name:'Synthetic history '+i,steps:[{id:'s',stepKind:'task',taskId:tasks[0].id,description:text}],status:'completed'};
+    const hash=prepareWorkflowDefinition(wf,tasks,config).hash,runId='synthetic-run-'+i;
+    const journal={schemaVersion:1,runId,workflowId:wf.id,definitionHash:hash,revision:2,phase:'completed',nextStepId:null,steps:[{stepId:'s',status:'completed',output:'old workflow result '+i}]};
+    wf.runtimeExecution={runId,workflowId:wf.id,definitionHash:hash,revision:2,phase:'completed'};
+    config.workflows.push(wf);fs.writeFileSync(path.join(runtime,runId+'.json'),JSON.stringify(journal));
+  }
+  fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify(config));return config;
+}
+
+test('historical load yields during bound definition recovery and publishes complete settings once',async t=>{
+  const {create,directory,runtime}=fixture(t),p=create(),config=historicalCatalog(directory,runtime);
+  p.reservePluginExecution();const prior=p.settings,load=p.settingsWriter.loadAsync.bind(p.settingsWriter);
+  let recovering=false,ticks=0,maxGap=0,previous=0;
+  p.settingsWriter.loadAsync=async(...args)=>{const value=await load(...args);recovering=true;previous=performance.now();return value;};
+  const timer=setInterval(()=>{if(recovering){const now=performance.now();maxGap=Math.max(maxGap,now-previous);previous=now;ticks++;assert.equal(p.settings,prior,'no partial catalog during recovery');}},1);
+  try{
+    await Object.getPrototypeOf(p).loadSettings.call(p);
+    maxGap=Math.max(maxGap,performance.now()-previous);
+    t.diagnostic(`synthetic historical recovery: ticks=${ticks}, maxGapMs=${maxGap}`);
+    assert.ok(ticks>=3,`input during historical recovery: ${ticks}; gap ${maxGap}`);
+    assert.ok(maxGap<=100,`historical recovery gap ${maxGap}`);
+    for(let i=0;i<config.workflows.length;i++){
+      assert.equal(p.settings.workflows[i].steps[0].output,'old workflow result '+i);
+      assert.equal(p.settings.workflows[i].runtimeExecution.definitionHash,config.workflows[i].runtimeExecution.definitionHash);
+      assert.equal(p.settings.workflows[i].steps[0].description,config.workflows[i].steps[0].description);
+    }
+    assert.equal(p.settings.tasks[0].code,config.tasks[0].code);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(directory,'data.json'))),config);
+  }finally{clearInterval(timer);p.releasePluginExecution(false);}
+});
+
+for(const change of ['local','external','unload','journal','owner']) test('historical recovery rejects '+change+' changes during yield without stale publication',async t=>{
+  const {create,directory,runtime}=fixture(t),p=create();historicalCatalog(directory,runtime,2);
+  p.reservePluginExecution();const prior=p.settings,load=p.settingsWriter.loadAsync.bind(p.settingsWriter),assertOwned=p.pluginExecutionLease.assertOwned;
+  let changed=false;
+  p.settingsWriter.loadAsync=async(...args)=>{const value=await load(...args);setImmediate(()=>{
+    changed=true;
+    if(change==='local')prior.edit='human edit';
+    if(change==='unload')p.lifecycleStopped=true;
+    if(change==='external')fs.appendFileSync(path.join(directory,'data.json'),'\n');
+    if(change==='journal')fs.appendFileSync(path.join(runtime,'synthetic-run-0.json'),'\n');
+    if(change==='owner')p.pluginExecutionLease.assertOwned=()=>{throw Error('Execution owner changed during recovery');};
+  });return value;};
+  try{
+    await assert.rejects(Object.getPrototypeOf(p).loadSettings.call(p),/changed|stopp|closed|unload/i);
+    assert.equal(changed,true);assert.equal(p.settings,prior);
+    if(change==='local')assert.equal(p.settings.edit,'human edit');
+    if(['local','external','journal'].includes(change)){
+      const current=fs.readFileSync(path.join(directory,'data.json'));
+      await assert.rejects(p.saveSettings(false),/reload before saving/);
+      assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),current,'a later save cannot overwrite the failed recovery snapshot');
+    }
+  }finally{p.pluginExecutionLease.assertOwned=assertOwned;p.releasePluginExecution(false);}
+});
+
+test('save during offside recovery conflicts without replacing the catalog or local edits',async t=>{
+  const {create,directory,runtime}=fixture(t),p=create();historicalCatalog(directory,runtime,2);p.reservePluginExecution();
+  const file=path.join(directory,'data.json'),before=fs.readFileSync(file),read=p.settingsWriter.loadAsync.bind(p.settingsWriter);
+  let release,entered;const ready=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+  p.settingsWriter.loadAsync=async(...args)=>{const value=await read(...args);entered();await gate;return value;};
+  const loading=Object.getPrototypeOf(p).loadSettings.call(p),settled=loading.catch(()=>{});
+  try{
+    await ready;p.settings.edit='human edit';
+    await assert.rejects(p.saveSettings(false),/reload before saving/);
+    assert.deepEqual(fs.readFileSync(file),before);assert.equal(p.settings.edit,'human edit');
+    release();await assert.rejects(loading,/changed/);
+    await assert.rejects(p.saveSettings(false),/reload before saving/);
+    assert.deepEqual(fs.readFileSync(file),before);
+  }finally{release();await settled;p.releasePluginExecution(false);}
+});
+
+test('successful explicit reload clears a recovery conflict before saving the complete current catalog',async t=>{
+  const {create,directory,runtime}=fixture(t),p=create(),config=historicalCatalog(directory,runtime,1);p.reservePluginExecution();
+  const read=p.settingsWriter.loadAsync.bind(p.settingsWriter),file=path.join(directory,'data.json');
+  p.settingsWriter.loadAsync=async(...args)=>{const value=await read(...args);setImmediate(()=>p.settings.edit='human edit retained after conflict');return value;};
+  try{
+    await assert.rejects(Object.getPrototypeOf(p).loadSettings.call(p),/changed/);
+    assert.equal(p.settings.edit,'human edit retained after conflict');await assert.rejects(p.saveSettings(false),/reload before saving/);
+    p.settingsWriter.loadAsync=read;await Object.getPrototypeOf(p).loadSettings.call(p);await p.saveSettings(false);
+    const saved=JSON.parse(fs.readFileSync(file));
+    assert.deepEqual(saved.tasks,config.tasks);assert.equal(saved.workflows[0].id,config.workflows[0].id);
+    assert.equal(saved.workflows[0].runtimeExecution.definitionHash,config.workflows[0].runtimeExecution.definitionHash);
+    assert.equal(saved.workflows[0].steps[0].description,config.workflows[0].steps[0].description);
+    assert.equal(saved.workflows[0].steps[0].output,'old workflow result 0');
+  }finally{p.releasePluginExecution(false);}
+});
+
+test('a newer disk baseline observed during failed recovery cannot authorize saving an older published catalog',async t=>{
+  const {create,directory,runtime}=fixture(t),p=create(),config=historicalCatalog(directory,runtime,1);p.reservePluginExecution();
+  const file=path.join(directory,'data.json');
+  try{
+    await Object.getPrototypeOf(p).loadSettings.call(p);
+    fs.writeFileSync(file,JSON.stringify({...config,externalEdit:'preserve the new disk field'}));
+    const before=fs.readFileSync(file),read=p.settingsWriter.loadAsync.bind(p.settingsWriter);
+    p.settingsWriter.loadAsync=async(...args)=>{const value=await read(...args);setImmediate(()=>p.settings.localEdit='preserve the human edit');return value;};
+    await assert.rejects(Object.getPrototypeOf(p).loadSettings.call(p),/changed/);
+    assert.equal(p.settings.localEdit,'preserve the human edit');
+    await assert.rejects(p.saveSettings(false),/reload before saving/);
+    assert.deepEqual(fs.readFileSync(file),before);
+  }finally{p.releasePluginExecution(false);}
+});
+
+test('full onload observes large historical journals cooperatively with the exact historical proof hash',async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),p=create();historicalCatalog(directory,runtime,4);
+  const output='synthetic historical result \\\n😀'.repeat(150000);
+  for(const file of fs.readdirSync(runtime))if(file.endsWith('.json')){
+    const checkpoint=JSON.parse(fs.readFileSync(path.join(runtime,file)));checkpoint.steps[0].output=output;
+    fs.writeFileSync(path.join(runtime,file),JSON.stringify(checkpoint));
+  }
+  const expected=JSON.stringify(fs.readdirSync(runtime).sort().filter(n=>/^[a-zA-Z0-9-]+\.json$/.test(n)).map(n=>[n,fs.readFileSync(path.join(runtime,n),'utf8')]));
+  p.loadSettings=async()=>Object.getPrototypeOf(p).loadSettings.call(p);
+  const load=p.loadSettings;let observing=false,ticks=0,maxGap=0,previous;
+  p.loadSettings=async()=>{await load();observing=true;previous=performance.now();};
+  const timer=setInterval(()=>{if(observing){const now=performance.now();maxGap=Math.max(maxGap,now-previous);previous=now;ticks++;}},1);
+  try{
+    await p.onload();maxGap=Math.max(maxGap,performance.now()-previous);
+    t.diagnostic(`synthetic onload journal observation: ticks=${ticks}, maxGapMs=${maxGap}`);
+    assert.equal(p.ready,true);assert.ok(ticks>=3,`input during journal observation ${ticks}; gap ${maxGap}`);
+    assert.ok(maxGap<=100,`onload journal observation gap ${maxGap}`);
+    const proof=JSON.parse(fs.readFileSync(p.observationProof));
+    assert.equal(proof.journalHash,require('crypto').createHash('sha256').update(expected).digest('hex'));
+  }finally{clearInterval(timer);await p.onunload();}
+});
+
+test('observation proof changed during its asynchronous durable flush is rejected and preserved',async t=>{
+  const {create,runtime}=fixture(t),p=create();p.reservePluginExecution();p.observedJournalSnapshot='[]';
+  const file=path.join(runtime,'plugin-observation-'+p.pluginExecutionLease.token+'.proof'),flush=fs.fsync;
+  const foreign='synthetic changed proof';
+  t.mock.method(fs,'fsync',(fd,callback)=>{fs.writeFileSync(file,foreign);flush(fd,callback);});
+  try{
+    await assert.rejects(p.recordObservationProof(),/proof identity changed/);
+    assert.equal(fs.readFileSync(file,'utf8'),foreign);assert.equal(p.observationProof,undefined);
+  }finally{p.releasePluginExecution(false);}
+});
+function startupWatching(t,directory){
+  const watch=fs.watch;let entered;
+  const ready=new Promise(resolve=>{entered=resolve;});
+  t.mock.method(fs,'watch',function(target,...args){
+    const observer=watch.call(this,target,...args);
+    if(fs.realpathSync.native(target)===fs.realpathSync.native(directory))entered();
+    return observer;
+  });
+  return ready;
+}
+
+test('unload drains pending CLI terminal publication before releasing its lease',async t=>{
+  timers(t);const {create,runtime}=fixture(t),p=create();p.reservePluginExecution();
+  let finish,closed=false,pending=true;
+  const writes=new Promise(resolve=>finish=resolve);
+  p.cliRequestHost={close(){closed=true;},get hasPendingWork(){return pending;},async drain(){await writes;pending=false;}};
+  const unloading=p.onunload();
+  assert.equal(closed,true);assert.ok(fs.existsSync(path.join(runtime,'execution.lock')),'lease retained during receipt write');
+  finish();await unloading;
+  assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),false,'lease released only after durable terminal publication');
+});
+
+test('large startup validation yields to input and its async guard rejects later catalog edits',async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create(),file=path.join(directory,'data.json');
+  fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[],padding:'synthetic\\\n'.repeat(2000000)}));
+  p.reservePluginExecution();
+  let ticks=0;const timer=setInterval(()=>ticks++,1);
+  let guard;
+  try{
+    try{guard=await p.completeInstalledRelease();assert.ok(ticks>=2,`input during startup validation: ${ticks}`);}finally{clearInterval(timer);}
+    fs.appendFileSync(file,'\n');
+    await assert.rejects(guard(),/changed after startup validation/);
+  }finally{p.releasePluginExecution(false);}
+});
+test('startup reuses parsed bytes only while their fingerprint and identity remain confirmed',async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create(),file=path.join(directory,'data.json');
+  const padding='synthetic\\\n'.repeat(100000),parse=JSON.parse;
+  fs.writeFileSync(file,JSON.stringify({tasks:[],workflows:[],padding}));
+  let parsedCharacters=0;
+  t.mock.method(JSON,'parse',function(text,...args){
+    if(typeof text==='string'&&text.startsWith('"')&&text.length>1000)parsedCharacters+=text.length;
+    return parse.call(this,text,...args);
+  });
+  p.reservePluginExecution();
+  try{
+    const guard=await p.completeInstalledRelease();
+    assert.ok(parsedCharacters<JSON.stringify(padding).length*1.1,'unchanged large values must not be parsed twice during stabilization');
+    fs.appendFileSync(file,'\n');await assert.rejects(guard(),/changed after startup validation/);
+  }finally{p.releasePluginExecution(false);}
+});
+for(const valid of [true,false]) test(`slow cooperative startup ${valid?'accepts valid processing beyond two seconds':'does not renew the corruption deadline'}`,async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create(),file=path.join(directory,'data.json');
+  const text=JSON.stringify({tasks:[],workflows:[],padding:'synthetic'.repeat(40000)});
+  fs.writeFileSync(file,valid?text:text.slice(0,-1));
+  const before=fs.readFileSync(file),realNow=performance.now.bind(performance),open=fs.promises.open;
+  let processingMs=0,observed=false;
+  t.mock.method(performance,'now',()=>realNow()+processingMs);
+  t.mock.method(fs.promises,'open',async function(target,...args){
+    const handle=await open.call(this,target,...args);
+    if(path.resolve(String(target))===path.resolve(file)){
+      const read=handle.read.bind(handle);
+      const readFile=handle.readFile.bind(handle);
+      const observe=bytes=>{if(!observed&&bytes){observed=true;processingMs+=3000;}};
+      handle.read=async(...values)=>{
+        const result=await read(...values);
+        observe(result.bytesRead);
+        return result;
+      };
+      handle.readFile=async(...values)=>{
+        const result=await readFile(...values);
+        observe(result.length);
+        return result;
+      };
+    }
+    return handle;
+  });
+  p.reservePluginExecution();
+  try{
+    if(valid){const guard=await p.completeInstalledRelease();await guard();}
+    else await assert.rejects(p.completeInstalledRelease(),/did not become valid and stable/);
+    assert.equal(observed,true);assert.deepEqual(fs.readFileSync(file),before);
+  }finally{p.releasePluginExecution(false);}
+});
 function dashboard(t,p){
   const view=p.createDashboard({}),events=[];
   view.unsubscribeTaskUpdated=()=>events.push('tasks');
@@ -305,17 +549,19 @@ for(const finishes of [true,false,'late']) test(`startup monotonic budget ${fini
   const lock=file+'.write-lock',token=require('crypto').randomUUID(),before=fs.readFileSync(file);
   const temporary=`${file}.${process.pid}.123.abc.tmp`;
   fs.writeFileSync(lock,token);fs.writeFileSync(temporary,before);
-  let now=0,notify,closed=0,outcome;
+  let now=0,notify,closed=0,outcome,watchEntered;
+  const watching=new Promise(resolve=>{watchEntered=resolve;});
   t.mock.method(performance,'now',()=>now);
   const watch=fs.watch;
   t.mock.method(fs,'watch',function(target,callback){
-    const observer=watch.call(this,target,callback);notify=callback;
+    const observer=watch.call(this,target,callback);notify=callback;watchEntered();
     const close=observer.close.bind(observer);observer.close=()=>{closed++;return close();};
     return observer;
   });
   const tick=async value=>{now=value;notify();await require('node:timers/promises').setImmediate();};
   const loading=p.onload().then(()=>{outcome='loaded';},error=>{outcome=error;});
   try {
+    await Promise.race([watching,loading]);
     assert.equal(typeof notify,'function');
     // Keep real files and ownership checks; only monotonic elapsed time is controlled.
     await tick(3_000);
@@ -374,7 +620,15 @@ for(const scenario of ['persistent','token-replaced','lock-replaced','unobserved
       'lock-hardlink':/Unsafe/,'foreign-temporary':/Unsafe/,'orphan-temporary':/reconciliation/,'temporary-replaced':/identity changed/,
       corrupt:/JSON/,'uncertain-catalog':/Active execution/,journal:/uncertain effect/,'owner-changed':/lease|ownership/i,
       cancel:/stopped/,'directory-replaced':/identity|selection|installation/i}[scenario];
+    // Package verification now performs asynchronous I/O. Mutate only after
+    // the real startup monitor has observed the original writer, not after an
+    // assumed 40 ms or before the monitor even exists on a cold filesystem.
+    let watchEntered;const watching=new Promise(resolve=>{watchEntered=resolve;});
+    const watch=fs.watch;t.mock.method(fs,'watch',function(target,callback){
+      const observer=watch.call(this,target,callback);watchEntered();return observer;
+    });
     const rejected=assert.rejects(p.onload(),expected);
+    await Promise.race([watching,rejected]);
     await delay(40);
     if(scenario==='token-replaced')fs.writeFileSync(lock,require('crypto').randomUUID());
     if(scenario==='lock-replaced'){fs.renameSync(lock,lock+'.previous');fs.writeFileSync(lock,token);}
@@ -401,7 +655,9 @@ test('after atomic writer completes, even a byte-identical external catalog repl
   timers(t);const {create,directory}=fixture(t),p=create(),file=path.join(directory,'data.json');
   const lock=file+'.write-lock',before=fs.readFileSync(file),delay=require('node:timers/promises').setTimeout;
   fs.writeFileSync(lock,require('crypto').randomUUID());
+  const watching=startupWatching(t,directory);
   const rejected=assert.rejects(p.onload(),/identity changed/);
+  await Promise.race([watching,rejected]);
   await delay(40);fs.unlinkSync(lock);await delay(50);
   fs.renameSync(file,file+'.external-backup');fs.writeFileSync(file,before);
   await rejected;assert.equal(p.ready,false);assert.deepEqual(fs.readFileSync(file),before);
@@ -476,12 +732,14 @@ for(const scenario of ['corrupt','invalid-catalog','journal','live-owner','owner
     else fs.writeFileSync(file,'');
     if(scenario==='live-owner') {create().reservePluginExecution();owner=fs.readFileSync(path.join(runtime,'execution.lock/owner.json'));}
     if(scenario==='journal')fs.writeFileSync(path.join(runtime,'proof.json'),JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]}));
+    const watching=startupWatching(t,directory);
     const loading=p.onload();
     const expected={corrupt:/valid and stable/, 'invalid-catalog':/Invalid execution catalog/,journal:/uncertain effect/,
       'live-owner':/live or cannot/, 'owner-changed':/lease|ownership/i,'file-replaced':/identity changed/,'manifest-changed':/identity changed/,cancel:/stopped/}[scenario];
     // Attach rejection handler before yielding to the host.
     const rejected=scenario==='live-owner' ? loading.then(()=>assert.match(p.startupError,expected)) : assert.rejects(loading,expected);
     if(['owner-changed','file-replaced','manifest-changed','cancel'].includes(scenario))mutation=(async()=>{
+      await Promise.race([watching,rejected]);
       await delay(30);
       if(scenario==='owner-changed'){
         const ownerFile=path.join(runtime,'execution.lock/owner.json');
@@ -712,9 +970,11 @@ test('Obsidian quit awaits a pending settings save before releasing an observed 
 });
 
 test('complete package is reverified after asynchronous catalog stabilization',async t=>{
- timers(t);const {create,directory}=fixture(t),p=create();const loading=p.onload();
+ timers(t);const {create,directory}=fixture(t),p=create();const watching=startupWatching(t,directory),loading=p.onload();
+ const rejected=assert.rejects(loading,/package changed/);
+ await Promise.race([watching,rejected]);
  fs.appendFileSync(path.join(directory,'autooc-runtime.cjs'),'\n// changed during startup');
- await assert.rejects(loading,/package changed/);assert.equal(p.ready,false);
+ await rejected;assert.equal(p.ready,false);
 });
 
 for(const timing of ['before-click','during-download']) test('Update preserves an open Dashboard save '+timing+' and reloads the full package',async t=>{

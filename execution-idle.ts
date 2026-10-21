@@ -4,6 +4,8 @@ import { setTimeout as delay } from "timers/promises";
 import { performance } from "perf_hooks";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { validateProgressBinding } from "./workflow-progress";
+import { hashTextCooperatively, parseCooperatively } from "./cooperative-json";
+import { readSettingsTextAsync, settingsFingerprint } from "./settings-writer";
 
 // Read-only proof used before automatic recovery, release and installation.
 // A terminal label alone does not prove an external effect/evaluation ended.
@@ -71,7 +73,9 @@ export function assertInstalledExecutionIdle(directory: string, memorySettings?:
 // catalog snapshot, startup may wait for the initial SettingsWriter queue
 // (1.6.1 atomic rename) or saveData truncation (1.6.0). This is read-only;
 // recovery, release and execution retain their synchronous fail-closed checks.
-export async function waitForInstalledCatalog(directory: string, assertOwner: () => void, allowPendingRuns = false): Promise<() => void> {
+export function waitForInstalledCatalog(directory: string, assertOwner: () => void, allowPendingRuns?: boolean, cooperative?: false): Promise<() => void>;
+export function waitForInstalledCatalog(directory: string, assertOwner: () => void, allowPendingRuns: boolean, cooperative: true): Promise<() => Promise<void>>;
+export async function waitForInstalledCatalog(directory: string, assertOwner: () => void, allowPendingRuns = false, cooperative = false): Promise<(() => void) | (() => Promise<void>)> {
   const file = path.join(directory, "data.json");
   // A verified package may open its recovery-capable UI with unfinished runs.
   // Installation/release/recovery proofs keep the stricter default idle checks.
@@ -94,6 +98,9 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe execution configuration or write marker");
     return stat;
   };
+  // Tiny legacy catalogs stay in the original indivisible observation path:
+  // yielding there can miss several queued atomic commits and their inode proof.
+  const asyncCatalog = cooperative && (regularStat(file)?.size || 0) > 256 * 1024;
   const checkContext = () => {
     if (identity(fs.lstatSync(directory)) !== directoryIdentity) throw new Error("Installation identity changed during startup");
     assertOwner();
@@ -172,8 +179,53 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
       return value;
     } finally { fs.closeSync(fd); }
   };
+  const retryRead = new Error("Observed historical writer advanced during asynchronous read");
+  const checkReadMarkers = () => {
+    if (regularStat(lock) || fs.readdirSync(directory).some(name => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+      // Only the already observed historical queue may advance while I/O yields.
+      // pendingWriter still requires the predecessor temporary/inode proof.
+      if (writer && pendingWriter()) throw retryRead;
+      throw new Error("Unfinished configuration write requires reconciliation");
+    }
+  };
+  const readAsync = async (): Promise<string | null> => {
+    checkContext();
+    checkReadMarkers();
+    const stat = regularStat(file), currentIdentity = stat ? identity(stat) : null;
+    if (fileIdentity === undefined) fileIdentity = currentIdentity;
+    if (fileIdentity !== currentIdentity) throw new Error("Configuration identity changed during startup");
+    const value = await readSettingsTextAsync(file);
+    checkContext();
+    checkReadMarkers();
+    const after = regularStat(file);
+    if ((after ? identity(after) : null) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+    return value;
+  };
+  const readAsyncFingerprint = async (): Promise<string | null> => {
+    checkContext(); checkReadMarkers();
+    const before = regularStat(file);
+    if ((before ? identity(before) : null) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+    const currentHash = await settingsFingerprint(file);
+    checkContext(); checkReadMarkers();
+    const after = regularStat(file);
+    if ((after ? identity(after) : null) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+    return currentHash;
+  };
+  const makeAsyncGuard = (expectedHash: string | null) => async () => {
+    if (await readAsyncFingerprint() !== expectedHash) throw new Error("Configuration changed after startup validation; retry safely");
+    if (!allowPendingRuns) {
+      const current = await readAsync();
+      checkCatalog(current === null ? {} : await parseCooperatively(current), assertIdleJournals(path.join(directory, "runtime")));
+      if (current !== null && await hashTextCooperatively(current) !== expectedHash) throw new Error("Configuration changed after startup validation; retry safely");
+      checkContext();
+    }
+  };
   const startedAt = performance.now();
   const deadline = startedAt + 2_000;
+  // This budget bounds waiting for invalid/unstable legacy bytes, not useful
+  // cooperative processing of a valid catalog. The observed writer's separate
+  // wall-clock deadline below is never extended.
+  let validProcessingMs = 0;
   // A historical Dashboard queues multiple atomic saves. Under native load
   // five legitimate saves exceeded the former 2s TOTAL budget. Allow 10s for
   // that observed queue (5x the old budget), including final stabilization.
@@ -181,6 +233,7 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
   // writer still fails closed. Legacy JSON truncation keeps its 2s budget.
   const writerDeadline = startedAt + 10_000;
   let previous: string | null | undefined, stableSince = performance.now();
+  let validated: {hash: string | null; settings: unknown} | undefined;
   // Wake on directory changes as well as the bounded polling fallback. A
   // historical queue can commit several files inside a 25ms polling interval.
   // Notifications never authorize a transition: the inode proof above does.
@@ -208,29 +261,61 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
       // Atomic writers never truncate the installed catalog. Do not let a
       // finishing UI save hide already persisted uncertainty or corruption.
       const current = regularStat(file);
-      if (current) assertIdleCatalog(JSON.parse(fs.readFileSync(file, "utf8")), assertIdleJournals(path.join(directory, "runtime")));
+      if (current) {
+        const settings = asyncCatalog ? await parseCooperatively((await readSettingsTextAsync(file))!) : JSON.parse(fs.readFileSync(file, "utf8"));
+        assertIdleCatalog(settings, assertIdleJournals(path.join(directory, "runtime")));
+      }
       if (performance.now() >= writerDeadline) throw new Error("Unfinished configuration write requires reconciliation; startup wait expired");
       stableSince = performance.now();
       await wait();
       continue;
     }
-    const value = read();
-    let settings: unknown, valid = true;
-    try { settings = value === null ? null : JSON.parse(value); }
-    catch (error) { if (!(error instanceof SyntaxError)) throw error; valid = false; }
+    const processingStarted = performance.now();
+    let value: string | null = null, settings: unknown, valid = true, reused = false;
+    let comparison: string | null;
+    try {
+      if (asyncCatalog && validated) {
+        comparison = await readAsyncFingerprint();
+        if (comparison === validated.hash) { settings = validated.settings; reused = true; }
+      }
+      if (!reused) value = asyncCatalog ? await readAsync() : read();
+    }
+    catch (error) {
+      if (error !== retryRead) throw error;
+      if (performance.now() >= writerDeadline) throw new Error("Unfinished configuration write requires reconciliation; startup wait expired");
+      stableSince = performance.now();
+      await wait();
+      continue;
+    }
+    if (!reused) {
+      try { settings = value === null ? null : asyncCatalog ? await parseCooperatively(value) : JSON.parse(value); }
+      catch (error) { if (!(error instanceof SyntaxError)) throw error; valid = false; }
+      comparison = asyncCatalog && value !== null ? await hashTextCooperatively(value) : value;
+    }
     // Retry syntax only, never invalid catalogs, uncertain journals or owners.
-    if (valid && value !== null) checkCatalog(settings, checkpoints);
-    if (!valid || previous !== value) stableSince = performance.now();
-    previous = valid ? value : undefined;
+    if (valid && (reused ? comparison! !== null : value !== null)) checkCatalog(settings, checkpoints);
+    // Retain just the parsed snapshot. Later observations hash bounded file
+    // chunks and repeat identity/marker/journal checks, without another full
+    // encoded string and object graph. Never reuse data after a byte change.
+    if (asyncCatalog) validated = valid ? {hash: comparison!, settings} : undefined;
+    if (asyncCatalog && valid && !writer) validProcessingMs += performance.now() - processingStarted;
+    if (!valid || previous !== comparison!) stableSince = performance.now();
+    previous = valid ? comparison! : undefined;
     if (writer && performance.now() >= writerDeadline) throw new Error("AutoOC configuration did not become valid and stable during startup; retry after the legacy writer finishes");
     if (valid && performance.now() - stableSince >= 100) {
+      if (asyncCatalog) return makeAsyncGuard(comparison!);
+      if (cooperative) return async () => {
+        const current = read();
+        if (current !== value) throw new Error("Configuration changed after startup validation; retry safely");
+        if (!allowPendingRuns) assertInstalledExecutionIdle(directory);
+      };
       return () => {
         const current = read();
         if (current !== value) throw new Error("Configuration changed after startup validation; retry safely");
         if (!allowPendingRuns) assertInstalledExecutionIdle(directory);
       };
     }
-    if (performance.now() >= deadline && !writer) throw new Error("AutoOC configuration did not become valid and stable during startup; retry after the legacy writer finishes");
+    if (performance.now() - validProcessingMs >= deadline && !writer) throw new Error("AutoOC configuration did not become valid and stable during startup; retry after the legacy writer finishes");
     await wait();
   } } finally { watcher.close(); }
 }

@@ -1,9 +1,32 @@
 ---
 name: autooc-runtime
-description: Consultar, iniciar, detener y recuperar tareas o workflows de AutoOC desde un agente mediante la CLI, con ejecución autónoma o a través del plugin abierto.
+description: Consultar y ejecutar AutoOC desde un agente y editar workflows compatibles con Obsidian abierto. Usar para descubrir la CLI instalada, conservar identidades y resolver conflictos o recuperación con evidencia.
 ---
 
 # AutoOC desde un agente
+
+## Editar un workflow sin cerrar Obsidian
+
+Consultar primero `version` y `help`. Si `capabilities` incluye `export-workflow` y `edit-workflow`, usar esta vía en la bóveda autorizada con AutoOC activo. No escribir directamente `data.json`, quitar reservas ni pedir cerrar Obsidian para estas ediciones.
+
+```text
+node CLI export-workflow --vault ABS_VAULT --workflow ID --out ABS_NEW_JSON
+node CLI edit-workflow --vault ABS_VAULT --workflow ID --patch ABS_PATCH_JSON
+```
+
+La exportación crea un archivo nuevo con `expectedHash` y la definición editable del workflow seleccionado, sin resultados ni historial. Preparar un patch JSON con ese `expectedHash` y `changes`, por ejemplo:
+
+```json
+{"expectedHash":"SHA256_DE_LA_EXPORTACION","changes":{"description":"Descripción revisada","stepChanges":[{"id":"PASO_EXISTENTE","code":"output = 2;"}]}}
+```
+
+Se admiten `name` y `description` del workflow y `name`, `code` o `evaluatePrompt` de pasos existentes. `code` requiere un paso Code. Mantener `changes` por debajo de 58.000 bytes UTF-8 y el archivo de patch como máximo en 60.000 bytes; dividir cambios mayores usando el hash devuelto en la última edición. La exportación es una vista editable, no un paquete importable. Esta primera versión conserva IDs, conexiones, permisos, programación, tareas asociadas y estados/historial; no crea ni elimina pasos, no edita prompts/modelos de tareas asociadas ni ejecuta el código editado.
+
+El plugin propietario guarda mediante su cola cooperativa y devuelve un recibo durable con el hash nuevo. Ante conflicto, exportar la definición actual y revisar el cambio. Ante ejecución activa, esperar a que termine manteniendo Obsidian abierto. Tras una respuesta incierta o perdida, inspeccionar el recibo y la definición antes de reintentar: no hay fallback que escriba el catálogo por fuera del plugin.
+
+Si el plugin cargado es anterior y no anuncia esta capacidad, preparar primero el candidato y su respaldo y recargar únicamente AutoOC una vez. Las ediciones posteriores de esta vía no requieren descargarlo. Los parches locales pueden contener código o instrucciones; mantenerlos privados y no incluirlos en informes públicos.
+
+Volver a exportar a un archivo nuevo para comprobar el texto guardado; guardar no equivale a ejecutar ni a validar su lógica. Leer/exportar solo la definición necesaria y enviar cambios pequeños evita copiar repetidamente un catálogo grande. Conservar contenido e historial; no truncarlos para mejorar cifras. Distinguir tiempo total de guardado CLI de pausas del editor y registrar validaciones aplazadas sin presentarlas como aprobadas. Los cambios de tareas o estructura requieren otra vía soportada o una operación de mantenimiento autorizada con respaldo y solo el plugin descargado.
 
 ## Explicit abandonment (1.6.5+)
 

@@ -1,5 +1,6 @@
 import { validateExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
-import { prepareWorkflowDefinition } from "./workflow-definition";
+import { prepareWorkflowDefinition, prepareWorkflowDefinitionAsync } from "./workflow-definition";
+import { cloneJsonStructure } from "./cooperative-json";
 
 // The catalog binding identifies the historical run independently of the
 // editable definition. Check it before deciding how to project that run.
@@ -21,13 +22,30 @@ export function recoverWorkflowProgress(workflow:any,tasks:any[],settings:Record
   // An edited terminal definition can be incomplete. Only definition preparation
   // is optional here; checkpoint and binding errors above are never suppressed.
   try { currentHash = prepareWorkflowDefinition(workflow,tasks,settings).hash; } catch { /* Validate on the next explicit execution. */ }
-  if (currentHash === checkpoint.definitionHash) return projectWorkflowProgress(workflow,tasks,settings,checkpoint,expectedRunId);
+  return recoverPreparedProgress(workflow,checkpoint,currentHash);
+}
+
+export async function recoverWorkflowProgressAsync(workflow:any,tasks:any[],settings:Record<string,any>,checkpoint:RunCheckpoint,expectedRunId:string,activelyExecuting=false) {
+  // Neither a caller mutation nor later projection can alter this operation's
+  // entry snapshot. Never catch identity, checkpoint or publication errors.
+  workflow=cloneJsonStructure(workflow);checkpoint=cloneJsonStructure(checkpoint);
+  validateProgressBinding(workflow,checkpoint,expectedRunId);
+  let currentHash:string|undefined;
+  try { currentHash=(await prepareWorkflowDefinitionAsync(workflow,tasks,settings)).hash; }
+  catch (error) { if(activelyExecuting)throw error; }
+  if(activelyExecuting && currentHash!==checkpoint.definitionHash)throw new Error("Progress identity or definition mismatch");
+  return recoverPreparedProgress(workflow,checkpoint,currentHash,activelyExecuting);
+}
+
+function recoverPreparedProgress(workflow:any,checkpoint:RunCheckpoint,currentHash:string|undefined,activelyExecuting=false) {
+  const terminal=["completed","failed","abandoned"].includes(checkpoint.phase);
+  if (currentHash === checkpoint.definitionHash) return projectPreparedProgress(workflow,checkpoint,activelyExecuting);
   return {...workflow,
     ...(checkpoint.createdAt ? {lastRun:checkpoint.createdAt} : {}),
     status:terminal ? checkpoint.phase : 'pending',currentStep:0,
     runtimeExecution:{runId:checkpoint.runId,workflowId:checkpoint.workflowId,definitionHash:checkpoint.definitionHash,
       revision:checkpoint.revision,phase:checkpoint.phase,abandonment:checkpoint.abandonment,requiresReconciliation:!terminal,definitionChanged:true,
-      historicalSteps:JSON.parse(JSON.stringify(checkpoint.steps))},
+      historicalSteps:cloneJsonStructure(checkpoint.steps)},
     // A hash alone cannot prove that a reused step ID still means the same task.
     steps:workflow.steps.map((step:any)=>{const {lastRun,output,status,...definition}=step;return {...definition,status:'pending',output:''};}),
   };
@@ -39,6 +57,10 @@ export function projectWorkflowProgress(workflow:any,tasks:any[],settings:Record
   validateProgressBinding(workflow,checkpoint,expectedRunId);
   const definition = prepareWorkflowDefinition(workflow,tasks,settings);
   if (checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
+  return projectPreparedProgress(workflow,checkpoint,activelyExecuting);
+}
+
+function projectPreparedProgress(workflow:any,checkpoint:RunCheckpoint,activelyExecuting=false) {
   const last = new Map(checkpoint.steps.map(step=>[step.stepId,step]));
   if (checkpoint.steps.some(step=>!workflow.steps.some((known:any)=>known.id===step.stepId))) throw new Error("Progress contains an unknown step");
   if (checkpoint.nextStepId && !workflow.steps.some((known:any)=>known.id===checkpoint.nextStepId)) throw new Error("Progress next step is absent");

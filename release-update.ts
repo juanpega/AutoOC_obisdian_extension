@@ -60,6 +60,21 @@ export function hasCompleteInstalledRelease(directory: string, version: string):
   } catch { return false; }
 }
 
+// Startup must not synchronously fault several cold bundle files into memory.
+// Keep the synchronous contract for release/recovery callers that need it.
+export async function hasCompleteInstalledReleaseAsync(directory: string, version: string): Promise<boolean> {
+  try {
+    const root = fs.realpathSync(directory), files: Record<string, Buffer> = {};
+    for (const name of [...RELEASE_FILES, RELEASE_DESCRIPTOR]) {
+      const file = regularPath(root, name);
+      files[name] = await fs.promises.readFile(file);
+      regularPath(root, name);
+    }
+    verifyRelease(files, version);
+    return true;
+  } catch { return false; }
+}
+
 // The caller owns the same lease as both execution hosts. A durable marker
 // blocks restart after process death; artifacts only, never data.json/secrets.
 export function installRelease(options: {

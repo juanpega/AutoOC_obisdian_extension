@@ -1,8 +1,16 @@
-import { SettingsWriter } from "./settings-writer";
+import { SettingsWriter, type ObservedVersion } from "./settings-writer";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { projectWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { persistTaskHistory } from "./task-history";
+
+export interface PersistedWorkflowCatalog {
+  catalog: any;
+  version: ObservedVersion;
+  runId: string;
+  workflowId: string;
+  revision: number;
+}
 
 // Called by the owning host after journal persistence, before advancing.
 // Read the current catalog on every boundary so unrelated edits are retained;
@@ -15,13 +23,14 @@ export async function persistWorkflowProgress(options: {
   replaceCompletedRunId?: string;
   taskId?: string;
   vaultBase?: string;
-}): Promise<void> {
+  writer?: SettingsWriter;
+}): Promise<PersistedWorkflowCatalog> {
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
   }
-  const writer = new SettingsWriter();
-  const config: any = writer.load(options.configurationFile);
+  const writer = options.writer || new SettingsWriter();
+  const config: any = await writer.loadAsync(options.configurationFile);
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
     throw new Error("Invalid AutoOC catalog");
   }
@@ -84,4 +93,6 @@ export async function persistWorkflowProgress(options: {
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? projected : workflow)};
   await writer.save(options.configurationFile, () => next);
   if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
+  return {catalog:next,version:writer.confirmedVersion(options.configurationFile),
+    runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};
 }

@@ -15,6 +15,58 @@ function loader(overrides={}) {
   return load;
 }
 const load=loader(),{prepareWorkflowDefinition:prepare}=load('workflow-definition'),{runCodeWorkflowHost:run}=load('code-workflow-host');
+
+test('cooperative historical definition hashing yields and freezes the entry snapshot with exact legacy bytes',async()=>{
+  const {prepareWorkflowDefinitionAsync}=load('workflow-definition');
+  const task={id:'t',prompt:('synthetic\\\n😀\ud800').repeat(500000)};
+  const workflow={id:'w',steps:[{id:'s',stepKind:'task',taskId:'t'}]};
+  const expected=prepare(workflow,[task],{});
+  let ticks=0;const timer=setInterval(()=>ticks++,1);
+  try{
+    const pending=prepareWorkflowDefinitionAsync(workflow,[task],{});
+    task.prompt='later edit';workflow.steps[0].taskId='later-task';
+    const actual=await pending;
+    assert.equal(actual.hash,expected.hash);assert.deepEqual(actual,expected);
+    assert.ok(Object.isFrozen(actual.tasks[0]));assert.ok(ticks>=2,`input ticks ${ticks}`);
+    const {hash,...value}=actual;
+    assert.equal(hash,require('node:crypto').createHash('sha256').update(JSON.stringify(value)).digest('hex'));
+  }finally{clearInterval(timer);}
+});
+
+test('async historical projection preserves terminal edits, prior results and all identity guards',async()=>{
+  const {recoverWorkflowProgressAsync:recover,recoverWorkflowProgress:sync}=load('workflow-progress');
+  const tasks=[{id:'t',taskKind:'code',code:'synthetic',prompt:'retained'}];
+  const workflow={id:'w',steps:[{id:'s',stepKind:'task',taskId:'t'}]};
+  const hash=prepare(workflow,tasks,{}).hash;
+  const checkpoint={schemaVersion:1,runId:'synthetic',workflowId:'w',definitionHash:hash,revision:2,phase:'completed',nextStepId:null,steps:[{stepId:'s',status:'completed',output:'old result'}]};
+  workflow.runtimeExecution={runId:checkpoint.runId,workflowId:'w',definitionHash:hash,revision:2};
+  assert.deepEqual(await recover(workflow,tasks,{},checkpoint,'synthetic'),sync(workflow,tasks,{},checkpoint,'synthetic'));
+  for(const changed of [{...workflow,name:'edited'}, {...workflow,steps:[]}]){
+    const actual=await recover(changed,tasks,{},checkpoint,'synthetic');
+    assert.deepEqual(actual,sync(changed,tasks,{},checkpoint,'synthetic'));
+    assert.equal(actual.runtimeExecution.definitionChanged,true);assert.deepEqual(actual.runtimeExecution.historicalSteps,checkpoint.steps);
+    await assert.rejects(recover(changed,tasks,{},checkpoint,'synthetic',true));
+  }
+  for(const changed of [{...checkpoint,runId:'other'},{...checkpoint,workflowId:'other'},{...checkpoint,revision:1},{...checkpoint,definitionHash:'b'.repeat(64)},{...checkpoint,steps:[{stepId:'s',status:'completed'}]}]){
+    await assert.rejects(recover(workflow,tasks,{},changed,'synthetic'));
+  }
+});
+
+test('definition fingerprints preserve native bytes without monolithic large-field encoding',t=>{
+  const workflow={id:'synthetic',steps:[{id:'code',stepKind:'code',code:('x\\\n😀\ud800@autooc-string-0').repeat(150000)}]};
+  const original=prepare(workflow,[],{}),{hash,...payload}=original;
+  const expected=require('node:crypto').createHash('sha256').update(JSON.stringify(payload)).digest('hex');
+  const stringify=JSON.stringify;
+  t.mock.method(JSON,'stringify',function(...args){
+    const encoded=stringify.apply(this,args);
+    assert.ok(encoded===undefined||encoded.length<128*1024,'definition encoding must keep individual allocations bounded');
+    return encoded;
+  });
+  const prepared=prepare(workflow,[],{});
+  assert.equal(prepared.hash,expected);assert.equal(prepared.hash,hash);
+  assert.equal(prepared.workflow.steps[0].code,workflow.steps[0].code);
+  assert.ok(Object.isFrozen(prepared.workflow.steps[0]));
+});
 test('dirty branch switch is rejected before a run is created, while current-branch support remains allowed',()=>fixture(async root=>{
   const git=(...args)=>execFileSync('git',['-c',`safe.directory=${root}`,...args],{cwd:root,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
   git('init','-b','work');fs.writeFileSync(path.join(root,'tracked.txt'),'original');git('add','tracked.txt');
