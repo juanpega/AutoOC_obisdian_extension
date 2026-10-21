@@ -8309,6 +8309,9 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.updateInProgress = false;
     this.lifecycleStopped = false;
     this.startupPending = false;
+    this.startupWaitGeneration = 0;
+    this.startupWaitingForOwner = false;
+    this.startupRecoveryDisposed = false;
     this.executionAttempted = false;
     this.lifecycleTimers = /* @__PURE__ */ new Set();
     this.ready = false;
@@ -8509,6 +8512,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         this.startupPending = false;
         this.lifecycleStopped = true;
         this.startupError = String(error);
+        this.startupWaitingForOwner = this.waitForExecutionOwner();
         this.registerRecoveryInterface();
         return;
       }
@@ -8632,6 +8636,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   async onunload() {
     var _a, _b;
+    this.startupRecoveryDisposed = true;
+    this.stopStartupWait();
     this.lifecycleStopped = true;
     this.ready = false;
     if (this.cliRequestTimer !== void 0) window.clearInterval(this.cliRequestTimer);
@@ -8688,6 +8694,69 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     if (closingRequestHost && !closingRequestHost.hasPendingWork && this.cliRequestHost === closingRequestHost) this.cliRequestHost = void 0;
     await closingBridge;
   }
+  stopStartupWait() {
+    this.startupWaitGeneration++;
+    if (this.startupWaitTimer !== void 0) window.clearInterval(this.startupWaitTimer);
+    this.startupWaitTimer = void 0;
+  }
+  waitForExecutionOwner() {
+    try {
+      const location = this.selectedExecutionLocation(false);
+      const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+      if (owner.pid === process.pid) return false;
+      process.kill(owner.pid, 0);
+      const plugins = this.app.plugins;
+      if (!(plugins == null ? void 0 : plugins.disablePlugin) || !(plugins == null ? void 0 : plugins.enablePlugin)) return false;
+      const generation = this.startupWaitGeneration;
+      let absentSince;
+      this.startupWaitTimer = window.setInterval(async () => {
+        if (this.startupRecoveryDisposed || generation !== this.startupWaitGeneration) return;
+        try {
+          const current = this.selectedExecutionLocation(false);
+          if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory)) {
+            this.stopStartupWait();
+            return;
+          }
+          try {
+            fs23.lstatSync(path22.join(current.runtimeDirectory, "execution.lock"));
+            absentSince = void 0;
+            return;
+          } catch (error) {
+            if (error.code !== "ENOENT") throw error;
+          }
+          const now = Date.now();
+          if (absentSince === void 0 || now < absentSince) {
+            absentSince = now;
+            return;
+          }
+          if (now - absentSince < 500) return;
+          this.stopStartupWait();
+          await this.retryLoadingAutoOC();
+        } catch (error) {
+          this.stopStartupWait();
+          new import_obsidian.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
+        }
+      }, 1e3);
+      this.registerInterval(this.startupWaitTimer);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+  retryLoadingAutoOC() {
+    if (this.startupRetry) return this.startupRetry;
+    if (this.startupRecoveryDisposed) return Promise.reject(new Error("AutoOC instance is stopped"));
+    this.stopStartupWait();
+    const plugins = this.app.plugins;
+    this.startupRetry = Promise.resolve().then(async () => {
+      if (this.startupRecoveryDisposed) throw new Error("AutoOC instance is stopped");
+      await plugins.disablePlugin(this.manifest.id);
+      await plugins.enablePlugin(this.manifest.id);
+    }).finally(() => {
+      this.startupRetry = void 0;
+    });
+    return this.startupRetry;
+  }
   registerRecoveryInterface() {
     const open = async () => {
       const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
@@ -8695,18 +8764,20 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       await leaf.setViewState({ type: VIEW_TYPE, active: true });
       await this.app.workspace.revealLeaf(leaf);
     };
-    this.registerView(VIEW_TYPE, (leaf) => new AutoOCRecoveryView(leaf, this.startupError, async () => {
-      const plugins = this.app.plugins;
-      await plugins.disablePlugin(this.manifest.id);
-      await plugins.enablePlugin(this.manifest.id);
-    }, this.closedSessionRecovery()));
-    this.addRibbonIcon("workflow", "AutoOC \u2014 recovery required", () => {
+    this.registerView(VIEW_TYPE, (leaf) => new AutoOCRecoveryView(
+      leaf,
+      this.startupError,
+      () => this.retryLoadingAutoOC(),
+      this.closedSessionRecovery(),
+      this.startupWaitingForOwner
+    ));
+    this.addRibbonIcon("workflow", this.startupWaitingForOwner ? "AutoOC \u2014 waiting for execution" : "AutoOC \u2014 recovery required", () => {
       void open();
     });
     this.addCommand({ id: "open-auto-oc", name: "Open AutoOC recovery", callback: () => {
       void open();
     } });
-    new import_obsidian.Notice("AutoOC: execution is unavailable. Open AutoOC for recovery details.", 1e4);
+    new import_obsidian.Notice(this.startupWaitingForOwner ? "AutoOC is waiting for the active execution. Loading will retry automatically; you can keep editing notes." : "AutoOC: execution is unavailable. Open AutoOC for recovery details.", 1e4);
   }
   closedSessionRecovery() {
     try {
@@ -14341,11 +14412,12 @@ var SecretRevealModal = class extends import_obsidian.Modal {
   }
 };
 var AutoOCRecoveryView = class extends import_obsidian.ItemView {
-  constructor(leaf, reason, retry, recoverClosedSession) {
+  constructor(leaf, reason, retry, recoverClosedSession, waitingForOwner = false) {
     super(leaf);
     this.reason = reason;
     this.retry = retry;
     this.recoverClosedSession = recoverClosedSession;
+    this.waitingForOwner = waitingForOwner;
   }
   getViewType() {
     return VIEW_TYPE;
@@ -14358,12 +14430,12 @@ var AutoOCRecoveryView = class extends import_obsidian.ItemView {
   }
   async onOpen() {
     this.contentEl.empty();
-    this.contentEl.createEl("h2", { text: "AutoOC needs attention" });
-    this.contentEl.createEl("p", { text: this.recoverClosedSession ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved." : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved." });
+    this.contentEl.createEl("h2", { text: this.waitingForOwner ? "AutoOC is waiting" : "AutoOC needs attention" });
+    this.contentEl.createEl("p", { text: this.waitingForOwner ? "Another AutoOC execution is active. Loading will retry automatically after its reservation is released. You can keep editing notes." : this.recoverClosedSession ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved." : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved." });
     const details = this.contentEl.createEl("pre", { text: this.reason });
     details.style.whiteSpace = "pre-wrap";
     details.style.overflowWrap = "anywhere";
-    this.contentEl.createEl("p", { text: this.recoverClosedSession ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation." : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it." });
+    this.contentEl.createEl("p", { text: this.waitingForOwner ? "The active execution keeps its reservation. No task will be resumed or repeated when this panel loads." : this.recoverClosedSession ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation." : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it." });
     if (this.recoverClosedSession) {
       const recover = this.contentEl.createEl("button", { text: "Recover closed session and open AutoOC" });
       recover.onclick = async () => {

@@ -532,8 +532,11 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
   const jobs=Array.from({length:writes-1},()=>view.persistDashboardPositions());jobs.push(view.onClose());
   await firstRename;
   successor.loadSettings=async()=>{successor.settings=successor.settingsWriter.load(file);};
+  // Package verification yields before catalog observation. Keep the first
+  // commit blocked until the successor actually observes the outgoing queue.
+  const watching=startupWatching(t,directory);
   const loading=successor.onload().then(()=>null,error=>error);
-  await delay(60);finish();await Promise.all(jobs);
+  await Promise.race([watching,loading]);await delay(60);finish();await Promise.all(jobs);
   const error=await loading;
   try {
     assert.equal(error,null);assert.equal(successor.ready,true);assert.equal(tokens.size,writes);
@@ -928,6 +931,26 @@ test('live CLI owner leaves a visible recovery view without scheduling or catalo
   await p.onunload();assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),lease);
   assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);owner.releasePluginExecution(false);
   const successor=create();await successor.onload();assert.equal(successor.ready,true);await successor.onunload();
+});
+
+for(const mode of ['released','manual-race','replaced-owner','unloaded'])test('startup waits for external owner: '+mode,async t=>{
+ timers(t);const {create,directory,runtime}=fixture(t),owner=create(),p=create();owner.reservePluginExecution();
+ const file=path.join(runtime,'execution.lock/owner.json'),original=JSON.parse(fs.readFileSync(file)),foreign={...original,pid:987654321};
+ fs.writeFileSync(file,JSON.stringify(foreign));const kill=process.kill;t.mock.method(process,'kill',(pid,signal)=>pid===foreign.pid?true:kill(pid,signal));
+ const intervals=[];window.setInterval=(fn,ms)=>{intervals.push({fn,ms});return intervals.length;};
+ let disables=0,enables=0,next;
+ p.app.plugins={disablePlugin:async()=>{disables++;await p.onunload();},enablePlugin:async()=>{enables++;next=create();await next.onload();}};
+ try{
+   const before=fs.readFileSync(path.join(directory,'data.json'));await p.onload();assert.equal(p.ready,false);
+   const wait=intervals.find(x=>x.ms===1000);assert.ok(wait,'external owner must leave a bounded lightweight startup watcher');
+   let now=Date.now();t.mock.method(Date,'now',()=>now);const tick=async()=>{now+=1000;await wait.fn();};
+   const view=p.createDashboard({}),elements=[];view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};await view.onOpen();
+   assert.ok(elements.some(e=>e.text==='AutoOC is waiting'));
+   await tick();assert.equal(enables,0);assert.deepEqual(fs.readFileSync(file),Buffer.from(JSON.stringify(foreign)));
+   if(mode==='replaced-owner'){const replacement={...foreign,token:require('node:crypto').randomUUID()};fs.writeFileSync(file,JSON.stringify(replacement));await tick();await tick();assert.equal(enables,0);assert.equal(JSON.parse(fs.readFileSync(file)).token,replacement.token);fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);}
+   else {if(mode==='unloaded')await p.onunload();fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);await tick();if(mode==='manual-race')await Promise.all([tick(),elements.find(e=>e.text==='Retry loading AutoOC').onclick()]);else await tick();await tick();if(mode==='released'||mode==='manual-race'){assert.equal(enables,1);assert.equal(disables,1);assert.equal(next.ready,true);}else assert.equal(enables,0);}
+   assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);
+ }finally{await p.onunload();if(next)await next.onunload();if(fs.existsSync(file)){fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);}}
 });
 
 test('failed pending settings write cannot release an uncertain reservation',async t=>{

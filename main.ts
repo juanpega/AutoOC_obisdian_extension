@@ -1909,6 +1909,11 @@ export default class AutoOCPlugin extends Plugin {
   updateInProgress = false;
   private lifecycleStopped = false;
   private startupPending = false;
+  private startupWaitTimer?: number;
+  private startupWaitGeneration = 0;
+  private startupWaitingForOwner = false;
+  private startupRecoveryDisposed = false;
+  private startupRetry?: Promise<void>;
   private observedJournalSnapshot?: string;
   private observationProof?: string;
   private executionAttempted = false;
@@ -2117,6 +2122,7 @@ export default class AutoOCPlugin extends Plugin {
         this.startupPending = false;
         this.lifecycleStopped = true;
         this.startupError = String(error);
+        this.startupWaitingForOwner = this.waitForExecutionOwner();
         this.registerRecoveryInterface();
         return;
       }
@@ -2254,6 +2260,8 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async onunload() {
+    this.startupRecoveryDisposed = true;
+    this.stopStartupWait();
     this.lifecycleStopped = true;
     this.ready = false;
     if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
@@ -2309,6 +2317,70 @@ export default class AutoOCPlugin extends Plugin {
     await closingBridge;
   }
 
+  private stopStartupWait(): void {
+    this.startupWaitGeneration++;
+    if (this.startupWaitTimer !== undefined) window.clearInterval(this.startupWaitTimer);
+    this.startupWaitTimer = undefined;
+  }
+
+  private waitForExecutionOwner(): boolean {
+    try {
+      const location = this.selectedExecutionLocation(false);
+      const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+      // A confirmed external owner may finish normally. Unknown/dead owners
+      // still require the existing explicit recovery path.
+      if (owner.pid === process.pid) return false;
+      process.kill(owner.pid, 0);
+      const plugins = (this.app as any).plugins;
+      if (!plugins?.disablePlugin || !plugins?.enablePlugin) return false;
+      const generation = this.startupWaitGeneration;
+      let absentSince: number | undefined;
+      this.startupWaitTimer = window.setInterval(async () => {
+        if (this.startupRecoveryDisposed || generation !== this.startupWaitGeneration) return;
+        try {
+          const current = this.selectedExecutionLocation(false);
+          if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory)) {
+            this.stopStartupWait();
+            return;
+          }
+          try {
+            fs.lstatSync(path.join(current.runtimeDirectory, 'execution.lock'));
+            absentSince = undefined;
+            return;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+          const now = Date.now();
+          if (absentSince === undefined || now < absentSince) { absentSince = now; return; }
+          // Two separate observations avoid reloading during lease handover.
+          if (now - absentSince < 500) return;
+          this.stopStartupWait();
+          await this.retryLoadingAutoOC();
+        } catch (error) {
+          this.stopStartupWait();
+          new Notice('AutoOC: automatic loading stopped. Retry loading AutoOC. ' + String(error));
+        }
+      }, 1000);
+      this.registerInterval(this.startupWaitTimer);
+      return true;
+    } catch { return false; }
+  }
+
+  private retryLoadingAutoOC(): Promise<void> {
+    if (this.startupRetry) return this.startupRetry;
+    if (this.startupRecoveryDisposed) return Promise.reject(new Error('AutoOC instance is stopped'));
+    this.stopStartupWait();
+    const plugins = (this.app as any).plugins;
+    // Both the manual button and the waiter share one reload. Reloading never
+    // removes another owner's reservation or resumes a workflow.
+    this.startupRetry = Promise.resolve().then(async () => {
+      if (this.startupRecoveryDisposed) throw new Error('AutoOC instance is stopped');
+      await plugins.disablePlugin(this.manifest.id);
+      await plugins.enablePlugin(this.manifest.id);
+    }).finally(() => { this.startupRetry = undefined; });
+    return this.startupRetry;
+  }
+
   private registerRecoveryInterface(): void {
     const open = async () => {
       const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
@@ -2316,15 +2388,13 @@ export default class AutoOCPlugin extends Plugin {
       await leaf.setViewState({type: VIEW_TYPE, active: true});
       await this.app.workspace.revealLeaf(leaf);
     };
-    this.registerView(VIEW_TYPE, leaf => new AutoOCRecoveryView(leaf, this.startupError!, async () => {
-      // A human retry reloads the plugin. It never deletes a lease or resumes work.
-      const plugins = (this.app as any).plugins;
-      await plugins.disablePlugin(this.manifest.id);
-      await plugins.enablePlugin(this.manifest.id);
-    }, this.closedSessionRecovery()));
-    this.addRibbonIcon("workflow", "AutoOC — recovery required", () => { void open(); });
+    this.registerView(VIEW_TYPE, leaf => new AutoOCRecoveryView(leaf, this.startupError!,
+      () => this.retryLoadingAutoOC(), this.closedSessionRecovery(), this.startupWaitingForOwner));
+    this.addRibbonIcon("workflow", this.startupWaitingForOwner ? "AutoOC — waiting for execution" : "AutoOC — recovery required", () => { void open(); });
     this.addCommand({id: "open-auto-oc", name: "Open AutoOC recovery", callback: () => { void open(); }});
-    new Notice("AutoOC: execution is unavailable. Open AutoOC for recovery details.", 10000);
+    new Notice(this.startupWaitingForOwner
+      ? "AutoOC is waiting for the active execution. Loading will retry automatically; you can keep editing notes."
+      : "AutoOC: execution is unavailable. Open AutoOC for recovery details.", 10000);
   }
 
   private closedSessionRecovery(): (() => void) | undefined {
@@ -8281,20 +8351,24 @@ class SecretRevealModal extends Modal {
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void, private waitingForOwner = false) { super(leaf); }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC — recovery"; }
   getIcon() { return "workflow"; }
   async onOpen() {
     this.contentEl.empty();
-    this.contentEl.createEl("h2", {text: "AutoOC needs attention"});
-    this.contentEl.createEl("p", {text: this.recoverClosedSession
+    this.contentEl.createEl("h2", {text: this.waitingForOwner ? "AutoOC is waiting" : "AutoOC needs attention"});
+    this.contentEl.createEl("p", {text: this.waitingForOwner
+      ? "Another AutoOC execution is active. Loading will retry automatically after its reservation is released. You can keep editing notes."
+      : this.recoverClosedSession
       ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved."
       : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved."});
     const details = this.contentEl.createEl("pre", {text: this.reason});
     details.style.whiteSpace = 'pre-wrap';
     details.style.overflowWrap = 'anywhere';
-    this.contentEl.createEl("p", {text: this.recoverClosedSession
+    this.contentEl.createEl("p", {text: this.waitingForOwner
+      ? "The active execution keeps its reservation. No task will be resumed or repeated when this panel loads."
+      : this.recoverClosedSession
       ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
       : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
     if (this.recoverClosedSession) {
