@@ -11,8 +11,11 @@ test('distributed ZIP and its skill support task, workflow, gates, error, stop a
   t.after(()=>{assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(root).startsWith('autooc-package-'));fs.rmSync(root,{recursive:true});});
   const out=path.join(root,'release'),vault=path.join(root,'vault'),install=path.join(vault,'.obsidian/plugins/auto-oc');
   fs.mkdirSync(install,{recursive:true});
-  const packaged=spawnSync(process.execPath,[path.join(repo,'scripts/package-release.mjs'),'--out',out],{cwd:repo,encoding:'utf8',timeout:30000});
-  assert.equal(packaged.status,0,packaged.stderr);
+  // Native compression launches PowerShell alongside other test workers. Its
+  // wall-clock watchdog is separate from the plugin's response-time budget.
+  const packagingStarted=Date.now();
+  const packaged=spawnSync(process.execPath,[path.join(repo,'scripts/package-release.mjs'),'--out',out],{cwd:repo,encoding:'utf8',timeout:60000,windowsHide:true});
+  assert.equal(packaged.status,0,JSON.stringify({command:'node scripts/package-release.mjs --out <fixture>',elapsedMs:Date.now()-packagingStarted,status:packaged.status,signal:packaged.signal,error:packaged.error?.message,stderr:packaged.stderr,stdout:packaged.stdout}));
   const zip=path.join(out,fs.readdirSync(out).find(name=>name.endsWith('.zip')));
   const unpacked=process.platform==='win32'
     ? spawnSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${zip.replace(/'/g,"''")}' -DestinationPath '${install.replace(/'/g,"''")}'`],{encoding:'utf8',timeout:30000})

@@ -7,13 +7,33 @@ import { standaloneTaskWorkflow } from "./standalone-task";
 import { recoverExecutionLease,readExecutionLeaseOwner } from "./execution-lease";
 import { answerWorkflowApproval } from "./workflow-approval";
 import { abandonInstalledExecution } from "./execution-abandonment";
-import {requestPluginExecution} from "./cli-plugin-requests";
+import {requestPluginExecution,requestPluginWorkflowEdit} from "./cli-plugin-requests";
+import {workflowEditDefinition,workflowEditHash,validWorkflowEdit} from "./workflow-edit";
 import {resolveInstalledWorkflowLocation} from "./installed-workflow-location";
 declare const AUTOOC_VERSION: string;
 const version = AUTOOC_VERSION;
 
 async function main(args: string[]) {
   const [command, ...rest] = args;
+  if(command==="export-workflow"||command==="edit-workflow") {
+    const last=command==="export-workflow"?"--out":"--patch";
+    if(rest.length!==6||rest[0]!=="--vault"||rest[2]!=="--workflow"||rest[4]!==last||!path.isAbsolute(rest[1])||!path.isAbsolute(rest[5]))throw new Error("Use --vault <absolute path> --workflow <id> "+last+" <absolute JSON file>, in that order");
+    const location=resolveInstalledWorkflowLocation(rest[1]);
+    if(command==="export-workflow") {
+      let catalog:any;try{catalog=JSON.parse(fs.readFileSync(location.configurationFile,"utf8"));}catch{throw new Error("Cannot read valid AutoOC configuration");}
+      const workflows=catalog.workflows?.filter((w:any)=>w.id===rest[3]);
+      if(workflows?.length!==1)throw new Error("Workflow identity is missing or ambiguous");
+      const workflow=workflows[0];
+      fs.writeFileSync(rest[5],JSON.stringify({workflowId:workflow.id,expectedHash:workflowEditHash(workflow),definition:workflowEditDefinition(workflow)},null,2),{flag:"wx",mode:0o600});
+      return {version,workflowId:workflow.id,expectedHash:workflowEditHash(workflow),exported:true};
+    }
+    const stat=fs.lstatSync(rest[5]);
+    if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size>60000)throw new Error("Patch must be a regular JSON file of at most 60KB");
+    let patch:any;try{patch=JSON.parse(fs.readFileSync(rest[5],"utf8"));}catch{throw new Error("Invalid workflow patch JSON");}
+    const edit={command:"edit-workflow" as const,workflowId:rest[3],expectedHash:patch?.expectedHash,changes:patch?.changes};
+    if(!validWorkflowEdit(edit))throw new Error("Invalid workflow patch; export current definition and use expectedHash plus supported changes");
+    return {version,...await requestPluginWorkflowEdit(location.runtimeDirectory,edit)};
+  }
   if(command === "abandon") {
     const keys=["--vault","--workflow","--run","--revision","--reason","--acknowledge-unknown-effects"];
     if(rest.length!==12 || keys.some((key,index)=>rest[index*2]!==key) || !/^(0|[1-9]\d*)$/.test(rest[7]) || rest[11]!=="true") {
@@ -41,8 +61,8 @@ async function main(args: string[]) {
     }
     return {version,...recoverExecutionLease(directory,rest[3])};
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon"], taskSelection:true, pluginRequests:1 };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", experimental: true, foreground:true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon","export-workflow","edit-workflow"], taskSelection:true, pluginRequests:1,workflowEditing:1 };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground:true };
   if (["run","resume","reconcile","stop"].includes(command)) {
     const values = new Map<string,string>();
     const target = rest.includes("--task") ? "--task" : "--workflow";

@@ -53,7 +53,7 @@ __export(autooc_runtime_exports, {
 module.exports = __toCommonJS(autooc_runtime_exports);
 
 // workflow-definition.ts
-var import_crypto = require("crypto");
+var import_crypto2 = require("crypto");
 
 // execution-defaults.ts
 var EXECUTION_DEFAULTS = Object.freeze({
@@ -76,6 +76,233 @@ function effectiveExecutionSettings(settings) {
   return Object.fromEntries(Object.entries(EXECUTION_DEFAULTS).map(([key, value]) => [key, settings[key] === void 0 ? value : settings[key]]));
 }
 
+// cooperative-json.ts
+var import_crypto = require("crypto");
+var import_timers = require("timers");
+var import_perf_hooks = require("perf_hooks");
+var import_util = require("util");
+var CHUNK = 16 * 1024;
+var invalid = () => new SyntaxError("Cannot read valid AutoOC configuration");
+async function run(work) {
+  let deadline = import_perf_hooks.performance.now() + 4;
+  for (; ; ) {
+    const next = work.next();
+    if (next.done) return next.value;
+    if (import_perf_hooks.performance.now() >= deadline) {
+      await new Promise((resolve7) => (0, import_timers.setImmediate)(resolve7));
+      deadline = import_perf_hooks.performance.now() + 4;
+    }
+  }
+}
+async function parseCooperatively(text) {
+  let offset = 0, budget = CHUNK;
+  const decoded = /* @__PURE__ */ new Map();
+  let decodedSize = 0;
+  const strings = /* @__PURE__ */ new Map();
+  let stringsSize = 0;
+  function decode(source) {
+    const previous = decoded.get(source);
+    if (previous !== void 0) return previous;
+    const value2 = JSON.parse('"' + source + '"');
+    const size = 2 * (source.length + value2.length);
+    if (decodedSize + size <= 1024 * 1024 && decoded.size < 1024) {
+      decoded.set(source, value2);
+      decodedSize += size;
+    }
+    return value2;
+  }
+  function* step() {
+    if (--budget <= 0) {
+      budget = CHUNK;
+      yield;
+    }
+  }
+  function* whitespace() {
+    while (offset < text.length && /[\x20\t\r\n]/.test(text[offset])) {
+      offset++;
+      yield* step();
+    }
+  }
+  function* string() {
+    if (text[offset++] !== '"') throw invalid();
+    const start = offset, boundaries = [];
+    let chunkStart = start;
+    while (offset < text.length) {
+      const char = text.charCodeAt(offset++);
+      if (char === 34) {
+        const end = offset - 1, length = end - start;
+        const encoded = length >= CHUNK && length <= 4 * 1024 * 1024 ? text.slice(start, end) : void 0;
+        const previous = encoded === void 0 ? void 0 : strings.get(encoded);
+        if (previous !== void 0) return previous;
+        const pieces = [];
+        chunkStart = start;
+        for (const boundary of boundaries) {
+          pieces.push(decode(text.slice(chunkStart, boundary)));
+          chunkStart = boundary;
+          yield;
+        }
+        pieces.push(decode(text.slice(chunkStart, end)));
+        const value2 = pieces.join("");
+        const size = encoded === void 0 ? 0 : 2 * (encoded.length + value2.length);
+        if (encoded !== void 0 && strings.size < 1024 && stringsSize + size <= 16 * 1024 * 1024) {
+          strings.set(encoded, value2);
+          stringsSize += size;
+        }
+        return value2;
+      }
+      if (char < 32) throw invalid();
+      if (char === 92) {
+        if (text[offset] === "u") offset += 5;
+        else offset++;
+      }
+      if (offset - chunkStart >= CHUNK) {
+        boundaries.push(offset);
+        chunkStart = offset;
+        yield;
+      }
+    }
+    throw invalid();
+  }
+  const stack = [];
+  let root;
+  function accept(item) {
+    const parent = stack[stack.length - 1];
+    if (!parent) {
+      root = item;
+      return;
+    }
+    if (parent.array) parent.result.push(item);
+    else Object.defineProperty(parent.result, parent.key, { value: item, writable: true, enumerable: true, configurable: true });
+    parent.state = "separator";
+  }
+  function* value() {
+    yield* whitespace();
+    const char = text[offset];
+    if (char === '"') {
+      accept(yield* string());
+      return;
+    }
+    if (char === "{" || char === "[") {
+      const array = char === "[", result = array ? [] : {};
+      accept(result);
+      offset++;
+      stack.push({ array, result, state: "first" });
+      return;
+    }
+    const start = offset;
+    while (offset < text.length && !/[\x20\t\r\n,\]}]/.test(text[offset])) {
+      offset++;
+      yield* step();
+    }
+    if (offset === start) throw invalid();
+    accept(JSON.parse(text.slice(start, offset)));
+  }
+  try {
+    return await run(function* () {
+      yield* value();
+      while (stack.length) {
+        yield* step();
+        yield* whitespace();
+        const frame = stack[stack.length - 1], end = frame.array ? "]" : "}";
+        if (frame.state === "first" && text[offset] === end) {
+          offset++;
+          stack.pop();
+          continue;
+        }
+        if (frame.state === "separator") {
+          const separator = text[offset++];
+          if (separator === end) {
+            stack.pop();
+            continue;
+          }
+          if (separator !== ",") throw invalid();
+          frame.state = frame.array ? "value" : "key";
+          continue;
+        }
+        if (!frame.array && (frame.state === "first" || frame.state === "key")) {
+          frame.key = yield* string();
+          yield* whitespace();
+          if (text[offset++] !== ":") throw invalid();
+          frame.state = "value";
+          continue;
+        }
+        yield* value();
+      }
+      yield* whitespace();
+      if (offset !== text.length) throw invalid();
+      return root;
+    }());
+  } catch {
+    throw invalid();
+  }
+}
+function captureJsonStructure(value, space = 2) {
+  const strings = [];
+  const skeleton = JSON.stringify(value, (_key, item) => {
+    if (import_util.types.isStringObject(item)) item = String(item);
+    if (typeof item !== "string") return item;
+    const index = strings.push(item) - 1;
+    return `@autooc-string-${index}`;
+  }, space);
+  if (skeleton === void 0) throw new Error("Settings are not serializable");
+  return { skeleton, strings };
+}
+function cloneJsonStructure(value) {
+  return cloneCapturedJson(captureJsonStructure(value));
+}
+function cloneCapturedJson({ skeleton, strings }) {
+  return JSON.parse(skeleton, (_key, item) => typeof item === "string" && /^@autooc-string-\d+$/.test(item) ? strings[Number(item.slice(15))] : item);
+}
+function encodeCapturedJson({ skeleton, strings }) {
+  return function* () {
+    const markers = /"@autooc-string-(\d+)"(?!\s*:)/g;
+    let previous = 0, match;
+    while (match = markers.exec(skeleton)) {
+      yield skeleton.slice(previous, match.index);
+      yield '"';
+      const source = strings[Number(match[1])];
+      for (let start = 0; start < source.length; ) {
+        let end = Math.min(start + CHUNK, source.length);
+        if (end < source.length && source.charCodeAt(end - 1) >= 55296 && source.charCodeAt(end - 1) <= 56319 && source.charCodeAt(end) >= 56320 && source.charCodeAt(end) <= 57343) end--;
+        yield JSON.stringify(source.slice(start, end)).slice(1, -1);
+        start = end;
+      }
+      yield '"';
+      previous = markers.lastIndex;
+    }
+    yield skeleton.slice(previous);
+  }();
+}
+async function consume(parts, accept) {
+  await run(function* () {
+    for (const part of parts) {
+      accept(part);
+      yield;
+    }
+  }());
+}
+async function hashJsonCooperatively(value) {
+  const source = encodeCapturedJson(captureJsonStructure(value)), hash = (0, import_crypto.createHash)("sha256");
+  await consume(source, (part) => {
+    hash.update(part, "utf8");
+  });
+  return hash.digest("hex");
+}
+async function hashTextCooperatively(text) {
+  const hash = (0, import_crypto.createHash)("sha256");
+  await consume(function* () {
+    for (let start = 0; start < text.length; ) {
+      let end = Math.min(start + CHUNK, text.length);
+      if (end < text.length && text.charCodeAt(end - 1) >= 55296 && text.charCodeAt(end - 1) <= 56319 && text.charCodeAt(end) >= 56320 && text.charCodeAt(end) <= 57343) end--;
+      yield text.slice(start, end);
+      start = end;
+    }
+  }(), (part) => {
+    hash.update(part, "utf8");
+  });
+  return hash.digest("hex");
+}
+
 // workflow-definition.ts
 var runtimeFields = /* @__PURE__ */ new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 function withoutRuntime(value) {
@@ -93,7 +320,7 @@ function freeze(value) {
   }
   return value;
 }
-function prepareWorkflowDefinition(workflow, tasks, settings) {
+function definitionPayload(workflow, tasks, settings) {
   if (!workflow.id || !workflow.steps.length || new Set(workflow.steps.map((s) => s.id)).size !== workflow.steps.length) throw new Error("Invalid workflow identity or steps");
   const refs = [...new Set(workflow.steps.filter((s) => s.stepKind === "task" || !s.stepKind && s.taskId).map((s) => s.taskId))];
   const selected = refs.map((id) => {
@@ -101,8 +328,13 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
     if (!id || matches.length !== 1) throw new Error("Missing or ambiguous referenced task");
     return withoutRuntime(matches[0]);
   });
-  const payload = canonical({ workflow: { ...withoutRuntime(workflow), steps: workflow.steps.map((s) => withoutRuntime(s)) }, tasks: selected, settings: effectiveExecutionSettings(settings) });
-  const hash = (0, import_crypto.createHash)("sha256").update(JSON.stringify(payload)).digest("hex");
+  return canonical({ workflow: { ...withoutRuntime(workflow), steps: workflow.steps.map((s) => withoutRuntime(s)) }, tasks: selected, settings: effectiveExecutionSettings(settings) });
+}
+function prepareWorkflowDefinition(workflow, tasks, settings) {
+  const payload = definitionPayload(workflow, tasks, settings);
+  const digest = (0, import_crypto2.createHash)("sha256");
+  for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
+  const hash = digest.digest("hex");
   return freeze({ ...payload, hash });
 }
 
@@ -126,7 +358,7 @@ var fs7 = __toESM(require("fs"));
 // execution-lease.ts
 var fs2 = __toESM(require("fs"));
 var path2 = __toESM(require("path"));
-var import_crypto2 = require("crypto");
+var import_crypto3 = require("crypto");
 function acquireExecutionLease(runtimeDirectory) {
   const root = fs2.realpathSync(runtimeDirectory);
   if (fs2.existsSync(path2.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
@@ -134,7 +366,7 @@ function acquireExecutionLease(runtimeDirectory) {
   if (fs2.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
   const lock = path2.join(root, "execution.lock");
   const ownerPath = path2.join(lock, "owner.json");
-  const token = (0, import_crypto2.randomUUID)();
+  const token = (0, import_crypto3.randomUUID)();
   fs2.mkdirSync(lock);
   if (fs2.existsSync(recovery)) {
     fs2.rmdirSync(lock);
@@ -210,16 +442,20 @@ function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
 // execution-journal.ts
 var fs4 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
-var import_crypto4 = require("crypto");
+var import_crypto5 = require("crypto");
 
 // settings-writer.ts
 var fs3 = __toESM(require("fs"));
 var path3 = __toESM(require("path"));
-var import_crypto3 = require("crypto");
-var SettingsWriter = class {
+var import_crypto4 = require("crypto");
+var import_string_decoder = require("string_decoder");
+var import_perf_hooks2 = require("perf_hooks");
+var import_timers2 = require("timers");
+var SettingsWriter = class _SettingsWriter {
   constructor() {
     this.tail = Promise.resolve();
     this.observed = /* @__PURE__ */ new Map();
+    this.cached = /* @__PURE__ */ new Map();
     this.pending = 0;
   }
   async drain() {
@@ -229,43 +465,126 @@ var SettingsWriter = class {
   get hasPendingWrites() {
     return this.pending > 0;
   }
+  fork() {
+    const fork = new _SettingsWriter();
+    for (const [file, version] of this.observed) fork.observed.set(file, { ...version });
+    for (const [file, value] of this.cached) fork.cached.set(file, cloneJsonStructure(value));
+    return fork;
+  }
+  confirmedVersion(file) {
+    const version = this.observed.get(path3.resolve(file));
+    if (!version) throw new Error("Catalog has no confirmed version");
+    return { ...version };
+  }
+  adoptConfirmed(file, version, accept) {
+    this.pending++;
+    const operation = this.tail.then(async () => {
+      if (!version.textHash || !/^[a-f0-9]{64}$/.test(version.textHash) || version.valueHash !== version.textHash || await settingsFingerprint(file) !== version.textHash) {
+        throw new Error("AutoOC confirmed catalog changed externally; reload before saving");
+      }
+      if (!accept()) throw new Error("AutoOC settings changed while loading; reload before saving");
+      this.observed.set(path3.resolve(file), { ...version });
+      this.cached.delete(path3.resolve(file));
+    });
+    const tracked = operation.finally(() => {
+      this.pending--;
+    });
+    this.tail = tracked.then(() => {
+    }, () => {
+    });
+    return tracked;
+  }
+  async assertUnchanged(file) {
+    const observed = this.observed.get(path3.resolve(file));
+    if (!observed || await settingsFingerprint(file) !== observed.textHash) {
+      throw new Error("AutoOC configuration changed during preflight; reload before execution");
+    }
+  }
   // Read exactly the version against which subsequent writes are compared.
   // A missing file is distinct from an existing empty/null configuration.
   load(file) {
     const text = readSettingsText(file);
     const value = parseSettings(text);
-    this.observed.set(path3.resolve(file), text);
+    const hash = (source) => (0, import_crypto4.createHash)("sha256").update(source, "utf8").digest("hex");
+    this.observed.set(path3.resolve(file), {
+      textHash: text === null ? null : hash(text),
+      valueHash: text === null ? null : hash(JSON.stringify(value, null, 2))
+    });
+    this.cached.set(path3.resolve(file), cloneJsonStructure(value));
     return value;
   }
-  save(file, snapshot) {
+  // Share the write queue: a late load cannot change the baseline of an
+  // in-flight save. The caller may reject publication after a local edit.
+  loadAsync(file, accept = () => true) {
+    this.pending++;
+    const operation = this.tail.then(async () => {
+      file = path3.resolve(file);
+      const observed = this.observed.get(file);
+      if (observed && this.cached.has(file) && await settingsFingerprint(file) === observed.textHash) {
+        if (!accept()) throw new Error("AutoOC settings changed while loading; reload before saving");
+        return cloneJsonStructure(this.cached.get(file));
+      }
+      let text = await readSettingsTextAsync(file);
+      const value = text === null ? null : await parseCooperatively(text);
+      const missing = text === null, textHash = missing ? null : await hashTextCooperatively(text);
+      text = null;
+      const version = { textHash, valueHash: missing ? null : await hashJsonCooperatively(value) };
+      if (!accept()) throw new Error("AutoOC settings changed while loading; reload before saving");
+      this.observed.set(file, version);
+      this.cached.set(file, cloneJsonStructure(value));
+      return value;
+    });
+    const tracked = operation.finally(() => {
+      this.pending--;
+    });
+    this.tail = tracked.then(() => {
+    }, () => {
+    });
+    return tracked;
+  }
+  save(file, snapshot, validate) {
     this.pending++;
     const operation = this.tail.then(async () => {
       file = path3.resolve(file);
       await fs3.promises.mkdir(path3.dirname(file), { recursive: true });
       const lock = file + ".write-lock";
-      const token = (0, import_crypto3.randomUUID)();
+      const token = (0, import_crypto4.randomUUID)();
       const descriptor = fs3.openSync(lock, "wx", 384);
       try {
         fs3.writeFileSync(descriptor, token);
-        fs3.fsyncSync(descriptor);
+        await new Promise((resolve7, reject) => fs3.fsync(descriptor, (error) => error ? reject(error) : resolve7()));
       } finally {
         fs3.closeSync(descriptor);
       }
       try {
-        const current = readSettingsText(file);
-        if (!this.observed.has(file)) {
-          parseSettings(current);
-        } else if (this.observed.get(file) !== current) {
-          const currentValue = parseSettings(current);
-          const previous = this.observed.get(file);
-          if (previous === null || current === null || JSON.stringify(parseSettings(previous)) !== JSON.stringify(currentValue)) {
+        const observed = this.observed.get(file), currentHash = await settingsFingerprint(file);
+        if (!observed || observed.textHash !== currentHash) {
+          const current = await readSettingsTextAsync(file);
+          const currentValue = current === null ? null : await parseCooperatively(current);
+          if (observed && (observed.textHash === null || current === null || observed.valueHash !== await hashJsonCooperatively(currentValue))) {
             throw new Error("AutoOC configuration changed externally; reload before saving");
           }
         }
-        const serialized = JSON.stringify(snapshot(), null, 2);
-        if (serialized === void 0) throw new Error("Settings are not serializable");
-        await atomicSettingsTextWrite(file, serialized);
-        this.observed.set(file, serialized);
+        validate?.();
+        const captured = captureJsonStructure(snapshot());
+        if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
+          throw new Error("Settings write lock ownership changed");
+        }
+        if (await settingsFingerprint(file) !== currentHash) {
+          throw new Error("AutoOC configuration changed during preparation; reload before saving");
+        }
+        const nextHash = await atomicSettingsTextWrite(file, encodeCapturedJson(captured), fs3.promises, async () => {
+          validate?.();
+          if (await settingsFingerprint(file) !== currentHash) {
+            throw new Error("AutoOC configuration changed during replacement; reload before saving");
+          }
+          if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
+            throw new Error("Settings write lock ownership changed");
+          }
+          validate?.();
+        });
+        this.observed.set(file, { textHash: nextHash, valueHash: nextHash });
+        this.cached.set(file, cloneCapturedJson(captured));
       } finally {
         if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
           throw new Error("Settings write lock ownership changed");
@@ -282,6 +601,116 @@ var SettingsWriter = class {
     return tracked;
   }
 };
+function ioBudget() {
+  let started = import_perf_hooks2.performance.now();
+  return () => {
+    if (import_perf_hooks2.performance.now() - started < 4) return;
+    return new Promise((resolve7) => (0, import_timers2.setImmediate)(() => {
+      started = import_perf_hooks2.performance.now();
+      resolve7();
+    }));
+  };
+}
+function sameSettingsFile(before, after) {
+  return after.isFile() && before.dev === after.dev && before.ino === after.ino && before.size === after.size && before.mtimeMs === after.mtimeMs && before.ctimeMs === after.ctimeMs;
+}
+async function settingsFingerprint(file) {
+  let handle;
+  let inspected = false;
+  try {
+    const stat = await fs3.promises.lstat(file);
+    inspected = true;
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Configuration must be a regular file");
+    handle = await fs3.promises.open(file, "r");
+    const opened = await handle.stat();
+    if (!sameSettingsFile(stat, opened)) throw new Error("Configuration identity changed while reading");
+    const buffer = Buffer.allocUnsafe(256 * 1024), hash = (0, import_crypto4.createHash)("sha256"), budget = ioBudget();
+    let total = 0;
+    for (; ; ) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) {
+        const after = await handle.stat();
+        const current = await fs3.promises.lstat(file);
+        if (total !== opened.size || !sameSettingsFile(opened, after) || current.isSymbolicLink() || !sameSettingsFile(opened, current)) throw new Error("Configuration changed while reading");
+        return hash.digest("hex");
+      }
+      total += bytesRead;
+      if (total > opened.size) throw new Error("Configuration changed while reading");
+      hash.update(buffer.subarray(0, bytesRead));
+      const pause = budget();
+      if (pause) await pause;
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      if (!inspected) return null;
+      throw new Error("Configuration changed while reading");
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+async function readSettingsTextAsync(file) {
+  let inspected = false;
+  try {
+    const stat = await fs3.promises.lstat(file);
+    inspected = true;
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Configuration must be a regular file");
+    const handle = await fs3.promises.open(file, "r");
+    try {
+      const opened = await handle.stat();
+      if (!sameSettingsFile(stat, opened)) throw new Error("Configuration identity changed while reading");
+      let bytes = Buffer.allocUnsafe(opened.size);
+      const budget = ioBudget();
+      for (let offset = 0; offset < bytes.length; ) {
+        const { bytesRead } = await handle.read(bytes, offset, Math.min(256 * 1024, bytes.length - offset), null);
+        if (!bytesRead) throw new Error("Configuration changed while reading");
+        offset += bytesRead;
+        const pause = budget();
+        if (pause) await pause;
+      }
+      const after = await handle.stat();
+      const afterRead = await fs3.promises.lstat(file);
+      if (!sameSettingsFile(opened, after) || afterRead.isSymbolicLink() || !sameSettingsFile(opened, afterRead)) throw new Error("Configuration changed while reading");
+      if (bytes.length <= 256 * 1024) return bytes.toString("utf8");
+      const isAscii = require("buffer").isAscii;
+      let ascii = true;
+      for (let offset = 0; offset < bytes.length; offset += 256 * 1024) {
+        const slice = bytes.subarray(offset, offset + 256 * 1024);
+        if (isAscii ? !isAscii(slice) : slice.some((byte) => byte > 127)) {
+          ascii = false;
+          break;
+        }
+        await new Promise((resolve7) => (0, import_timers2.setImmediate)(resolve7));
+      }
+      if (ascii) {
+        const final2 = await handle.stat();
+        const current2 = await fs3.promises.lstat(file);
+        if (!sameSettingsFile(opened, final2) || current2.isSymbolicLink() || !sameSettingsFile(opened, current2)) throw new Error("Configuration changed while reading");
+        return bytes.toString("utf8");
+      }
+      const decoder = new import_string_decoder.StringDecoder("utf8"), parts = [];
+      for (let offset = 0; offset < bytes.length; offset += 256 * 1024) {
+        parts.push(decoder.write(bytes.subarray(offset, offset + 256 * 1024)));
+        await new Promise((resolve7) => (0, import_timers2.setImmediate)(resolve7));
+      }
+      parts.push(decoder.end());
+      bytes = void 0;
+      const final = await handle.stat();
+      const current = await fs3.promises.lstat(file);
+      if (!sameSettingsFile(opened, final) || current.isSymbolicLink() || !sameSettingsFile(opened, current)) throw new Error("Configuration changed while reading");
+      return parts.join("");
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      if (!inspected) return null;
+      throw new Error("Configuration changed while reading");
+    }
+    throw error;
+  }
+}
 function readSettingsText(file) {
   try {
     const stat = fs3.lstatSync(file);
@@ -309,36 +738,58 @@ async function atomicSettingsWrite(file, data, io = fs3.promises) {
   if (text === void 0) throw new Error("Settings are not serializable");
   await atomicSettingsTextWrite(file, text, io);
 }
-async function atomicSettingsTextWrite(file, text, io = fs3.promises) {
+async function atomicSettingsTextWrite(file, text, io = fs3.promises, beforeReplace) {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path3.dirname(file), { recursive: true });
   let handle;
+  const hash = (0, import_crypto4.createHash)("sha256");
   try {
     handle = await io.open(temp, "wx", 384);
-    await handle.writeFile(text, "utf8");
+    const parts = typeof text === "string" ? [text] : text;
+    let batch = [], size = 0;
+    const flush = async () => {
+      const part = batch.join("");
+      batch = [];
+      size = 0;
+      hash.update(part, "utf8");
+      await handle.writeFile(part, "utf8");
+    };
+    for (const part of parts) for (let start = 0; start < part.length; ) {
+      let end = Math.min(start + 64 * 1024, part.length);
+      if (end < part.length && part.charCodeAt(end - 1) >= 55296 && part.charCodeAt(end - 1) <= 56319 && part.charCodeAt(end) >= 56320 && part.charCodeAt(end) <= 57343) end--;
+      const chunk = part.slice(start, end);
+      batch.push(chunk);
+      size += chunk.length;
+      start = end;
+      if (size >= 64 * 1024) await flush();
+    }
+    if (size) await flush();
     await handle.sync();
     await handle.close();
     handle = void 0;
-    const baseline = await io.readFile(file).catch((error) => {
+    const baseline = beforeReplace ? void 0 : await io.readFile(file).catch((error) => {
       if (error.code === "ENOENT") return null;
       throw error;
     });
     for (let attempt = 0; ; attempt++) {
+      await beforeReplace?.();
       try {
         await io.rename(temp, file);
         break;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code || "") || attempt >= 4) throw error;
         await new Promise((resolve7) => setTimeout(resolve7, 50 * (attempt + 1)));
+        if (beforeReplace) continue;
         const current = await io.readFile(file).catch((readError) => {
           if (readError.code === "ENOENT") return null;
           throw readError;
         });
-        if (baseline === null ? current !== null : current === null || !baseline.equals(current)) {
+        if (baseline == null ? current !== null : current === null || !baseline.equals(current)) {
           throw new Error("AutoOC configuration changed during replacement; reload before saving");
         }
       }
     }
+    return hash.digest("hex");
   } finally {
     if (handle) await handle.close().catch(() => {
     });
@@ -393,7 +844,7 @@ var ExecutionJournal = class _ExecutionJournal {
   }
   static async create(lease, workflowId, definitionHash, entryStep) {
     lease.assertOwned();
-    const state = { schemaVersion: 1, runId: (0, import_crypto4.randomUUID)(), workflowId, definitionHash, revision: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), phase: "ready", nextStepId: entryStep, steps: [] };
+    const state = { schemaVersion: 1, runId: (0, import_crypto5.randomUUID)(), workflowId, definitionHash, revision: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), phase: "ready", nextStepId: entryStep, steps: [] };
     validateExecutionCheckpoint(state);
     const file = path4.join(lease.directory, state.runId + ".json");
     if (fs4.existsSync(file)) throw new Error("Execution identity already exists");
@@ -1026,7 +1477,7 @@ function verifyWorkflowBranch(journal, vault) {
 // workflow-approval.ts
 var fs6 = __toESM(require("fs"));
 var path7 = __toESM(require("path"));
-var import_crypto5 = require("crypto");
+var import_crypto6 = require("crypto");
 function responseFile(directory, runId, token) {
   if (!/^[a-f0-9-]+$/.test(token)) throw new Error("Invalid approval identity");
   return path7.join(directory, `${runId}-${token}.approval.json`);
@@ -1046,7 +1497,7 @@ function answerWorkflowApproval(directory, runId, token, approved) {
   return { runId, approval: token, decision: approved ? "approve" : "deny", recorded: true };
 }
 async function awaitWorkflowApproval(journal, directory, request, redact, signal, onCheckpoint) {
-  const token = (0, import_crypto5.randomUUID)(), runId = journal.snapshot().runId;
+  const token = (0, import_crypto6.randomUUID)(), runId = journal.snapshot().runId;
   const ownerToken = readExecutionLeaseOwner(directory).token;
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await onCheckpoint?.(journal.snapshot());
@@ -1151,10 +1602,24 @@ async function runCodeWorkflowHost(options) {
             definition.workflow,
             previous ? { stepId: previous.stepId, output: previous.output || "" } : void 0
           );
-          return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
-            await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
-            await options.onCheckpoint?.(journal.snapshot());
-          }, { approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint) });
+          let observing = true;
+          try {
+            return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
+              await journal.recordCodexThread(step.id, threadId, turnId, stepIndex);
+              await options.onCheckpoint?.(journal.snapshot());
+            }, {
+              approve: (request, lifetime) => awaitWorkflowApproval(journal, options.runtimeDirectory, request, options.redact, lifetime || signal, options.onCheckpoint),
+              onOutput: options.onTaskOutput ? (output) => {
+                if (!observing || signal?.aborted) return;
+                lease.assertOwned();
+                const state = journal.snapshot();
+                if (state.phase !== "in_flight" || state.steps.length - 1 !== stepIndex || state.steps[stepIndex].stepId !== step.id) return;
+                options.onTaskOutput({ runId: state.runId, workflowId: state.workflowId, taskId: task.id, stepId: step.id, stepIndex, output: options.redact(output) });
+              } : void 0
+            });
+          } finally {
+            observing = false;
+          }
         }
         if (step.stepKind === "delay") {
           const spec = workflowDelay(step.delayValue, step.delayUnit);
@@ -1201,6 +1666,9 @@ function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expected
   validateProgressBinding(workflow, checkpoint, expectedRunId);
   const definition = prepareWorkflowDefinition(workflow, tasks, settings);
   if (checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
+  return projectPreparedProgress(workflow, checkpoint, activelyExecuting);
+}
+function projectPreparedProgress(workflow, checkpoint, activelyExecuting = false) {
   const last = new Map(checkpoint.steps.map((step) => [step.stepId, step]));
   if (checkpoint.steps.some((step) => !workflow.steps.some((known) => known.id === step.stepId))) throw new Error("Progress contains an unknown step");
   if (checkpoint.nextStepId && !workflow.steps.some((known) => known.id === checkpoint.nextStepId)) throw new Error("Progress next step is absent");
@@ -1292,8 +1760,8 @@ async function persistWorkflowProgress(options) {
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
   }
-  const writer = new SettingsWriter();
-  const config = writer.load(options.configurationFile);
+  const writer = options.writer || new SettingsWriter();
+  const config = await writer.loadAsync(options.configurationFile);
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
     throw new Error("Invalid AutoOC catalog");
   }
@@ -1367,9 +1835,17 @@ async function persistWorkflowProgress(options) {
   const next = { ...config, tasks, workflows: virtual ? config.workflows : config.workflows.map((workflow2) => workflow2 === matches[0] ? projected : workflow2) };
   await writer.save(options.configurationFile, () => next);
   if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
+  return {
+    catalog: next,
+    version: writer.confirmedVersion(options.configurationFile),
+    runId: durable.runId,
+    workflowId: durable.workflowId,
+    revision: durable.revision
+  };
 }
 
 // installed-workflow-host.ts
+var fs17 = __toESM(require("fs"));
 var path16 = __toESM(require("path"));
 
 // code-task.ts
@@ -1421,7 +1897,7 @@ async function executeCodexTask(client, request) {
 
 // codex-client.ts
 var import_child_process2 = require("child_process");
-var import_string_decoder = require("string_decoder");
+var import_string_decoder2 = require("string_decoder");
 var fs9 = __toESM(require("fs"));
 var os = __toESM(require("os"));
 var path9 = __toESM(require("path"));
@@ -1437,7 +1913,7 @@ var JsonLineRpcPeer = class {
     this.onMessage = onMessage;
     this.buffer = "";
     // stdout may split a UTF-8 character across data events. Keep bytes per peer.
-    this.decoder = new import_string_decoder.StringDecoder("utf8");
+    this.decoder = new import_string_decoder2.StringDecoder("utf8");
     this.nextId = 1;
     this.pending = /* @__PURE__ */ new Map();
   }
@@ -2353,26 +2829,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
   }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
-  const fs19 = require("fs");
+  const fs20 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs19.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs20.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn4 } = require("child_process");
   const child = spawn4("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs19.unlinkSync(launcherFile);
+      fs20.unlinkSync(launcherFile);
     } catch {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs19.unlinkSync(psScriptFile);
+      fs20.unlinkSync(psScriptFile);
     } catch {
     }
   }, 6e5);
@@ -2380,12 +2856,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs19.unlinkSync(launcherFile);
+      fs20.unlinkSync(launcherFile);
     } catch {
     }
     if (removeScript) {
       try {
-        fs19.unlinkSync(psScriptFile);
+        fs20.unlinkSync(psScriptFile);
       } catch {
       }
     }
@@ -2407,7 +2883,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs19.existsSync(effectivePidFile) ? String(fs19.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs20.existsSync(effectivePidFile) ? String(fs20.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn4("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -2416,7 +2892,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs19.unlinkSync(effectivePidFile);
+      fs20.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -2437,18 +2913,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
   };
 }
 function launchHiddenSh(shScriptFile, pidFile) {
-  const fs19 = require("fs");
+  const fs20 = require("fs");
   const { spawn: spawn4 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs19.chmodSync(shScriptFile, 448);
+    fs20.chmodSync(shScriptFile, 448);
   } catch {
   }
   const child = spawn4("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs19.unlinkSync(shScriptFile);
+      fs20.unlinkSync(shScriptFile);
     } catch {
     }
   }, 6e5);
@@ -2456,7 +2932,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs19.unlinkSync(shScriptFile);
+        fs20.unlinkSync(shScriptFile);
       } catch {
       }
     }
@@ -2477,7 +2953,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs19.existsSync(effectivePidFile) ? String(fs19.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs20.existsSync(effectivePidFile) ? String(fs20.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -2492,7 +2968,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs19.unlinkSync(effectivePidFile);
+      fs20.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -2792,7 +3268,7 @@ function createCopilotWorkflowAdapter(definition, vault) {
 }
 function createOpenCodeWorkflowAdapter(definition, vault) {
   const supports = (task) => !task.taskKind || task.taskKind === "opencode";
-  return { supports, async execute(task, prompt, signal) {
+  return { supports, async execute(task, prompt, signal, _recordThread, interaction) {
     if (!supports(task)) throw new Error("Unsupported OpenCode task");
     if (signal?.aborted) throw new Error("OpenCode cancelled before launch");
     const taskCwd = task.workingDirectory || definition.settings.workingDirectory || vault;
@@ -2836,17 +3312,25 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
+        const read = (file) => fs13.existsSync(file) ? decodeCommandBuffer(fs13.readFileSync(file)) : "";
+        let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
           try {
             if (timeout > 0 && Date.now() - started > timeout) {
               abort();
               return;
             }
-            if (!fs13.existsSync(doneFile)) return;
+            const completed = fs13.existsSync(doneFile);
+            if (!completed && (!interaction?.onOutput || Date.now() < nextOutputAt)) return;
+            const output = formatTaskOutput(read(outFile), read(errFile));
+            if (output !== lastOutput) {
+              lastOutput = output;
+              interaction?.onOutput?.(output);
+            }
+            nextOutputAt = Date.now() + 500;
+            if (!completed) return;
             const exit = fs13.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
-            const read = (file) => fs13.existsSync(file) ? decodeCommandBuffer(fs13.readFileSync(file)) : "";
-            const output = formatTaskOutput(read(outFile), read(errFile));
             known = true;
             finish();
             resolve7({ succeeded: exit === "0", output: output || "(no output)" });
@@ -2906,7 +3390,7 @@ function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations) {
 // workflow-stop.ts
 var fs14 = __toESM(require("fs"));
 var path13 = __toESM(require("path"));
-var import_crypto6 = require("crypto");
+var import_crypto7 = require("crypto");
 function readStopRequest(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
   const file = path13.join(directory, runId + ".stop.json");
@@ -2932,7 +3416,7 @@ async function requestWorkflowStop(directory, runId) {
   const state = readExecutionCheckpoint(directory, runId);
   if (["completed", "failed", "abandoned"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
   readStopRequest(directory, runId);
-  const requestId = (0, import_crypto6.randomUUID)();
+  const requestId = (0, import_crypto7.randomUUID)();
   await atomicSettingsWrite(path13.join(directory, runId + ".stop.json"), { schemaVersion: 1, runId, requestId });
   return { runId, requestId, requested: true, phase: state.phase };
 }
@@ -3062,6 +3546,7 @@ function ensureInstalledWorkflowRuntime(location) {
 }
 
 // installed-workflow-host.ts
+var preparingInstallations = /* @__PURE__ */ new Set();
 async function runInstalledWorkflow(options) {
   if (!path16.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
@@ -3071,76 +3556,93 @@ async function runInstalledWorkflow(options) {
     options.lease.assertOwned();
     if (!samePhysicalPath(options.lease.directory, runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
   }
-  const config = new SettingsWriter().load(configurationFile);
-  if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
-  if (config.tasks.some((task) => task.status === "running") || config.workflows.some((workflow) => workflow.status === "running")) {
-    throw new Error("Catalog has unresolved running activity; verify its owner before execution");
-  }
-  const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
-  if (virtual && config.workflows.some((workflow) => workflow.id === virtual.id)) throw new Error("Reserved task identity conflicts with a workflow");
-  const matches = virtual ? config.tasks.filter((task) => task.id === options.taskId) : config.workflows.filter((workflow) => workflow.id === options.workflowId);
-  if (matches.length !== 1) throw new Error("Missing or ambiguous workflow identity");
-  if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
-    throw new Error("Workflow has a bound execution; select that identity explicitly");
-  }
-  const definition = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
-  preflightInstalledWorkflow(definition, vault);
-  ensureInstalledWorkflowRuntime(location);
-  const replaceCompletedRunId = options.newExecution ? matches[0].runtimeExecution?.runId : void 0;
-  if (replaceCompletedRunId) {
-    const previous = readExecutionCheckpoint(runtimeDirectory, replaceCompletedRunId);
-    const binding = matches[0].runtimeExecution;
-    const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition.workflow.id;
-    validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId);
-    if (!["completed", "failed", "abandoned"].includes(previous.phase)) {
-      throw new Error("Cannot replace an unfinished execution");
-    }
-  }
-  let activeRunId = options.resumeRunId;
-  const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
-  const controller = new AbortController();
-  const abort = () => controller.abort();
-  options.signal?.addEventListener("abort", abort, { once: true });
-  if (options.signal?.aborted) abort();
-  let stopError;
-  const checkStop = () => {
-    if (!activeRunId) return;
-    try {
-      const request = readStopRequest(runtimeDirectory, activeRunId);
-      if (request && request !== acknowledged) abort();
-    } catch (error) {
-      stopError = error;
-      abort();
-    }
-  };
-  const timer = setInterval(checkStop, 100);
-  timer.unref?.();
+  if (preparingInstallations.has(runtimeDirectory)) throw Object.assign(new Error("Installation already has an advancing session"), { code: "EEXIST" });
+  preparingInstallations.add(runtimeDirectory);
+  let ownedLease;
   try {
-    const result = await runCodeWorkflowHost({
-      definition,
-      runtimeDirectory,
-      vaultBase: vault,
-      resumeRunId: options.resumeRunId,
-      reconcile: options.reconcile,
-      maxSteps: options.maxSteps,
-      signal: controller.signal,
-      redact: options.redact,
-      lease: options.lease,
-      vaultMutations: options.vaultMutations,
-      tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
-      evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
-      onCheckpoint: async (checkpoint) => {
-        activeRunId = checkpoint.runId;
-        checkStop();
-        await persistWorkflowProgress({ configurationFile, runtimeDirectory, checkpoint, expectedRunId: checkpoint.runId, replaceCompletedRunId, taskId: options.taskId, vaultBase: vault });
-        await options.onCheckpoint?.(checkpoint);
+    if (!options.lease && fs17.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
+    const reader = options.catalogWriter || new SettingsWriter();
+    let config = await reader.loadAsync(configurationFile);
+    if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
+    if (config.tasks.some((task) => task.status === "running") || config.workflows.some((workflow) => workflow.status === "running")) {
+      throw new Error("Catalog has unresolved running activity; verify its owner before execution");
+    }
+    const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
+    if (virtual && config.workflows.some((workflow) => workflow.id === virtual.id)) throw new Error("Reserved task identity conflicts with a workflow");
+    const matches = virtual ? config.tasks.filter((task) => task.id === options.taskId) : config.workflows.filter((workflow) => workflow.id === options.workflowId);
+    if (matches.length !== 1) throw new Error("Missing or ambiguous workflow identity");
+    if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
+      throw new Error("Workflow has a bound execution; select that identity explicitly");
+    }
+    const definition = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
+    preflightInstalledWorkflow(definition, vault);
+    ensureInstalledWorkflowRuntime(location);
+    if (!options.lease && !ownedLease) ownedLease = acquireExecutionLease(runtimeDirectory);
+    await reader.assertUnchanged(configurationFile);
+    const replaceCompletedRunId = options.newExecution ? matches[0].runtimeExecution?.runId : void 0;
+    if (replaceCompletedRunId) {
+      const previous = readExecutionCheckpoint(runtimeDirectory, replaceCompletedRunId);
+      const binding = matches[0].runtimeExecution;
+      const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition.workflow.id;
+      validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId);
+      if (!["completed", "failed", "abandoned"].includes(previous.phase)) {
+        throw new Error("Cannot replace an unfinished execution");
       }
-    });
-    if (stopError) throw stopError;
-    return result;
+    }
+    config = void 0;
+    let activeRunId = options.resumeRunId;
+    const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted) abort();
+    let stopError;
+    const checkStop = () => {
+      if (!activeRunId) return;
+      try {
+        const request = readStopRequest(runtimeDirectory, activeRunId);
+        if (request && request !== acknowledged) abort();
+      } catch (error) {
+        stopError = error;
+        abort();
+      }
+    };
+    const timer = setInterval(checkStop, 100);
+    timer.unref?.();
+    try {
+      const result = await runCodeWorkflowHost({
+        definition,
+        runtimeDirectory,
+        vaultBase: vault,
+        resumeRunId: options.resumeRunId,
+        reconcile: options.reconcile,
+        maxSteps: options.maxSteps,
+        signal: controller.signal,
+        redact: options.redact,
+        lease: options.lease || ownedLease,
+        vaultMutations: options.vaultMutations,
+        onTaskOutput: options.onTaskOutput,
+        tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
+        evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
+        onCheckpoint: async (checkpoint) => {
+          activeRunId = checkpoint.runId;
+          checkStop();
+          const catalog = await persistWorkflowProgress({ configurationFile, runtimeDirectory, checkpoint, expectedRunId: checkpoint.runId, replaceCompletedRunId, taskId: options.taskId, vaultBase: vault, writer: reader });
+          await options.onCheckpoint?.(checkpoint, catalog);
+        }
+      });
+      if (stopError) throw stopError;
+      return result;
+    } finally {
+      clearInterval(timer);
+      options.signal?.removeEventListener("abort", abort);
+    }
   } finally {
-    clearInterval(timer);
-    options.signal?.removeEventListener("abort", abort);
+    try {
+      ownedLease?.release();
+    } finally {
+      preparingInstallations.delete(runtimeDirectory);
+    }
   }
 }
 
@@ -3163,17 +3665,17 @@ async function abandonInstalledExecution(options) {
 }
 
 // release-update.ts
-var fs18 = __toESM(require("fs"));
+var fs19 = __toESM(require("fs"));
 var path18 = __toESM(require("path"));
-var import_crypto7 = require("crypto");
+var import_crypto8 = require("crypto");
 
 // execution-idle.ts
-var fs17 = __toESM(require("fs"));
+var fs18 = __toESM(require("fs"));
 var path17 = __toESM(require("path"));
 function assertIdleJournals(runtime) {
-  if (fs17.existsSync(path17.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  if (fs18.existsSync(path17.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
   const checkpoints = /* @__PURE__ */ new Map();
-  for (const name of fs17.readdirSync(runtime)) {
+  for (const name of fs18.readdirSync(runtime)) {
     if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
     if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
@@ -3198,7 +3700,7 @@ function verifyRelease(files, expectedVersion) {
     throw new Error("Incomplete or incompatible AutoOC release");
   }
   for (const file of RELEASE_FILES) {
-    if (!Buffer.isBuffer(files[file]) || (0, import_crypto7.createHash)("sha256").update(files[file]).digest("hex") !== descriptor.sha256[file]) {
+    if (!Buffer.isBuffer(files[file]) || (0, import_crypto8.createHash)("sha256").update(files[file]).digest("hex") !== descriptor.sha256[file]) {
       throw new Error(`Release integrity mismatch: ${file}`);
     }
   }
@@ -3212,49 +3714,49 @@ function regularPath(root, relative4, create = false) {
     current = path18.join(current, parts[i]);
     let stat;
     try {
-      stat = fs18.lstatSync(current);
+      stat = fs19.lstatSync(current);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
       throw new Error(`Unsafe release destination: ${relative4}`);
     }
-    if (!stat && i < parts.length - 1 && create) fs18.mkdirSync(current);
+    if (!stat && i < parts.length - 1 && create) fs19.mkdirSync(current);
   }
   return current;
 }
 function installRelease(options) {
   const { files, version, lease } = options;
   verifyRelease(files, version);
-  const directory = fs18.realpathSync(options.directory);
-  if (fs18.lstatSync(options.directory).isSymbolicLink() || path18.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
+  const directory = fs19.realpathSync(options.directory);
+  if (fs19.lstatSync(options.directory).isSymbolicLink() || path18.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
   lease.assertOwned();
   const marker = path18.join(lease.directory, "update-pending.json");
-  if (fs18.existsSync(marker)) throw new Error("Previous update requires recovery");
+  if (fs19.existsSync(marker)) throw new Error("Previous update requires recovery");
   assertIdleJournals(lease.directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
-  const backup = path18.join(lease.directory, `update-backup-${(0, import_crypto7.randomUUID)()}`);
-  fs18.mkdirSync(backup);
+  const backup = path18.join(lease.directory, `update-backup-${(0, import_crypto8.randomUUID)()}`);
+  fs19.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
   for (const name of names) {
     const source = regularPath(directory, name);
-    const bytes = fs18.existsSync(source) ? fs18.readFileSync(source) : void 0;
+    const bytes = fs19.existsSync(source) ? fs19.readFileSync(source) : void 0;
     previous.set(name, bytes);
     if (bytes) {
       const target = path18.join(backup, name);
-      fs18.mkdirSync(path18.dirname(target), { recursive: true });
-      fs18.writeFileSync(target, bytes, { flag: "wx" });
+      fs19.mkdirSync(path18.dirname(target), { recursive: true });
+      fs19.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
   const record = { schemaVersion: 1, version, backup: path18.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
-  fs18.writeFileSync(path18.join(backup, "recovery.json"), JSON.stringify(record));
-  const fd = fs18.openSync(marker, "wx");
+  fs19.writeFileSync(path18.join(backup, "recovery.json"), JSON.stringify(record));
+  const fd = fs19.openSync(marker, "wx");
   try {
-    fs18.writeFileSync(fd, JSON.stringify(record));
-    fs18.fsyncSync(fd);
+    fs19.writeFileSync(fd, JSON.stringify(record));
+    fs19.fsyncSync(fd);
   } finally {
-    fs18.closeSync(fd);
+    fs19.closeSync(fd);
   }
   const written = [];
   try {
@@ -3262,20 +3764,20 @@ function installRelease(options) {
       lease.assertOwned();
       const target = regularPath(directory, name, true);
       written.push(name);
-      fs18.writeFileSync(target, files[name]);
+      fs19.writeFileSync(target, files[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs18.readFileSync(regularPath(directory, name))]));
+    const installed = Object.fromEntries(names.map((name) => [name, fs19.readFileSync(regularPath(directory, name))]));
     verifyRelease(installed, version);
-    fs18.unlinkSync(marker);
+    fs19.unlinkSync(marker);
     return { version, backup, installed: names };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath(directory, name);
       const bytes = previous.get(name);
-      if (bytes !== void 0) fs18.writeFileSync(target, bytes);
-      else if (fs18.existsSync(target)) fs18.unlinkSync(target);
+      if (bytes !== void 0) fs19.writeFileSync(target, bytes);
+      else if (fs19.existsSync(target)) fs19.unlinkSync(target);
     }
-    fs18.unlinkSync(marker);
+    fs19.unlinkSync(marker);
     throw error;
   }
 }

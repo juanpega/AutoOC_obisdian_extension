@@ -25,7 +25,7 @@ export function createCopilotWorkflowAdapter(definition:PreparedWorkflow,vault:s
 
 export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:string):WorkflowTaskAdapter {
   const supports=(task:Readonly<Record<string,any>>)=>(!task.taskKind || task.taskKind==='opencode');
-  return {supports,async execute(task,prompt,signal) {
+  return {supports,async execute(task,prompt,signal,_recordThread,interaction) {
     if(!supports(task)) throw new Error("Unsupported OpenCode task");
     if(signal?.aborted) throw new Error("OpenCode cancelled before launch");
     const taskCwd=task.workingDirectory || definition.settings.workingDirectory || vault;
@@ -66,14 +66,19 @@ export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:
         const finish=(error?:Error)=>{if(ended)return;ended=true;clearInterval(timer);signal?.removeEventListener('abort',abort);if(error)reject(error);};
         const abort=()=>{handle.kill();finish(new Error('OpenCode interrupted; effects require reconciliation'));};
         const started=Date.now(),timeout=Number(definition.settings.taskTimeoutSeconds)*1000;
+        const read=(file:string)=>fs.existsSync(file)?decodeCommandBuffer(fs.readFileSync(file)):'';
+        let lastOutput='',nextOutputAt=0;
         const timer=setInterval(()=>{
           try {
             if(timeout>0 && Date.now()-started>timeout) {abort();return;}
-            if(!fs.existsSync(doneFile))return;
+            const completed=fs.existsSync(doneFile);
+            if(!completed && (!interaction?.onOutput || Date.now()<nextOutputAt))return;
+            const output=formatTaskOutput(read(outFile),read(errFile));
+            if(output!==lastOutput){lastOutput=output;interaction?.onOutput?.(output);}
+            nextOutputAt=Date.now()+500;
+            if(!completed)return;
             const exit=fs.readFileSync(doneFile,'utf8').replace(/^\uFEFF/,'').trim();
             if(!/^-?\d+$/.test(exit))throw new Error('Invalid OpenCode completion marker');
-            const read=(file:string)=>fs.existsSync(file)?decodeCommandBuffer(fs.readFileSync(file)):'';
-            const output=formatTaskOutput(read(outFile),read(errFile));
             known=true;finish();resolve({succeeded:exit==='0',output:output || '(no output)'});
           } catch(error) {finish(error as Error);}
         },100);

@@ -1,4 +1,5 @@
-import { projectWorkflowProgress, recoverWorkflowProgress } from "./workflow-progress";
+import { projectWorkflowProgress, recoverWorkflowProgress, recoverWorkflowProgressAsync } from "./workflow-progress";
+import { cloneJsonStructure } from "./cooperative-json";
 import type { RunCheckpoint } from "./execution-journal";
 
 // A single task uses the same coordinator, journal and progress projection as
@@ -11,6 +12,17 @@ export function standaloneTaskWorkflow(taskId:string) {
 export function projectStandaloneTask(task:any,tasks:any[],settings:Record<string,any>,checkpoint:RunCheckpoint,activelyExecuting=false,recovery=false) {
   const workflow={...standaloneTaskWorkflow(task.id),runtimeExecution:task.runtimeExecution};
   const projected=(recovery ? recoverWorkflowProgress : projectWorkflowProgress)(workflow,tasks,settings,checkpoint,task.runtimeExecution.runId,activelyExecuting);
+  return taskProjection(task,workflow,projected,checkpoint);
+}
+
+export async function recoverStandaloneTaskAsync(task:any,tasks:any[],settings:Record<string,any>,checkpoint:RunCheckpoint,activelyExecuting=false) {
+  task=cloneJsonStructure(task);checkpoint=cloneJsonStructure(checkpoint);
+  const workflow={...standaloneTaskWorkflow(task.id),runtimeExecution:task.runtimeExecution};
+  const projected=await recoverWorkflowProgressAsync(workflow,tasks,settings,checkpoint,task.runtimeExecution.runId,activelyExecuting);
+  return taskProjection(task,workflow,projected,checkpoint);
+}
+
+function taskProjection(task:any,workflow:any,projected:any,checkpoint:RunCheckpoint) {
   if (checkpoint.steps.some(step=>step.stepId !== 'task')) throw new Error("Standalone progress contains an unknown step");
   const observed=checkpoint.steps[checkpoint.steps.length-1];
   return {...task,status:projected.status,output:observed?.output || '',

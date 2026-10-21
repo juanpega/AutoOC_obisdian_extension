@@ -15,10 +15,82 @@ function fixture(t){
   plugin.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};
   plugin.createVaultMutationBatch=()=>({record(){},async flush(){}});
   plugin.reservePluginExecution();
-  t.after(()=>{plugin.cliRequestHost?.close();if(plugin.cliRequestTimer!==undefined)clearInterval(plugin.cliRequestTimer);plugin.releasePluginExecution(false);assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(vault).startsWith('autooc-coexist-'));fs.rmSync(vault,{recursive:true,force:true});});
+  t.after(async()=>{plugin.cliRequestHost?.close();if(plugin.cliRequestTimer!==undefined)clearInterval(plugin.cliRequestTimer);await plugin.cliRequestHost?.drain();plugin.releasePluginExecution(false);assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(vault).startsWith('autooc-coexist-'));fs.rmSync(vault,{recursive:true,force:true});});
   return {vault,directory,plugin};
 }
-function cli(vault,...args){return new Promise((resolve,reject)=>{const child=spawn(process.execPath,[path.join(root,'autooc-cli.cjs'),...args,'--vault',vault]);let stdout='',stderr='';child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);child.on('error',reject);child.on('exit',code=>resolve({code,stdout,stderr}));});}
+function cli(vault,...args){return new Promise((resolve,reject)=>{
+  const child=spawn(process.execPath,[path.join(root,'autooc-cli.cjs'),...args,'--vault',vault],{windowsHide:true});
+  let stdout='',stderr='',timedOut=false;
+  // Own only this synthetic child; a failed protocol must not stall the suite.
+  const watchdog=setTimeout(()=>{timedOut=true;child.kill();},45000);
+  child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);
+  child.on('error',error=>{clearTimeout(watchdog);reject(error);});
+  child.on('exit',code=>{clearTimeout(watchdog);if(timedOut)reject(new Error(`Synthetic CLI watchdog expired after 45000ms; stdout=${stdout}; stderr=${stderr}`));else resolve({code,stdout,stderr});});
+});}
+
+test('a local save during an async reload rejects the late load and preserves the edit',async t=>{
+  const {directory,plugin}=fixture(t);await plugin.loadSettings();
+  plugin.settings.syntheticPadding='synthetic'.repeat(3000000);
+  await plugin.saveSettings(false);
+  const loading=plugin.loadSettings();
+  plugin.settings.defaultModel='local-edit';
+  const saving=plugin.saveSettings(false);
+  await assert.rejects(loading,/changed while loading/);
+  await saving;
+  assert.equal(plugin.settings.defaultModel,'local-edit');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(directory,'data.json'))).defaultModel,'local-edit');
+});
+
+test('an unsaved nested local edit during async reload is preserved with an explicit conflict',async t=>{
+  const {plugin}=fixture(t);await plugin.loadSettings();
+  plugin.settings.syntheticPadding='synthetic'.repeat(3000000);
+  await plugin.saveSettings(false);
+  const loading=plugin.loadSettings();
+  plugin.settings.tasks[0].name='unsaved-local-edit';
+  await assert.rejects(loading,/changed while loading/);
+  assert.equal(plugin.settings.tasks[0].name,'unsaved-local-edit');
+  await plugin.saveSettings(false);
+});
+
+test('checkpoints publish a confirmed catalog without full UI rereads',async t=>{
+  const {vault,plugin}=fixture(t);await plugin.loadSettings();
+  let reads=0;const load=plugin.settingsWriter.loadAsync.bind(plugin.settingsWriter);
+  plugin.settingsWriter.loadAsync=(...args)=>{reads++;return load(...args);};
+  await plugin.runSharedWorkflow('@task:single',undefined,false,false,'single');
+  assert.equal(reads,0,'the persisted catalog must be reused, including final projection');
+  assert.equal(plugin.settings.tasks[0].status,'completed');
+  assert.equal(fs.readFileSync(path.join(vault,'effects.txt'),'utf8'),'once');
+});
+
+test('confirmed publication preserves an unsaved local edit and prevents the first effect',async t=>{
+  const {vault,plugin}=fixture(t);await plugin.loadSettings();
+  const adopt=plugin.settingsWriter.adoptConfirmed.bind(plugin.settingsWriter);
+  plugin.settingsWriter.adoptConfirmed=(...args)=>{
+    plugin.settings.tasks[0].name='unsaved-local-name';
+    return adopt(...args);
+  };
+  await assert.rejects(plugin.runSharedWorkflow('@task:single',undefined,false,false,'single'),/changed while loading/);
+  assert.equal(plugin.settings.tasks[0].name,'unsaved-local-name');
+  assert.equal(fs.existsSync(path.join(vault,'effects.txt')),false);
+  await plugin.saveSettings(false);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(vault,'.obsidian/plugins/auto-oc/data.json'))).tasks[0].name,'unsaved-local-name');
+});
+
+test('external edit between confirmed persistence and UI publication is retained without effects',async t=>{
+  const {vault,directory,plugin}=fixture(t);await plugin.loadSettings();
+  const adopt=plugin.settingsWriter.adoptConfirmed.bind(plugin.settingsWriter),file=path.join(directory,'data.json');
+  let edited=false;
+  plugin.settingsWriter.adoptConfirmed=(...args)=>{
+    if(!edited){edited=true;const current=JSON.parse(fs.readFileSync(file));current.unrelatedEdit='external-kept';fs.writeFileSync(file,JSON.stringify(current));}
+    return adopt(...args);
+  };
+  await assert.rejects(plugin.runSharedWorkflow('@task:single',undefined,false,false,'single'),/confirmed catalog changed externally/);
+  assert.equal(JSON.parse(fs.readFileSync(file)).unrelatedEdit,'external-kept');
+  assert.equal(fs.existsSync(path.join(vault,'effects.txt')),false);
+  assert.equal(plugin.settings.unrelatedEdit,'external-kept');
+  await plugin.saveSettings(false);
+  assert.equal(JSON.parse(fs.readFileSync(file)).unrelatedEdit,'external-kept');
+});
 test('CLI runs a task while plugin owns the vault and projects live progress without repeating effects',async t=>{
   const {vault,plugin}=fixture(t);await plugin.loadSettings();
   const observed=[];plugin.refreshOpenViews=()=>observed.push(JSON.parse(JSON.stringify(plugin.settings.tasks[0])));
