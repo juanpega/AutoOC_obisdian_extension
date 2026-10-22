@@ -9,7 +9,7 @@ function load(name){
   m._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,file);return m.exports;
 }
 test('terminal disposition preserves exact historical bytes and only releases individually reviewed uncertainty',async t=>{
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-'));
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-')));
   t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
   fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[],workflows:[]}));
@@ -50,7 +50,7 @@ test('terminal disposition preserves exact historical bytes and only releases in
 });
 
 test('terminal disposition rejects unsafe decisions and preserves evidence on persistence failure and retry',async t=>{
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-'));
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-')));
   t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
   fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[],workflows:[]}));
@@ -71,16 +71,17 @@ test('terminal disposition rejects unsafe decisions and preserves evidence on pe
   assert.deepEqual(fs.readFileSync(file),bytes);assert.equal(readExecutionCheckpoint(runtime,before.runId).disposition,undefined);
   const snapshot=path.join(runtime,`disposition-${before.runId}-${before.revision}.snapshot`);
   assert.deepEqual(fs.readFileSync(snapshot),bytes);
-  const liveOwner=acquireExecutionLease(runtime),originalOpen=fs.promises.open;
+  const liveOwner=acquireExecutionLease(runtime),originalOpen=fs.promises.open;let ownershipFaultInjected=false;
   const ownerFile=path.join(runtime,'execution.lock','owner.json'),ownerBytes=fs.readFileSync(ownerFile);
   fs.promises.open=async function(target,...args){
     const handle=await originalOpen.call(this,target,...args);
     if(String(target).startsWith(file+'.') && String(target).endsWith('.tmp')) {
+      ownershipFaultInjected=true;
       const changed=JSON.parse(ownerBytes);changed.token='changed-owner';fs.writeFileSync(ownerFile,JSON.stringify(changed));
     }
     return handle;
   };
-  try {await assert.rejects(disposeTerminalExecution({...decision,lease:liveOwner}),/ownership/);assert.deepEqual(fs.readFileSync(file),bytes);}
+  try {await assert.rejects(disposeTerminalExecution({...decision,lease:liveOwner}),/ownership/);assert.equal(ownershipFaultInjected,true,'owner fault must reach the physical journal temporary');assert.deepEqual(fs.readFileSync(file),bytes);}
   finally {fs.promises.open=originalOpen;fs.writeFileSync(ownerFile,ownerBytes);liveOwner.release();}
   const result=await disposeTerminalExecution(decision);assert.equal(result.disposition.outcome,'unknown');
   const owner=acquireExecutionLease(runtime);
@@ -90,7 +91,7 @@ test('terminal disposition rejects unsafe decisions and preserves evidence on pe
 });
 
 test('completed history with pending evaluation remains completed and a clean terminal run cannot be disposed',async t=>{
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-'));
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-')));
   t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
   fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[],workflows:[]}));
@@ -108,7 +109,7 @@ test('completed history with pending evaluation remains completed and a clean te
 });
 
 test('maintenance reports a durable disposition even when a subsequent write marker fails its postcondition',async t=>{
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-'));
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-')));
   t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
   const {RELEASE_FILES,RELEASE_DESCRIPTOR}=load('release-update');
@@ -118,19 +119,20 @@ test('maintenance reports a durable disposition even when a subsequent write mar
   const lease=acquireExecutionLease(runtime),j=await ExecutionJournal.create(lease,'wf','a'.repeat(64),'a');
   await j.begin('a');await j.recordResult({succeeded:false,output:'original',cancelled:true});await j.finish('a',false,'original',null);const before=j.snapshot();lease.release();
   const decision={...inspectTerminalExecution({vault,runId:before.runId}),reason:'Individual fixture review',acknowledgedUnknownEffects:true};
-  const rename=fs.promises.rename;
-  fs.promises.rename=async function(from,to){await rename.call(this,from,to);if(to===path.join(runtime,before.runId+'.json'))fs.writeFileSync(path.join(directory,'data.json.write-lock'),'fixture-pending-writer');};
+  const rename=fs.promises.rename;let markerFaultInjected=false;
+  fs.promises.rename=async function(from,to){await rename.call(this,from,to);if(to===path.join(runtime,before.runId+'.json')){markerFaultInjected=true;fs.writeFileSync(path.join(directory,'data.json.write-lock'),'fixture-pending-writer');}};
   try {
     await assert.rejects(load('release-maintenance').maintainRelease({sourceDirectory:root,vault,version:'1.6.8',decisions:[decision]}),error=>{
       const receipt=JSON.parse(error.message);assert.equal(receipt.applied.length,1);assert.equal(receipt.applied[0].runId,before.runId);assert.equal(receipt.loadedInObsidian,false);return true;
     });
   } finally {fs.promises.rename=rename;}
+  assert.equal(markerFaultInjected,true,'write marker fault must reach the physical journal');
   const state=readExecutionCheckpoint(runtime,before.runId);assert.equal(state.disposition.outcome,'unknown');assert.deepEqual(state.steps,before.steps);
   assert.equal(fs.existsSync(path.join(directory,'data.json.write-lock')),true);
 });
 
 for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd51df7bd4955c1c22c6910e']])test(`official transition from authentic ${version} keeps legacy readers conservative and installs individual decisions`,async t=>{
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-transition-'));
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-transition-')));
   t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
   const {RELEASE_FILES,RELEASE_DESCRIPTOR,verifyRelease}=load('release-update');
