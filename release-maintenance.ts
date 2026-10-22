@@ -5,7 +5,7 @@ import {resolveInstalledWorkflowLocation} from './installed-workflow-location';
 import {acquireExecutionLease} from './execution-lease';
 import {inspectTerminalExecution,disposeTerminalExecution} from './execution-abandonment';
 import {readExecutionCheckpoint,dispositionLocation} from './execution-journal';
-import {assertInstalledExecutionIdle} from './execution-idle';
+import {assertInstalledExecutionIdle,assertIdleCatalog} from './execution-idle';
 import {verifyRelease,installRelease,RELEASE_FILES,RELEASE_DESCRIPTOR} from './release-update';
 import {physicalPath} from './path-identity';
 
@@ -38,6 +38,7 @@ export async function maintainRelease(options:{sourceDirectory:string;vault:stri
   verifyRelease(files,options.version);
   const location=resolveInstalledWorkflowLocation(options.vault),identity=dispositionLocation(location);
   if(source===location.installationDirectory)throw new Error('Run maintenance from a separate extracted package');
+  let abandonmentEvidence:Map<string,Buffer>|undefined;
   const assertContext=()=>{
     const current=dispositionLocation(resolveInstalledWorkflowLocation(options.vault));
     if(JSON.stringify(current)!==JSON.stringify(identity))throw new Error('Maintenance installation identity changed');
@@ -46,6 +47,21 @@ export async function maintainRelease(options:{sourceDirectory:string;vault:stri
       fs.readdirSync(location.runtimeDirectory).some(n=>n.endsWith('.tmp') || n.endsWith('.write-lock')))throw new Error('Unfinished write requires reconciliation');
     const catalog=JSON.parse(regular(location.configurationFile).toString('utf8'));
     if(['tasks','workflows'].some(k=>!Array.isArray(catalog[k]) || catalog[k].some((e:any)=>e.status==='running' || e.pendingCodexApproval)))throw new Error('Active catalog requires reconciliation');
+    // Prove existing abandonments BEFORE applying any new decisions or backing
+    // up/installing. Repeat under the lease and immediately before installation.
+    const checkpoints=new Map(fs.readdirSync(location.runtimeDirectory).filter(n=>/^[a-zA-Z0-9-]+\.json$/.test(n)).map(name=>{
+      const state=readExecutionCheckpoint(location.runtimeDirectory,name.slice(0,-5));return [state.runId,state] as const;
+    }));
+    const evidence=new Map<string,Buffer>();
+    for(const state of checkpoints.values())if(state.abandonment)for(const name of [state.runId+'.json',state.abandonment.snapshot]) {
+      evidence.set(name,regular(path.join(location.runtimeDirectory,name)));
+    }
+    if(abandonmentEvidence && (evidence.size!==abandonmentEvidence.size || [...evidence].some(([name,bytes])=>!abandonmentEvidence!.get(name)?.equals(bytes))))throw new Error('Abandonment evidence changed during maintenance');
+    abandonmentEvidence ??= evidence;
+    assertIdleCatalog(Object.fromEntries(['tasks','workflows'].map(kind=>[kind,catalog[kind].filter((entry:any)=>{
+      const binding=entry.runtimeExecution;
+      return binding && (!checkpoints.has(binding.runId) || checkpoints.get(binding.runId)!.phase==='abandoned');
+    })])),checkpoints);
   };
   assertContext();
   if(fs.existsSync(path.join(location.runtimeDirectory,'execution.lock')))throw new Error('Unload AutoOC normally; execution reservation is present');

@@ -38,7 +38,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.6.8",
+      version: "1.6.9",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -3138,6 +3138,7 @@ var import_perf_hooks5 = require("perf_hooks");
 var fs6 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
 var import_crypto6 = require("crypto");
+var import_util2 = require("util");
 
 // settings-writer.ts
 var fs5 = __toESM(require("fs"));
@@ -3792,6 +3793,23 @@ function readExecutionCheckpoint(directory, runId) {
   }
   validateExecutionCheckpoint(state);
   if (state.runId !== runId) throw new Error("Execution identity changed");
+  if (state.abandonment) {
+    const d = state.abandonment, snapshot = path6.join(directory, d.snapshot);
+    let prior;
+    try {
+      const stat2 = fs6.lstatSync(snapshot);
+      if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1) throw new Error("Unsafe abandonment snapshot");
+      prior = JSON.parse(fs6.readFileSync(snapshot, "utf8"));
+      validateExecutionCheckpoint(prior);
+    } catch (e) {
+      throw new Error("Missing, unsafe or invalid abandonment snapshot");
+    }
+    const { abandonment, ...expected } = state;
+    expected.phase = d.previousPhase;
+    expected.nextStepId = d.previousNextStepId;
+    expected.revision = d.previousRevision;
+    if (!(0, import_util2.isDeepStrictEqual)(prior, expected)) throw new Error("Abandonment snapshot does not match checkpoint");
+  }
   if (state.disposition) {
     const d = state.disposition, location = dispositionLocation(d);
     if (physicalPath(directory) !== location.runtimeDirectory || Object.entries(location).some(([key, value]) => d[key] !== value)) throw new Error("Disposition installation identity changed");
@@ -4198,7 +4216,7 @@ function assertIdleJournals(runtime) {
   return checkpoints;
 }
 function assertIdleCatalog(settings, checkpoints) {
-  var _a;
+  var _a, _b;
   if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new Error("Invalid execution configuration");
   for (const kind of ["tasks", "workflows"]) {
     const entries = (_a = settings[kind]) != null ? _a : [];
@@ -4213,8 +4231,22 @@ function assertIdleCatalog(settings, checkpoints) {
       const binding = entry.runtimeExecution;
       if (!binding) continue;
       const checkpoint = checkpoints.get(binding.runId);
-      if (!checkpoint || binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
+      if (!checkpoint) throw new Error("Execution binding requires reconciliation");
       validateProgressBinding({ id: kind === "workflows" ? entry.id : binding.workflowId, runtimeExecution: binding }, checkpoint, binding.runId);
+      if (checkpoint.abandonment) {
+        const d = checkpoint.abandonment;
+        if (kind === "tasks" && checkpoint.workflowId.startsWith("@task:") && checkpoint.workflowId !== `@task:${entry.id}`) throw new Error("Abandonment standalone task identity mismatch");
+        const prior = binding.revision === d.previousRevision && binding.phase === d.previousPhase;
+        const projected = binding.revision === checkpoint.revision && binding.phase === "abandoned" && !binding.requiresReconciliation;
+        if (binding.definitionHash !== checkpoint.definitionHash || !prior && !projected) throw new Error("Abandonment binding phase, hash or revision mismatch");
+        if (kind === "tasks" || binding.stepId !== void 0 || binding.stepIndex !== void 0) {
+          const index = binding.stepIndex;
+          const unstartedTask = kind === "tasks" && checkpoint.workflowId === `@task:${entry.id}` && checkpoint.steps.length === 0 && d.previousPhase === "ready" && binding.stepId === "task" && d.previousNextStepId === "task" && (index === void 0 || index === -1);
+          if (!unstartedTask && (typeof binding.stepId !== "string" || !checkpoint.steps.some((step) => step.stepId === binding.stepId) || index !== void 0 && (!Number.isSafeInteger(index) || index < 0 || ((_b = checkpoint.steps[index]) == null ? void 0 : _b.stepId) !== binding.stepId))) {
+            throw new Error("Abandonment binding step or index mismatch");
+          }
+        }
+      } else if (binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
       if (kind === "tasks" && checkpoint.workflowId !== `@task:${entry.id}` && !checkpoint.steps.some((step) => step.stepId === binding.stepId)) {
         throw new Error("Bound task step is absent from its journal");
       }

@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { randomUUID, createHash } from "crypto";
 import { physicalPath } from "./path-identity";
+import { isDeepStrictEqual } from "util";
 import { atomicSettingsWrite } from "./settings-writer";
 import type { ExecutionLease } from "./execution-lease";
 
@@ -123,6 +124,19 @@ export function readExecutionCheckpoint(directory:string,runId:string):RunCheckp
   catch { throw new Error("Cannot read valid execution checkpoint"); }
   validateExecutionCheckpoint(state);
   if (state.runId !== runId) throw new Error("Execution identity changed");
+  if(state.abandonment) {
+    const d=state.abandonment,snapshot=path.join(directory,d.snapshot);
+    let prior:unknown;
+    try {
+      const stat=fs.lstatSync(snapshot);
+      if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1)throw new Error("Unsafe abandonment snapshot");
+      prior=JSON.parse(fs.readFileSync(snapshot,'utf8'));
+      validateExecutionCheckpoint(prior);
+    } catch {throw new Error("Missing, unsafe or invalid abandonment snapshot");}
+    const {abandonment,...expected}=state;
+    expected.phase=d.previousPhase;expected.nextStepId=d.previousNextStepId;expected.revision=d.previousRevision;
+    if(!isDeepStrictEqual(prior,expected))throw new Error("Abandonment snapshot does not match checkpoint");
+  }
   if(state.disposition) {
     const d=state.disposition,location=dispositionLocation(d);
     if(physicalPath(directory)!==location.runtimeDirectory || Object.entries(location).some(([key,value])=>(d as any)[key]!==value))throw new Error("Disposition installation identity changed");
