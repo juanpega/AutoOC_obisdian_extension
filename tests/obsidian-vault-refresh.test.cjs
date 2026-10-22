@@ -233,23 +233,33 @@ test('built classic task and step wait for refresh, including partial script fai
   }
 });
 
-test('built plugin shared hosts refresh direct steps, referenced tasks and standalone tasks before completion', async t => {
+test('built plugin shared hosts refresh direct steps, referenced tasks and standalone tasks before completion', {timeout:60000}, async t => {
   for (const kind of ['step','referenced','standalone']) {
     const root=fixture(t), install=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(install,{recursive:true});
     const task={id:'task',name:'Code',taskKind:'code',codeAllowVault:true,code:'vault.append("shared.md", "once"); output="done";'};
     const step=kind==='step'?{...task,id:'step',stepKind:'code'}:{id:'step',stepKind:'task',taskId:task.id};
     fs.writeFileSync(path.join(install,'data.json'),JSON.stringify({tasks:[task],workflows:[{id:'wf',name:'WF',steps:[step]}]}));
-    let release, settled=false;
-    const p=new Plugin();p.app={vault:{adapter:adapter(root,()=>new Promise(resolve=>{release=resolve;})),configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
+    let release, settled=false, started, pending, timer;
+    const refreshStarted=new Promise(resolve=>{started=resolve;}), controller=new AbortController();
+    const p=new Plugin();p.app={vault:{adapter:adapter(root,()=>new Promise(resolve=>{release=resolve;started();if(controller.signal.aborted)resolve();})),configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};
     p.reservePluginExecution();
     try {
       await p.loadSettings();
-      const pending=p.runSharedWorkflow(kind==='standalone'?'task:task':'wf',undefined,false,false,kind==='standalone'?'task':undefined).then(r=>{settled=true;return r;});
-      for(let i=0;i<200 && !release;i++) await new Promise(resolve=>setTimeout(resolve,5));
+      // Exercise readiness after a slow startup; an iteration-count poll could
+      // expire before the refresh began, then delete a still-active fixture.
+      const save=p.saveSettings.bind(p);let delayed=false;
+      p.saveSettings=async(...args)=>{if(kind==='step'&&!delayed){delayed=true;await new Promise(resolve=>setTimeout(resolve,5000));}return save(...args);};
+      pending=p.runSharedWorkflow(kind==='standalone'?'task:task':'wf',undefined,false,false,kind==='standalone'?'task':undefined,{signal:controller.signal,progress:()=>{}}).then(r=>{settled=true;return r;});
+      await Promise.race([refreshStarted,pending.then(()=>{throw Error('Shared workflow ended before requesting refresh');}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture refresh was not reached')),30000);})]);
       assert.equal(typeof release,'function');assert.equal(settled,false);
+      if(kind==='step')assert.equal(delayed,true);
       release();const result=await pending;assert.equal(result.phase,'completed');assert.equal(fs.readFileSync(path.join(root,'shared.md'),'utf8'),'once');
       const saved=fs.readFileSync(path.join(install,'data.json'),'utf8');assert.doesNotMatch(saved,/onVaultMutation|vaultMutations/);
-    } finally {p.releasePluginExecution(false);}
+    } finally {
+      clearTimeout(timer);controller.abort();release?.();
+      if(pending)await pending.catch(()=>{});
+      p.releasePluginExecution(false);
+    }
   }
 });
 
