@@ -6,8 +6,15 @@ import readline from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { validateReleaseArtifacts } from "./scripts/release-artifacts.mjs";
 import { createRequire } from "node:module";
+import { execFileSync } from "node:child_process";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// Explicit noninteractive bridge; the same command also ships in the seven
+// artifacts through autooc-cli.cjs. No dependency on the installed old CLI.
+if(process.argv[2]==='--maintenance') {
+  execFileSync(process.execPath,[path.join(__dirname,'autooc-cli.cjs'),'maintain-release',...process.argv.slice(3)],{stdio:'inherit',windowsHide:true});
+  process.exit(0);
+}
 
 const defaultVaultRoot = path.resolve(__dirname, "..");
 

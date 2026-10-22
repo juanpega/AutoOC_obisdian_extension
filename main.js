@@ -38,7 +38,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.6.7",
+      version: "1.6.8",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -2196,8 +2196,8 @@ function samePhysicalPath(left, right) {
   return path.relative(physicalPath(left), physicalPath(right)) === "";
 }
 function isWithinPhysicalPath(root, location) {
-  const relative5 = path.relative(physicalPath(root), physicalPath(location));
-  return relative5 !== ".." && !relative5.startsWith(".." + path.sep) && !path.isAbsolute(relative5);
+  const relative6 = path.relative(physicalPath(root), physicalPath(location));
+  return relative6 !== ".." && !relative6.startsWith(".." + path.sep) && !path.isAbsolute(relative6);
 }
 
 // cli-plugin-requests.ts
@@ -2866,26 +2866,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
-  const fs24 = require("fs");
+  const fs25 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs24.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs25.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn5 } = require("child_process");
   const child = spawn5("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs24.unlinkSync(launcherFile);
+      fs25.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs24.unlinkSync(psScriptFile);
+      fs25.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -2893,12 +2893,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs24.unlinkSync(launcherFile);
+      fs25.unlinkSync(launcherFile);
     } catch (e) {
     }
     if (removeScript) {
       try {
-        fs24.unlinkSync(psScriptFile);
+        fs25.unlinkSync(psScriptFile);
       } catch (e) {
       }
     }
@@ -2920,7 +2920,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs24.existsSync(effectivePidFile) ? String(fs24.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs25.existsSync(effectivePidFile) ? String(fs25.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn5("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -2929,7 +2929,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs24.unlinkSync(effectivePidFile);
+      fs25.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -2951,18 +2951,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
 }
 function launchHiddenSh(shScriptFile, pidFile) {
   var _a;
-  const fs24 = require("fs");
+  const fs25 = require("fs");
   const { spawn: spawn5 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs24.chmodSync(shScriptFile, 448);
+    fs25.chmodSync(shScriptFile, 448);
   } catch (e) {
   }
   const child = spawn5("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs24.unlinkSync(shScriptFile);
+      fs25.unlinkSync(shScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -2970,7 +2970,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs24.unlinkSync(shScriptFile);
+        fs25.unlinkSync(shScriptFile);
       } catch (e) {
       }
     }
@@ -2991,7 +2991,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs24.existsSync(effectivePidFile) ? String(fs24.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs25.existsSync(effectivePidFile) ? String(fs25.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -3006,7 +3006,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs24.unlinkSync(effectivePidFile);
+      fs25.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -3661,10 +3661,10 @@ function parseSettings(text) {
     throw new Error("Cannot read valid AutoOC configuration");
   }
 }
-async function atomicSettingsWrite(file, data, io = fs5.promises) {
+async function atomicSettingsWrite(file, data, io = fs5.promises, beforeReplace) {
   const text = JSON.stringify(data, null, 2);
   if (text === void 0) throw new Error("Settings are not serializable");
-  await atomicSettingsTextWrite(file, text, io);
+  await atomicSettingsTextWrite(file, text, io, beforeReplace);
 }
 async function atomicSettingsTextWrite(file, text, io = fs5.promises, beforeReplace) {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
@@ -3728,6 +3728,32 @@ async function atomicSettingsTextWrite(file, text, io = fs5.promises, beforeRepl
 
 // execution-journal.ts
 var writes = /* @__PURE__ */ new Map();
+function checkpointUncertainties(state) {
+  return state.steps.flatMap((step, index) => {
+    var _a;
+    return [
+      ...step.status === "in_flight" ? [`${index}:in_flight`] : [],
+      ...step.approval ? [`${index}:approval`] : [],
+      ...((_a = step.result) == null ? void 0 : _a.cancelled) ? [`${index}:cancelled`] : [],
+      ...(step.evaluations || []).filter((e) => e.status !== "completed").map((e) => `${index}:evaluation:${e.key}`)
+    ];
+  });
+}
+function directoryIdentity(directory) {
+  const stat = fs6.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe disposition directory");
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+function dispositionLocation(location) {
+  const vault = physicalPath(location.vault), installationDirectory = physicalPath(location.installationDirectory), runtimeDirectory = physicalPath(location.runtimeDirectory);
+  if (path6.relative(installationDirectory, runtimeDirectory) !== "runtime" || path6.relative(vault, installationDirectory).split(path6.sep).includes("..")) throw new Error("Disposition location mismatch");
+  let current = vault;
+  for (const part of path6.relative(vault, runtimeDirectory).split(path6.sep)) {
+    current = path6.join(current, part);
+    directoryIdentity(current);
+  }
+  return { vault, installationDirectory, runtimeDirectory, vaultIdentity: directoryIdentity(vault), installationIdentity: directoryIdentity(installationDirectory), runtimeIdentity: directoryIdentity(runtimeDirectory) };
+}
 function validateExecutionCheckpoint(value) {
   const validDate = (date) => date === void 0 || typeof date === "string" && Number.isFinite(Date.parse(date));
   if (!value || value.schemaVersion !== 1 || !/^[a-zA-Z0-9-]+$/.test(value.runId || "") || typeof value.workflowId !== "string" || !value.workflowId || !/^[a-f0-9]{64}$/.test(value.definitionHash || "") || !Number.isSafeInteger(value.revision) || value.revision < 0 || !["ready", "in_flight", "completed", "failed", "abandoned"].includes(value.phase) || !(value.nextStepId === null || typeof value.nextStepId === "string" && value.nextStepId.length > 0) || !Array.isArray(value.steps) || !validDate(value.createdAt)) throw new Error("Invalid execution checkpoint");
@@ -3744,6 +3770,10 @@ function validateExecutionCheckpoint(value) {
       throw new Error("Invalid step checkpoint");
   }
   const last = value.steps[value.steps.length - 1];
+  if (value.disposition !== void 0) {
+    const d = value.disposition;
+    if (!["failed", "completed"].includes(value.phase) || typeof d.at !== "string" || !validDate(d.at) || typeof d.reason !== "string" || !d.reason.trim() || d.reason.length > 1e3 || d.outcome !== "unknown" || d.acknowledgedUnknownEffects !== true || d.previousRevision !== value.revision - 1 || d.snapshot !== `disposition-${value.runId}-${d.previousRevision}.snapshot` || !/^[a-f0-9]{64}$/.test(d.snapshotHash || "") || d.runId !== value.runId || d.workflowId !== value.workflowId || d.definitionHash !== value.definitionHash || !["vault", "installationDirectory", "runtimeDirectory"].every((key) => typeof d[key] === "string" && path6.isAbsolute(d[key])) || !["vaultIdentity", "installationIdentity", "runtimeIdentity"].every((key) => typeof d[key] === "string" && d[key]) || !checkpointUncertainties(value).length || JSON.stringify(d.causes) !== JSON.stringify(checkpointUncertainties(value))) throw new Error("Invalid terminal disposition");
+  }
   const abandoned = value.phase === "abandoned", decision = value.abandonment;
   if (abandoned ? !decision || typeof decision.at !== "string" || !validDate(decision.at) || typeof decision.reason !== "string" || !decision.reason.trim() || decision.reason.length > 1e3 || decision.outcome !== "unknown" || decision.acknowledgedUnknownEffects !== true || !["ready", "in_flight"].includes(decision.previousPhase) || typeof decision.previousNextStepId !== "string" || !decision.previousNextStepId || !Number.isSafeInteger(decision.previousRevision) || decision.previousRevision !== value.revision - 1 || decision.snapshot !== `abandonment-${value.runId}-${decision.previousRevision}.snapshot` || decision.previousPhase === "in_flight" !== ((last == null ? void 0 : last.status) === "in_flight") || decision.previousPhase === "in_flight" && decision.previousNextStepId !== (last == null ? void 0 : last.stepId) : decision !== void 0) throw new Error("Invalid abandonment decision");
   if (!abandoned && value.phase === "in_flight" !== ((last == null ? void 0 : last.status) === "in_flight") || value.phase === "in_flight" && value.nextStepId !== last.stepId || ["ready", "in_flight"].includes(value.phase) && value.nextStepId === null || ["completed", "failed", "abandoned"].includes(value.phase) && value.nextStepId !== null)
@@ -3753,7 +3783,7 @@ function readExecutionCheckpoint(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
   const file = path6.join(directory, runId + ".json");
   const stat = fs6.lstatSync(file);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Execution checkpoint must be a regular file");
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) throw new Error("Execution checkpoint must be a regular file");
   let state;
   try {
     state = JSON.parse(fs6.readFileSync(file, "utf8"));
@@ -3762,6 +3792,19 @@ function readExecutionCheckpoint(directory, runId) {
   }
   validateExecutionCheckpoint(state);
   if (state.runId !== runId) throw new Error("Execution identity changed");
+  if (state.disposition) {
+    const d = state.disposition, location = dispositionLocation(d);
+    if (physicalPath(directory) !== location.runtimeDirectory || Object.entries(location).some(([key, value]) => d[key] !== value)) throw new Error("Disposition installation identity changed");
+    const snapshot = path6.join(directory, d.snapshot), stat2 = fs6.lstatSync(snapshot);
+    if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1) throw new Error("Unsafe disposition snapshot");
+    const original = fs6.readFileSync(snapshot);
+    if ((0, import_crypto6.createHash)("sha256").update(original).digest("hex") !== d.snapshotHash) throw new Error("Disposition snapshot changed");
+    const prior = JSON.parse(original.toString("utf8"));
+    validateExecutionCheckpoint(prior);
+    const { disposition, ...expected } = state;
+    expected.revision--;
+    if (JSON.stringify(prior) !== JSON.stringify(expected)) throw new Error("Disposition snapshot does not match checkpoint");
+  }
   return state;
 }
 var ExecutionJournal = class _ExecutionJournal {
@@ -3791,6 +3834,45 @@ var ExecutionJournal = class _ExecutionJournal {
   }
   snapshot() {
     return JSON.parse(JSON.stringify(this.state));
+  }
+  disposeTerminal(expectedRevision, reason, acknowledgedUnknownEffects, location) {
+    return this.update((state, original) => {
+      if (state.revision !== expectedRevision) throw new Error("Execution revision changed; inspect again");
+      if (state.disposition) throw new Error("Terminal execution already disposed");
+      if (!["failed", "completed"].includes(state.phase) || !checkpointUncertainties(state).length) throw new Error("No terminal uncertainty to dispose");
+      if (acknowledgedUnknownEffects !== true) throw new Error("Explicit acknowledgement of unknown effects is required");
+      if (typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("A concise disposition reason is required");
+      const identity = dispositionLocation(location);
+      if (identity.runtimeDirectory !== physicalPath(this.lease.directory)) throw new Error("Disposition lease identity mismatch");
+      const snapshot = `disposition-${state.runId}-${state.revision}.snapshot`, file = path6.join(this.lease.directory, snapshot);
+      if (fs6.existsSync(file)) {
+        const stat = fs6.lstatSync(file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs6.readFileSync(file, "utf8") !== original) throw new Error("Disposition snapshot changed");
+      } else {
+        const fd = fs6.openSync(file, "wx", 384);
+        try {
+          fs6.writeFileSync(fd, original);
+          fs6.fsyncSync(fd);
+        } finally {
+          fs6.closeSync(fd);
+        }
+      }
+      this.lease.assertOwned();
+      state.disposition = {
+        ...identity,
+        at: (/* @__PURE__ */ new Date()).toISOString(),
+        reason: reason.trim(),
+        outcome: "unknown",
+        acknowledgedUnknownEffects: true,
+        previousRevision: state.revision,
+        snapshot,
+        snapshotHash: (0, import_crypto6.createHash)("sha256").update(original).digest("hex"),
+        workflowId: state.workflowId,
+        runId: state.runId,
+        definitionHash: state.definitionHash,
+        causes: checkpointUncertainties(state)
+      };
+    });
   }
   abandon(expectedRevision, reason, acknowledgedUnknownEffects) {
     return this.update((state) => {
@@ -3833,10 +3915,21 @@ var ExecutionJournal = class _ExecutionJournal {
       const previous = fs6.readFileSync(this.file, "utf8");
       if (JSON.stringify(JSON.parse(previous)) !== JSON.stringify(this.state)) throw new Error("Execution checkpoint changed");
       const next = this.snapshot();
-      change(next);
+      if (next.disposition) throw new Error("Terminal execution already disposed; historical evidence is immutable");
+      change(next, previous);
       next.revision++;
       validateExecutionCheckpoint(next);
-      await atomicSettingsWrite(this.file, next);
+      await atomicSettingsWrite(this.file, next, fs6.promises, async () => {
+        this.lease.assertOwned();
+        const stat = fs6.lstatSync(this.file);
+        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs6.readFileSync(this.file, "utf8") !== previous) throw new Error("Execution checkpoint changed before publication");
+        if (next.disposition) {
+          const d = next.disposition;
+          if (Object.entries(dispositionLocation(d)).some(([key, value]) => d[key] !== value)) throw new Error("Disposition identity changed");
+          const snapshot = path6.join(this.lease.directory, d.snapshot), stat2 = fs6.lstatSync(snapshot);
+          if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1 || fs6.readFileSync(snapshot, "utf8") !== previous) throw new Error("Disposition snapshot changed before publication");
+        }
+      });
       this.lease.assertOwned();
       this.state = next;
     });
@@ -4044,6 +4137,8 @@ function recoverPreparedProgress(workflow, checkpoint, currentHash, activelyExec
       revision: checkpoint.revision,
       phase: checkpoint.phase,
       abandonment: checkpoint.abandonment,
+      disposition: checkpoint.disposition,
+      terminalUncertainty: checkpointUncertainties(checkpoint).length > 0,
       requiresReconciliation: !terminal,
       definitionChanged: true,
       historicalSteps: cloneJsonStructure(checkpoint.steps)
@@ -4072,7 +4167,7 @@ function projectPreparedProgress(workflow, checkpoint, activelyExecuting = false
     ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
     status: checkpoint.phase === "abandoned" ? "abandoned" : checkpoint.phase === "completed" ? "completed" : checkpoint.phase === "failed" ? "failed" : activelyExecuting ? "running" : "pending",
     currentStep: Math.max(0, workflow.steps.findIndex((step) => step.id === target)),
-    runtimeExecution: { runId: checkpoint.runId, definitionHash: checkpoint.definitionHash, revision: checkpoint.revision, phase: checkpoint.phase, abandonment: checkpoint.abandonment, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
+    runtimeExecution: { runId: checkpoint.runId, definitionHash: checkpoint.definitionHash, revision: checkpoint.revision, phase: checkpoint.phase, abandonment: checkpoint.abandonment, disposition: checkpoint.disposition, terminalUncertainty: checkpointUncertainties(checkpoint).length > 0, requiresReconciliation: checkpoint.phase === "in_flight" && !activelyExecuting },
     steps: workflow.steps.map((step) => {
       const observed = last.get(step.id);
       return { ...step, ...(observed == null ? void 0 : observed.startedAt) ? { lastRun: observed.startedAt } : {}, status: (observed == null ? void 0 : observed.status) === "in_flight" ? checkpoint.phase === "abandoned" ? "abandoned" : activelyExecuting ? "running" : "pending" : (observed == null ? void 0 : observed.status) || "pending", output: (observed == null ? void 0 : observed.output) || "" };
@@ -4088,7 +4183,7 @@ function assertIdleJournals(runtime) {
     if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
     if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
-    if (state.phase === "abandoned") {
+    if (state.phase === "abandoned" || state.disposition) {
       checkpoints.set(state.runId, state);
       continue;
     }
@@ -4118,7 +4213,7 @@ function assertIdleCatalog(settings, checkpoints) {
       const binding = entry.runtimeExecution;
       if (!binding) continue;
       const checkpoint = checkpoints.get(binding.runId);
-      if (!checkpoint || binding.requiresReconciliation) throw new Error("Execution binding requires reconciliation");
+      if (!checkpoint || binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
       validateProgressBinding({ id: kind === "workflows" ? entry.id : binding.workflowId, runtimeExecution: binding }, checkpoint, binding.runId);
       if (kind === "tasks" && checkpoint.workflowId !== `@task:${entry.id}` && !checkpoint.steps.some((step) => step.stepId === binding.stepId)) {
         throw new Error("Bound task step is absent from its journal");
@@ -4157,7 +4252,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const lock = file + ".write-lock";
   const identity = (stat) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-  const directoryIdentity = identity(fs7.lstatSync(directory));
+  const directoryIdentity2 = identity(fs7.lstatSync(directory));
   let fileIdentity;
   let initial = true, writer, writerFinished = false;
   const temporaryIdentities = /* @__PURE__ */ new Map();
@@ -4174,7 +4269,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const asyncCatalog = cooperative && (((_a = regularStat(file)) == null ? void 0 : _a.size) || 0) > 256 * 1024;
   const checkContext = () => {
-    if (identity(fs7.lstatSync(directory)) !== directoryIdentity) throw new Error("Installation identity changed during startup");
+    if (identity(fs7.lstatSync(directory)) !== directoryIdentity2) throw new Error("Installation identity changed during startup");
     assertOwner();
   };
   const pendingWriter = () => {
@@ -4415,9 +4510,9 @@ async function downloadRelease(baseUrl, version, fetcher = fetch) {
   verifyRelease(files, version);
   return files;
 }
-function regularPath(root, relative5, create = false) {
+function regularPath(root, relative6, create = false) {
   let current = root;
-  const parts = relative5.split("/");
+  const parts = relative6.split("/");
   for (let i = 0; i < parts.length; i++) {
     current = path8.join(current, parts[i]);
     let stat;
@@ -4427,7 +4522,7 @@ function regularPath(root, relative5, create = false) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
-      throw new Error(`Unsafe release destination: ${relative5}`);
+      throw new Error(`Unsafe release destination: ${relative6}`);
     }
     if (!stat && i < parts.length - 1 && create) fs8.mkdirSync(current);
   }
@@ -4518,7 +4613,7 @@ function installRelease(options) {
 var import_obsidian = require("obsidian");
 var import_child_process5 = require("child_process");
 var os4 = __toESM(require("os"));
-var fs23 = __toESM(require("fs"));
+var fs24 = __toESM(require("fs"));
 var path22 = __toESM(require("path"));
 var crypto2 = __toESM(require("crypto"));
 
@@ -5429,16 +5524,16 @@ var ObsidianVaultRefresh = class {
       file = physicalPath(file);
     }
     const root = physicalPath(this.root);
-    const relative5 = path12.relative(root, file);
-    if (!path12.isAbsolute(file) || !relative5 || relative5 === ".." || relative5.startsWith(".." + path12.sep) || path12.isAbsolute(relative5)) {
+    const relative6 = path12.relative(root, file);
+    if (!path12.isAbsolute(file) || !relative6 || relative6 === ".." || relative6.startsWith(".." + path12.sep) || path12.isAbsolute(relative6)) {
       throw new Error("Refresh path escapes vault");
     }
     let current = root;
-    for (const part of relative5.split(path12.sep)) {
+    for (const part of relative6.split(path12.sep)) {
       current = path12.join(current, part);
       if (fs12.lstatSync(current).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
     }
-    return relative5.split(path12.sep).join("/");
+    return relative6.split(path12.sep).join("/");
   }
   async reconcile(files) {
     if (this.stopped) throw new Error("Plugin unloaded");
@@ -5471,9 +5566,9 @@ var ObsidianVaultRefresh = class {
         try {
           for (const file of files) {
             check();
-            const relative5 = this.relativeFile(file);
-            if (relative5.split("/").some((part) => part.startsWith("."))) continue;
-            await adapter.reconcileInternalFile(relative5);
+            const relative6 = this.relativeFile(file);
+            if (relative6.split("/").some((part) => part.startsWith("."))) continue;
+            await adapter.reconcileInternalFile(relative6);
             check();
           }
           completed = true;
@@ -6715,7 +6810,7 @@ function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
   if (!path19.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
   const vault = physicalPath(vaultPath);
   regularDirectory3(vault);
-  let relative5 = path19.join(".obsidian", "plugins", "auto-oc");
+  let relative6 = path19.join(".obsidian", "plugins", "auto-oc");
   if (installationDirectory !== void 0) {
     if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
       throw new Error("Invalid installation location");
@@ -6727,16 +6822,16 @@ function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
         inspected = path19.join(inspected, part);
         regularDirectory3(inspected);
       }
-      relative5 = path19.relative(vault, physicalPath(inspected));
+      relative6 = path19.relative(vault, physicalPath(inspected));
     } else {
-      relative5 = path19.isAbsolute(installationDirectory) ? path19.relative(path19.resolve(vaultPath), installationDirectory) : installationDirectory;
+      relative6 = path19.isAbsolute(installationDirectory) ? path19.relative(path19.resolve(vaultPath), installationDirectory) : installationDirectory;
     }
-    if (!relative5 || path19.isAbsolute(relative5) || relative5.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
+    if (!relative6 || path19.isAbsolute(relative6) || relative6.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
       throw new Error("Installation must remain inside the vault");
     }
   }
   let directory = vault;
-  for (const part of relative5.split(/[\\/]/)) {
+  for (const part of relative6.split(/[\\/]/)) {
     if (!part) throw new Error("Invalid installation component");
     directory = path19.join(directory, part);
     regularDirectory3(directory);
@@ -6866,6 +6961,54 @@ async function runInstalledWorkflow(options) {
 }
 
 // execution-abandonment.ts
+var fs22 = __toESM(require("fs"));
+function inspectTerminalExecution(options) {
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const identity = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+  return {
+    ...identity,
+    runId: state.runId,
+    workflowId: state.workflowId,
+    definitionHash: state.definitionHash,
+    revision: state.revision,
+    phase: state.phase,
+    causes: checkpointUncertainties(state),
+    disposition: state.disposition
+  };
+}
+async function disposeTerminalExecution(options) {
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const lease = options.lease || acquireExecutionLease(location.runtimeDirectory);
+  try {
+    lease.assertOwned();
+    if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Disposition lease identity mismatch");
+    const observed = inspectTerminalExecution(options);
+    for (const key of ["vault", "installationDirectory", "runtimeDirectory", "vaultIdentity", "installationIdentity", "runtimeIdentity", "workflowId", "runId", "definitionHash"]) {
+      if (observed[key] !== options[key]) throw new Error("Disposition observed identity changed; inspect again");
+    }
+    if (observed.revision !== options.revision || JSON.stringify(observed.causes) !== JSON.stringify(options.causes)) throw new Error("Execution revision or uncertainty changed; inspect again");
+    const assertQuiescent = () => {
+      lease.assertOwned();
+      const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault, options.installationDirectory));
+      if (Object.entries(current).some(([key, value]) => options[key] !== value)) throw new Error("Disposition installation identity changed");
+      if (fs22.existsSync(location.configurationFile + ".write-lock") || fs22.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs22.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
+      const config = JSON.parse(fs22.readFileSync(location.configurationFile, "utf8"));
+      if (["tasks", "workflows"].some((kind) => !Array.isArray(config[kind]) || config[kind].some((entry) => entry.status === "running" || entry.pendingCodexApproval))) throw new Error("Active execution requires reconciliation");
+      for (const name of fs22.readdirSync(location.runtimeDirectory)) {
+        if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
+        const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
+        if (["ready", "in_flight"].includes(state.phase)) throw new Error("Active or unfinished execution requires reconciliation");
+      }
+    };
+    assertQuiescent();
+    const journal = ExecutionJournal.open(lease, options.runId, options.definitionHash);
+    await journal.disposeTerminal(options.revision, options.reason, options.acknowledgedUnknownEffects, location);
+    assertQuiescent();
+    return readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+  } finally {
+    if (!options.lease) lease.release();
+  }
+}
 async function abandonInstalledExecution(options) {
   if (!Number.isSafeInteger(options.revision) || options.revision < 0) throw new Error("Exact observed revision is required");
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
@@ -6885,10 +7028,10 @@ async function abandonInstalledExecution(options) {
 
 // checkpoint-observation.ts
 var path21 = __toESM(require("path"));
-var fs22 = __toESM(require("fs"));
+var fs23 = __toESM(require("fs"));
 async function observeCheckpoint(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path21.join(directory, runId + ".json"), stat = fs22.lstatSync(file), text = await readSettingsTextAsync(file);
+  const file = path21.join(directory, runId + ".json"), stat = fs23.lstatSync(file), text = await readSettingsTextAsync(file);
   if (text === null) throw new Error("Execution checkpoint is absent");
   let checkpoint;
   try {
@@ -6900,7 +7043,7 @@ async function observeCheckpoint(directory, runId) {
   if (checkpoint.runId !== runId) throw new Error("Execution identity changed");
   const hash = await hashTextCooperatively(text);
   const assertCurrent = () => {
-    const current = fs22.lstatSync(file);
+    const current = fs23.lstatSync(file);
     if (!current.isFile() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error("Execution checkpoint changed during observation");
   };
   assertCurrent();
@@ -7390,11 +7533,11 @@ var SecretStore = class {
   }
   load() {
     const file = this.filePath;
-    if (!fs23.existsSync(file)) {
+    if (!fs24.existsSync(file)) {
       this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
       return;
     }
-    const raw = fs23.readFileSync(file, "utf8");
+    const raw = fs24.readFileSync(file, "utf8");
     const parsed = raw.trim() ? JSON.parse(raw) : {};
     this.vault = {
       schemaVersion: parsed.schemaVersion || SECRETS_SCHEMA_VERSION,
@@ -7404,8 +7547,8 @@ var SecretStore = class {
   }
   save() {
     const file = this.filePath;
-    fs23.mkdirSync(path22.dirname(file), { recursive: true });
-    fs23.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}
+    fs24.mkdirSync(path22.dirname(file), { recursive: true });
+    fs24.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}
 `, "utf8");
   }
   isSecureStorageAvailable() {
@@ -7804,7 +7947,7 @@ function getUvCandidates() {
 function resolveUvBin() {
   for (const candidate of getUvCandidates()) {
     try {
-      if (fs23.existsSync(candidate)) return candidate;
+      if (fs24.existsSync(candidate)) return candidate;
     } catch (e) {
     }
   }
@@ -8102,15 +8245,15 @@ function saveLogToFile(vaultBasePath, taskId, output) {
   if (!output || !output.trim()) return null;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    fs23.mkdirSync(logDir, { recursive: true });
+    fs24.mkdirSync(logDir, { recursive: true });
   } catch (e) {
   }
   const timestamp = formatTimestampForLog();
   const logFile = path22.join(logDir, `${timestamp}.log`);
   try {
-    fs23.writeFileSync(logFile, output, "utf8");
+    fs24.writeFileSync(logFile, output, "utf8");
     const latestFile = path22.join(logDir, "latest.log");
-    fs23.writeFileSync(latestFile, output, "utf8");
+    fs24.writeFileSync(latestFile, output, "utf8");
     return logFile;
   } catch (e) {
     return null;
@@ -8119,8 +8262,8 @@ function saveLogToFile(vaultBasePath, taskId, output) {
 function getLogHistory(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs23.existsSync(logDir)) return [];
-    const files = fs23.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    if (!fs24.existsSync(logDir)) return [];
+    const files = fs24.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
     return files.map((f) => ({
       file: path22.join(logDir, f),
       timestamp: formatLogFilenameTimestamp(f)
@@ -8131,7 +8274,7 @@ function getLogHistory(vaultBasePath, taskId) {
 }
 function readLogFile(filePath) {
   try {
-    return formatLogContent(fs23.readFileSync(filePath, "utf8"));
+    return formatLogContent(fs24.readFileSync(filePath, "utf8"));
   } catch (e) {
     return "(error reading log file)";
   }
@@ -8140,13 +8283,13 @@ function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
   if (maxLogs <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs23.existsSync(logDir)) return;
-    const files = fs23.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    if (!fs24.existsSync(logDir)) return;
+    const files = fs24.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
     while (files.length > maxLogs) {
       const oldFile = files.shift();
       if (oldFile) {
         try {
-          fs23.unlinkSync(path22.join(logDir, oldFile));
+          fs24.unlinkSync(path22.join(logDir, oldFile));
         } catch (e) {
         }
       }
@@ -8158,9 +8301,9 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
   if (retentionDays <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs23.existsSync(logDir)) return;
+    if (!fs24.existsSync(logDir)) return;
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
-    const files = fs23.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    const files = fs24.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
     for (const f of files) {
       const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
       if (match) {
@@ -8168,7 +8311,7 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
         const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
         if (fileDate.getTime() < cutoff) {
           try {
-            fs23.unlinkSync(path22.join(logDir, f));
+            fs24.unlinkSync(path22.join(logDir, f));
           } catch (e) {
           }
         }
@@ -8180,16 +8323,16 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
 function clearTaskLogs(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs23.existsSync(logDir)) return;
-    const files = fs23.readdirSync(logDir);
+    if (!fs24.existsSync(logDir)) return;
+    const files = fs24.readdirSync(logDir);
     for (const f of files) {
       try {
-        fs23.unlinkSync(path22.join(logDir, f));
+        fs24.unlinkSync(path22.join(logDir, f));
       } catch (e) {
       }
     }
     try {
-      fs23.rmdirSync(logDir);
+      fs24.rmdirSync(logDir);
     } catch (e) {
     }
   } catch (e) {
@@ -8198,13 +8341,13 @@ function clearTaskLogs(vaultBasePath, taskId) {
 function clearAllLogs(vaultBasePath) {
   const logsDir = path22.join(vaultBasePath, ".opencode", "logs");
   try {
-    if (!fs23.existsSync(logsDir)) return;
-    const dirs = fs23.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs24.existsSync(logsDir)) return;
+    const dirs = fs24.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of dirs) {
       clearTaskLogs(vaultBasePath, dir);
     }
     try {
-      fs23.rmdirSync(logsDir);
+      fs24.rmdirSync(logsDir);
     } catch (e) {
     }
   } catch (e) {
@@ -8212,7 +8355,7 @@ function clearAllLogs(vaultBasePath) {
 }
 function deleteSingleLogFile(filePath) {
   try {
-    fs23.unlinkSync(filePath);
+    fs24.unlinkSync(filePath);
   } catch (e) {
   }
 }
@@ -8346,14 +8489,14 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const { runtime, names } = this.journalNames();
     return JSON.stringify(names.map((name) => {
       readExecutionCheckpoint(runtime, name.slice(0, -5));
-      return [name, fs23.readFileSync(path22.join(runtime, name), "utf8")];
+      return [name, fs24.readFileSync(path22.join(runtime, name), "utf8")];
     }));
   }
   journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs23.existsSync(path22.join(directory, "data.json.write-lock")) || fs23.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
-    const names = fs23.readdirSync(runtime).sort();
+    if (fs24.existsSync(path22.join(directory, "data.json.write-lock")) || fs24.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
+    const names = fs24.readdirSync(runtime).sort();
     if (names.some((name) => name === "update-pending.json" || name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished runtime write or update");
     return { runtime, names: names.filter((name) => /^[a-zA-Z0-9-]+\.json$/.test(name)) };
   }
@@ -8391,7 +8534,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       if (this.executionAttempted || this.observedJournalSnapshot === void 0 || this.startupPending || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) throw error;
       if (this.journalSnapshot() !== this.observedJournalSnapshot) throw error;
       const file = this.selectedExecutionLocation().configurationFile;
-      for (const settings of [this.settings, JSON.parse(fs23.readFileSync(file, "utf8"))]) {
+      for (const settings of [this.settings, JSON.parse(fs24.readFileSync(file, "utf8"))]) {
         if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw error;
         assertIdleCatalog({
           tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -8410,18 +8553,18 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.assertLifecycleOpen();
     lease.assertOwned();
     const file = this.observationProofPath(lease.token);
-    const fd = fs23.openSync(file, "wx", 384);
+    const fd = fs24.openSync(file, "wx", 384);
     try {
-      const identity = fs23.fstatSync(fd);
+      const identity = fs24.fstatSync(fd);
       const bytes = JSON.stringify({ schemaVersion: 1, token: lease.token, journalHash });
-      fs23.writeFileSync(fd, bytes);
-      await new Promise((resolve7, reject) => fs23.fsync(fd, (error) => error ? reject(error) : resolve7()));
+      fs24.writeFileSync(fd, bytes);
+      await new Promise((resolve7, reject) => fs24.fsync(fd, (error) => error ? reject(error) : resolve7()));
       lease.assertOwned();
       this.assertLifecycleOpen();
-      const current = fs23.lstatSync(file);
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs23.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
+      const current = fs24.lstatSync(file);
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs24.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
     } finally {
-      fs23.closeSync(fd);
+      fs24.closeSync(fd);
     }
     this.observationProof = file;
   }
@@ -8431,7 +8574,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     if (this.observationProof) {
       this.pluginExecutionLease.assertOwned();
       const file = this.observationProof;
-      if (fs23.existsSync(file)) fs23.unlinkSync(file);
+      if (fs24.existsSync(file)) fs24.unlinkSync(file);
       this.observationProof = void 0;
     }
     this.executionAttempted = true;
@@ -8439,11 +8582,11 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   assertClosedObservation(token) {
     const location = this.selectedExecutionLocation(false);
     if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package changed");
-    const file = this.observationProofPath(token), stat = fs23.lstatSync(file);
+    const file = this.observationProofPath(token), stat = fs24.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Invalid observation proof");
-    const proof = JSON.parse(fs23.readFileSync(file, "utf8"));
+    const proof = JSON.parse(fs24.readFileSync(file, "utf8"));
     if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require("crypto").createHash("sha256").update(this.journalSnapshot()).digest("hex")) throw new Error("Observed execution state changed");
-    const settings = JSON.parse(fs23.readFileSync(location.configurationFile, "utf8"));
+    const settings = JSON.parse(fs24.readFileSync(location.configurationFile, "utf8"));
     if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error("Execution requires reconciliation");
     assertIdleCatalog({
       tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -8453,24 +8596,24 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   async completeInstalledRelease() {
     const location = this.selectedExecutionLocation();
     const manifestFile = path22.join(location.installationDirectory, "manifest.json");
-    const manifestStat = fs23.lstatSync(manifestFile);
+    const manifestStat = fs24.lstatSync(manifestFile);
     if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1) throw new Error("Unsafe installed plugin manifest");
-    const startingManifest = await fs23.promises.readFile(manifestFile);
+    const startingManifest = await fs24.promises.readFile(manifestFile);
     const installedManifest = JSON.parse(startingManifest.toString("utf8"));
     if (installedManifest.id !== "auto-oc" || installedManifest.id !== this.manifest.id || installedManifest.version !== PLUGIN_BUILD_VERSION) {
       throw new Error("Installed plugin manifest identity or version differs from the bundle");
     }
     const mainFile = path22.join(location.installationDirectory, "main.js");
-    const stat = fs23.lstatSync(mainFile);
+    const stat = fs24.lstatSync(mainFile);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe installed plugin bundle");
-    const startingBundle = await fs23.promises.readFile(mainFile);
+    const startingBundle = await fs24.promises.readFile(mainFile);
     const completePackage = await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION);
     const assertCatalog = await waitForInstalledCatalog(location.installationDirectory, () => {
       this.assertLifecycleOpen();
       this.selectedExecutionLocation();
       for (const [file, bytes] of [[manifestFile, startingManifest], [mainFile, startingBundle]]) {
-        const current = fs23.lstatSync(file);
-        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs23.readFileSync(file).equals(bytes)) {
+        const current = fs24.lstatSync(file);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs24.readFileSync(file).equals(bytes)) {
           throw new Error("Installed plugin identity changed during startup");
         }
       }
@@ -8486,10 +8629,10 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     try {
       const files = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, PLUGIN_BUILD_VERSION);
       this.assertLifecycleOpen();
-      if (!files["main.js"].equals(startingBundle) || !fs23.readFileSync(mainFile).equals(startingBundle)) {
+      if (!files["main.js"].equals(startingBundle) || !fs24.readFileSync(mainFile).equals(startingBundle)) {
         throw new Error("Bootstrap revision differs from the starting plugin; retry with a coherent release");
       }
-      if (!files["manifest.json"].equals(startingManifest) || !fs23.readFileSync(manifestFile).equals(startingManifest)) {
+      if (!files["manifest.json"].equals(startingManifest) || !fs24.readFileSync(manifestFile).equals(startingManifest)) {
         throw new Error("Bootstrap manifest differs from the starting installation");
       }
       this.assertExecutionIdle();
@@ -8499,7 +8642,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       Object.assign(this.manifest, installedManifest);
       return assertCatalog;
     } finally {
-      this.updateInProgress = fs23.existsSync(path22.join(location.runtimeDirectory, "update-pending.json"));
+      this.updateInProgress = fs24.existsSync(path22.join(location.runtimeDirectory, "update-pending.json"));
     }
   }
   async onload() {
@@ -8718,7 +8861,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
             return;
           }
           try {
-            fs23.lstatSync(path22.join(current.runtimeDirectory, "execution.lock"));
+            fs24.lstatSync(path22.join(current.runtimeDirectory, "execution.lock"));
             absentSince = void 0;
             return;
           } catch (error) {
@@ -8782,7 +8925,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   closedSessionRecovery() {
     try {
       const location = this.selectedExecutionLocation(false);
-      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs23.existsSync(path22.join(location.runtimeDirectory, "update-pending.json"))) return;
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs24.existsSync(path22.join(location.runtimeDirectory, "update-pending.json"))) return;
       const owner = readExecutionLeaseOwner(location.runtimeDirectory);
       try {
         process.kill(owner.pid, 0);
@@ -8792,7 +8935,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       }
       return () => {
         const current = this.selectedExecutionLocation(false);
-        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs23.existsSync(path22.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs24.existsSync(path22.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
         recoverExecutionLease(current.runtimeDirectory, owner.token);
       };
     } catch (e) {
@@ -9584,7 +9727,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
               ...observed2.codexThreadId ? { lastCodexThreadId: observed2.codexThreadId } : {},
               ...observed2.codexTurnId ? { lastCodexTurnId: observed2.codexTurnId } : {},
               pendingCodexApproval: void 0,
-              runtimeExecution: { ...binding, revision: checkpoint.revision, definitionHash: checkpoint.definitionHash, phase: checkpoint.phase, abandonment: checkpoint.abandonment, finishedAt: observed2.finishedAt, requiresReconciliation: false }
+              runtimeExecution: { ...binding, revision: checkpoint.revision, definitionHash: checkpoint.definitionHash, phase: checkpoint.phase, abandonment: checkpoint.abandonment, disposition: checkpoint.disposition, terminalUncertainty: checkpointUncertainties(checkpoint).length > 0, finishedAt: observed2.finishedAt, requiresReconciliation: false }
             };
           }
           const workflow = recovered.find((wf) => {
@@ -9715,9 +9858,9 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   isRalphLoopEnabled() {
     const configPath = getOpencodeConfigPath();
-    if (!fs23.existsSync(configPath)) return false;
+    if (!fs24.existsSync(configPath)) return false;
     try {
-      const raw = fs23.readFileSync(configPath, "utf8");
+      const raw = fs24.readFileSync(configPath, "utf8");
       const data = JSON.parse(raw);
       return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
     } catch (e) {
@@ -9727,13 +9870,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   async ensureRalphLoopPluginEnabled() {
     const configPath = getOpencodeConfigPath();
     const configDir = path22.dirname(configPath);
-    if (!fs23.existsSync(configDir)) {
-      fs23.mkdirSync(configDir, { recursive: true });
+    if (!fs24.existsSync(configDir)) {
+      fs24.mkdirSync(configDir, { recursive: true });
     }
     let data = {};
-    if (fs23.existsSync(configPath)) {
+    if (fs24.existsSync(configPath)) {
       try {
-        const raw = fs23.readFileSync(configPath, "utf8");
+        const raw = fs24.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -9745,7 +9888,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     }
     plugins.push("opencode-ralph-loop");
     data.plugin = plugins;
-    fs23.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+    fs24.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     return { changed: true, configPath };
   }
@@ -9770,21 +9913,21 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   ensureAutoOcMcpServerFile() {
     const { mcpPath } = this.getAutoOcMcpPaths();
-    fs23.mkdirSync(path22.dirname(mcpPath), { recursive: true });
-    fs23.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    fs24.mkdirSync(path22.dirname(mcpPath), { recursive: true });
+    fs24.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
     return mcpPath;
   }
   async ensureAutoOcMcpEnabled() {
     const configPath = getOpencodeConfigPath();
     const configDir = path22.dirname(configPath);
-    if (!fs23.existsSync(configDir)) {
-      fs23.mkdirSync(configDir, { recursive: true });
+    if (!fs24.existsSync(configDir)) {
+      fs24.mkdirSync(configDir, { recursive: true });
     }
     const mcpPath = this.ensureAutoOcMcpServerFile();
     let data = {};
-    if (fs23.existsSync(configPath)) {
+    if (fs24.existsSync(configPath)) {
       try {
-        const raw = fs23.readFileSync(configPath, "utf8");
+        const raw = fs24.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -9798,7 +9941,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       mcp["autooc-mcp"] = nextBlock;
       data.mcp = mcp;
       if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-      fs23.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+      fs24.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     }
     return { changed, configPath, mcpPath };
@@ -9905,7 +10048,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     } catch (error) {
       new import_obsidian.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
     } finally {
-      this.updateInProgress = !!this.pluginExecutionLease && fs23.existsSync(path22.join(this.pluginExecutionLease.directory, "update-pending.json"));
+      this.updateInProgress = !!this.pluginExecutionLease && fs24.existsSync(path22.join(this.pluginExecutionLease.directory, "update-pending.json"));
       if (!this.lifecycleStopped) (_d = this.view) == null ? void 0 : _d.refresh();
     }
   }
@@ -9931,7 +10074,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   // transition validation prompts.
   async evaluateWithOpencode(prompt, model, cwd) {
     return new Promise((resolve7) => {
-      const fs24 = require("fs");
+      const fs25 = require("fs");
       const path23 = require("path");
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -9946,15 +10089,15 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       const cleanup = (removeScript = true) => {
         hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
         try {
-          fs24.unlinkSync(scriptFile);
+          fs25.unlinkSync(scriptFile);
         } catch (e) {
         }
         try {
-          fs24.unlinkSync(outFile);
+          fs25.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs24.unlinkSync(pidFile);
+          fs25.unlinkSync(pidFile);
         } catch (e) {
         }
       };
@@ -10011,7 +10154,7 @@ DONE:%s
       }
       const scriptFile = path23.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
       if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-      else fs24.writeFileSync(scriptFile, launchScript, "utf8");
+      else fs25.writeFileSync(scriptFile, launchScript, "utf8");
       hiddenProc = launchHidden(scriptFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -10024,10 +10167,10 @@ DONE:%s
           resolve7({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
-        if (!fs24.existsSync(outFile)) return;
+        if (!fs25.existsSync(outFile)) return;
         settled = true;
         clearInterval(poll);
-        const raw = fs24.readFileSync(outFile, "utf8");
+        const raw = fs25.readFileSync(outFile, "utf8");
         cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
@@ -10088,6 +10231,31 @@ DONE:%s
       this.legacyAttempts.delete(task.id);
       if (callback) await callback(task, code);
     };
+  }
+  async confirmTerminalDisposition(workflowId, runId) {
+    this.assertLifecycleOpen();
+    const location = this.selectedExecutionLocation(), observed = inspectTerminalExecution({ vault: location.vault, installationDirectory: location.installationDirectory, runId });
+    if (observed.workflowId !== workflowId) throw new Error("Execution identity changed");
+    const modal = new ConfirmModal(
+      this.app,
+      "Resolve historical uncertainty?",
+      `Workflow: ${workflowId}. Attempt: ${runId}. Revision: ${observed.revision}. Historical phase: ${observed.phase}. External outcome remains UNKNOWN. This records a human disposition only: it does not stop processes, verify termination, mark success, or execute steps. Review this exact attempt and enter your reason.`,
+      true
+    );
+    if (!await modal.openAndWait()) return;
+    this.assertLifecycleOpen();
+    if (this.updateInProgress || !this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size) throw new Error("An execution is still active; wait for it to finish");
+    const reservation = { workflowId, runId, controller: new AbortController() };
+    this.sharedWorkflowExecution = reservation;
+    try {
+      await this.saveSettings(false);
+      this.beginExecutionEffects();
+      await disposeTerminalExecution({ ...observed, lease: this.pluginExecutionLease, reason: modal.reason, acknowledgedUnknownEffects: true });
+    } finally {
+      if (this.sharedWorkflowExecution === reservation) this.sharedWorkflowExecution = void 0;
+      await this.loadSettings();
+      this.refreshOpenViews();
+    }
   }
   async confirmAbandonTaskExecution(taskId) {
     var _a;
@@ -10293,47 +10461,47 @@ DONE:%s
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
     const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
-    const fs24 = require("fs");
+    const fs25 = require("fs");
     try {
-      fs24.unlinkSync(outFile);
+      fs25.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs24.unlinkSync(errFile);
+      fs25.unlinkSync(errFile);
     } catch (e) {
     }
     try {
-      fs24.unlinkSync(doneFile);
+      fs25.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
-      fs24.unlinkSync(pidFile);
+      fs25.unlinkSync(pidFile);
     } catch (e) {
     }
     try {
-      fs24.unlinkSync(promptFile);
+      fs25.unlinkSync(promptFile);
     } catch (e) {
     }
     try {
-      fs24.unlinkSync(fullPromptFile);
+      fs25.unlinkSync(fullPromptFile);
     } catch (e) {
     }
     try {
-      fs24.unlinkSync(tmpFullPromptFile);
+      fs25.unlinkSync(tmpFullPromptFile);
     } catch (e) {
     }
     if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
       try {
-        fs24.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs25.writeFileSync(fullPromptFile, prompt, "utf8");
       } catch (e) {
         fullPromptFile = tmpFullPromptFile;
-        fs24.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs25.writeFileSync(fullPromptFile, prompt, "utf8");
       }
       const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
       const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
-      fs24.writeFileSync(promptFile, shortPrompt, "utf8");
+      fs25.writeFileSync(promptFile, shortPrompt, "utf8");
     } else {
-      fs24.writeFileSync(promptFile, preparedPrompt, "utf8");
+      fs25.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
@@ -10361,7 +10529,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const launchScript = buildOpenCodeScript({ pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd });
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-    else fs24.writeFileSync(scriptFile, launchScript, "utf8");
+    else fs25.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
     try {
       hiddenProc = launchHidden(scriptFile, pidFile);
@@ -10383,31 +10551,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
       try {
-        fs24.unlinkSync(promptFile);
+        fs25.unlinkSync(promptFile);
       } catch (e) {
       }
       try {
-        fs24.unlinkSync(fullPromptFile);
+        fs25.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       try {
-        fs24.unlinkSync(tmpFullPromptFile);
+        fs25.unlinkSync(tmpFullPromptFile);
       } catch (e) {
       }
       try {
-        fs24.unlinkSync(outFile);
+        fs25.unlinkSync(outFile);
       } catch (e) {
       }
       try {
-        fs24.unlinkSync(errFile);
+        fs25.unlinkSync(errFile);
       } catch (e) {
       }
       try {
-        fs24.unlinkSync(doneFile);
+        fs25.unlinkSync(doneFile);
       } catch (e) {
       }
       try {
-        fs24.unlinkSync(pidFile);
+        fs25.unlinkSync(pidFile);
       } catch (e) {
       }
     };
@@ -10493,9 +10661,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         new import_obsidian.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
-      if (!fs24.existsSync(doneFile)) {
-        const stdout2 = fs24.existsSync(outFile) ? decodeCommandBuffer(fs24.readFileSync(outFile)) : "";
-        const stderr2 = fs24.existsSync(errFile) ? decodeCommandBuffer(fs24.readFileSync(errFile)) : "";
+      if (!fs25.existsSync(doneFile)) {
+        const stdout2 = fs25.existsSync(outFile) ? decodeCommandBuffer(fs25.readFileSync(outFile)) : "";
+        const stderr2 = fs25.existsSync(errFile) ? decodeCommandBuffer(fs25.readFileSync(errFile)) : "";
         const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
         if (normalized2) {
           t.output = `${normalized2}
@@ -10512,9 +10680,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      const stdout = fs24.existsSync(outFile) ? decodeCommandBuffer(fs24.readFileSync(outFile)) : "";
-      const stderr = fs24.existsSync(errFile) ? decodeCommandBuffer(fs24.readFileSync(errFile)) : "";
-      const exitCodeRaw = fs24.readFileSync(doneFile, "utf8").trim();
+      const stdout = fs25.existsSync(outFile) ? decodeCommandBuffer(fs25.readFileSync(outFile)) : "";
+      const stderr = fs25.existsSync(errFile) ? decodeCommandBuffer(fs25.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs25.readFileSync(doneFile, "utf8").trim();
       cleanupTempFiles();
       if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
@@ -11171,7 +11339,7 @@ ${current.output}`;
         title: "Export AutoOC tasks and workflows"
       });
       if (result.canceled || !result.filePath) return;
-      fs23.writeFileSync(result.filePath, json, "utf8");
+      fs24.writeFileSync(result.filePath, json, "utf8");
       new import_obsidian.Notice(
         `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
       );
@@ -11198,7 +11366,7 @@ ${current.output}`;
     };
   }
   async importFromFile(filePath) {
-    const raw = fs23.readFileSync(filePath, "utf8");
+    const raw = fs24.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
     return this.importFromData(data);
   }
@@ -13161,7 +13329,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     renderTaskResults(resultsRoot);
   }
   renderTaskCard(parent, task) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     const stopIdentity = this.plugin.taskStopIdentity(task);
     const stopTask = async (button) => {
       button.disabled = true;
@@ -13184,7 +13352,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`
     });
     const badge = summary.createEl("span", {
-      text: task.status === "abandoned" ? "abandoned \xB7 outcome unknown" : ((_a = task.legacyExecution) == null ? void 0 : _a.stopState) ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_b = task.runtimeExecution) == null ? void 0 : _b.requiresReconciliation) ? "reconciliation required" : task.status,
+      text: ((_a = task.runtimeExecution) == null ? void 0 : _a.disposition) ? `${task.status} \xB7 human disposition ${task.runtimeExecution.disposition.at} \xB7 external outcome unknown` : task.status === "abandoned" ? "abandoned \xB7 outcome unknown" : ((_b = task.legacyExecution) == null ? void 0 : _b.stopState) ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_c = task.runtimeExecution) == null ? void 0 : _c.requiresReconciliation) ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -13253,8 +13421,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const isExpanded = this.expandedTasks.has(task.id);
     details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = task.taskKind === "codex" ? (_e = (_d = (_c = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _c.label) != null ? _d : task.model) != null ? _e : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_g = (_f = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _f.label) != null ? _g : task.model;
-    meta.createEl("span", { text: `\u{1F5C2} ${((_h = task.area) == null ? void 0 : _h.trim()) || "No area"}` });
+    const modelLabel = task.taskKind === "codex" ? (_f = (_e = (_d = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _d.label) != null ? _e : task.model) != null ? _f : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_h = (_g = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _g.label) != null ? _h : task.model;
+    meta.createEl("span", { text: `\u{1F5C2} ${((_i = task.area) == null ? void 0 : _i.trim()) || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
     } else if (task.taskKind === "codex") {
@@ -13281,8 +13449,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     } else if (task.scheduleType === "interval") {
-      const value = (_i = task.scheduleIntervalValue) != null ? _i : 10;
-      const unit = (_j = task.scheduleIntervalUnit) != null ? _j : "minutes";
+      const value = (_j = task.scheduleIntervalValue) != null ? _j : 10;
+      const unit = (_k = task.scheduleIntervalUnit) != null ? _k : "minutes";
       scheduleText = `\u{1F501} Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
@@ -13304,7 +13472,19 @@ var AutoOCView = class extends import_obsidian.ItemView {
       });
     }
     const actions = details.createDiv("auto-oc-card-actions");
-    if (((_k = task.runtimeExecution) == null ? void 0 : _k.requiresReconciliation) && ((_l = task.runtimeExecution) == null ? void 0 : _l.workflowId) === standaloneTaskWorkflow(task.id).id && task.status !== "running") {
+    const terminalBinding = task.runtimeExecution;
+    if ((terminalBinding == null ? void 0 : terminalBinding.terminalUncertainty) && !terminalBinding.disposition && ["failed", "completed"].includes(terminalBinding.phase) && task.status !== "running") {
+      const dispose = actions.createEl("button", { text: "Resolve historical uncertainty" });
+      dispose.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id, terminalBinding.runId);
+        } catch (error) {
+          new import_obsidian.Notice(this.plugin.redactSecrets(String(error)));
+        }
+      };
+    }
+    if (((_l = task.runtimeExecution) == null ? void 0 : _l.requiresReconciliation) && ((_m = task.runtimeExecution) == null ? void 0 : _m.workflowId) === standaloneTaskWorkflow(task.id).id && task.status !== "running") {
       const abandon = actions.createEl("button", { text: "Abandon attempt", cls: "auto-oc-btn-stop" });
       abandon.onclick = async (e) => {
         e.stopPropagation();
@@ -13516,7 +13696,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     renderWorkflowResults(resultsRoot);
   }
   renderWorkflowCard(parent, workflow) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     card.setAttr("data-auto-oc-workflow-id", workflow.id);
     const summary = card.createDiv("auto-oc-card-summary");
@@ -13525,13 +13705,13 @@ var AutoOCView = class extends import_obsidian.ItemView {
       cls: "auto-oc-task-name"
     });
     const badge = summary.createEl("span", {
-      text: workflow.status === "abandoned" ? "abandoned \xB7 outcome unknown" : workflow.status,
+      text: ((_a = workflow.runtimeExecution) == null ? void 0 : _a.disposition) ? `${workflow.status} \xB7 human disposition ${workflow.runtimeExecution.disposition.at} \xB7 external outcome unknown` : workflow.status === "abandoned" ? "abandoned \xB7 outcome unknown" : workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "\u25B6", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
-    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready", "in_flight"].includes((_a = workflow.runtimeExecution) == null ? void 0 : _a.phase);
+    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready", "in_flight"].includes((_b = workflow.runtimeExecution) == null ? void 0 : _b.phase);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try {
@@ -13582,7 +13762,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const isExpandedWf = this.expandedWorkflows.has(workflow.id);
     details.style.display = isExpandedWf ? "block" : "none";
     const areaMeta = details.createDiv("auto-oc-card-meta");
-    areaMeta.createEl("span", { text: `\u{1F5C2} ${((_b = workflow.area) == null ? void 0 : _b.trim()) || "No area"}` });
+    areaMeta.createEl("span", { text: `\u{1F5C2} ${((_c = workflow.area) == null ? void 0 : _c.trim()) || "No area"}` });
     if (workflow.description) {
       const desc = details.createDiv("auto-oc-prompt-preview");
       desc.createEl("span", { text: workflow.description.slice(0, 200) });
@@ -13627,7 +13807,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           cls: `auto-oc-badge auto-oc-badge-${task.status}`
         });
       }
-      const stepArea = ((_c = step.area) == null ? void 0 : _c.trim()) || ((_d = workflow.area) == null ? void 0 : _d.trim());
+      const stepArea = ((_d = step.area) == null ? void 0 : _d.trim()) || ((_e = workflow.area) == null ? void 0 : _e.trim());
       if (stepArea) {
         stepHeader.createSpan({
           text: `\u{1F5C2} ${stepArea}`,
@@ -13669,7 +13849,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           };
         } else if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-          stepMeta.createSpan({ text: `Pauses for ${(_e = step.delayValue) != null ? _e : 5} ${(_f = step.delayUnit) != null ? _f : "minutes"}` });
+          stepMeta.createSpan({ text: `Pauses for ${(_f = step.delayValue) != null ? _f : 5} ${(_g = step.delayUnit) != null ? _g : "minutes"}` });
           const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
           const btnDelayLog = stepActions.createEl("button", {
             text: "\u{1F4C4} Log",
@@ -13692,7 +13872,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         continue;
       }
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-      const modelLabel = (_h = (_g = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _g.label) != null ? _h : task.model;
+      const modelLabel = (_i = (_h = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _h.label) != null ? _i : task.model;
       if ((task.taskKind || "opencode") === "code") {
         taskMeta.createSpan({ text: "{ } Code task" });
       } else {
@@ -13788,13 +13968,26 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const days = wfScheduleMonthDays.join(", ");
         schedMeta.createEl("span", { text: `\u{1F501} Day ${days || "no days"} of each month at ${wfScheduleTime}` });
       } else if (wfScheduleType === "interval") {
-        const value = (_i = workflow.scheduleIntervalValue) != null ? _i : 10;
-        const unit = (_j = workflow.scheduleIntervalUnit) != null ? _j : "minutes";
+        const value = (_j = workflow.scheduleIntervalValue) != null ? _j : 10;
+        const unit = (_k = workflow.scheduleIntervalUnit) != null ? _k : "minutes";
         schedMeta.createEl("span", { text: `\u{1F501} Every ${value} ${unit}` });
       }
     }
     const actions = details.createDiv("auto-oc-card-actions");
     const durableExecution = workflow.runtimeExecution;
+    if ((durableExecution == null ? void 0 : durableExecution.terminalUncertainty) && !durableExecution.disposition && ["failed", "completed"].includes(durableExecution.phase) && !this.plugin.isWorkflowExecuting(workflow.id)) {
+      const dispose = actions.createEl("button", { text: "Resolve historical uncertainty" });
+      dispose.onclick = async (e) => {
+        e.stopPropagation();
+        try {
+          await this.plugin.confirmTerminalDisposition(workflow.id, durableExecution.runId);
+        } catch (error) {
+          new import_obsidian.Notice(this.plugin.redactSecrets(String(error)));
+        } finally {
+          this.refresh();
+        }
+      };
+    }
     const needsRecovery = durableExecution && ["ready", "in_flight"].includes(durableExecution.phase);
     if (needsRecovery && !this.plugin.isWorkflowExecuting(workflow.id)) {
       let mode = "blocked";
@@ -14186,10 +14379,12 @@ var VisualBuilderModal = class extends import_obsidian.Modal {
   }
 };
 var ConfirmModal = class extends import_obsidian.Modal {
-  constructor(app, titleText, bodyText) {
+  constructor(app, titleText, bodyText, requireReason = false) {
     super(app);
     this.titleText = titleText;
     this.bodyText = bodyText;
+    this.requireReason = requireReason;
+    this.reason = "";
   }
   openAndWait() {
     this.open();
@@ -14204,12 +14399,19 @@ var ConfirmModal = class extends import_obsidian.Modal {
     setupModalX(this);
     contentEl.createEl("h3", { text: this.titleText });
     contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
+    if (this.requireReason) new import_obsidian.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
+      this.reason = value;
+    }));
     new import_obsidian.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
       var _a;
       (_a = this.resolve) == null ? void 0 : _a.call(this, false);
       this.close();
     })).addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => {
       var _a;
+      if (this.requireReason && (!this.reason.trim() || this.reason.length > 1e3)) {
+        new import_obsidian.Notice("Enter a reason of 1\u20131000 characters");
+        return;
+      }
       (_a = this.resolve) == null ? void 0 : _a.call(this, true);
       this.close();
     }));
@@ -16155,7 +16357,7 @@ var ImportModal = class extends import_obsidian.Modal {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
-      const raw = fs23.readFileSync(this.filePath, "utf8");
+      const raw = fs24.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
       const result = this.validateExport(data);
@@ -16891,7 +17093,7 @@ var CodexAppModal = class extends import_obsidian.Modal {
   }
   async launch(cwd) {
     try {
-      if (!fs23.existsSync(cwd) || !fs23.statSync(cwd).isDirectory()) throw new Error(`Folder does not exist: ${cwd}`);
+      if (!fs24.existsSync(cwd) || !fs24.statSync(cwd).isDirectory()) throw new Error(`Folder does not exist: ${cwd}`);
       openCodexNewThread(cwd, (error) => void this.fallbackOpen(error, cwd));
       new import_obsidian.Notice(`AutoOC: opening a new ChatGPT / Codex conversation in ${cwd}`);
       this.close();
@@ -16953,10 +17155,10 @@ var DiagnosticModal = class extends import_obsidian.Modal {
       (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
     }
     this.hiddenProc = null;
-    const fs24 = require("fs");
+    const fs25 = require("fs");
     for (const file of this.tempFiles) {
       try {
-        fs24.unlinkSync(file);
+        fs25.unlinkSync(file);
       } catch (e) {
       }
     }
@@ -16983,17 +17185,17 @@ var DiagnosticModal = class extends import_obsidian.Modal {
           new import_obsidian.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
-        const fs24 = require("fs");
+        const fs25 = require("fs");
         const path23 = require("path");
         const osTmp = require("os").tmpdir();
         const outFile = path23.join(osTmp, "autooc-diag.txt");
         const pidFile = path23.join(osTmp, "autooc-diag.pid");
         try {
-          fs24.unlinkSync(outFile);
+          fs25.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs24.unlinkSync(pidFile);
+          fs25.unlinkSync(pidFile);
         } catch (e) {
         }
         let launchScript;
@@ -17043,7 +17245,7 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
         }
         const scriptFile = path23.join(osTmp, `autooc-diag${scriptExt()}`);
         if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-        else fs24.writeFileSync(scriptFile, launchScript, "utf8");
+        else fs25.writeFileSync(scriptFile, launchScript, "utf8");
         this.tempFiles = [outFile, pidFile, scriptFile];
         if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}
 
@@ -17056,13 +17258,13 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
             if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
             return;
           }
-          if (!fs24.existsSync(outFile)) {
+          if (!fs25.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           if (this.pollHandle) clearInterval(this.pollHandle);
           this.pollHandle = null;
-          const raw = fs24.readFileSync(outFile, "utf8");
+          const raw = fs25.readFileSync(outFile, "utf8");
           this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -17157,14 +17359,14 @@ Detected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
       return text;
     }).addButton(
       (btn) => btn.setButtonText("\u{1F50D} Auto-detect").onClick(async () => {
-        const { existsSync: existsSync14 } = require("fs");
+        const { existsSync: existsSync15 } = require("fs");
         const candidates = [
           `${process.env.APPDATA}\\npm\\opencode.cmd`,
           `${process.env.APPDATA}\\npm\\opencode`,
           `${process.env.LOCALAPPDATA}\\npm\\opencode.cmd`,
           `${process.env.ProgramFiles}\\nodejs\\opencode.cmd`
         ].filter(Boolean);
-        const found = candidates.find((c) => existsSync14(c));
+        const found = candidates.find((c) => existsSync15(c));
         if (found) {
           this.plugin.settings.opencodePath = found;
           await this.plugin.saveSettings();

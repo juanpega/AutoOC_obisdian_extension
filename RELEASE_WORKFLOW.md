@@ -35,3 +35,26 @@ Ante fallo de descarga o integridad previo a escritura, se conserva la instalaci
 El puente MCP se retira en 1.6.2; se conservan CLI, runtime, skill y almacén de credenciales sin editar configuraciones de otros clientes. Las pruebas con el candidato servido por una fixture no acreditan instalación desde GitHub ni Obsidian real: registrar esos ensayos por separado. La publicación y el rollout siguen requiriendo autorización específica.
 
 Do not bypass an active execution owner or an unfinished update marker. Preserve its backup and evidence, and follow the documented recovery procedure before starting another execution or update.
+
+## Transición administrativa de 1.6.6 y 1.6.7 a 1.6.8
+
+El actualizador anterior valida inactividad antes de descargar; corregir solo el
+bundle descargado no habilita ese primer salto. El ZIP conserva siete artefactos:
+`autooc-cli.cjs` incluye `maintain-release`, que usa el código del paquete nuevo,
+no la CLI/runtime del destino. Desde el repositorio, el comando equivalente es
+`node deploy.mjs --maintenance --vault "C:/ruta/vault" --inspect` (o
+`--decisions "C:/ruta/decisiones.json"`). No ejecutes `npm run deploy` para
+inspeccionar: ese script construye y despliega.
+
+Sigue la selección individual y los comandos del README. Primero desactiva el
+plugin; una reserva existente impide continuar y nunca se recupera por este modo.
+La herramienta verifica hashes/versión, crea y verifica respaldo privado de
+catálogo, journals, snapshots y siete artefactos, registra decisiones bajo reserva
+exclusiva y vuelve a validar inactividad antes del instalador con rollback.
+Los hashes prueban coherencia; verifica también el origen confiable del paquete.
+
+Un fallo posterior no deshace una decisión humana durable. El diagnóstico incluye
+casos persistidos y respaldo, sin anunciar instalación completa. Tras corregir la
+causa, reinspecciona; no envíes revisiones antiguas ni casos ya dispuestos.
+Una instalación en disco requiere todavía recarga y validación real de Obsidian.
+Las pruebas sintéticas y Node no sustituyen las pruebas GUI desde ambas versiones.

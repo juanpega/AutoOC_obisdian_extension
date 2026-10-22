@@ -146,3 +146,28 @@ Verificado desde un ZIP generado e instalado en un vault temporal: listar, tarea
 El actualizador original 1.6.0 copia tres archivos. Al arrancar el candidato 1.6.2, el plugin completa automáticamente la CLI, el runtime, esta skill y el descriptor desde el origen configurado, antes de habilitar tareas o workflows. No requiere abrir **Check updates** ni copiar componentes manualmente en el recorrido normal. Comprueba el manifiesto físico, la versión del bundle y la integridad del paquete antes de actualizar la identidad que Obsidian conserva en memoria; rechaza revisiones distintas. El completado inicial necesita red; si falla la descarga o su verificación, el arranque informa del fallo y permite reintentar sin anunciar éxito. Una instalación completa y verificada carga sin red. Para una instalación nueva se usa el ZIP completo, conservando configuración y journals. El candidato debe publicarse mediante el proceso autorizado antes de que el origen público lo ofrezca; las pruebas con un origen controlado no acreditan publicación. El descriptor detecta mezclas y corrupción; la confianza sigue dependiendo del origen del paquete.
 
 La actualización rechaza ejecuciones pendientes y reservas de otros propietarios. Si falla una escritura, restaura los artefactos anteriores. Si hay un corte de proceso o también falla la restauración, conserva `runtime/update-pending.json` y el respaldo indicado en `backup`; el arranque queda bloqueado. Conservar esa evidencia y detener la actualización. Una recuperación manual debe restaurar únicamente los artefactos enumerados en `recovery.json` desde ese respaldo, retirar únicamente los artefactos enumerados como `absent` y verificar el conjunto antes de retirar el marcador. Nunca restaurar ni borrar `data.json`, credenciales o journals para reparar un paquete. No ejecutar esa recuperación por inferencia ni borrar una reserva para forzar el arranque.
+
+## Disposición terminal y primer salto desde 1.6.6 / 1.6.7
+
+Para un histórico terminal que sigue bloqueando la actualización, no borres ni
+edites journals y no conviertas su fase en éxito. `abandon` conserva su contrato
+de intentos no terminales. Con el plugin descargado y sin reserva, la CLI nueva
+ofrece `inspect-terminal --vault <absoluto> --run <id>` y
+`dispose-terminal --vault <absoluto> --decision <JSON absoluto>`.
+La decisión conserva exactamente la inspección y añade `reason` no vacío y
+`acknowledgedUnknownEffects:true`. Solo una decisión humana expresa autoriza
+su ejecución; los resultados externos continúan desconocidos.
+
+Para el primer salto, extrae el paquete completo corregido en otra carpeta:
+`node autooc-cli.cjs maintain-release --vault <absoluto> --inspect`.
+Después de revisar cada caso, guarda una lista de sus objetos exactos, cada uno
+con motivo y reconocimiento explícito, y ejecuta desde esa carpeta
+`node autooc-cli.cjs maintain-release --vault <absoluto> --decisions <JSON absoluto>`.
+No requiere capacidades nuevas en la CLI antigua; crea respaldo privado verificado
+e instala los siete artefactos con el instalador bajo una única reserva. Rechaza
+actividad, escrituras pendientes y cualquier incertidumbre no seleccionada.
+No roba reservas ni ejecuta tareas. Ante fallo parcial, conserva el recibo y
+respaldo, reinspecciona y selecciona únicamente lo pendiente (lista `[]` explícita si todas las decisiones ya son durables). Nunca atribuyas a
+una autorización de otra bóveda o ejecución una aceptación implícita.
+La instalación en disco no verifica carga real: recarga normalmente y comprueba
+versión, historial, datos y nota testigo. No operes sobre un plugin cargado.

@@ -18,7 +18,7 @@ export function assertIdleJournals(runtime: string): Map<string, RunCheckpoint> 
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
     // A validated human abandonment accepts uncertainty explicitly. It is not
     // evidence of success or process termination, but releases orchestration.
-    if (state.phase === "abandoned") { checkpoints.set(state.runId, state); continue; }
+    if (state.phase === "abandoned" || state.disposition) { checkpoints.set(state.runId, state); continue; }
     if (!["completed", "failed"].includes(state.phase) || state.steps.some(step =>
       step.status === "in_flight" || step.approval || step.result?.cancelled || step.evaluations?.some(item => item.status !== "completed"))) {
       throw new Error("Unfinished execution or uncertain effect requires reconciliation");
@@ -45,7 +45,7 @@ export function assertIdleCatalog(settings: any, checkpoints: Map<string, RunChe
       const binding = entry.runtimeExecution;
       if (!binding) continue;
       const checkpoint = checkpoints.get(binding.runId);
-      if (!checkpoint || binding.requiresReconciliation) throw new Error("Execution binding requires reconciliation");
+      if (!checkpoint || binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
       validateProgressBinding({id: kind === "workflows" ? entry.id : binding.workflowId, runtimeExecution: binding}, checkpoint, binding.runId);
       if (kind === "tasks" && checkpoint.workflowId !== `@task:${entry.id}` && !checkpoint.steps.some(step => step.stepId === binding.stepId)) {
         throw new Error("Bound task step is absent from its journal");
