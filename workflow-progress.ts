@@ -1,4 +1,4 @@
-import { validateExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
+import { validateExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { prepareWorkflowDefinition, prepareWorkflowDefinitionAsync } from "./workflow-definition";
 import { cloneJsonStructure } from "./cooperative-json";
 
@@ -44,7 +44,7 @@ function recoverPreparedProgress(workflow:any,checkpoint:RunCheckpoint,currentHa
     ...(checkpoint.createdAt ? {lastRun:checkpoint.createdAt} : {}),
     status:terminal ? checkpoint.phase : 'pending',currentStep:0,
     runtimeExecution:{runId:checkpoint.runId,workflowId:checkpoint.workflowId,definitionHash:checkpoint.definitionHash,
-      revision:checkpoint.revision,phase:checkpoint.phase,abandonment:checkpoint.abandonment,requiresReconciliation:!terminal,definitionChanged:true,
+      revision:checkpoint.revision,phase:checkpoint.phase,abandonment:checkpoint.abandonment,disposition:checkpoint.disposition,terminalUncertainty:checkpointUncertainties(checkpoint).length>0,requiresReconciliation:!terminal,definitionChanged:true,
       historicalSteps:cloneJsonStructure(checkpoint.steps)},
     // A hash alone cannot prove that a reused step ID still means the same task.
     steps:workflow.steps.map((step:any)=>{const {lastRun,output,status,...definition}=step;return {...definition,status:'pending',output:''};}),
@@ -69,7 +69,7 @@ function projectPreparedProgress(workflow:any,checkpoint:RunCheckpoint,activelyE
     ...(checkpoint.createdAt ? {lastRun:checkpoint.createdAt} : {}),
     status:checkpoint.phase==='abandoned'?'abandoned':checkpoint.phase==='completed'?'completed':checkpoint.phase==='failed'?'failed':activelyExecuting?'running':'pending',
     currentStep:Math.max(0,workflow.steps.findIndex((step:any)=>step.id===target)),
-    runtimeExecution:{runId:checkpoint.runId,definitionHash:checkpoint.definitionHash,revision:checkpoint.revision,phase:checkpoint.phase,abandonment:checkpoint.abandonment,requiresReconciliation:checkpoint.phase==='in_flight'&&!activelyExecuting},
+    runtimeExecution:{runId:checkpoint.runId,definitionHash:checkpoint.definitionHash,revision:checkpoint.revision,phase:checkpoint.phase,abandonment:checkpoint.abandonment,disposition:checkpoint.disposition,terminalUncertainty:checkpointUncertainties(checkpoint).length>0,requiresReconciliation:checkpoint.phase==='in_flight'&&!activelyExecuting},
     steps:workflow.steps.map((step:any)=>{
       const observed = last.get(step.id);
       return {...step,...(observed?.startedAt ? {lastRun:observed.startedAt} : {}),status:observed?.status==='in_flight'?(checkpoint.phase==='abandoned'?'abandoned':activelyExecuting?'running':'pending'):observed?.status || 'pending',output:observed?.output || ''};

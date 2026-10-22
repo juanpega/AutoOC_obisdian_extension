@@ -149,3 +149,39 @@ Start with the [architecture](docs/architecture.md).
 ## License
 
 AutoOC is open source under the [MIT License](LICENSE).
+
+## Actualización de históricos bloqueados (1.6.6 / 1.6.7 → 1.6.8)
+
+Si el actualizador informa de efectos inciertos y `abandon` rechaza una ejecución
+terminal, usa el paquete completo **1.6.8** desde una carpeta independiente.
+Verifica su procedencia oficial antes de ejecutarlo. Esta guía prepara la nueva
+versión; no acredita que esté publicada ni instalada en tu bóveda.
+
+1. Descarga AutoOC normalmente desde Obsidian (desactivar el plugin). Una reserva
+   que permanezca bloquea el procedimiento: no borres locks ni journals.
+2. Desde el ZIP extraído, ejecuta:
+   `node autooc-cli.cjs maintain-release --vault "C:/ruta/vault" --inspect`.
+   La inspección no modifica la instalación y muestra identidad física, revisión
+   y causas, sin prompts ni resultados privados.
+3. Guarda en un JSON privado una **lista** con únicamente las inspecciones de las
+   ejecuciones revisadas. Conserva todos sus campos; añade a cada objeto
+   `"reason":"motivo humano concreto"` y `"acknowledgedUnknownEffects":true`.
+   No selecciones ejecuciones de otra bóveda ni infieras decisiones globales.
+4. Ejecuta desde esa misma carpeta:
+   `node autooc-cli.cjs maintain-release --vault "C:/ruta/vault" --decisions "C:/ruta/decisiones.json"`.
+   Comprueba el recibo: informa del respaldo privado verificado y de cada decisión
+   durable, e instala los siete artefactos con la reserva del destino.
+5. Activa AutoOC normalmente y comprueba la versión, historial y una nota testigo
+   guardada/reabierta. El recibo de instalación **no acredita carga en Obsidian**.
+
+La fase histórica, pasos y resultados se conservan; el resultado externo sigue
+siendo **desconocido**, incluso tras resolver el bloqueo administrativo. La
+decisión no detiene procesos, confirma su terminación ni repite pasos. Si queda
+otro histórico incierto o una escritura pendiente, la instalación se detiene.
+Los lectores antiguos aceptan el campo añadido y mantienen su bloqueo prudente.
+No se necesita un comando nuevo en la CLI antigua.
+
+Si hay un fallo parcial, conserva el recibo, el respaldo y los snapshots.
+Las decisiones durables permanecen; vuelve a inspeccionar y selecciona solo los
+casos aún pendientes (lista `[]` explícita si todas las decisiones ya son durables). Si queda `update-pending.json`, utiliza la recuperación
+soportada del instalador antes de ejecutar más trabajo. No edites sus registros.

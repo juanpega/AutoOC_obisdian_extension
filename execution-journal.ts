@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
+import { physicalPath } from "./path-identity";
 import { atomicSettingsWrite } from "./settings-writer";
 import type { ExecutionLease } from "./execution-lease";
 
@@ -14,6 +15,7 @@ export interface RunCheckpoint {
   revision: number;
   createdAt?: string;
   phase: Phase;
+  disposition?: TerminalDisposition;
   abandonment?: {at:string;reason:string;outcome:"unknown";acknowledgedUnknownEffects:true;previousPhase:"ready"|"in_flight";previousNextStepId:string;previousRevision:number;snapshot:string};
   nextStepId: string | null;
   steps: Array<{ stepId: string; status: "in_flight" | "completed" | "failed"; output?: string; startedAt?:string; finishedAt?:string; codexThreadId?: string; codexTurnId?: string;
@@ -22,6 +24,39 @@ export interface RunCheckpoint {
     evaluations?: Array<{key:string;status:"in_flight"|"completed";output?:string}>;
     approval?: {token:string;ownerToken:string;requestId:string|number;kind:string;summary:string};
   }>;
+}
+
+export interface DispositionLocation { vault:string; installationDirectory:string; runtimeDirectory:string }
+export interface TerminalDisposition {
+  at:string; reason:string; outcome:"unknown"; acknowledgedUnknownEffects:true;
+  previousRevision:number; snapshot:string; snapshotHash:string;
+  vault:string; installationDirectory:string; runtimeDirectory:string;
+  vaultIdentity:string; installationIdentity:string; runtimeIdentity:string;
+  workflowId:string; runId:string; definitionHash:string; causes:string[];
+}
+
+export function checkpointUncertainties(state:RunCheckpoint):string[] {
+  return state.steps.flatMap((step,index)=>[
+    ...(step.status==="in_flight" ? [`${index}:in_flight`] : []),
+    ...(step.approval ? [`${index}:approval`] : []),
+    ...(step.result?.cancelled ? [`${index}:cancelled`] : []),
+    ...(step.evaluations || []).filter(e=>e.status!=="completed").map(e=>`${index}:evaluation:${e.key}`)
+  ]);
+}
+
+function directoryIdentity(directory:string):string {
+  const stat=fs.lstatSync(directory);
+  if(!stat.isDirectory() || stat.isSymbolicLink())throw new Error("Unsafe disposition directory");
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+
+export function dispositionLocation(location:DispositionLocation) {
+  const vault=physicalPath(location.vault),installationDirectory=physicalPath(location.installationDirectory),runtimeDirectory=physicalPath(location.runtimeDirectory);
+  if(path.relative(installationDirectory,runtimeDirectory)!=="runtime" || path.relative(vault,installationDirectory).split(path.sep).includes(".."))throw new Error("Disposition location mismatch");
+  // Inspect every installation component before trusting its physical identity.
+  let current=vault;
+  for(const part of path.relative(vault,runtimeDirectory).split(path.sep)) {current=path.join(current,part);directoryIdentity(current);}
+  return {vault,installationDirectory,runtimeDirectory,vaultIdentity:directoryIdentity(vault),installationIdentity:directoryIdentity(installationDirectory),runtimeIdentity:directoryIdentity(runtimeDirectory)};
 }
 
 export function validateExecutionCheckpoint(value: any): asserts value is RunCheckpoint {
@@ -49,6 +84,16 @@ export function validateExecutionCheckpoint(value: any): asserts value is RunChe
       throw new Error("Invalid step checkpoint");
   }
   const last = value.steps[value.steps.length - 1];
+  if(value.disposition!==undefined) {
+    const d=value.disposition;
+    if(!["failed","completed"].includes(value.phase) || typeof d.at!=="string" || !validDate(d.at) ||
+      typeof d.reason!=="string" || !d.reason.trim() || d.reason.length>1000 || d.outcome!=="unknown" || d.acknowledgedUnknownEffects!==true ||
+      d.previousRevision!==value.revision-1 || d.snapshot!==`disposition-${value.runId}-${d.previousRevision}.snapshot` || !/^[a-f0-9]{64}$/.test(d.snapshotHash || "") ||
+      d.runId!==value.runId || d.workflowId!==value.workflowId || d.definitionHash!==value.definitionHash ||
+      !["vault","installationDirectory","runtimeDirectory"].every(key=>typeof d[key]==="string" && path.isAbsolute(d[key])) ||
+      !["vaultIdentity","installationIdentity","runtimeIdentity"].every(key=>typeof d[key]==="string" && d[key]) ||
+      !checkpointUncertainties(value).length || JSON.stringify(d.causes)!==JSON.stringify(checkpointUncertainties(value)))throw new Error("Invalid terminal disposition");
+  }
   const abandoned=value.phase === "abandoned", decision=value.abandonment;
   if (abandoned ? !decision || typeof decision.at!=="string" || !validDate(decision.at) ||
       typeof decision.reason!=="string" || !decision.reason.trim() || decision.reason.length>1000 || decision.outcome!=="unknown" || decision.acknowledgedUnknownEffects!==true ||
@@ -72,12 +117,23 @@ export function readExecutionCheckpoint(directory:string,runId:string):RunCheckp
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
   const file = path.join(directory, runId + ".json");
   const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Execution checkpoint must be a regular file");
+  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink!==1) throw new Error("Execution checkpoint must be a regular file");
   let state:unknown;
   try { state = JSON.parse(fs.readFileSync(file,"utf8")); }
   catch { throw new Error("Cannot read valid execution checkpoint"); }
   validateExecutionCheckpoint(state);
   if (state.runId !== runId) throw new Error("Execution identity changed");
+  if(state.disposition) {
+    const d=state.disposition,location=dispositionLocation(d);
+    if(physicalPath(directory)!==location.runtimeDirectory || Object.entries(location).some(([key,value])=>(d as any)[key]!==value))throw new Error("Disposition installation identity changed");
+    const snapshot=path.join(directory,d.snapshot),stat=fs.lstatSync(snapshot);
+    if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1)throw new Error("Unsafe disposition snapshot");
+    const original=fs.readFileSync(snapshot);
+    if(createHash("sha256").update(original).digest("hex")!==d.snapshotHash)throw new Error("Disposition snapshot changed");
+    const prior=JSON.parse(original.toString("utf8"));validateExecutionCheckpoint(prior);
+    const {disposition,...expected}=state;expected.revision--;
+    if(JSON.stringify(prior)!==JSON.stringify(expected))throw new Error("Disposition snapshot does not match checkpoint");
+  }
   return state;
 }
 
@@ -107,6 +163,30 @@ export class ExecutionJournal {
 
   snapshot(): RunCheckpoint { return JSON.parse(JSON.stringify(this.state)); }
 
+  disposeTerminal(expectedRevision:number,reason:string,acknowledgedUnknownEffects:boolean,location:DispositionLocation):Promise<void> {
+    return this.update((state,original)=>{
+      if(state.revision!==expectedRevision)throw new Error("Execution revision changed; inspect again");
+      if(state.disposition)throw new Error("Terminal execution already disposed");
+      if(!["failed","completed"].includes(state.phase) || !checkpointUncertainties(state).length)throw new Error("No terminal uncertainty to dispose");
+      if(acknowledgedUnknownEffects!==true)throw new Error("Explicit acknowledgement of unknown effects is required");
+      if(typeof reason!=="string" || !reason.trim() || reason.length>1000)throw new Error("A concise disposition reason is required");
+      const identity=dispositionLocation(location);
+      if(identity.runtimeDirectory!==physicalPath(this.lease.directory))throw new Error("Disposition lease identity mismatch");
+      const snapshot=`disposition-${state.runId}-${state.revision}.snapshot`,file=path.join(this.lease.directory,snapshot);
+      if(fs.existsSync(file)) {
+        const stat=fs.lstatSync(file);
+        if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || fs.readFileSync(file,"utf8")!==original)throw new Error("Disposition snapshot changed");
+      } else {
+        const fd=fs.openSync(file,"wx",0o600);
+        try {fs.writeFileSync(fd,original);fs.fsyncSync(fd);} finally {fs.closeSync(fd);}
+      }
+      this.lease.assertOwned();
+      state.disposition={...identity,at:new Date().toISOString(),reason:reason.trim(),outcome:"unknown",acknowledgedUnknownEffects:true,
+        previousRevision:state.revision,snapshot,snapshotHash:createHash("sha256").update(original).digest("hex"),
+        workflowId:state.workflowId,runId:state.runId,definitionHash:state.definitionHash,causes:checkpointUncertainties(state)};
+    });
+  }
+
   abandon(expectedRevision:number, reason:string, acknowledgedUnknownEffects:boolean):Promise<void> {
     return this.update(state=>{
       if(state.revision!==expectedRevision)throw new Error("Execution revision changed; inspect again");
@@ -128,15 +208,26 @@ export class ExecutionJournal {
     });
   }
 
-  private update(change: (next: RunCheckpoint) => void): Promise<void> {
+  private update(change: (next: RunCheckpoint, original:string) => void): Promise<void> {
     const operation = (writes.get(this.file) || Promise.resolve()).then(async () => {
       this.lease.assertOwned();
       if (fs.lstatSync(this.file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
       const previous = fs.readFileSync(this.file, "utf8");
       if (JSON.stringify(JSON.parse(previous)) !== JSON.stringify(this.state)) throw new Error("Execution checkpoint changed");
       const next = this.snapshot();
-      change(next); next.revision++; validateExecutionCheckpoint(next);
-      await atomicSettingsWrite(this.file, next);
+      if(next.disposition)throw new Error("Terminal execution already disposed; historical evidence is immutable");
+      change(next,previous); next.revision++; validateExecutionCheckpoint(next);
+      await atomicSettingsWrite(this.file, next, fs.promises, async()=>{
+        this.lease.assertOwned();
+        const stat=fs.lstatSync(this.file);
+        if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || fs.readFileSync(this.file,"utf8")!==previous)throw new Error("Execution checkpoint changed before publication");
+        if(next.disposition) {
+          const d=next.disposition;
+          if(Object.entries(dispositionLocation(d)).some(([key,value])=>(d as any)[key]!==value))throw new Error("Disposition identity changed");
+          const snapshot=path.join(this.lease.directory,d.snapshot),stat=fs.lstatSync(snapshot);
+          if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || fs.readFileSync(snapshot,'utf8')!==previous)throw new Error("Disposition snapshot changed before publication");
+        }
+      });
       this.lease.assertOwned();
       this.state = next;
     });

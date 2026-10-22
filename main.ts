@@ -48,8 +48,8 @@ import { supportsSharedWorkflow, type WorkflowTaskOutput } from "./code-workflow
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, recoverWorkflowProgressAsync, validateProgressBinding } from "./workflow-progress";
 import { taskElapsedSeconds } from "./task-history";
-import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
-import { abandonInstalledExecution } from "./execution-abandonment";
+import { readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
+import { abandonInstalledExecution, inspectTerminalExecution, disposeTerminalExecution } from "./execution-abandonment";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { observeCheckpoint } from "./checkpoint-observation";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
@@ -3204,7 +3204,7 @@ export default class AutoOCPlugin extends Plugin {
             ...(observed.codexThreadId ? {lastCodexThreadId:observed.codexThreadId} : {}),
             ...(observed.codexTurnId ? {lastCodexTurnId:observed.codexTurnId} : {}),
             pendingCodexApproval:undefined,
-            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,phase:checkpoint.phase,abandonment:checkpoint.abandonment,finishedAt:observed.finishedAt,requiresReconciliation:false}};
+            runtimeExecution:{...binding,revision:checkpoint.revision,definitionHash:checkpoint.definitionHash,phase:checkpoint.phase,abandonment:checkpoint.abandonment,disposition:checkpoint.disposition,terminalUncertainty:checkpointUncertainties(checkpoint).length>0,finishedAt:observed.finishedAt,requiresReconciliation:false}};
         }
         const workflow = recovered.find(wf=>wf.id===binding.workflowId && (wf as any).runtimeExecution?.runId===binding.runId);
         const step = workflow?.steps.find(step=>step.id===binding.stepId && step.taskId===task.id);
@@ -3713,6 +3713,25 @@ export default class AutoOCPlugin extends Plugin {
       this.legacyAttempts.delete(task.id);
       if (callback) await callback(task, code);
     };
+  }
+
+  async confirmTerminalDisposition(workflowId:string,runId:string) {
+    this.assertLifecycleOpen();
+    const location=this.selectedExecutionLocation(),observed=inspectTerminalExecution({vault:location.vault,installationDirectory:location.installationDirectory,runId});
+    if(observed.workflowId!==workflowId)throw new Error('Execution identity changed');
+    const modal=new ConfirmModal(this.app,'Resolve historical uncertainty?',
+      `Workflow: ${workflowId}. Attempt: ${runId}. Revision: ${observed.revision}. Historical phase: ${observed.phase}. External outcome remains UNKNOWN. This records a human disposition only: it does not stop processes, verify termination, mark success, or execute steps. Review this exact attempt and enter your reason.`,true);
+    if(!await modal.openAndWait())return;
+    this.assertLifecycleOpen();
+    if(this.updateInProgress || !this.pluginExecutionLease || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size)throw new Error('An execution is still active; wait for it to finish');
+    const reservation={workflowId,runId,controller:new AbortController()};this.sharedWorkflowExecution=reservation;
+    try {
+      await this.saveSettings(false);this.beginExecutionEffects();
+      await disposeTerminalExecution({...observed,lease:this.pluginExecutionLease,reason:modal.reason,acknowledgedUnknownEffects:true});
+    } finally {
+      if(this.sharedWorkflowExecution===reservation)this.sharedWorkflowExecution=undefined;
+      await this.loadSettings();this.refreshOpenViews();
+    }
   }
 
   async confirmAbandonTaskExecution(taskId:string):Promise<void> {
@@ -7011,7 +7030,7 @@ class AutoOCView extends ItemView {
     });
     
     const badge = summary.createEl("span", {
-      text: task.status === "abandoned" ? "abandoned · outcome unknown" : task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
+      text: (task as any).runtimeExecution?.disposition ? `${task.status} · human disposition ${(task as any).runtimeExecution.disposition.at} · external outcome unknown` : task.status === "abandoned" ? "abandoned · outcome unknown" : task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -7134,6 +7153,11 @@ class AutoOCView extends ItemView {
 
     const actions = details.createDiv("auto-oc-card-actions");
 
+    const terminalBinding=(task as any).runtimeExecution;
+    if(terminalBinding?.terminalUncertainty && !terminalBinding.disposition && ['failed','completed'].includes(terminalBinding.phase) && task.status!=='running') {
+      const dispose=actions.createEl('button',{text:'Resolve historical uncertainty'});
+      dispose.onclick=async e=>{e.stopPropagation();try {await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id,terminalBinding.runId);} catch(error) {new Notice(this.plugin.redactSecrets(String(error)));}};
+    }
     if ((task as any).runtimeExecution?.requiresReconciliation && (task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && task.status !== 'running') {
       const abandon = actions.createEl('button', {text:'Abandon attempt',cls:'auto-oc-btn-stop'});
       abandon.onclick = async e => {
@@ -7371,7 +7395,7 @@ class AutoOCView extends ItemView {
     });
 
     const badge = summary.createEl("span", {
-      text: workflow.status === "abandoned" ? "abandoned · outcome unknown" : workflow.status,
+      text: (workflow as any).runtimeExecution?.disposition ? `${workflow.status} · human disposition ${(workflow as any).runtimeExecution.disposition.at} · external outcome unknown` : workflow.status === "abandoned" ? "abandoned · outcome unknown" : workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
@@ -7662,6 +7686,10 @@ class AutoOCView extends ItemView {
     const actions = details.createDiv("auto-oc-card-actions");
 
     const durableExecution=(workflow as any).runtimeExecution;
+    if(durableExecution?.terminalUncertainty && !durableExecution.disposition && ['failed','completed'].includes(durableExecution.phase) && !this.plugin.isWorkflowExecuting(workflow.id)) {
+      const dispose=actions.createEl('button',{text:'Resolve historical uncertainty'});
+      dispose.onclick=async e=>{e.stopPropagation();try {await this.plugin.confirmTerminalDisposition(workflow.id,durableExecution.runId);} catch(error) {new Notice(this.plugin.redactSecrets(String(error)));} finally {this.refresh();}};
+    }
     const needsRecovery=durableExecution && ["ready","in_flight"].includes(durableExecution.phase);
     if (needsRecovery && !this.plugin.isWorkflowExecuting(workflow.id)) {
       let mode:"resume"|"reconcile"|"blocked"="blocked";
@@ -8087,8 +8115,9 @@ class VisualBuilderModal extends Modal {
 
 class ConfirmModal extends Modal {
   private resolve?: (value: boolean) => void;
+  reason = '';
 
-  constructor(app: App, private titleText: string, private bodyText: string) {
+  constructor(app: App, private titleText: string, private bodyText: string, private requireReason=false) {
     super(app);
   }
 
@@ -8104,9 +8133,10 @@ class ConfirmModal extends Modal {
     setupModalX(this);
     contentEl.createEl("h3", { text: this.titleText });
     contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
+    if(this.requireReason)new Setting(contentEl).setName('Reason for this human decision').addTextArea(text=>text.onChange(value=>{this.reason=value;}));
     new Setting(contentEl)
       .addButton((btn) => btn.setButtonText("Cancel").onClick(() => { this.resolve?.(false); this.close(); }))
-      .addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => { this.resolve?.(true); this.close(); }));
+      .addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => { if(this.requireReason && (!this.reason.trim() || this.reason.length>1000)){new Notice('Enter a reason of 1–1000 characters');return;} this.resolve?.(true); this.close(); }));
   }
 
   onClose() {

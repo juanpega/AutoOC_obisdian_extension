@@ -294,10 +294,10 @@ function parseSettings(text: string | null): unknown {
   catch { throw new Error("Cannot read valid AutoOC configuration"); }
 }
 
-export async function atomicSettingsWrite(file: string, data: unknown, io = fs.promises): Promise<void> {
+export async function atomicSettingsWrite(file: string, data: unknown, io = fs.promises, beforeReplace?:()=>Promise<void>): Promise<void> {
   const text = JSON.stringify(data, null, 2);
   if (text === undefined) throw new Error("Settings are not serializable");
-  await atomicSettingsTextWrite(file, text, io);
+  await atomicSettingsTextWrite(file, text, io, beforeReplace);
 }
 
 // The snapshot has already been serialized once; keep those bytes immutable
