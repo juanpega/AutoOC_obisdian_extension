@@ -171,3 +171,13 @@ respaldo, reinspecciona y selecciona únicamente lo pendiente (lista `[]` explí
 una autorización de otra bóveda o ejecución una aceptación implícita.
 La instalación en disco no verifica carga real: recarga normalmente y comprueba
 versión, historial, datos y nota testigo. No operes sobre un plugin cargado.
+
+El mantenimiento del paquete 1.6.9 admite vínculos anteriores a un abandono
+oficial del mismo intento únicamente con su snapshot original válido y revisión,
+fase, hash e identidad coherentes. Reconocerlo no modifica el catálogo ni crea
+otra decisión; el resultado externo sigue `unknown`. Inspecciona de nuevo y usa
+un archivo de decisiones `[]` si no hay otras incertidumbres pendientes. No
+repitas `abandon`, no edites journals y no retires reservas. Evidencia ausente,
+insegura, alterada o cambiante y otras incertidumbres siguen bloqueando. Para
+el primer salto desde 1.6.6/1.6.7 usa la CLI del paquete nuevo separado; la CLI
+antigua no necesita incorporar estos comandos.

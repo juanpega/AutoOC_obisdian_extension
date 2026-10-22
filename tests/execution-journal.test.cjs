@@ -14,6 +14,30 @@ const {executeCode}=load('code-runtime');
 const {prepareWorkflowDefinition:prepare}=load('workflow-definition');
 const {runCodeWorkflowHost}=load('code-workflow-host');
 const hash='a'.repeat(64);
+test('abandonment reader verifies full original snapshot and rejects unsafe or inconsistent history',async()=>fixture(async lease=>{
+  const {readExecutionCheckpoint}=load('execution-journal');
+  const journal=await J.create(lease,'snapshot-proof',hash,'a');await journal.begin('a');
+  await journal.recordCodexThread('a','thread-original','turn-original');
+  await journal.recordResult({succeeded:false,output:'original result',cancelled:true});await journal.recordEvaluation('pending');
+  const before=journal.snapshot();await journal.abandon(before.revision,'Explicit historical decision',true);
+  const after=journal.snapshot(),file=path.join(lease.directory,after.runId+'.json'),snapshot=path.join(lease.directory,after.abandonment.snapshot);
+  const bytes=fs.readFileSync(file),priorBytes=fs.readFileSync(snapshot);
+  for(const mutation of [s=>s.steps[0].codexThreadId='changed',s=>s.steps[0].result.output='changed',s=>s.steps[0].evaluations[0].status='completed',s=>s.createdAt='2020-01-01',s=>s.definitionHash='b'.repeat(64),s=>s.runId='other',s=>s.workflowId='other']) {
+    const prior=JSON.parse(priorBytes);mutation(prior);fs.writeFileSync(snapshot,JSON.stringify(prior));
+    assert.throws(()=>readExecutionCheckpoint(lease.directory,after.runId),/snapshot/i);assert.deepEqual(fs.readFileSync(file),bytes);
+  }
+  fs.writeFileSync(snapshot,'{');assert.throws(()=>readExecutionCheckpoint(lease.directory,after.runId),/snapshot/i);
+  fs.writeFileSync(snapshot,priorBytes);
+  const link=snapshot+'.linked';fs.linkSync(snapshot,link);
+  try{assert.throws(()=>readExecutionCheckpoint(lease.directory,after.runId),/snapshot/i);}finally{fs.unlinkSync(link);}
+  for(const change of [{acknowledgedUnknownEffects:false},{outcome:'success'},{snapshot:'../escape.snapshot'},{previousRevision:0}]) {
+    const altered=structuredClone(after);Object.assign(altered.abandonment,change);fs.writeFileSync(file,JSON.stringify(altered));
+    assert.throws(()=>readExecutionCheckpoint(lease.directory,after.runId),/abandonment/i);
+  }
+  fs.writeFileSync(file,bytes);assert.deepEqual(readExecutionCheckpoint(lease.directory,after.runId),after);
+  assert.deepEqual(fs.readFileSync(snapshot),priorBytes);
+  fs.unlinkSync(snapshot); // This fixture's teardown inventories journal JSON only.
+}));
 test('explicit abandonment preserves uncertain evidence and cannot resume or hide a changed revision', async()=>fixture(async lease=>{
   const definition=prepare({id:'abandoned',steps:[{id:'a',stepKind:'code',code:'output="must not repeat";'}]},[],{});
   const journal=await J.create(lease,'abandoned',definition.hash,'a');

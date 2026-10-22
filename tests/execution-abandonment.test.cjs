@@ -2,12 +2,135 @@ const {test}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),Module=require('node:module'),ts=require('typescript');
 const {spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..'),cache=new Map();
+const candidateVersion=JSON.parse(fs.readFileSync(path.join(root,'manifest.json'),'utf8')).version;
 function load(name){
   const file=path.join(root,name+'.ts');if(cache.has(file))return cache.get(file).exports;
   const m=new Module(file,module);m.filename=file;m.paths=Module._nodeModulePaths(root);cache.set(file,m);
   const original=m.require.bind(m);m.require=name=>name.startsWith('./')?load(name.slice(2)):original(name);
   m._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,file);return m.exports;
 }
+
+for(const phase of ['ready','in_flight'])test(`stale abandonment binding ${phase} is read-only and rejects incompatible evidence`,async t=>{
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-stale-')));
+  t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
+  const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
+  const {ExecutionJournal,readExecutionCheckpoint}=load('execution-journal'),{acquireExecutionLease}=load('execution-lease');
+  const {assertInstalledExecutionIdle}=load('execution-idle');
+  const lease=acquireExecutionLease(runtime),j=await ExecutionJournal.create(lease,'wf','a'.repeat(64),'a');
+  // Keep an earlier observed task, also when the workflow is ready for its next step.
+  await j.begin('a');await j.recordResult({succeeded:false,output:'historical unknown',cancelled:true});
+  if(phase==='ready')await j.finish('a',true,'historical output','b');
+  const before=j.snapshot(),binding={runId:before.runId,definitionHash:before.definitionHash,revision:before.revision,phase,requiresReconciliation:true};
+  const catalog={tasks:[{id:'task',status:'pending',runtimeExecution:{...binding,workflowId:'wf',stepId:'a',stepIndex:0}}],workflows:[{id:'wf',status:'pending',runtimeExecution:binding}]};
+  const config=path.join(directory,'data.json');fs.writeFileSync(config,JSON.stringify(catalog));
+  await j.abandon(before.revision,'Existing explicit decision',true);const after=j.snapshot();lease.release();
+  const file=path.join(runtime,before.runId+'.json'),snapshot=path.join(runtime,after.abandonment.snapshot);
+  const originals=[config,file,snapshot].map(p=>fs.readFileSync(p));
+  assert.doesNotThrow(()=>assertInstalledExecutionIdle(directory));
+  const projected=structuredClone(catalog);
+  for(const kind of ['tasks','workflows'])Object.assign(projected[kind][0].runtimeExecution,{revision:after.revision,phase:'abandoned',requiresReconciliation:false});
+  fs.writeFileSync(config,JSON.stringify(projected));assert.doesNotThrow(()=>assertInstalledExecutionIdle(directory));fs.writeFileSync(config,originals[0]);
+  for(const kind of ['tasks','workflows'])for(const change of [{runId:'absent'},{workflowId:'other'},{definitionHash:'b'.repeat(64)},{revision:before.revision-1},{phase:'failed'},{phase:'abandoned'},{stepId:'absent'},{stepIndex:9}]) {
+    const altered=structuredClone(catalog);Object.assign(altered[kind][0].runtimeExecution,change);
+    fs.writeFileSync(config,JSON.stringify(altered));assert.throws(()=>assertInstalledExecutionIdle(directory),undefined,JSON.stringify({kind,change}));
+  }
+  fs.writeFileSync(config,originals[0]);
+  for(const mutate of [p=>{p.workflowId='other';},p=>{p.steps[0].result.output='forged';},p=>{p.revision++;},p=>{p.nextStepId='other';}]) {
+    const prior=JSON.parse(originals[2]);mutate(prior);fs.writeFileSync(snapshot,JSON.stringify(prior));
+    assert.throws(()=>readExecutionCheckpoint(runtime,before.runId),/snapshot/i);assert.throws(()=>assertInstalledExecutionIdle(directory));
+  }
+  fs.writeFileSync(snapshot,originals[2]);fs.renameSync(snapshot,snapshot+'.saved');
+  assert.throws(()=>readExecutionCheckpoint(runtime,before.runId),/snapshot/i);fs.renameSync(snapshot+'.saved',snapshot);
+  assert.doesNotThrow(()=>assertInstalledExecutionIdle(directory));
+  [config,file,snapshot].forEach((p,i)=>assert.deepEqual(fs.readFileSync(p),originals[i]));
+  assert.equal(readExecutionCheckpoint(runtime,before.runId).abandonment.outcome,'unknown');
+});
+
+for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd51df7bd4955c1c22c6910e']])test(`stale abandonment maintenance from authentic ${version} preserves decisions across rejection, rollback and reload`,async t=>{
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-stale-transition-')));
+  t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
+  const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');fs.mkdirSync(runtime,{recursive:true});
+  const {RELEASE_FILES,RELEASE_DESCRIPTOR,verifyRelease}=load('release-update'),names=[...RELEASE_FILES,RELEASE_DESCRIPTOR],old={};
+  for(const name of names) {
+    const result=spawnSync('git',['-c',`safe.directory=${root.replace(/\\/g,'/')}`,'show',`${commit}:${name}`],{cwd:root,maxBuffer:12*1024*1024,windowsHide:true});
+    assert.equal(result.status,0,result.stderr?.toString());old[name]=result.stdout;
+    const target=path.join(directory,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.writeFileSync(target,result.stdout);
+  }
+  verifyRelease(old,version);
+  const legacy=require(path.join(directory,'autooc-runtime.cjs'));
+  const {ExecutionJournal,readExecutionCheckpoint}=load('execution-journal'),lease=legacy.acquireExecutionLease(runtime);
+  const catalog={tasks:[],workflows:[],custom:'preserve'},states=[];
+  for(const mode of ['ready','in_flight','standalone','standalone-ready']) {
+    const standalone=mode.startsWith('standalone');
+    const taskId='task-'+mode,workflowId=standalone?`@task:${taskId}`:'wf-'+mode,stepId=standalone?'task':'a';
+    const task={id:taskId,name:taskId,taskKind:'code',code:'throw Error("must never execute");',scheduleType:'manual',status:'pending'};
+    const wf={id:workflowId,name:workflowId,status:'pending',steps:[{id:stepId,taskId,stepKind:'task'}]};
+    const hash=load('workflow-definition').prepareWorkflowDefinition(wf,[task],catalog).hash;
+    const j=await ExecutionJournal.create(lease,workflowId,hash,stepId);
+    if(mode!=='standalone-ready'){await j.begin(stepId);await j.recordResult({succeeded:false,output:'original unknown',cancelled:true});}
+    if(mode==='ready')await j.finish(stepId,true,'original','next');
+    const before=j.snapshot(),binding={runId:before.runId,workflowId,definitionHash:hash,revision:before.revision,phase:before.phase,requiresReconciliation:true};
+    task.runtimeExecution={...binding,stepId,stepIndex:mode==='standalone-ready'?-1:0};catalog.tasks.push(task);
+    if(!standalone){wf.runtimeExecution={...binding};delete wf.runtimeExecution.workflowId;catalog.workflows.push(wf);}
+    // Official old API records the decision; leave the previous bindings intact.
+    await legacy.abandonInstalledExecution({vault,runId:before.runId,workflowId,revision:before.revision,reason:'Existing explicit synthetic decision',acknowledgedUnknownEffects:true,lease});
+    states.push(readExecutionCheckpoint(runtime,before.runId));
+  }
+  lease.release();
+  const config=path.join(directory,'data.json');fs.writeFileSync(config,JSON.stringify(catalog));
+  const evidence=[config,...states.flatMap(s=>[path.join(runtime,s.runId+'.json'),path.join(runtime,s.abandonment.snapshot)])];
+  const bytes=evidence.map(p=>fs.readFileSync(p));
+  const preserve=()=>evidence.forEach((p,i)=>assert.deepEqual(fs.readFileSync(p),bytes[i]));
+  const preservePackage=()=>names.forEach(n=>assert.deepEqual(fs.readFileSync(path.join(directory,n)),old[n]));
+  const {maintainRelease}=load('release-maintenance'),options={sourceDirectory:root,vault,version:candidateVersion,decisions:[]};
+  assert.equal((await maintainRelease({...options,decisions:undefined})).mode,'inspect');preserve();
+  for(const marker of [path.join(directory,'data.json.write-lock'),path.join(directory,'data.json.pending.tmp'),path.join(runtime,'pending.write-lock'),path.join(runtime,'pending.tmp'),path.join(runtime,'update-pending.json')]) {
+    fs.writeFileSync(marker,'synthetic pending');await assert.rejects(maintainRelease(options),/write|update/);fs.unlinkSync(marker);preserve();preservePackage();
+  }
+  const owner=legacy.acquireExecutionLease(runtime);await assert.rejects(maintainRelease(options),/reservation/);owner.release();
+  for(const patch of [{status:'running'},{pendingCodexApproval:{token:'pending'}},{runtimeExecution:{...catalog.tasks[0].runtimeExecution,revision:0}}]) {
+    const changed=structuredClone(catalog);Object.assign(changed.tasks[0],patch);fs.writeFileSync(config,JSON.stringify(changed));
+    await assert.rejects(maintainRelease(options));fs.writeFileSync(config,bytes[0]);preserve();preservePackage();
+  }
+  const write=fs.writeFileSync;let injection=false;
+  fs.writeFileSync=function(file,...args){if(!injection && file===path.join(directory,'main.js')){injection=true;throw new Error('stale install injected');}return write.call(this,file,...args);};
+  try{await assert.rejects(maintainRelease(options),/stale install injected/);}finally{fs.writeFileSync=write;}
+  assert.equal(injection,true);preserve();preservePackage();assert.equal(fs.existsSync(path.join(runtime,'update-pending.json')),false);
+  let failedWrites=0;
+  fs.writeFileSync=function(file,...args){if(file===path.join(directory,'main.js')){failedWrites++;throw new Error('stale rollback injected');}return write.call(this,file,...args);};
+  try{await assert.rejects(maintainRelease(options),/stale rollback injected/);}finally{fs.writeFileSync=write;}
+  assert.equal(failedWrites,2,'both install and rollback must be reached');preserve();
+  const marker=path.join(runtime,'update-pending.json'),recovery=JSON.parse(fs.readFileSync(marker));
+  const recoveryDirectory=path.join(runtime,recovery.backup);assert.equal(fs.existsSync(path.join(recoveryDirectory,'recovery.json')),true);
+  await assert.rejects(maintainRelease(options),/update/);
+  // Exercise the documented exact package restoration in this isolated fixture.
+  // No catalog, journal or snapshot is part of recovery.
+  for(const name of recovery.files)fs.copyFileSync(path.join(recoveryDirectory,name),path.join(directory,name));
+  fs.unlinkSync(marker);preserve();preservePackage();
+  const wrongTask=structuredClone(catalog);wrongTask.tasks[2].id='other-task';fs.writeFileSync(config,JSON.stringify(wrongTask));
+  await assert.rejects(maintainRelease(options),/standalone task identity/);fs.writeFileSync(config,bytes[0]);preserve();preservePackage();
+  for(const change of [{stepId:'other'},{stepIndex:0},{phase:'in_flight'},{revision:states[3].revision}]) {
+    const altered=structuredClone(catalog);Object.assign(altered.tasks[3].runtimeExecution,change);fs.writeFileSync(config,JSON.stringify(altered));
+    await assert.rejects(maintainRelease(options));fs.writeFileSync(config,bytes[0]);preserve();preservePackage();
+  }
+  // Evidence replacement during the verified backup must fail before install.
+  let changed=false;const open=fs.openSync;
+  fs.openSync=function(file,...args){const result=open.call(this,file,...args);if(!changed && String(file).endsWith('backup-integrity.json')){changed=true;fs.appendFileSync(evidence[1],' ');}return result;};
+  try{await assert.rejects(maintainRelease(options),/evidence changed/);}finally{fs.openSync=open;fs.writeFileSync(evidence[1],bytes[1]);}
+  assert.equal(changed,true);preserve();preservePackage();
+  const receipt=await maintainRelease(options);assert.deepEqual(receipt.applied,[]);assert.equal(receipt.loadedInObsidian,false);preserve();
+  for(const name of names)assert.deepEqual(fs.readFileSync(path.join(directory,name)),fs.readFileSync(path.join(root,name)));
+  const backup=JSON.parse(fs.readFileSync(path.join(receipt.maintenanceBackup,'backup-integrity.json')));
+  for(const [name,hash] of Object.entries(backup.sha256))assert.equal(require('node:crypto').createHash('sha256').update(fs.readFileSync(path.join(receipt.maintenanceBackup,name))).digest('hex'),hash);
+  // Actual loadSettings twice under a host double: this is deliberately not GUI evidence.
+  const originalLoad=Module._load;let Plugin;
+  try{Module._load=function(name,...args){if(name==='obsidian')return Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab'].map(k=>[k,class {}]));return originalLoad.call(this,name,...args);};Plugin=require(path.join(directory,'main.js')).default;}finally{Module._load=originalLoad;}
+  for(let i=0;i<2;i++) {
+    const plugin=new Plugin();plugin.manifest={id:'auto-oc'};plugin.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};
+    plugin.reservePluginExecution();try{await plugin.loadSettings();assert.ok(plugin.settings.tasks.every(t=>t.runtimeExecution.abandonment.outcome==='unknown'));assert.ok(plugin.settings.workflows.every(w=>w.status==='abandoned'));}finally{plugin.releasePluginExecution(false);}
+    preserve();
+  }
+});
 test('terminal disposition preserves exact historical bytes and only releases individually reviewed uncertainty',async t=>{
   const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-disposition-')));
   t.after(()=>fs.rmSync(vault,{recursive:true,force:true}));
@@ -122,7 +245,7 @@ test('maintenance reports a durable disposition even when a subsequent write mar
   const rename=fs.promises.rename;let markerFaultInjected=false;
   fs.promises.rename=async function(from,to){await rename.call(this,from,to);if(to===path.join(runtime,before.runId+'.json')){markerFaultInjected=true;fs.writeFileSync(path.join(directory,'data.json.write-lock'),'fixture-pending-writer');}};
   try {
-    await assert.rejects(load('release-maintenance').maintainRelease({sourceDirectory:root,vault,version:'1.6.8',decisions:[decision]}),error=>{
+    await assert.rejects(load('release-maintenance').maintainRelease({sourceDirectory:root,vault,version:candidateVersion,decisions:[decision]}),error=>{
       const receipt=JSON.parse(error.message);assert.equal(receipt.applied.length,1);assert.equal(receipt.applied[0].runId,before.runId);assert.equal(receipt.loadedInObsidian,false);return true;
     });
   } finally {fs.promises.rename=rename;}
@@ -163,7 +286,7 @@ for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd5
   const source=path.join(vault,'extracted-new-package'),out=path.join(vault,'package');
   const packaged=spawnSync(process.execPath,[path.join(root,'scripts/package-release.mjs'),'--out',out],{cwd:root,encoding:'utf8',timeout:60000,windowsHide:true});
   assert.equal(packaged.status,0,packaged.stderr);
-  const zip=path.join(out,'auto-oc-1.6.8.zip');
+  const zip=path.join(out,`auto-oc-${candidateVersion}.zip`);
   const extracted=process.platform==='win32'
     ? spawnSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${zip.replace(/'/g,"''")}' -DestinationPath '${source.replace(/'/g,"''")}'`],{encoding:'utf8',timeout:30000,windowsHide:true})
     : spawnSync('unzip',['-q',zip,'-d',source],{encoding:'utf8',timeout:30000,windowsHide:true});
@@ -202,14 +325,14 @@ for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd5
     if(!injected && file===path.join(directory,'main.js')) {injected=true;throw new Error('injected install failure');}
     return write(file,...args);
   };
-  try {await assert.rejects(maintainRelease({sourceDirectory:source,vault,version:'1.6.8',decisions:[decisions[1]]}),/injected install failure/);} finally {fs.writeFileSync=write;}
+  try {await assert.rejects(maintainRelease({sourceDirectory:source,vault,version:candidateVersion,decisions:[decisions[1]]}),/injected install failure/);} finally {fs.writeFileSync=write;}
   assert.equal(injected,true);for(const name of [...RELEASE_FILES,RELEASE_DESCRIPTOR])assert.deepEqual(fs.readFileSync(path.join(directory,name)),old[name]);
   assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),boundCatalog);
   const oldLeaseAfterRollback=legacy.acquireExecutionLease(runtime);
   assert.throws(()=>legacy.installRelease({directory,version,files:old,lease:oldLeaseAfterRollback}),/uncertain/);oldLeaseAfterRollback.release();
   fs.writeFileSync(decisionFile,'[]');
   result=cli('maintain-release','--vault',vault,'--decisions',decisionFile);assert.equal(result.status,0,result.stderr);
-  const receipt=JSON.parse(result.stdout);assert.equal(receipt.loadedInObsidian,false);assert.equal(receipt.version,'1.6.8');
+  const receipt=JSON.parse(result.stdout);assert.equal(receipt.loadedInObsidian,false);assert.equal(receipt.version,candidateVersion);
   for(const name of [...RELEASE_FILES,RELEASE_DESCRIPTOR])assert.deepEqual(fs.readFileSync(path.join(directory,name)),fs.readFileSync(path.join(root,name)));
   assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),boundCatalog);
   const status=JSON.parse(cli('status','--vault',vault).stdout);

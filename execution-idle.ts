@@ -45,8 +45,29 @@ export function assertIdleCatalog(settings: any, checkpoints: Map<string, RunChe
       const binding = entry.runtimeExecution;
       if (!binding) continue;
       const checkpoint = checkpoints.get(binding.runId);
-      if (!checkpoint || binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
+      if (!checkpoint) throw new Error("Execution binding requires reconciliation");
       validateProgressBinding({id: kind === "workflows" ? entry.id : binding.workflowId, runtimeExecution: binding}, checkpoint, binding.runId);
+      if(checkpoint.abandonment) {
+        // readExecutionCheckpoint has proven the complete original snapshot.
+        // Only its exact prior binding (or the exact projected terminal binding)
+        // can refer to this decision. Never relax general progress recovery.
+        const d=checkpoint.abandonment;
+        if(kind==='tasks' && checkpoint.workflowId.startsWith('@task:') && checkpoint.workflowId!==`@task:${entry.id}`)throw new Error("Abandonment standalone task identity mismatch");
+        const prior=binding.revision===d.previousRevision && binding.phase===d.previousPhase;
+        const projected=binding.revision===checkpoint.revision && binding.phase==='abandoned' && !binding.requiresReconciliation;
+        if(binding.definitionHash!==checkpoint.definitionHash || !prior && !projected)throw new Error("Abandonment binding phase, hash or revision mismatch");
+        if(kind==='tasks' || binding.stepId!==undefined || binding.stepIndex!==undefined) {
+          const index=binding.stepIndex;
+          // Standalone projection is published even before its first begin():
+          // its historical index is -1, and only the original next step exists.
+          const unstartedTask=kind==='tasks' && checkpoint.workflowId===`@task:${entry.id}` && checkpoint.steps.length===0 &&
+            d.previousPhase==='ready' && binding.stepId==='task' && d.previousNextStepId==='task' && (index===undefined || index===-1);
+          if(!unstartedTask && (typeof binding.stepId!=='string' || !checkpoint.steps.some(step=>step.stepId===binding.stepId) ||
+            index!==undefined && (!Number.isSafeInteger(index) || index<0 || checkpoint.steps[index]?.stepId!==binding.stepId))) {
+            throw new Error("Abandonment binding step or index mismatch");
+          }
+        }
+      } else if(binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
       if (kind === "tasks" && checkpoint.workflowId !== `@task:${entry.id}` && !checkpoint.steps.some(step => step.stepId === binding.stepId)) {
         throw new Error("Bound task step is absent from its journal");
       }

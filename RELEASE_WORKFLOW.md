@@ -36,7 +36,7 @@ El puente MCP se retira en 1.6.2; se conservan CLI, runtime, skill y almacén de
 
 Do not bypass an active execution owner or an unfinished update marker. Preserve its backup and evidence, and follow the documented recovery procedure before starting another execution or update.
 
-## Transición administrativa de 1.6.6 y 1.6.7 a 1.6.8
+## Transición administrativa de 1.6.6 y 1.6.7 a 1.6.9
 
 El actualizador anterior valida inactividad antes de descargar; corregir solo el
 bundle descargado no habilita ese primer salto. El ZIP conserva siete artefactos:
@@ -58,3 +58,11 @@ casos persistidos y respaldo, sin anunciar instalación completa. Tras corregir 
 causa, reinspecciona; no envíes revisiones antiguas ni casos ya dispuestos.
 Una instalación en disco requiere todavía recarga y validación real de Obsidian.
 Las pruebas sintéticas y Node no sustituyen las pruebas GUI desde ambas versiones.
+
+El paquete 1.6.9 reconoce abandonos oficiales existentes con vínculos anteriores
+sin reproyectar el catálogo. Exige snapshot original íntegro y coherencia exacta
+del vínculo con su intento; conserva revisión, resultados y `unknown`. Tras una
+inspección nueva, usa decisiones `[]` si no hay otras incertidumbres pendientes:
+no repitas el abandono ni añadas una aceptación para el mismo caso. Se verifica
+la evidencia antes de nuevas decisiones, bajo reserva y antes de instalar; un
+cambio la invalida. La publicación 1.6.8 y su ZIP histórico se conservan intactos.

@@ -150,10 +150,10 @@ Start with the [architecture](docs/architecture.md).
 
 AutoOC is open source under the [MIT License](LICENSE).
 
-## Actualización de históricos bloqueados (1.6.6 / 1.6.7 → 1.6.8)
+## Actualización de históricos bloqueados (1.6.6 / 1.6.7 → 1.6.9)
 
 Si el actualizador informa de efectos inciertos y `abandon` rechaza una ejecución
-terminal, usa el paquete completo **1.6.8** desde una carpeta independiente.
+terminal, usa el paquete completo **1.6.9** desde una carpeta independiente.
 Verifica su procedencia oficial antes de ejecutarlo. Esta guía prepara la nueva
 versión; no acredita que esté publicada ni instalada en tu bóveda.
 
@@ -180,6 +180,16 @@ decisión no detiene procesos, confirma su terminación ni repite pasos. Si qued
 otro histórico incierto o una escritura pendiente, la instalación se detiene.
 Los lectores antiguos aceptan el campo añadido y mantienen su bloqueo prudente.
 No se necesita un comando nuevo en la CLI antigua.
+
+Desde 1.6.9, el mantenimiento también reconoce un abandono oficial ya registrado
+cuando el catálogo conserva los vínculos anteriores del mismo intento. Verifica
+el snapshot original completo, identidad, hash histórico, revisión, fase y pasos;
+no modifica esos vínculos ni vuelve a registrar el abandono. Si no quedan otras
+incertidumbres por decidir, guarda `[]` en el archivo de decisiones después de
+una inspección nueva. El resultado externo permanece `unknown` y `applied` queda
+vacío. Un snapshot ausente, inseguro o incoherente, otro intento sin resolver,
+una reserva o una escritura pendiente bloquean el procedimiento. No edites el
+catálogo o la evidencia para sortear ese diagnóstico.
 
 Si hay un fallo parcial, conserva el recibo, el respaldo y los snapshots.
 Las decisiones durables permanecen; vuelve a inspeccionar y selecciona solo los

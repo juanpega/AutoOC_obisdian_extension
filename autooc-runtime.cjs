@@ -446,6 +446,7 @@ function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
 var fs4 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 var import_crypto5 = require("crypto");
+var import_util2 = require("util");
 
 // settings-writer.ts
 var fs3 = __toESM(require("fs"));
@@ -864,6 +865,23 @@ function readExecutionCheckpoint(directory, runId) {
   }
   validateExecutionCheckpoint(state);
   if (state.runId !== runId) throw new Error("Execution identity changed");
+  if (state.abandonment) {
+    const d = state.abandonment, snapshot = path4.join(directory, d.snapshot);
+    let prior;
+    try {
+      const stat2 = fs4.lstatSync(snapshot);
+      if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1) throw new Error("Unsafe abandonment snapshot");
+      prior = JSON.parse(fs4.readFileSync(snapshot, "utf8"));
+      validateExecutionCheckpoint(prior);
+    } catch {
+      throw new Error("Missing, unsafe or invalid abandonment snapshot");
+    }
+    const { abandonment, ...expected } = state;
+    expected.phase = d.previousPhase;
+    expected.nextStepId = d.previousNextStepId;
+    expected.revision = d.previousRevision;
+    if (!(0, import_util2.isDeepStrictEqual)(prior, expected)) throw new Error("Abandonment snapshot does not match checkpoint");
+  }
   if (state.disposition) {
     const d = state.disposition, location = dispositionLocation(d);
     if (physicalPath(directory) !== location.runtimeDirectory || Object.entries(location).some(([key, value]) => d[key] !== value)) throw new Error("Disposition installation identity changed");
@@ -3846,8 +3864,22 @@ function assertIdleCatalog(settings, checkpoints) {
       const binding = entry.runtimeExecution;
       if (!binding) continue;
       const checkpoint = checkpoints.get(binding.runId);
-      if (!checkpoint || binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
+      if (!checkpoint) throw new Error("Execution binding requires reconciliation");
       validateProgressBinding({ id: kind === "workflows" ? entry.id : binding.workflowId, runtimeExecution: binding }, checkpoint, binding.runId);
+      if (checkpoint.abandonment) {
+        const d = checkpoint.abandonment;
+        if (kind === "tasks" && checkpoint.workflowId.startsWith("@task:") && checkpoint.workflowId !== `@task:${entry.id}`) throw new Error("Abandonment standalone task identity mismatch");
+        const prior = binding.revision === d.previousRevision && binding.phase === d.previousPhase;
+        const projected = binding.revision === checkpoint.revision && binding.phase === "abandoned" && !binding.requiresReconciliation;
+        if (binding.definitionHash !== checkpoint.definitionHash || !prior && !projected) throw new Error("Abandonment binding phase, hash or revision mismatch");
+        if (kind === "tasks" || binding.stepId !== void 0 || binding.stepIndex !== void 0) {
+          const index = binding.stepIndex;
+          const unstartedTask = kind === "tasks" && checkpoint.workflowId === `@task:${entry.id}` && checkpoint.steps.length === 0 && d.previousPhase === "ready" && binding.stepId === "task" && d.previousNextStepId === "task" && (index === void 0 || index === -1);
+          if (!unstartedTask && (typeof binding.stepId !== "string" || !checkpoint.steps.some((step) => step.stepId === binding.stepId) || index !== void 0 && (!Number.isSafeInteger(index) || index < 0 || checkpoint.steps[index]?.stepId !== binding.stepId))) {
+            throw new Error("Abandonment binding step or index mismatch");
+          }
+        }
+      } else if (binding.requiresReconciliation && !checkpoint.disposition) throw new Error("Execution binding requires reconciliation");
       if (kind === "tasks" && checkpoint.workflowId !== `@task:${entry.id}` && !checkpoint.steps.some((step) => step.stepId === binding.stepId)) {
         throw new Error("Bound task step is absent from its journal");
       }
@@ -3987,6 +4019,7 @@ async function maintainRelease(options) {
   verifyRelease(files, options.version);
   const location = resolveInstalledWorkflowLocation(options.vault), identity = dispositionLocation(location);
   if (source === location.installationDirectory) throw new Error("Run maintenance from a separate extracted package");
+  let abandonmentEvidence;
   const assertContext = () => {
     const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault));
     if (JSON.stringify(current) !== JSON.stringify(identity)) throw new Error("Maintenance installation identity changed");
@@ -3994,6 +4027,20 @@ async function maintainRelease(options) {
     if (fs21.existsSync(location.configurationFile + ".write-lock") || fs21.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs21.readdirSync(location.runtimeDirectory).some((n) => n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
     const catalog = JSON.parse(regular(location.configurationFile).toString("utf8"));
     if (["tasks", "workflows"].some((k) => !Array.isArray(catalog[k]) || catalog[k].some((e) => e.status === "running" || e.pendingCodexApproval))) throw new Error("Active catalog requires reconciliation");
+    const checkpoints = new Map(fs21.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).map((name) => {
+      const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
+      return [state.runId, state];
+    }));
+    const evidence = /* @__PURE__ */ new Map();
+    for (const state of checkpoints.values()) if (state.abandonment) for (const name of [state.runId + ".json", state.abandonment.snapshot]) {
+      evidence.set(name, regular(path19.join(location.runtimeDirectory, name)));
+    }
+    if (abandonmentEvidence && (evidence.size !== abandonmentEvidence.size || [...evidence].some(([name, bytes]) => !abandonmentEvidence.get(name)?.equals(bytes)))) throw new Error("Abandonment evidence changed during maintenance");
+    abandonmentEvidence ??= evidence;
+    assertIdleCatalog(Object.fromEntries(["tasks", "workflows"].map((kind) => [kind, catalog[kind].filter((entry) => {
+      const binding = entry.runtimeExecution;
+      return binding && (!checkpoints.has(binding.runId) || checkpoints.get(binding.runId).phase === "abandoned");
+    })])), checkpoints);
   };
   assertContext();
   if (fs21.existsSync(path19.join(location.runtimeDirectory, "execution.lock"))) throw new Error("Unload AutoOC normally; execution reservation is present");
