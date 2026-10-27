@@ -88,12 +88,22 @@ export class SettingsWriter {
   private cached = new Map<string, any>();
   private pending = 0;
   private writeFailure: unknown;
+  private transactions = new Set<Promise<unknown>>();
+
+  // Register host transactions synchronously, before their queued I/O begins.
+  // Updates/unload must see these saves even while another session publishes.
+  trackTransaction<T>(operation:Promise<T>):Promise<T> {
+    this.transactions.add(operation);
+    void operation.then(()=>this.transactions.delete(operation),()=>this.transactions.delete(operation));
+    return operation;
+  }
 
   async drain(): Promise<void> {
+    while(this.transactions.size)await Promise.all([...this.transactions]);
     await this.tail;
     if (this.writeFailure) throw this.writeFailure;
   }
-  get hasPendingWrites(): boolean { return this.pending > 0; }
+  get hasPendingWrites(): boolean { return this.pending > 0 || this.transactions.size > 0; }
 
   fork(): SettingsWriter {
     const fork = new SettingsWriter();

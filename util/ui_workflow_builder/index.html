@@ -1481,6 +1481,7 @@
       <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="useRalphLoop" ${t.useRalphLoop ? "checked" : ""} /> Use Ralph Loop</label></div>`;
     return `${retiredDependencyWarning(t) }
       <div class="field"><label>Name *</label><input data-f="name" value="${esc(t.name)}" /></div>
+      <div class="field"><label>Concurrencia</label><select data-f="concurrency"><option value="exclusive" ${t.concurrency !== "independent" ? "selected" : ""}>Exclusiva</option><option value="independent" ${t.concurrency === "independent" ? "selected" : ""}>Independiente</option></select><div class="hint-inline">Máximo dos ejecuciones compatibles. No amplía permisos.</div></div>
       <div class="field"><label>Task type</label><select data-f="taskMode"><option value="opencode" ${taskMode === "opencode" ? "selected" : ""}>OpenCode</option><option value="opencode-cli" ${taskMode === "opencode-cli" ? "selected" : ""}>OpenCode CLI</option><option value="codex" ${taskMode === "codex" ? "selected" : ""}>Codex (background)</option><option value="codex-app" ${taskMode === "codex-app" ? "selected" : ""}>ChatGPT / Codex</option><option value="copilot" ${taskMode === "copilot" ? "selected" : ""}>GitHub Copilot CLI</option><option value="code" ${taskMode === "code" ? "selected" : ""}>Local JavaScript</option></select></div>
       ${isCode ? "" : '<div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">' + esc(t.prompt) + '</textarea></div>'}
       ${engineFields}
@@ -1518,6 +1519,7 @@
   function editorWorkflowHtml(w) {
     return `${retiredDependencyWarning(w) }
       <div class="field"><label>Name *</label><input data-f="name" value="${esc(w.name)}" /></div>
+      <div class="field"><label>Concurrencia</label><select data-f="concurrency"><option value="exclusive" ${w.concurrency !== "independent" ? "selected" : ""}>Exclusiva</option><option value="independent" ${w.concurrency === "independent" ? "selected" : ""}>Independiente</option></select><div class="hint-inline">Máximo dos ejecuciones compatibles. No amplía permisos.</div></div>
       <div class="field"><label>Description</label><textarea data-f="description" rows="2">${esc(w.description)}</textarea></div>
       <div class="row-2">
         <div class="field"><label>Color</label><select data-f="color">${["#b07ad9","#4a7dff","#6ec27c","#d8a657","#e879b3","#5fb3d4","#e06c75"].map(c => '<option value="' + esc(c) + '" ' + (w.color === c ? "selected" : "") + ' style="color:' + esc(c) + '">● ' + esc(c) + '</option>').join("")}</select></div>

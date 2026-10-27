@@ -169,7 +169,7 @@ for (const entry of ['card', 'workflow']) for (const standalone of [false, true]
     fs.mkdirSync(install, { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ logsEnabled, tasks: [{ id: 't', name: 'Task', taskKind: 'codex', prompt: 'fixture', scheduleType: 'manual' }],
       workflows: [{ id: 'wf', name: 'Shared', steps: [{ id: 'a', stepKind: 'task', taskId: 't' }] }] }));
-    delete p.pluginExecutionLease; delete p.sharedWorkflowExecution; delete p.saveSettings;
+    delete p.pluginExecutionLease; p.sharedWorkflowExecution = undefined; delete p.saveSettings;
     p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
     p.manifest = { id: 'auto-oc' }; p.redactSecrets = text => text;
     h.Client.prototype.run = async function() { return { status: 'completed', output: 'historical result', threadId: 'thread-history', turnId: 'turn-history' }; };
@@ -241,7 +241,7 @@ function stopCardHarness(globals = {}) {
   const notices = [], elements = [], bundle = { exports: {} };
   class Stub {}
   const obsidian = { Plugin: Stub, Notice: class { constructor(text) { notices.push(text); } }, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; }; module.exports.setConfirmation = answer => { ConfirmModal.prototype.openAndWait = answer; };', {
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; catalogTransaction = (file, operation) => operation(); }; module.exports.setConfirmation = answer => { ConfirmModal.prototype.openAndWait = answer; };', {
     module: bundle, exports: bundle.exports, require: name => name === 'obsidian' ? obsidian : require(name),
     process, Buffer, console, AbortController, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
   });
@@ -277,7 +277,7 @@ function stopCardHarness(globals = {}) {
 test('task card abandons only the confirmed historical attempt after edits and permits a fresh task', async () => {
   const os=require('node:os'), root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-card-abandon-'));
   const h=stopCardHarness(), p=h.plugin;
-  delete p.sharedWorkflowExecution;delete p.pluginExecutionLease;delete p.saveSettings;
+  p.sharedWorkflowExecution = undefined;delete p.pluginExecutionLease;delete p.saveSettings;
   const install=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(install,'runtime');fs.mkdirSync(runtime,{recursive:true});
   p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};p.redactSecrets=s=>s;
   const state={schemaVersion:1,runId:'old-attempt',workflowId:'@task:t',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'task',steps:[{stepId:'task',status:'in_flight'}]};
@@ -291,7 +291,7 @@ test('task card abandons only the confirmed historical attempt after edits and p
     h.setConfirmation(async()=>false);await button.onclick({stopPropagation(){}});
     assert.deepEqual(JSON.parse(fs.readFileSync(file)),state,'cancel is read-only');
     h.setConfirmation(async()=>{p.sharedWorkflowExecution={workflowId:'other'};return true;});
-    await assert.rejects(p.confirmAbandonTaskExecution('t'),/still active/);delete p.sharedWorkflowExecution;
+    await assert.rejects(p.confirmAbandonTaskExecution('t'),/still active/);p.sharedWorkflowExecution = undefined;
     h.setConfirmation(async()=>{const changed={...state,revision:2};fs.writeFileSync(file,JSON.stringify(changed));return true;});
     await assert.rejects(p.confirmAbandonTaskExecution('t'),/revision changed/);
     assert.equal(JSON.parse(fs.readFileSync(file)).phase,'in_flight');
@@ -311,7 +311,7 @@ test('task card abandons only the confirmed historical attempt after edits and p
 
 function legacyHarness(kind = 'copilot', globals = {}) {
   const h = stopCardHarness(globals), p = h.plugin;
-  delete p.sharedWorkflowExecution; delete p.pluginExecutionLease; delete h.task.runtimeExecution;
+  p.sharedWorkflowExecution = undefined; delete p.pluginExecutionLease; delete h.task.runtimeExecution;
   Object.assign(h.task, {taskKind:kind,prompt:'fixture',code:'output="code result";',status:'pending',model:'test/model'});
   p.app = {vault:{adapter:{basePath:require('node:os').tmpdir()}}};
   p.saveSettings = async () => {};
@@ -625,7 +625,7 @@ test('same occurrence remains stoppable across thread and approval checkpoint re
 
 test('legacy stop and standalone owner cancellation preserve their separate behavior', async () => {
   const legacy = stopCardHarness();
-  delete legacy.task.runtimeExecution; delete legacy.plugin.sharedWorkflowExecution;
+  delete legacy.task.runtimeExecution; legacy.plugin.sharedWorkflowExecution = undefined;
   let killed = 0, finish;
   legacy.task.taskKind = 'copilot'; legacy.task.prompt = 'fixture';
   legacy.plugin.app = { vault: { adapter: { basePath: '.' } } };
@@ -653,7 +653,7 @@ test('real shared host receives card stop, preserves uncertain Codex outcome and
     fs.writeFileSync(file, JSON.stringify({ logsEnabled: false, tasks: [{ id: 't', name: 'Task', taskKind: 'codex', prompt: 'fixture', scheduleType: 'manual' }],
       workflows: [{ id: 'wf', name: 'Fixture', steps: [{ id: 'a', stepKind: 'task', taskId: 't', transitionMode: 'force' },
         { id: 'b', stepKind: 'code', codeAllowVault: true, code: 'vault.write("next-effect.txt", "bad");' }] }] }));
-    delete p.pluginExecutionLease; delete p.sharedWorkflowExecution; delete p.saveSettings;
+    delete p.pluginExecutionLease; p.sharedWorkflowExecution = undefined; delete p.saveSettings;
     p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
     p.manifest = { id: 'auto-oc' }; p.redactSecrets = text => text;
     let finish, started, interrupts = 0, runs = 0;
@@ -707,7 +707,7 @@ test('shared checkpoints cannot regress, change run or overwrite a replacement o
   const h = stopCardHarness(), p = h.plugin;
   let callback, finish, ready, loads = 0;
   const started = new Promise(resolve => ready = resolve);
-  delete p.sharedWorkflowExecution;
+  p.sharedWorkflowExecution = undefined;
   p.app = { vault: { adapter: { basePath: 'fixture' } } };
   // This unit fixture controls the host and persistence; location validation
   // is exercised through real installations in workflow-compatibility.
@@ -730,7 +730,7 @@ test('shared checkpoints cannot regress, change run or overwrite a replacement o
 
 test('task GUI buttons surface blocked starts without changing status or swallowing rejection', async () => {
   const h = stopCardHarness(), p = h.plugin;
-  delete p.sharedWorkflowExecution;
+  p.sharedWorkflowExecution = undefined;
   Object.assign(h.task, { status: 'pending', taskKind: 'opencode', interactiveTerminal: true, model: 'test/model' });
   delete h.task.runtimeExecution;
   p.redactSecrets = text => text.replace('PRIVATE_SENTINEL', '[redacted]');
@@ -1040,7 +1040,7 @@ for (const kind of ['code', 'codex', 'copilot']) test(`Play reserves once before
 
 for (const kind of ['task', 'workflow']) test(`Play blocks delegates and direct shared starts until checkpoint: ${kind}`, async () => {
   const h = stopCardHarness(), p = h.plugin;
-  delete p.sharedWorkflowExecution; delete h.task.runtimeExecution;
+  p.sharedWorkflowExecution = undefined; delete h.task.runtimeExecution;
   h.task.status = 'pending'; h.task.taskKind = 'code'; h.task.code = 'output="once";';
   Object.assign(h.workflow,{name:'Shared',status:'pending',steps:[{id:'a',stepKind:'code',code:'output="once";'}]});
   p.app = {vault:{adapter:{basePath:'fixture'}}};
@@ -1123,7 +1123,7 @@ test('independent definition IDs do not share the pending-start token', async ()
 
 test('shared save failure releases Play for retry without invoking the runtime', async () => {
   const h = stopCardHarness(), p = h.plugin;
-  delete p.sharedWorkflowExecution; delete h.task.runtimeExecution;
+  p.sharedWorkflowExecution = undefined; delete h.task.runtimeExecution;
   Object.assign(h.workflow,{name:'Retry',status:'pending',steps:[{id:'a',stepKind:'code',code:'output="once";'}]});
   p.app = {vault:{adapter:{basePath:'fixture'}}};
   p.selectedExecutionLocation = () => ({vault:'fixture',installationDirectory:'fixture/install'});

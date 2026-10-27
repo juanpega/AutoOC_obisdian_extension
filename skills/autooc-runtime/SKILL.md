@@ -5,6 +5,14 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Concurrencia dentro del propietario
+
+En este candidato, `concurrency: "independent"` habilita admisión compatible hasta dos sesiones dentro del mismo host. El editor clásico, Visual Builder e importación/exportación conservan la política. Ausente o `"exclusive"` significa exclusividad; no se modifican retrospectivamente definiciones ni permisos. GUI y peticiones CLI delegadas comparten el mismo límite. El descriptor del buzón compatible anuncia `concurrentExecutions: 2`; no atribuir esta capacidad a otra instalación por compartir número de versión.
+
+Se reservan todas las tareas referenciadas y los espacios físicos del workflow completo. Tareas repetidas, directorios iguales/anidados o repositorios Git comunes se rechazan antes de efectos. Code con acceso a bóveda, archivos o terminal, modos interactivos y evaluación con modelo requieren exclusividad. Los motores no interactivos pueden concurrir con espacios físicos disjuntos. Las declaraciones coordinan tareas de confianza: no constituyen aislamiento ni una frontera de seguridad.
+
+Conservar requestId y runId de cada sesión; cancelar una petición solo detiene su ejecución. No hay cola ni repetición automática al alcanzar el límite. Un fallo de persistencia o propiedad incierta retiene los recursos y exige continuación/reconciliación oficial, sin borrar reservas ni deducir abandono por tiempo. Un segundo host autónomo no puede competir con el propietario. Abrir Obsidian durante una ejecución CLI autónoma mantiene el propietario y la vista informativa, sin arrancar trabajo ni transferirlo. Estas modificaciones de fuentes no acreditan instalación, publicación ni validación GUI.
+
 ## Editar un workflow sin cerrar Obsidian
 
 Consultar primero `version` y `help`. Si `capabilities` incluye `export-workflow` y `edit-workflow`, usar esta vía en la bóveda autorizada con AutoOC activo. No escribir directamente `data.json`, quitar reservas ni pedir cerrar Obsidian para estas ediciones.

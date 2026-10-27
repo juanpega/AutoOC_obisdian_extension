@@ -249,7 +249,7 @@ test('built plugin shared hosts refresh direct steps, referenced tasks and stand
       // expire before the refresh began, then delete a still-active fixture.
       const save=p.saveSettings.bind(p);let delayed=false;
       p.saveSettings=async(...args)=>{if(kind==='step'&&!delayed){delayed=true;await new Promise(resolve=>setTimeout(resolve,5000));}return save(...args);};
-      pending=p.runSharedWorkflow(kind==='standalone'?'task:task':'wf',undefined,false,false,kind==='standalone'?'task':undefined,{signal:controller.signal,progress:()=>{}}).then(r=>{settled=true;return r;});
+      pending=p.runSharedWorkflow(kind==='standalone'?'@task:task':'wf',undefined,false,false,kind==='standalone'?'task':undefined,{signal:controller.signal,progress:()=>{}}).then(r=>{settled=true;return r;});
       await Promise.race([refreshStarted,pending.then(()=>{throw Error('Shared workflow ended before requesting refresh');}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Fixture refresh was not reached')),30000);})]);
       assert.equal(typeof release,'function');assert.equal(settled,false);
       if(kind==='step')assert.equal(delayed,true);

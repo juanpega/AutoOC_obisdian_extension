@@ -1,3 +1,4 @@
+import { validateConcurrency } from "./execution-coordinator";
 import * as fs from "fs";
 import * as path from "path";
 import { physicalPath, isWithinPhysicalPath } from "./path-identity";
@@ -23,6 +24,7 @@ export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:str
     if (item.workingDirectory !== undefined) checkDirectory(item.workingDirectory);
     if(item.interactiveTerminal!==undefined && typeof item.interactiveTerminal!=="boolean")throw new Error("interactiveTerminal must be boolean");
     if(item.taskKind==="code" && item.interactiveTerminal===true)throw new Error("Code tasks cannot be interactive");
+    validateConcurrency(item);
     validateBranchOptions(item);
     if(item.branch?.trim() || definition.workflow.handoffBranch) branchRepository(item.workingDirectory || definition.settings.workingDirectory || root,root);
     // A standalone task starts now. Later workflow steps may intentionally

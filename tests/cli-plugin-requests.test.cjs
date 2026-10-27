@@ -17,6 +17,34 @@ function fixture(t,execute,edit){
 }
 const state={runId:'aa11',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('distinct CLI requests overlap and cancellation never reaches their peer',async t=>{
+  const entries=new Map(),finish=new Map();
+  const f=fixture(t,async(command,signal,progress)=>{
+    entries.set(command.workflowId,signal);
+    const checkpoint={...state,workflowId:command.workflowId,runId:command.workflowId+'-run',phase:'in_flight'};
+    await progress(checkpoint);
+    await new Promise(resolve=>{finish.set(command.workflowId,resolve);signal.addEventListener('abort',resolve,{once:true});});
+    return {...checkpoint,phase:signal.aborted?'failed':'completed'};
+  });
+  const a=f.request({workflowId:'a'});await f.host.poll();
+  const b=f.request({workflowId:'b'});await f.host.poll();
+  while(!finish.has('b'))await settle();
+  const third=f.request({workflowId:'c'});await f.host.poll();assert.equal(f.receipt(third).status,'rejected');assert.match(f.receipt(third).error,/limit reached \(2\)/);
+  fs.writeFileSync(path.join(f.directory,a+'.cancel'),'{}');await f.host.poll();
+  assert.equal(entries.get('a').aborted,true);assert.equal(entries.get('b').aborted,false);
+  finish.get('b')();await f.host.drain();
+  assert.equal(f.receipt(a).checkpoint.runId,'a-run');assert.equal(f.receipt(b).checkpoint.runId,'b-run');
+  assert.equal(f.receipt(b).checkpoint.phase,'completed');
+});
+
+test('mailbox returns fixed admission reasons while keeping provider details private',async t=>{
+  for(const [message,expected] of [['Execution resource is occupied (workspace or Git repository)','Execution resource is occupied'],['private-provider-value','Plugin execution or receipt publication failed']]) {
+    const f=fixture(t,async()=>{throw new Error(message);});
+    const id=f.request();await f.host.poll();await f.host.drain();
+    assert.ok(f.receipt(id).error.startsWith(expected));assert.doesNotMatch(f.receipt(id).error,/private-provider-value/);
+  }
+});
 test('external workflow editing uses the live owner, durable receipt and no execution or replay',async t=>{
   let effects=0,edits=0;
   const result={workflowId:'w',definitionHash:'a'.repeat(64)};
