@@ -455,6 +455,101 @@ var import_crypto4 = require("crypto");
 var import_string_decoder = require("string_decoder");
 var import_perf_hooks2 = require("perf_hooks");
 var import_timers2 = require("timers");
+function settingsDirectoryIdentity(directory) {
+  const stat = fs3.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe settings directory");
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+function regularIntentText(file) {
+  const stat = fs3.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) throw new Error("Unsafe settings write intent");
+  return fs3.readFileSync(file, "utf8");
+}
+async function beginSettingsWriteIntent(file, token, originalHash) {
+  if (path3.basename(file) !== "data.json") return;
+  const directory = path3.dirname(file), runtime = path3.join(directory, "runtime"), ownerFile = path3.join(runtime, "execution.lock", "owner.json");
+  let ownerText;
+  try {
+    ownerText = regularIntentText(ownerFile);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  const owner = JSON.parse(ownerText);
+  const ownerDirectoryIdentity = settingsDirectoryIdentity(path3.dirname(ownerFile));
+  let ownerStat = fs3.lstatSync(ownerFile);
+  if (owner?.schemaVersion !== 1 || owner.pid !== process.pid || !/^[a-f0-9-]{36}$/.test(owner.token || "") || !Number.isFinite(Date.parse(owner.createdAt))) throw new Error("Settings writer does not own the execution lease");
+  const leaseOwner = { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
+  const intent = { schemaVersion: 1, token, directoryIdentity: settingsDirectoryIdentity(directory), runtimeIdentity: settingsDirectoryIdentity(runtime), owner: leaseOwner, originalHash };
+  const intentFile = file + ".write-intent", updateFile = intentFile + "." + token + ".tmp";
+  let published;
+  const assertOwned = () => {
+    const currentOwnerStat = fs3.lstatSync(ownerFile);
+    if (currentOwnerStat.dev !== ownerStat.dev || currentOwnerStat.ino !== ownerStat.ino || currentOwnerStat.size !== ownerStat.size || currentOwnerStat.mtimeMs !== ownerStat.mtimeMs || currentOwnerStat.ctimeMs !== ownerStat.ctimeMs || settingsDirectoryIdentity(path3.dirname(ownerFile)) !== ownerDirectoryIdentity || regularIntentText(ownerFile) !== ownerText || fs3.readFileSync(file + ".write-lock", "utf8") !== token || settingsDirectoryIdentity(directory) !== intent.directoryIdentity || settingsDirectoryIdentity(runtime) !== intent.runtimeIdentity) throw new Error("Settings intent ownership changed");
+    if (published !== void 0 && regularIntentText(intentFile) !== published) throw new Error("Settings write intent changed");
+  };
+  const replaceMetadata = async (from, to) => {
+    for (let attempt = 0; ; attempt++) {
+      assertOwned();
+      try {
+        await fs3.promises.rename(from, to);
+        return;
+      } catch (error) {
+        if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code || "") || attempt >= 4) throw error;
+        await new Promise((resolve7) => setTimeout(resolve7, 50 * (attempt + 1)));
+      }
+    }
+  };
+  const publishOwnerAnchor = async (hash) => {
+    assertOwned();
+    const next = JSON.parse(ownerText);
+    if (hash) next.settingsWriteIntent = { token, sha256: hash };
+    else delete next.settingsWriteIntent;
+    const nextText = JSON.stringify(next), temporary = path3.join(path3.dirname(ownerFile), "owner.settings-intent." + token + ".tmp");
+    const handle = await fs3.promises.open(temporary, "wx", 384);
+    try {
+      await handle.writeFile(nextText, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    assertOwned();
+    await replaceMetadata(temporary, ownerFile);
+    ownerText = nextText;
+    ownerStat = fs3.lstatSync(ownerFile);
+  };
+  const publish = async (initial = false) => {
+    assertOwned();
+    const text = JSON.stringify(intent), target = initial ? intentFile : updateFile;
+    const handle = await fs3.promises.open(target, "wx", 384);
+    try {
+      await handle.writeFile(text, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    assertOwned();
+    if (!initial) await replaceMetadata(updateFile, intentFile);
+    published = text;
+    await publishOwnerAnchor((0, import_crypto4.createHash)("sha256").update(text, "utf8").digest("hex"));
+  };
+  await publish(true);
+  return {
+    async prepared(temporary, preparedHash) {
+      intent.temporary = path3.basename(temporary);
+      if (preparedHash) intent.preparedHash = preparedHash;
+      await publish();
+    },
+    async finish() {
+      assertOwned();
+      const current = await settingsFingerprint(file);
+      if (current !== intent.originalHash && current !== intent.preparedHash || fs3.existsSync(updateFile) || intent.temporary && fs3.existsSync(path3.join(directory, intent.temporary))) throw new Error("Settings write evidence retained for recovery");
+      assertOwned();
+      await publishOwnerAnchor();
+      await fs3.promises.unlink(intentFile);
+    }
+  };
+}
 var SettingsWriter = class _SettingsWriter {
   constructor() {
     this.tail = Promise.resolve();
@@ -554,6 +649,7 @@ var SettingsWriter = class _SettingsWriter {
       const lock = file + ".write-lock";
       const token = (0, import_crypto4.randomUUID)();
       const descriptor = fs3.openSync(lock, "wx", 384);
+      let intent;
       try {
         fs3.writeFileSync(descriptor, token);
         await new Promise((resolve7, reject) => fs3.fsync(descriptor, (error) => error ? reject(error) : resolve7()));
@@ -570,6 +666,7 @@ var SettingsWriter = class _SettingsWriter {
           }
         }
         validate?.();
+        intent = await beginSettingsWriteIntent(file, token, currentHash);
         const captured = captureJsonStructure(snapshot());
         if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
           throw new Error("Settings write lock ownership changed");
@@ -586,14 +683,18 @@ var SettingsWriter = class _SettingsWriter {
             throw new Error("Settings write lock ownership changed");
           }
           validate?.();
-        });
+        }, intent?.prepared);
         this.observed.set(file, { textHash: nextHash, valueHash: nextHash });
         this.cached.set(file, cloneCapturedJson(captured));
       } finally {
-        if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
-          throw new Error("Settings write lock ownership changed");
+        try {
+          await intent?.finish();
+        } finally {
+          if (fs3.lstatSync(lock).isSymbolicLink() || fs3.readFileSync(lock, "utf8") !== token) {
+            throw new Error("Settings write lock ownership changed");
+          }
+          fs3.unlinkSync(lock);
         }
-        fs3.unlinkSync(lock);
       }
     });
     const tracked = operation.finally(() => {
@@ -742,12 +843,13 @@ async function atomicSettingsWrite(file, data, io = fs3.promises, beforeReplace)
   if (text === void 0) throw new Error("Settings are not serializable");
   await atomicSettingsTextWrite(file, text, io, beforeReplace);
 }
-async function atomicSettingsTextWrite(file, text, io = fs3.promises, beforeReplace) {
+async function atomicSettingsTextWrite(file, text, io = fs3.promises, beforeReplace, prepared) {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path3.dirname(file), { recursive: true });
   let handle;
   const hash = (0, import_crypto4.createHash)("sha256");
   try {
+    await prepared?.(temp);
     handle = await io.open(temp, "wx", 384);
     const parts = typeof text === "string" ? [text] : text;
     let batch = [], size = 0;
@@ -771,6 +873,7 @@ async function atomicSettingsTextWrite(file, text, io = fs3.promises, beforeRepl
     await handle.sync();
     await handle.close();
     handle = void 0;
+    await prepared?.(temp, hash.copy().digest("hex"));
     const baseline = beforeReplace ? void 0 : await io.readFile(file).catch((error) => {
       if (error.code === "ENOENT") return null;
       throw error;
@@ -3889,7 +3992,7 @@ function assertIdleCatalog(settings, checkpoints) {
 function assertInstalledExecutionIdle(directory, memorySettings) {
   const checkpoints = assertIdleJournals(path17.join(directory, "runtime"));
   const file = path17.join(directory, "data.json");
-  if (fs19.existsSync(file + ".write-lock") || fs19.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+  if (fs19.existsSync(file + ".write-lock") || fs19.existsSync(file + ".write-intent") || fs19.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
     throw new Error("Unfinished configuration write requires reconciliation");
   }
   let stat;

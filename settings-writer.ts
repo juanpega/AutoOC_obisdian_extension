@@ -8,6 +8,79 @@ import { captureJsonStructure, cloneCapturedJson, cloneJsonStructure, encodeCapt
 
 export type ObservedVersion = {textHash: string | null; valueHash: string | null};
 
+export interface SettingsWriteIntent {
+  schemaVersion:1; token:string; directoryIdentity:string; runtimeIdentity:string;
+  owner:{schemaVersion:1;token:string;pid:number;createdAt:string};
+  originalHash:string|null; temporary?:string; preparedHash?:string;
+}
+export function settingsDirectoryIdentity(directory:string):string {
+  const stat=fs.lstatSync(directory);
+  if(!stat.isDirectory()||stat.isSymbolicLink())throw new Error('Unsafe settings directory');
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+function regularIntentText(file:string):string {
+  const stat=fs.lstatSync(file);
+  if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||stat.size>16384)throw new Error('Unsafe settings write intent');
+  return fs.readFileSync(file,'utf8');
+}
+async function beginSettingsWriteIntent(file:string,token:string,originalHash:string|null) {
+  // Generic SettingsWriter users retain the legacy lock contract. A recovery
+  // proof is issued only by the process holding this installation's lease.
+  if(path.basename(file)!=='data.json')return;
+  const directory=path.dirname(file),runtime=path.join(directory,'runtime'),ownerFile=path.join(runtime,'execution.lock','owner.json');
+  let ownerText:string;
+  try{ownerText=regularIntentText(ownerFile);}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
+  const owner=JSON.parse(ownerText);
+  const ownerDirectoryIdentity=settingsDirectoryIdentity(path.dirname(ownerFile));
+  let ownerStat=fs.lstatSync(ownerFile);
+  if(owner?.schemaVersion!==1||owner.pid!==process.pid||!/^[a-f0-9-]{36}$/.test(owner.token||'')||!Number.isFinite(Date.parse(owner.createdAt)))throw new Error('Settings writer does not own the execution lease');
+  const leaseOwner={schemaVersion:1 as const,token:owner.token,pid:owner.pid,createdAt:owner.createdAt};
+  const intent:SettingsWriteIntent={schemaVersion:1,token,directoryIdentity:settingsDirectoryIdentity(directory),runtimeIdentity:settingsDirectoryIdentity(runtime),owner:leaseOwner,originalHash};
+  const intentFile=file+'.write-intent',updateFile=intentFile+'.'+token+'.tmp';
+  let published:string|undefined;
+  const assertOwned=()=>{
+    const currentOwnerStat=fs.lstatSync(ownerFile);
+    if(currentOwnerStat.dev!==ownerStat.dev||currentOwnerStat.ino!==ownerStat.ino||currentOwnerStat.size!==ownerStat.size||currentOwnerStat.mtimeMs!==ownerStat.mtimeMs||currentOwnerStat.ctimeMs!==ownerStat.ctimeMs||settingsDirectoryIdentity(path.dirname(ownerFile))!==ownerDirectoryIdentity||regularIntentText(ownerFile)!==ownerText||fs.readFileSync(file+'.write-lock','utf8')!==token||settingsDirectoryIdentity(directory)!==intent.directoryIdentity||settingsDirectoryIdentity(runtime)!==intent.runtimeIdentity)throw new Error('Settings intent ownership changed');
+    if(published!==undefined&&regularIntentText(intentFile)!==published)throw new Error('Settings write intent changed');
+  };
+  const replaceMetadata=async(from:string,to:string)=>{
+    for(let attempt=0;;attempt++){
+      assertOwned();
+      try{await fs.promises.rename(from,to);return;}catch(error){
+        if(process.platform!=='win32'||!['EPERM','EBUSY','EACCES'].includes((error as NodeJS.ErrnoException).code||'')||attempt>=4)throw error;
+        await new Promise(resolve=>setTimeout(resolve,50*(attempt+1)));
+      }
+    }
+  };
+  const publishOwnerAnchor=async(hash?:string)=>{
+    assertOwned();const next=JSON.parse(ownerText);
+    if(hash)next.settingsWriteIntent={token,sha256:hash};else delete next.settingsWriteIntent;
+    const nextText=JSON.stringify(next),temporary=path.join(path.dirname(ownerFile),'owner.settings-intent.'+token+'.tmp');
+    const handle=await fs.promises.open(temporary,'wx',0o600);
+    try{await handle.writeFile(nextText,'utf8');await handle.sync();}finally{await handle.close();}
+    assertOwned();await replaceMetadata(temporary,ownerFile);ownerText=nextText;ownerStat=fs.lstatSync(ownerFile);
+  };
+  const publish=async(initial=false)=>{
+    assertOwned();const text=JSON.stringify(intent),target=initial?intentFile:updateFile;
+    const handle=await fs.promises.open(target,'wx',0o600);
+    try{await handle.writeFile(text,'utf8');await handle.sync();}finally{await handle.close();}
+    assertOwned();
+    if(!initial)await replaceMetadata(updateFile,intentFile);
+    published=text;
+    await publishOwnerAnchor(createHash('sha256').update(text,'utf8').digest('hex'));
+  };
+  await publish(true);
+  return {
+    async prepared(temporary:string,preparedHash?:string){intent.temporary=path.basename(temporary);if(preparedHash)intent.preparedHash=preparedHash;await publish();},
+    async finish(){
+      assertOwned();
+      const current=await settingsFingerprint(file);
+      if((current!==intent.originalHash&&current!==intent.preparedHash)||fs.existsSync(updateFile)||intent.temporary&&fs.existsSync(path.join(directory,intent.temporary)))throw new Error('Settings write evidence retained for recovery');
+      assertOwned();await publishOwnerAnchor();await fs.promises.unlink(intentFile);
+    }
+  };
+}
+
 // One writer per plugin. Serialize only when its previous write has finished.
 export class SettingsWriter {
   private tail: Promise<void> = Promise.resolve();
@@ -109,6 +182,7 @@ export class SettingsWriter {
       // Only its durable flush can be slow; wait for it off the input thread
       // before taking a snapshot or touching the catalog.
       const descriptor = fs.openSync(lock, "wx", 0o600);
+      let intent:Awaited<ReturnType<typeof beginSettingsWriteIntent>>;
       try {
         fs.writeFileSync(descriptor, token);
         await new Promise<void>((resolve, reject) => fs.fsync(descriptor, error => error ? reject(error) : resolve()));
@@ -124,6 +198,7 @@ export class SettingsWriter {
           }
         }
         validate?.();
+        intent=await beginSettingsWriteIntent(file,token,currentHash);
         const captured = captureJsonStructure(snapshot());
         // Async preparation opens a window for an external non-cooperating
         // editor or lock replacement. Verify both before replacing any bytes.
@@ -142,14 +217,16 @@ export class SettingsWriter {
             throw new Error("Settings write lock ownership changed");
           }
           validate?.();
-        });
+        },intent?.prepared);
         this.observed.set(file, {textHash:nextHash, valueHash:nextHash});
         this.cached.set(file,cloneCapturedJson(captured));
       } finally {
+        try{await intent?.finish();}finally{
         if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== token) {
           throw new Error("Settings write lock ownership changed");
         }
         fs.unlinkSync(lock);
+        }
       }
     });
     const tracked = operation.finally(() => { this.pending--; });
@@ -302,12 +379,13 @@ export async function atomicSettingsWrite(file: string, data: unknown, io = fs.p
 
 // The snapshot has already been serialized once; keep those bytes immutable
 // across asynchronous writes and retries without another JSON round trip.
-async function atomicSettingsTextWrite(file: string, text: string | Generator<string,void,void>, io = fs.promises, beforeReplace?: () => Promise<void>): Promise<string> {
+async function atomicSettingsTextWrite(file: string, text: string | Generator<string,void,void>, io = fs.promises, beforeReplace?: () => Promise<void>, prepared?: (temporary:string,hash?:string)=>Promise<void>): Promise<string> {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path.dirname(file), { recursive: true });
   let handle: Awaited<ReturnType<typeof io.open>> | undefined;
   const hash = createHash("sha256");
   try {
+    await prepared?.(temp);
     handle = await io.open(temp, "wx", 0o600);
     const parts = typeof text === "string" ? [text] : text;
     let batch: string[] = [], size = 0;
@@ -328,6 +406,7 @@ async function atomicSettingsTextWrite(file: string, text: string | Generator<st
     await handle.sync();
     await handle.close();
     handle = undefined;
+    await prepared?.(temp,hash.copy().digest('hex'));
     // Windows may briefly deny replacement while another reader has the file
     // open. Retry only the atomic rename, never the snapshot or workflow effect.
     const baseline = beforeReplace ? undefined : await io.readFile(file).catch(error => {

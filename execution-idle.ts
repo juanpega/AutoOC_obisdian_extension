@@ -78,7 +78,7 @@ export function assertIdleCatalog(settings: any, checkpoints: Map<string, RunChe
 export function assertInstalledExecutionIdle(directory: string, memorySettings?: unknown): void {
   const checkpoints = assertIdleJournals(path.join(directory, "runtime"));
   const file = path.join(directory, "data.json");
-  if (fs.existsSync(file + ".write-lock") || fs.readdirSync(directory).some(name => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+  if (fs.existsSync(file + ".write-lock") || fs.existsSync(file + '.write-intent') || fs.readdirSync(directory).some(name => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
     throw new Error("Unfinished configuration write requires reconciliation");
   }
   let stat: fs.Stats | undefined;
@@ -133,6 +133,8 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
     if (stat) {
       const token = fs.readFileSync(lock, "utf8");
       if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(token)) throw new Error("Unsafe configuration write lock token");
+      const intentStat=regularStat(file+'.write-intent');
+      if(intentStat){if(intentStat.size>16384||JSON.parse(fs.readFileSync(file+'.write-intent','utf8')).token!==token)throw new Error('Configuration write intent identity changed');}
       if (!writer) {
         if (!initial) throw new Error("Configuration write started after startup snapshot");
         const catalog = regularStat(file);
@@ -163,6 +165,7 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
       // Only the outgoing writer in this renderer can be finishing a save.
       // A foreign/abandoned temporary is not an invitation to recover it.
       for (const name of temporaries) {
+        if(intentStat&&name==='data.json.write-intent.'+token+'.tmp'){regularStat(path.join(directory,name));continue;}
         if (!new RegExp(`^data\\.json\\.${process.pid}\\.[0-9]+\\.[0-9a-f]+\\.tmp$`).test(name)) throw new Error("Unsafe configuration temporary writer");
         const temporary = regularStat(path.join(directory, name));
         if (!temporary) continue; // It may have just been atomically renamed.
@@ -174,7 +177,7 @@ export async function waitForInstalledCatalog(directory: string, assertOwner: ()
       initial = false;
       return true;
     }
-    if (temporaries.length) throw new Error("Unfinished configuration write requires reconciliation");
+    if (temporaries.length || regularStat(file+'.write-intent')) throw new Error("Unfinished configuration write requires reconciliation");
     writerFinished = Boolean(writer);
     initial = false;
     return false;

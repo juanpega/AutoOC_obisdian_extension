@@ -181,3 +181,24 @@ repitas `abandon`, no edites journals y no retires reservas. Evidencia ausente,
 insegura, alterada o cambiante y otras incertidumbres siguen bloqueando. Para
 el primer salto desde 1.6.6/1.6.7 usa la CLI del paquete nuevo separado; la CLI
 antigua no necesita incorporar estos comandos.
+
+## Guardado interrumpido: protocolo del candidato de desarrollo
+
+El candidato incorpora `data.json.write-intent`, vinculado mediante SHA-256 al
+propietario de ejecución, identidades físicas y catálogo previo/preparado.
+Al arrancar en Obsidian, archiva automáticamente solo una escritura demostrada
+del propietario ausente y con catálogo e históricos seguros. Conserva el
+principal confirmado y todos los restos en `runtime/settings-write-recovery-TOKEN`
+con recibo; no promueve temporales ni reanuda ejecuciones. El cierre o recarga
+durante un guardado se cancela hasta terminar: esperar el aviso y repetir la
+acción. No convertir ese aviso en una orden de matar el proceso.
+
+Un lock antiguo sin prueba, PID vivo/reutilizado/no verificable, catálogo o
+prueba alterados, incertidumbre histórica, actualización pendiente o fallo
+parcial siguen bloqueando. Conservar la evidencia y diagnosticar el caso exacto.
+La recuperación automática del plugin no autoriza al agente a borrar archivos,
+recuperar otras reservas, aceptar efectos desconocidos ni promover temporales.
+`recover-lease` conserva su autorización humana específica. Metadatos incompletos
+tras un corte eléctrico pueden necesitar intervención. No atribuir esta
+protección al paquete publicado 1.6.9 ni a instalaciones anteriores: verificar
+los hashes del candidato, su entrega y la instalación antes de afirmarlo.

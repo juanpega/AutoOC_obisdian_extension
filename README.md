@@ -195,3 +195,20 @@ Si hay un fallo parcial, conserva el recibo, el respaldo y los snapshots.
 Las decisiones durables permanecen; vuelve a inspeccionar y selecciona solo los
 casos aún pendientes (lista `[]` explícita si todas las decisiones ya son durables). Si queda `update-pending.json`, utiliza la recuperación
 soportada del instalador antes de ejecutar más trabajo. No edites sus registros.
+
+## Guardados interrumpidos (candidato local)
+
+Al cerrar o recargar mientras AutoOC guarda, el plugin mantiene abierta la
+ventana hasta terminar. El aviso indica cuándo puedes repetir el cierre o la
+recarga. Si el proceso termina forzosamente, el siguiente arranque puede
+archivar el guardado interrumpido únicamente con una prueba durable vinculada
+al propietario ausente, al directorio y a las huellas del catálogo.
+
+La recuperación conserva el último `data.json` confirmado y los temporales en
+`runtime/settings-write-recovery-TOKEN`, con recibo verificable. No promueve
+temporales ni reanuda tareas. Un propietario vivo o no verificable, archivos
+alterados, mantenimiento pendiente o ejecuciones inciertas siguen bloqueando.
+Los bloqueos antiguos sin esta prueba requieren recuperación explícita; no se
+retiran por antigüedad. Un corte eléctrico puede dejar metadatos incompletos y
+seguir requiriendo intervención. Esta protección pertenece al candidato de la
+rama de desarrollo; la versión publicada 1.6.9 permanece sin cambios.

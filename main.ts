@@ -1,4 +1,5 @@
 import { samePhysicalPath } from "./path-identity";
+import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
 import {createPluginRequestHost} from "./cli-plugin-requests";
 import {applyWorkflowEdit} from "./workflow-edit";
 import { buildOpenCodeScript } from "./opencode-script";
@@ -1914,6 +1915,8 @@ export default class AutoOCPlugin extends Plugin {
   private startupWaitingForOwner = false;
   private startupRecoveryDisposed = false;
   private startupRetry?: Promise<void>;
+  private settingsRecoveryPromise?: Promise<unknown>;
+  private windowCloseDrain?: Promise<void>;
   private observedJournalSnapshot?: string;
   private observationProof?: string;
   private executionAttempted = false;
@@ -1960,7 +1963,7 @@ export default class AutoOCPlugin extends Plugin {
   private journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs.existsSync(path.join(directory, 'data.json.write-lock')) || fs.readdirSync(directory).some(name => name.startsWith('data.json.') && name.endsWith('.tmp'))) throw new Error('Unfinished configuration write');
+    if (fs.existsSync(path.join(directory, 'data.json.write-lock')) || fs.existsSync(path.join(directory,'data.json.write-intent')) || fs.readdirSync(directory).some(name => name.startsWith('data.json.') && name.endsWith('.tmp'))) throw new Error('Unfinished configuration write');
     const names = fs.readdirSync(runtime).sort();
     if (names.some(name => name === 'update-pending.json' || name.endsWith('.tmp') || name.endsWith('.write-lock'))) throw new Error('Unfinished runtime write or update');
     return {runtime,names:names.filter(name => /^[a-zA-Z0-9-]+\.json$/.test(name))};
@@ -2116,8 +2119,20 @@ export default class AutoOCPlugin extends Plugin {
 
   async onload() {
     this.startupPending = true;
+    this.registerWindowCloseGuard();
     try {
-      try { this.reservePluginExecution(); }
+      try {
+        const location=this.selectedExecutionLocation(false);
+        if(fs.existsSync(location.configurationFile+'.write-intent')){
+          if(!await hasCompleteInstalledReleaseAsync(location.installationDirectory,PLUGIN_BUILD_VERSION))throw new Error('Interrupted settings recovery requires a complete verified package');
+          this.settingsRecoveryPromise=recoverInterruptedSettingsWrite(location.installationDirectory,()=>this.assertLifecycleOpen());
+          try{
+            const recovered=await this.settingsRecoveryPromise;
+            if(recovered)new Notice('AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.',10000);
+          }finally{this.settingsRecoveryPromise=undefined;}
+        }
+        this.reservePluginExecution();
+      }
       catch (error) {
         this.startupPending = false;
         this.lifecycleStopped = true;
@@ -2231,11 +2246,6 @@ export default class AutoOCPlugin extends Plugin {
       // Closing a vault window need not emit workspace quit. Start the same
       // guarded cleanup synchronously before Electron destroys that renderer.
       // Pending writes/effects still retain their reservation if not drained.
-      if (typeof window.addEventListener === 'function') {
-        const close = () => { void this.onunload().catch(error => console.warn('AutoOC window cleanup retained reservation', error)); };
-        window.addEventListener('beforeunload', close);
-        this.register(() => window.removeEventListener('beforeunload', close));
-      }
       this.ready = true;
       this.startCliRequests();
       this.cliRequestTimer = window.setInterval(() => {
@@ -2257,6 +2267,32 @@ export default class AutoOCPlugin extends Plugin {
       new Notice(`AutoOC: startup failed — ${String(error)}`);
       throw error;
     } finally { this.startupPending = false; }
+  }
+
+  private registerWindowCloseGuard():void {
+    if(typeof window.addEventListener!=='function')return;
+    const close=(event:BeforeUnloadEvent)=>{
+      const publishingCLI=this.cliRequestHost?.hasPendingWork&&!this.sharedWorkflowExecution&&!this.runningProcesses.size&&!this.runningCodexClients.size&&!this.legacyAttempts.size;
+      if(this.settingsWriter.hasPendingWrites||publishingCLI||this.settingsRecoveryPromise){
+        // Electron destroys the renderer without awaiting async onunload.
+        // Do not turn reload/navigation into window.close(): retain the user's
+        // original action and let them retry once durable publication finishes.
+        event.preventDefault();(event as any).returnValue=false;
+        if(!this.windowCloseDrain){
+          new Notice('AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.',8000);
+          this.windowCloseDrain=Promise.all([this.settingsWriter.drain(),publishingCLI?this.cliRequestHost?.drain():undefined,this.settingsRecoveryPromise]).then(()=>{
+            new Notice('AutoOC: saving finished. You can close or reload the window.');
+          }).catch(error=>{
+            console.warn('AutoOC window kept open after save failure',error);
+            new Notice('AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.',10000);
+          }).finally(()=>{this.windowCloseDrain=undefined;});
+        }
+        return;
+      }
+      void this.onunload().catch(error=>console.warn('AutoOC window cleanup retained reservation',error));
+    };
+    window.addEventListener('beforeunload',close);
+    this.register(()=>window.removeEventListener('beforeunload',close));
   }
 
   async onunload() {
