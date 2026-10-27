@@ -40,7 +40,7 @@ For standalone tasks, use `@task:TASK_ID` as the workflow identity. This preserv
 
 ## Compatibilidad y disponibilidad
 
-Comprobar `version` y `help` de la instalación antes de usarla; la CLI mantiene `experimental: true`. `pluginRequests: 1` identifica el protocolo para ejecutar con el plugin abierto, que requiere también un plugin compatible. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. El almacén de secrets de AutoOC sigue aplazado en la interfaz autónoma.
+Comprobar `version` y `help` de la instalación antes de usarla; la CLI mantiene `experimental: true`. `pluginRequests: 1` identifica el protocolo para ejecutar con el plugin abierto, que requiere también un plugin compatible. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. Secrets se ha retirado del producto; el archivo histórico se conserva sin modificaciones.
 
 El puente MCP local se retira; la CLI y esta skill siguen incluidas sin instalar otro producto AutoOC. Un arranque desde los tres archivos entregados por el actualizador 1.6.0 completa el paquete automáticamente con red y verificación de versión/hashes. El paquete completo no necesita red para cargar. La recuperación automática del plugin solo archiva un propietario muerto con identidad estable y ausencia demostrada de efectos pendientes; nunca reanuda tareas por sí sola. El contrato explícito `recover-lease` de la CLI descrito abajo se conserva.
 
@@ -127,7 +127,7 @@ La operación archiva la reserva en `runtime/abandoned-lease-TOKEN`, conserva jo
 
 ## Autenticación y migración desde MCP
 
-El componente conserva la autenticación del proveedor en su perfil; no extrae ni copia el almacén cifrado de AutoOC. Declarar `requiresAutoOCSecrets: true` en una tarea dependiente de ese almacén: el host compartido la rechaza antes del primer efecto del workflow. La declaración no descubre automáticamente dependencias ocultas en prompts o scripts. El almacén de secretos queda aplazado y no se acredita su validación.
+El componente conserva la autenticación del proveedor en su perfil; no extrae ni copia el almacén cifrado de AutoOC. `requiresAutoOCSecrets: true` se conserva en tareas, workflows y pasos antiguos: todos los hosts, incluido el plugin y sus rutas clásicas, rechazan la definición antes del primer efecto del workflow, también en continuación. La declaración no descubre automáticamente dependencias ocultas en prompts o scripts. No existe gestión, PIN ni inyección automática del almacén. El plugin conserva solo un enmascarador histórico de lectura: valores conocidos de al menos cuatro caracteres descifrables mediante safeStorage; avisa si no pudo aplicarse íntegramente. No exporta valores ni modifica el archivo, no sustituye la autenticación del proveedor y no garantiza protección de credenciales externas. El host autónomo no accede al almacén cifrado.
 
 Migrar invocaciones de ejecución del puente MCP a los comandos anteriores conservando vault, IDs y evidencia. `autooc_play` dependiente de Obsidian no es ejecución autónoma. No retirar MCP de clientes que aún lo necesiten para otras capacidades; en particular, no reemplazar silenciosamente consultas de credenciales. Probar el cliente migrado sobre un vault aislado antes de cambiar su configuración habitual.
 

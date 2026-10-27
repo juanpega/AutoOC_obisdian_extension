@@ -338,14 +338,10 @@ test("runTask keeps malicious branch text literal in the launched script", async
   assert.equal(buildArgsCalls, 1);
 });
 
-test("resetSecretsPin requires unlocked secrets before resetting the PIN", () => {
-  const resetSecretsPin = mainTypeScriptSource.match(/private async resetSecretsPin\(\): Promise<void> \{[\s\S]*?\n  \}/)?.[0];
-
-  assert.ok(resetSecretsPin, "resetSecretsPin should exist in main.ts");
-  assert.match(
-    resetSecretsPin,
-    /if \(!await this\.ensureSecretsUnlocked\(\)\) return;[\s\S]*?this\.plugin\.secretStore\.resetPin\(\);/
-  );
+test("retired Secrets has no management, PIN, reveal or injection API", () => {
+  for (const name of ["SecretStore", "SecretsPinModal", "SecretEditModal", "SecretRevealModal", "getSecretsEnv", "resetSecretsPin", "renderSecrets"]) {
+    assert.ok(!mainTypeScriptSource.includes(name), name);
+  }
 });
 
 test("importFromData retains step order and explicit terminal transitions", async () => {

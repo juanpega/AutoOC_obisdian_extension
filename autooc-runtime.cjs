@@ -341,6 +341,27 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
   return freeze({ ...payload, hash });
 }
 
+// retired-dependency.ts
+function autoOCDependencyError(item) {
+  if (item.requiresAutoOCSecrets === void 0 || item.requiresAutoOCSecrets === false) return;
+  const identity = typeof item.id === "string" ? item.id : "definition";
+  return typeof item.requiresAutoOCSecrets !== "boolean" ? `Invalid AutoOC secrets dependency declaration (${identity}); requiresAutoOCSecrets must be boolean` : `AutoOC Secrets was retired (${identity}); adapt this definition before execution`;
+}
+function assertNoRetiredDependency(item) {
+  const error = autoOCDependencyError(item);
+  if (error) throw new Error(error);
+}
+function assertWorkflowDependencies(workflow, tasks) {
+  assertNoRetiredDependency(workflow);
+  for (const step of workflow.steps || []) {
+    assertNoRetiredDependency(step);
+    if (step.stepKind === "task" || !step.stepKind && step.taskId) {
+      const task = tasks.find((item) => item.id === step.taskId);
+      if (task) assertNoRetiredDependency(task);
+    }
+  }
+}
+
 // path-identity.ts
 var fs = __toESM(require("fs"));
 var path = __toESM(require("path"));
@@ -1746,9 +1767,11 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
 // code-workflow-host.ts
 var advancingLeases = /* @__PURE__ */ new WeakSet();
 function supportsSharedWorkflow(definition, tasks) {
+  assertWorkflowDependencies(definition.workflow, definition.tasks);
   return !definition.workflow.requiresAutoOCSecrets && !definition.tasks.some((task) => task.requiresAutoOCSecrets) && !definition.workflow.steps.some((step) => !["code", "delay", "task"].includes(step.stepKind || "task")) && definition.tasks.every((task) => !!tasks?.supports(task));
 }
 async function runCodeWorkflowHost(options) {
+  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
   if (options.reconcile && !options.resumeRunId) throw new Error("Reconciliation requires an existing run identity");
@@ -3639,6 +3662,7 @@ async function requestWorkflowStop(directory, runId) {
 var fs15 = __toESM(require("fs"));
 var path14 = __toESM(require("path"));
 function preflightInstalledWorkflow(definition, vault) {
+  assertWorkflowDependencies(definition.workflow, definition.tasks);
   const root = physicalPath(vault);
   const checkDirectory = (value) => {
     if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
@@ -3650,8 +3674,6 @@ function preflightInstalledWorkflow(definition, vault) {
   };
   checkDirectory(definition.settings.workingDirectory);
   for (const item of [definition.workflow, ...definition.workflow.steps, ...definition.tasks]) {
-    if (item.requiresAutoOCSecrets !== void 0 && typeof item.requiresAutoOCSecrets !== "boolean") throw new Error("Invalid AutoOC secrets dependency declaration");
-    if (item.requiresAutoOCSecrets === true) throw new Error("AutoOC secret store is unavailable in the shared runtime; use the supported Obsidian path");
     if (item.workingDirectory !== void 0) checkDirectory(item.workingDirectory);
     if (item.interactiveTerminal !== void 0 && typeof item.interactiveTerminal !== "boolean") throw new Error("interactiveTerminal must be boolean");
     if (item.taskKind === "code" && item.interactiveTerminal === true) throw new Error("Code tasks cannot be interactive");

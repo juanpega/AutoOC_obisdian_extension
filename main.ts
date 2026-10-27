@@ -1,3 +1,5 @@
+import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
+import { LegacyOutputRedaction } from "./legacy-output-redaction";
 import { samePhysicalPath } from "./path-identity";
 import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
 import {createPluginRequestHost} from "./cli-plugin-requests";
@@ -475,6 +477,7 @@ interface WorkflowTransition {
 }
 
 interface WorkflowStep {
+  requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
   name?: string;
@@ -528,7 +531,7 @@ interface ScheduledTask {
   output: string;
   createdAt: string;       // ISO string;
   workingDirectory?: string; // Optional path override
-  requiresAutoOCSecrets?: boolean; // Shared runtime must reject this dependency.
+  requiresAutoOCSecrets?: boolean; // All hosts reject this retired dependency.
   branch?: string;           // Git branch name
   createBranch?: boolean;    // Create branch if it doesn't exist
   code?: string;
@@ -553,6 +556,7 @@ interface ScheduledTask {
 type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 
 interface Workflow {
+  requiresAutoOCSecrets?: boolean;
   legacyExecution?: { token: string };
   id: string;
   name: string;
@@ -734,6 +738,7 @@ function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin):
 }
 
 interface ExportWorkflowStep {
+  requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
   name?: string;
@@ -761,6 +766,7 @@ interface ExportWorkflowStep {
 }
 
 interface ExportWorkflow {
+  requiresAutoOCSecrets?: boolean;
   exportId: string;
   name: string;
   area?: string;
@@ -800,56 +806,6 @@ interface LibraryIndex {
   library: LibraryEntry[];
 }
 
-type SecretType = "token" | "api_key" | "username" | "password" | "cookie" | "basic_auth" | "custom";
-
-interface SecretRecord {
-  id: string;
-  name: string;
-  envName: string;
-  type: SecretType;
-  profile: string;
-  encryptedValue: string;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface SecretsVaultPin {
-  enabled: boolean;
-  salt: string;
-  hash: string;
-}
-
-interface SecretsVault {
-  schemaVersion: number;
-  pin?: SecretsVaultPin;
-  secrets: SecretRecord[];
-}
-
-const SECRET_TYPES: SecretType[] = ["token", "api_key", "username", "password", "cookie", "basic_auth", "custom"];
-const SECRETS_SCHEMA_VERSION = 1;
-const SECRETS_UNLOCK_MS = 5 * 60 * 1000;
-
-function normalizeEnvName(value: string): string {
-  const cleaned = value
-    .trim()
-    .replace(/[^A-Za-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  const prefixed = cleaned.startsWith("AUTOOC_") ? cleaned : `AUTOOC_${cleaned || "SECRET"}`;
-  return /^[A-Za-z_]/.test(prefixed) ? prefixed : `AUTOOC_${prefixed}`;
-}
-
-function hashSecretPin(pin: string, salt: string): string {
-  return crypto.pbkdf2Sync(pin, salt, 120_000, 32, "sha256").toString("base64");
-}
-
-function timingSafeEqualText(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a);
-  const bBuf = Buffer.from(b);
-  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
-}
-
 function tryGetSafeStorage(): any | null {
   try {
     const electron = typeof window !== "undefined" && (window as any).require
@@ -859,144 +815,6 @@ function tryGetSafeStorage(): any | null {
     if (safeStorage?.isEncryptionAvailable?.()) return safeStorage;
   } catch { /* ignore */ }
   return null;
-}
-
-class SecretStore {
-  private vault: SecretsVault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
-  private unlockedUntil = 0;
-
-  constructor(private vaultBasePath: string) {}
-
-  get filePath(): string {
-    return path.join(this.vaultBasePath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
-  }
-
-  load(): void {
-    const file = this.filePath;
-    if (!fs.existsSync(file)) {
-      this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
-      return;
-    }
-    const raw = fs.readFileSync(file, "utf8");
-    const parsed = raw.trim() ? JSON.parse(raw) : {};
-    this.vault = {
-      schemaVersion: parsed.schemaVersion || SECRETS_SCHEMA_VERSION,
-      pin: parsed.pin,
-      secrets: Array.isArray(parsed.secrets) ? parsed.secrets : [],
-    };
-  }
-
-  save(): void {
-    const file = this.filePath;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}\n`, "utf8");
-  }
-
-  isSecureStorageAvailable(): boolean {
-    return !!tryGetSafeStorage();
-  }
-
-  hasPin(): boolean {
-    return !!this.vault.pin?.enabled && !!this.vault.pin.hash && !!this.vault.pin.salt;
-  }
-
-  isUnlocked(): boolean {
-    return !this.hasPin() || Date.now() < this.unlockedUntil;
-  }
-
-  lock(): void {
-    this.unlockedUntil = 0;
-  }
-
-  verifyPin(pin: string): boolean {
-    const pinData = this.vault.pin;
-    if (!pinData?.enabled) return true;
-    const hash = hashSecretPin(pin, pinData.salt);
-    const ok = timingSafeEqualText(hash, pinData.hash);
-    if (ok) this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
-    return ok;
-  }
-
-  setPin(pin: string): void {
-    const salt = crypto.randomBytes(16).toString("base64");
-    this.vault.pin = { enabled: true, salt, hash: hashSecretPin(pin, salt) };
-    this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
-    this.save();
-  }
-
-  resetPin(): void {
-    delete this.vault.pin;
-    this.unlockedUntil = 0;
-    this.save();
-  }
-
-  list(): SecretRecord[] {
-    return [...this.vault.secrets].sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  encryptValue(value: string): string {
-    const safeStorage = tryGetSafeStorage();
-    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
-    return Buffer.from(safeStorage.encryptString(value)).toString("base64");
-  }
-
-  decryptValue(record: SecretRecord): string {
-    const safeStorage = tryGetSafeStorage();
-    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
-    return safeStorage.decryptString(Buffer.from(record.encryptedValue, "base64"));
-  }
-
-  upsert(input: { id?: string; name: string; envName: string; type: SecretType; profile: string; value?: string; notes?: string }): void {
-    const now = new Date().toISOString();
-    const existing = input.id ? this.vault.secrets.find((s) => s.id === input.id) : undefined;
-    if (existing) {
-      existing.name = input.name.trim();
-      existing.envName = normalizeEnvName(input.envName || input.name);
-      existing.type = input.type;
-      existing.profile = input.profile.trim() || "default";
-      existing.notes = input.notes || "";
-      existing.updatedAt = now;
-      if (input.value !== undefined) existing.encryptedValue = this.encryptValue(input.value);
-    } else {
-      this.vault.secrets.push({
-        id: generateId(),
-        name: input.name.trim(),
-        envName: normalizeEnvName(input.envName || input.name),
-        type: input.type,
-        profile: input.profile.trim() || "default",
-        encryptedValue: this.encryptValue(input.value || ""),
-        notes: input.notes || "",
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    this.save();
-  }
-
-  delete(id: string): void {
-    this.vault.secrets = this.vault.secrets.filter((s) => s.id !== id);
-    this.save();
-  }
-
-  getEnv(profile = "default"): Record<string, string> {
-    const result: Record<string, string> = {};
-    for (const secret of this.vault.secrets) {
-      if (secret.profile && secret.profile !== "default" && secret.profile !== profile) continue;
-      result[secret.envName] = this.decryptValue(secret);
-    }
-    return result;
-  }
-
-  getRedactionValues(): string[] {
-    const values: string[] = [];
-    for (const secret of this.vault.secrets) {
-      try {
-        const value = this.decryptValue(secret);
-        if (value && value.length >= 4) values.push(value);
-      } catch { /* ignore */ }
-    }
-    return values;
-  }
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1285,6 +1103,7 @@ function toExportWorkflow(
 ): ExportWorkflow {
   return {
     exportId,
+    requiresAutoOCSecrets: workflow.requiresAutoOCSecrets,
     name: workflow.name,
     area: workflow.area,
     description: workflow.description,
@@ -1299,6 +1118,7 @@ function toExportWorkflow(
     handoffOutput: workflow.handoffOutput,
     steps: workflow.steps.map((step) => ({
       id: step.id,
+      requiresAutoOCSecrets: step.requiresAutoOCSecrets,
       stepKind: step.stepKind || "task",
       name: step.name,
       area: step.area,
@@ -1417,90 +1237,8 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("autooc-mcp")
 SCRIPT_PATH = Path(__file__).resolve()
 VAULT_PATH = Path(os.environ.get("AUTOOC_VAULT_PATH") or SCRIPT_PATH.parents[3])
-SECRETS_PATH = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc" / "secrets.vault.json"
 PLUGIN_DIR = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc"
 BRIDGE_PATH = PLUGIN_DIR / "mcp-bridge.json"
-
-
-def read_secrets_metadata() -> list[dict[str, Any]]:
-    try:
-        if not SECRETS_PATH.exists():
-            return []
-        data = json.loads(SECRETS_PATH.read_text(encoding="utf-8") or "{}")
-        secrets = data.get("secrets") if isinstance(data, dict) else []
-        if not isinstance(secrets, list):
-            return []
-        return [
-            {
-                "name": secret.get("name"),
-                "envName": secret.get("envName"),
-                "type": secret.get("type"),
-                "profile": secret.get("profile") or "default",
-                "updatedAt": secret.get("updatedAt"),
-            }
-            for secret in secrets
-            if isinstance(secret, dict)
-        ]
-    except Exception as exc:
-        return [{"error": str(exc)}]
-
-
-def normalize_key(value: str | None) -> str:
-    text = str(value or "").strip()
-    text = re.sub(r"^https?://", "", text, flags=re.I)
-    text = re.sub(r"^www\.", "", text, flags=re.I)
-    text = text.split("/")[0].split(":")[0]
-    text = re.sub(r"\.[^.]+$", "", text)
-    text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
-    return text.upper()
-
-
-def secret_value_for(secret: dict[str, Any] | None) -> str:
-    if not secret:
-        return ""
-    env_name = secret.get("envName")
-    return os.environ.get(str(env_name), "") if env_name else ""
-
-
-def find_secret_by_name_or_env(name: str) -> dict[str, Any] | None:
-    wanted = normalize_key(name)
-    for secret in read_secrets_metadata():
-        if normalize_key(secret.get("name")) == wanted or normalize_key(secret.get("envName")) == wanted:
-            return secret
-    return None
-
-
-def find_web_credentials(site: str) -> dict[str, Any]:
-    key = normalize_key(site)
-    secrets = read_secrets_metadata()
-
-    def is_for_site(secret: dict[str, Any]) -> bool:
-        return key in normalize_key(secret.get("name")) or key in normalize_key(secret.get("envName"))
-
-    def is_user(secret: dict[str, Any]) -> bool:
-        name = normalize_key(secret.get("name"))
-        env = normalize_key(secret.get("envName"))
-        type_name = str(secret.get("type") or "").lower()
-        return type_name == "username" or "USER" in name or "USER" in env
-
-    def is_pass(secret: dict[str, Any]) -> bool:
-        name = normalize_key(secret.get("name"))
-        env = normalize_key(secret.get("envName"))
-        type_name = str(secret.get("type") or "").lower()
-        return type_name == "password" or "PASS" in name or "PASS" in env
-
-    user = next((secret for secret in secrets if is_for_site(secret) and is_user(secret)), None)
-    password = next((secret for secret in secrets if is_for_site(secret) and is_pass(secret)), None)
-    username_value = secret_value_for(user)
-    password_value = secret_value_for(password)
-    return {
-        "site": site,
-        "usernameEnv": user.get("envName") if user else None,
-        "passwordEnv": password.get("envName") if password else None,
-        "username": username_value,
-        "password": password_value,
-        "found": bool(username_value and password_value),
-    }
 
 
 def bridge_post(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1535,47 +1273,6 @@ def vault_note_path(note_path: str) -> Path | None:
         return candidate if candidate.suffix.lower() == ".md" else None
     except Exception:
         return None
-
-
-@mcp.tool()
-def secrets_status() -> dict[str, Any]:
-    """Show AutoOC secrets vault status without revealing secret values."""
-    secrets = [secret for secret in read_secrets_metadata() if "error" not in secret]
-    return {"vaultPath": str(VAULT_PATH), "secretsPath": str(SECRETS_PATH), "secretsCount": len(secrets)}
-
-
-@mcp.tool()
-def list_secret_envs() -> list[dict[str, Any]]:
-    """List AutoOC secret names and environment variable names without revealing values."""
-    return read_secrets_metadata()
-
-
-@mcp.tool()
-def mcp_header_template() -> dict[str, Any]:
-    """Return a headers template mapping AutoOC secret names to {env:...} references."""
-    headers: dict[str, str] = {}
-    for secret in read_secrets_metadata():
-        name = secret.get("name")
-        env_name = secret.get("envName")
-        if name and env_name:
-            headers[str(name)] = "{env:" + str(env_name) + "}"
-    return {"headers": headers}
-
-
-@mcp.tool()
-def get_secret_value(name: str) -> dict[str, Any]:
-    """Return one AutoOC secret value by secret name or env var. Use only when the task explicitly needs the credential."""
-    secret = find_secret_by_name_or_env(name)
-    if not secret:
-        return {"found": False}
-    value = secret_value_for(secret)
-    return {"found": bool(value), "name": secret.get("name"), "envName": secret.get("envName"), "value": value}
-
-
-@mcp.tool()
-def get_web_credentials(site: str) -> dict[str, Any]:
-    """Return username and password for a website from AutoOC secrets."""
-    return find_web_credentials(site)
 
 
 @mcp.tool()
@@ -1879,7 +1576,9 @@ export default class AutoOCPlugin extends Plugin {
   private settingsPublicationState: "ready" | "loading" | "conflict" = "ready";
   private settingsWritableCatalog?: {file:string;version:ObservedVersion};
   settings!: AutoOCSettings;
-  secretStore!: SecretStore;
+  private legacyOutputRedaction = new LegacyOutputRedaction(() => {
+    new Notice("AutoOC: historical output masking is unavailable or incomplete. The historical store was kept unchanged.");
+  });
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
@@ -2570,6 +2269,8 @@ export default class AutoOCPlugin extends Plugin {
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
       external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void|Promise<void>}, releaseStart?: () => void) {
+    const selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
+    if (selected) assertWorkflowDependencies(selected, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -3028,11 +2729,13 @@ export default class AutoOCPlugin extends Plugin {
         if (!item) return send(404, { ok: false, error: `${kind} not found` });
         if (request.url === "/play") {
           if (kind === "task") {
+            assertNoRetiredDependency(item as ScheduledTask);
             if (this.isTaskActive(item as ScheduledTask)) {
               return send(409, { ok: false, id: item.id, name: item.name, status: "conflict", error: `Task "${item.name}" is already running.` });
             }
             void this.runTask(item as ScheduledTask);
           } else {
+            assertWorkflowDependencies(item as Workflow, this.settings.tasks);
             const workflowPlayError = this.getMcpWorkflowPlayError(item as Workflow);
             if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
             void this.runWorkflow(item as Workflow);
@@ -3247,12 +2950,10 @@ export default class AutoOCPlugin extends Plugin {
       this.settingsWritableCatalog = localFile ? {file:localFile,version:this.settingsWriter.confirmedVersion(localFile)} : undefined;
       this.settingsPublicationState = "ready";
     };
-    this.secretStore = new SecretStore(vaultBasePath);
-    try {
-      this.secretStore.load();
-    } catch (e) {
-      new Notice(`AutoOC: could not load secrets vault — ${String(e)}`);
-      this.secretStore = new SecretStore(vaultBasePath);
+    this.legacyOutputRedaction.load(path.join(location?.installationDirectory || path.resolve(vaultBasePath, this.manifest?.dir || path.join(this.app.vault.configDir || ".obsidian", "plugins", this.manifest?.id || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
+    for (const item of [...nextSettings.tasks, ...nextSettings.workflows, ...nextSettings.workflows.flatMap(w => w.steps || [])]) {
+      const error = autoOCDependencyError(item);
+      if (error) new Notice(error);
     }
     nextSettings.tasks = nextSettings.tasks.map(task => {
       if (!task.legacyExecution) return task;
@@ -3558,23 +3259,8 @@ export default class AutoOCPlugin extends Plugin {
     if (refreshView) this.view?.refresh();
   }
 
-  getSecretsEnv(profile = "default"): Record<string, string> {
-    if (!this.secretStore?.isSecureStorageAvailable()) return {};
-    try {
-      return this.secretStore.getEnv(profile);
-    } catch (e) {
-      new Notice(`AutoOC: could not load secrets for environment — ${String(e)}`);
-      return {};
-    }
-  }
-
   redactSecrets(text: string): string {
-    if (!text || !this.secretStore?.isSecureStorageAvailable()) return text;
-    let redacted = text;
-    for (const value of this.secretStore.getRedactionValues()) {
-      redacted = redacted.split(value).join("[secret:redacted]");
-    }
-    return redacted;
+    return this.legacyOutputRedaction?.redact(text) ?? text;
   }
 
   // ── Version / update helpers ────────────────────────────────────────────────
@@ -3689,7 +3375,7 @@ export default class AutoOCPlugin extends Plugin {
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
-      const secretEnv = this.getSecretsEnv();
+      const secretEnv = {};
       let settled = false;
       let hiddenProc: HiddenProcessHandle | null = null;
       const cleanup = (removeScript = true) => {
@@ -3904,12 +3590,14 @@ export default class AutoOCPlugin extends Plugin {
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
+    assertNoRetiredDependency(this.settings.tasks[idx]);
     if (this.isTaskActive(this.settings.tasks[idx])) {
       new Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
+    assertNoRetiredDependency(effectiveTask);
 
     const binding=(effectiveTask as any).runtimeExecution;
     if(!owner && binding?.requiresReconciliation) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
@@ -3998,7 +3686,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
     const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
-    const secretEnv = this.getSecretsEnv();
+    const secretEnv = {};
 
     if (effectiveTask.interactiveTerminal) {
       const current = this.settings.tasks[idx];
@@ -4329,6 +4017,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ): Promise<void> {
+    assertNoRetiredDependency(this.settings.tasks.find(t => t.id === task.id) || task);
     const findCurrent = () => this.settings.tasks.find((candidate) => candidate.id === task.id);
     let current = findCurrent();
     if (!current) return;
@@ -4374,7 +4063,7 @@ export default class AutoOCPlugin extends Plugin {
         model,
         allowAllTools: task.copilotAllowAllTools === true,
         timeoutMs: Math.max(0, this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS) * 1000,
-        env: this.getSecretsEnv(),
+        env: {},
       });
       current = findCurrent();
       if (!this.isLegacyCurrent(attempt) || cancelled || !current || current.status !== "running") return;
@@ -4422,6 +4111,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ): Promise<void> {
+    assertNoRetiredDependency(this.settings.tasks.find(t => t.id === task.id) || task);
     const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
     if (idx === -1) return;
     let current = this.settings.tasks[idx];
@@ -4621,6 +4311,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ) {
+    assertNoRetiredDependency(this.settings.tasks.find(t => t.id === task.id) || task);
     this.assertLifecycleOpen();
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
@@ -4659,11 +4350,11 @@ export default class AutoOCPlugin extends Plugin {
       const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCodeTask({
         ...current, code, vaultBase: vaultBasePath,
         cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
-        log: (...args) => { if (!isCurrent()) return; current.output += args.map(String).join(" ") + "\n"; },
+        log: (...args) => { if (!isCurrent()) return; current.output += this.redactSecrets(args.map(String).join(" ")) + "\n"; },
         onVaultMutation,
       }));
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
-      current.output = (current.output || "") + out;
+      current.output = this.redactSecrets((current.output || "") + out);
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
       if (this.settings.logsEnabled) {
@@ -4676,7 +4367,7 @@ export default class AutoOCPlugin extends Plugin {
     } catch (err) {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.status = "failed";
-      current.output = (current.output || "") + `[code error: ${String(err)}]`;
+      current.output = this.redactSecrets((current.output || "") + `[code error: ${String(err)}]`);
       this.view?.startGradualSink(current.id);
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, current.id, current.output);
@@ -4814,6 +4505,8 @@ export default class AutoOCPlugin extends Plugin {
   async runDueTasks() {
     const dueTasks = this.settings.tasks.filter((task) => isTaskDue(task));
     for (let i = 0; i < dueTasks.length; i++) {
+      const error = autoOCDependencyError(dueTasks[i]);
+      if (error) { new Notice(error); continue; }
       await this.runTask(dueTasks[i]);
       if (i < dueTasks.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
@@ -4822,6 +4515,8 @@ export default class AutoOCPlugin extends Plugin {
   async runDueWorkflows() {
     const dueWorkflows = this.settings.workflows.filter((wf) => isWorkflowDue(wf));
     for (let i = 0; i < dueWorkflows.length; i++) {
+      try { assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks); }
+      catch (error) { new Notice(String(error)); continue; }
       await this.runWorkflow(dueWorkflows[i]);
       if (i < dueWorkflows.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
@@ -5116,6 +4811,7 @@ export default class AutoOCPlugin extends Plugin {
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
+          requiresAutoOCSecrets: s.requiresAutoOCSecrets,
           name: (s as any).name,
           area: (s as any).area || ew.area || "",
           taskId: (s as any).taskExportId ? exportIdToTaskId.get((s as any).taskExportId) : undefined,
@@ -5153,6 +4849,7 @@ export default class AutoOCPlugin extends Plugin {
 
       const workflow: Workflow = {
         id: generateId(),
+        requiresAutoOCSecrets: ew.requiresAutoOCSecrets,
         name: this.ensureUniqueWorkflowName(ew.name),
         area: ew.area ?? "",
         description: ew.description ?? "",
@@ -5175,6 +4872,10 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     await this.saveSettings();
+    for (const item of [...this.settings.tasks, ...this.settings.workflows, ...this.settings.workflows.flatMap(w => w.steps || [])]) {
+      const error = autoOCDependencyError(item);
+      if (error) new Notice(error);
+    }
     return { tasksImported, workflowsImported };
   }
 
@@ -5191,6 +4892,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async executeWorkflow(workflow: Workflow, releaseStart?: () => void) {
+    assertWorkflowDependencies(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -5284,6 +4986,7 @@ export default class AutoOCPlugin extends Plugin {
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
     const wf = this.settings.workflows[wfIdx];
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
     if (!wf || wf.status !== "running") return;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
@@ -5344,6 +5047,7 @@ export default class AutoOCPlugin extends Plugin {
   async runWorkflowStep(wfIdx: number, stepIndex: number) {
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
     if (!step) {
@@ -5378,6 +5082,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDelayStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    assertWorkflowDependencies(wf, this.settings.tasks);
     const spec = workflowDelay(step.delayValue, step.delayUnit);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     if (this.stoppingWorkflows.has(wf.id) || wf.status !== "running") return;
@@ -5397,6 +5102,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runCodeStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    assertWorkflowDependencies(wf, this.settings.tasks);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     const inputVar = step.codeInputVar || "input";
     const outputVar = step.codeOutputVar || "output";
@@ -5412,19 +5118,21 @@ export default class AutoOCPlugin extends Plugin {
         onVaultMutation,
       }));
       if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
-      if (ctx) ctx.stepOutputs.set(step.id, out);
+      const masked = this.redactSecrets(out);
+      if (ctx) ctx.stepOutputs.set(step.id, masked);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
-      await this.completeStep(wf, step, stepIndex, true, out);
+      await this.completeStep(wf, step, stepIndex, true, masked);
     } catch (err) {
       if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
-      const msg = `[code error: ${String(err)}]`;
+      const msg = this.redactSecrets(`[code error: ${String(err)}]`);
       if (ctx) ctx.stepOutputs.set(step.id, msg);
-      new Notice(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`);
+      new Notice(this.redactSecrets(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`));
       await this.completeStep(wf, step, stepIndex, false, msg);
     }
   }
 
   async runTaskStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    assertWorkflowDependencies(wf, this.settings.tasks);
     const executionContext = (this as any).workflowRuntime?.get(wf.id);
     const isCurrentExecution = () => executionContext !== undefined &&
       (this as any).workflowRuntime?.get(wf.id) === executionContext &&
@@ -5519,6 +5227,7 @@ export default class AutoOCPlugin extends Plugin {
 
   // Complete a non-task step and move to the next one.
   async completeStep(wf: Workflow, step: WorkflowStep, stepIndex: number, succeeded: boolean, output: string) {
+    output = this.redactSecrets(output);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     const isCurrentExecution = () => ctx !== undefined && (this as any).workflowRuntime.get(wf.id) === ctx &&
       this.settings.workflows.find(w => w.id === wf.id)?.status === "running" && !this.stoppingWorkflows.has(wf.id);
@@ -5570,7 +5279,7 @@ class AutoOCView extends ItemView {
   private filterText: string = "";
   private filterStatus: string = "all";
   private filterArea: string = "all";
-  private currentTab: "dashboard" | "tasks" | "workflows" | "secrets" = "dashboard";
+  private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
@@ -6084,13 +5793,6 @@ class AutoOCView extends ItemView {
     });
     btnWorkflows.onclick = () => { this.currentTab = "workflows"; this.render(); };
 
-    const btnSecrets = navRow.createEl("button", {
-      text: "🔒 Secrets",
-      cls: "auto-oc-tab-btn",
-    });
-    btnSecrets.title = "Manage local secrets injected into OpenCode as temporary environment variables";
-    btnSecrets.onclick = () => { this.currentTab = "secrets"; this.render(); };
-
     const btnVisualBuilder = navRow.createEl("button", {
       text: "✨ WF Visual Builder",
       cls: "auto-oc-tab-btn",
@@ -6140,12 +5842,6 @@ class AutoOCView extends ItemView {
         cls: "auto-oc-btn-primary",
       });
       btnNewWorkflow.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
-    } else if (this.currentTab === "secrets") {
-      const btnNewSecret = toolsRow.createEl("button", {
-        text: "+ New Secret",
-        cls: "auto-oc-btn-primary",
-      });
-      btnNewSecret.onclick = () => this.openSecretEditor();
     }
     const toolsSpacer = toolsRow.createDiv("auto-oc-tab-spacer");
     toolsSpacer.style.flex = "1";
@@ -6167,76 +5863,16 @@ class AutoOCView extends ItemView {
     if (this.currentTab === "dashboard") btnDashboard.addClass("active");
     else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
-    else if (this.currentTab === "secrets") btnSecrets.addClass("active");
 
     // ── Content ──
     if (this.currentTab === "dashboard") {
       this.renderDashboard(containerEl);
     } else if (this.currentTab === "workflows") {
       this.renderWorkflows(containerEl);
-    } else if (this.currentTab === "secrets") {
-      this.renderSecrets(containerEl);
+
     } else {
       this.renderTasks(containerEl);
     }
-  }
-
-  private async ensureSecretsUnlocked(): Promise<boolean> {
-    const store = this.plugin.secretStore;
-    if (!store.hasPin()) {
-      const created = await new SecretsPinModal(this.app, store, "create").openAndWait();
-      if (created) this.render();
-      return created;
-    }
-    if (store.isUnlocked()) return true;
-    return new SecretsPinModal(this.app, store, "unlock").openAndWait();
-  }
-
-  private async openSecretEditor(secret?: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    new SecretEditModal(this.app, this.plugin, secret, () => this.render()).open();
-  }
-
-  private async revealSecret(secret: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    try {
-      const value = this.plugin.secretStore.decryptValue(secret);
-      new SecretRevealModal(this.app, secret, value).open();
-    } catch (e) {
-      new Notice(`AutoOC: could not reveal secret — ${String(e)}`);
-    }
-  }
-
-  private async copySecretValue(secret: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    try {
-      await copyTextToClipboard(this.plugin.secretStore.decryptValue(secret));
-      new Notice(`AutoOC: copied ${secret.name}.`);
-    } catch (e) {
-      new Notice(`AutoOC: could not copy secret — ${String(e)}`);
-    }
-  }
-
-  private async deleteSecret(secret: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    const confirmed = await new ConfirmModal(this.app, `Delete secret "${secret.name}"?`, "This cannot be undone.").openAndWait();
-    if (!confirmed) return;
-    this.plugin.secretStore.delete(secret.id);
-    new Notice(`AutoOC: deleted secret ${secret.name}.`);
-    this.render();
-  }
-
-  private async resetSecretsPin(): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    const confirmed = await new ConfirmModal(
-      this.app,
-      "Reset Secrets PIN?",
-      "This only removes the UI PIN. Encrypted secrets are kept. You can create a new PIN afterwards."
-    ).openAndWait();
-    if (!confirmed) return;
-    this.plugin.secretStore.resetPin();
-    new Notice("AutoOC: Secrets PIN reset. Secrets were kept.");
-    this.render();
   }
 
   private async copyAutoOcMcpInstallJson(): Promise<void> {
@@ -6263,101 +5899,6 @@ class AutoOCView extends ItemView {
   private async copyUvInstallCommand(): Promise<void> {
     await copyTextToClipboard(getUvInstallCommand());
     new Notice("AutoOC: uv install command copied.");
-  }
-
-  private renderSecrets(containerEl: HTMLElement): void {
-    const section = containerEl.createDiv("auto-oc-section auto-oc-secrets-section");
-    section.createEl("h4", { text: "Secrets" });
-    section.createEl("p", {
-      text: "Paste values normally; AutoOC encrypts them when saving and injects them into OpenCode as temporary env vars.",
-      cls: "setting-item-description",
-    });
-
-    const uvStatus = describeUvStatus();
-    if (!uvStatus.available) {
-      const uvWarning = section.createDiv("auto-oc-secrets-runtime-warning");
-      uvWarning.createEl("strong", { text: "autooc-mcp needs uv" });
-      uvWarning.createEl("p", {
-        text: "uv is not installed or AutoOC cannot find it. Install uv before using the autooc-mcp installer.",
-      });
-      const copyUv = uvWarning.createEl("button", { text: "Copy uv install command", cls: "auto-oc-btn-secondary" });
-      copyUv.onclick = () => this.copyUvInstallCommand();
-    }
-
-    if (!this.plugin.secretStore.isSecureStorageAvailable()) {
-      section.createEl("p", {
-        text: "Secure storage is not available on this system. Secrets cannot be created or revealed.",
-        cls: "setting-item-description auto-oc-update-error",
-      });
-      return;
-    }
-
-    const actions = section.createDiv("auto-oc-task-actions");
-    actions.addClass("auto-oc-secrets-toolbar");
-    const lockBtn = actions.createEl("button", { text: "Lock", cls: "auto-oc-btn-secondary" });
-    lockBtn.onclick = () => { this.plugin.secretStore.lock(); this.render(); };
-    const resetBtn = actions.createEl("button", { text: "Reset PIN", cls: "auto-oc-btn-secondary" });
-    resetBtn.onclick = () => this.resetSecretsPin();
-
-    if (!this.plugin.secretStore.hasPin()) {
-      section.createEl("p", {
-        text: "No UI PIN is set yet. Create one before managing secrets.",
-        cls: "setting-item-description",
-      });
-      const btn = section.createEl("button", { text: "Create PIN", cls: "auto-oc-btn-primary" });
-      btn.onclick = () => this.ensureSecretsUnlocked();
-      return;
-    }
-
-    if (!this.plugin.secretStore.isUnlocked()) {
-      section.createEl("p", { text: "Secrets are locked.", cls: "setting-item-description" });
-      const btn = section.createEl("button", { text: "Unlock Secrets", cls: "auto-oc-btn-primary" });
-      btn.onclick = async () => { if (await this.ensureSecretsUnlocked()) this.render(); };
-      return;
-    }
-
-    const installMcpBtn = actions.createEl("button", { text: "Install autooc-mcp in OpenCode", cls: "auto-oc-btn-primary" });
-    installMcpBtn.title = "Write autooc-mcp into the global OpenCode config and create the local MCP server file.";
-    installMcpBtn.onclick = () => this.installAutoOcMcpInOpenCode();
-
-    const copyMcpBtn = actions.createEl("button", { text: "Copy autooc-mcp install JSON", cls: "auto-oc-btn-secondary" });
-    copyMcpBtn.title = "Copy the OpenCode/harness config block that installs the local autooc-mcp server.";
-    copyMcpBtn.onclick = () => this.copyAutoOcMcpInstallJson();
-
-    const secrets = this.plugin.secretStore.list();
-    if (secrets.length === 0) {
-      section.createEl("p", { text: "No secrets yet. Use + New Secret to add one.", cls: "setting-item-description" });
-      return;
-    }
-
-    const tableWrap = section.createDiv("auto-oc-secrets-table-wrap");
-    const table = tableWrap.createEl("table", { cls: "auto-oc-secrets-table" });
-    const thead = table.createEl("thead");
-    const headRow = thead.createEl("tr");
-    ["Name", "Env Var", "Type", "Profile", "Updated", "Actions"].forEach((h) => headRow.createEl("th", { text: h }));
-    const tbody = table.createEl("tbody");
-    for (const secret of secrets) {
-      const row = tbody.createEl("tr");
-      row.createEl("td", { text: secret.name, cls: "auto-oc-secret-name" });
-      row.createEl("td", { text: secret.envName, cls: "auto-oc-secret-env" });
-      const typeTd = row.createEl("td");
-      typeTd.createSpan({ text: secret.type, cls: "auto-oc-secret-chip" });
-      const profileTd = row.createEl("td");
-      profileTd.createSpan({ text: secret.profile || "default", cls: "auto-oc-secret-chip auto-oc-secret-profile" });
-      row.createEl("td", { text: secret.updatedAt ? new Date(secret.updatedAt).toLocaleString() : "" });
-      const actionTd = row.createEl("td", { cls: "auto-oc-secrets-actions-cell" });
-      const actionWrap = actionTd.createDiv("auto-oc-secrets-actions");
-      const reveal = actionWrap.createEl("button", { text: "Reveal" });
-      reveal.onclick = () => this.revealSecret(secret);
-      const copyValue = actionWrap.createEl("button", { text: "Copy value" });
-      copyValue.onclick = () => this.copySecretValue(secret);
-      const copyEnv = actionWrap.createEl("button", { text: "Copy env" });
-      copyEnv.onclick = async () => { await copyTextToClipboard(secret.envName); new Notice("AutoOC: env var copied."); };
-      const edit = actionWrap.createEl("button", { text: "Edit" });
-      edit.onclick = () => this.openSecretEditor(secret);
-      const del = actionWrap.createEl("button", { text: "Delete", cls: "auto-oc-secret-danger" });
-      del.onclick = () => this.deleteSecret(secret);
-    }
   }
 
   // Renders the extension header at the top of the panel: title,
@@ -7158,6 +6699,8 @@ class AutoOCView extends ItemView {
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
+    const dependencyError = autoOCDependencyError(task);
+    if (dependencyError) parent.createEl("p", {text: dependencyError, cls: "mod-warning"});
     const stopIdentity = this.plugin.taskStopIdentity(task);
     const stopTask = async (button: HTMLButtonElement) => {
       button.disabled = true;
@@ -7542,6 +7085,8 @@ class AutoOCView extends ItemView {
   }
 
   private renderWorkflowCard(parent: HTMLElement, workflow: Workflow) {
+    try { assertWorkflowDependencies(workflow, this.plugin.settings.tasks); }
+    catch (error) { parent.createEl("p", {text: String(error), cls: "mod-warning"}); }
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     card.setAttr("data-auto-oc-workflow-id", workflow.id);
     const summary = card.createDiv("auto-oc-card-summary");
@@ -8166,7 +7711,7 @@ class VisualBuilderModal extends Modal {
         prompt: t.prompt || "",
         model: t.model !== undefined ? t.model : taskKind === "copilot" ? existing?.model ?? this.plugin.settings.defaultCopilotModel ?? "" : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
         copilotAllowAllTools: taskKind === "copilot" ? (t.copilotAllowAllTools ?? existing?.copilotAllowAllTools) === true : undefined,
-        requiresAutoOCSecrets: t.requiresAutoOCSecrets ?? existing?.requiresAutoOCSecrets,
+        requiresAutoOCSecrets: existing && Object.prototype.hasOwnProperty.call(existing, "requiresAutoOCSecrets") ? existing.requiresAutoOCSecrets : t.requiresAutoOCSecrets,
         agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
         reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
@@ -8210,6 +7755,7 @@ class VisualBuilderModal extends Modal {
       return {
         ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
+        requiresAutoOCSecrets: existing && Object.prototype.hasOwnProperty.call(existing, "requiresAutoOCSecrets") ? existing.requiresAutoOCSecrets : w.requiresAutoOCSecrets,
         name: w.name || "Unnamed",
         area: w.area !== undefined ? (w.area || "") : (existing?.area || ""),
         description: w.description || "",
@@ -8217,6 +7763,7 @@ class VisualBuilderModal extends Modal {
           const oldStep = existing?.steps.find((x) => x.id === s.id);
           return {
             id: s.id || generateId(),
+            requiresAutoOCSecrets: oldStep && Object.prototype.hasOwnProperty.call(oldStep, "requiresAutoOCSecrets") ? oldStep.requiresAutoOCSecrets : s.requiresAutoOCSecrets,
             stepKind: s.stepKind || "task",
             name: s.name,
             area: s.area || w.area || existing?.area || "",
@@ -8303,238 +7850,6 @@ class ConfirmModal extends Modal {
   }
 }
 
-class SecretsPinModal extends Modal {
-  private resolve?: (value: boolean) => void;
-  private settled = false;
-  private pin = "";
-  private confirmPin = "";
-
-  constructor(app: App, private store: SecretStore, private mode: "create" | "unlock") {
-    super(app);
-  }
-
-  openAndWait(): Promise<boolean> {
-    this.open();
-    return new Promise((resolve) => { this.resolve = resolve; });
-  }
-
-  private finish(value: boolean): void {
-    this.settled = true;
-    this.resolve?.(value);
-    this.close();
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("auto-oc-modal");
-    setupModalX(this);
-    preventBackdropClose(this);
-    contentEl.createEl("h3", { text: this.mode === "create" ? "Create Secrets PIN" : "Unlock Secrets" });
-    contentEl.createEl("p", {
-      text: this.mode === "create"
-        ? "This PIN protects the Secrets UI. It can be reset without deleting encrypted secrets."
-        : "Enter the Secrets UI PIN.",
-      cls: "setting-item-description",
-    });
-
-    new Setting(contentEl)
-      .setName("PIN")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.onChange((v) => (this.pin = v));
-        window.setTimeout(() => text.inputEl.focus(), 50);
-      });
-
-    if (this.mode === "create") {
-      new Setting(contentEl)
-        .setName("Confirm PIN")
-        .addText((text) => {
-          text.inputEl.type = "password";
-          text.inputEl.addClass("auto-oc-modal-input");
-          text.onChange((v) => (this.confirmPin = v));
-        });
-    }
-
-    new Setting(contentEl)
-      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.finish(false)))
-      .addButton((btn) => btn.setButtonText(this.mode === "create" ? "Create PIN" : "Unlock").setCta().onClick(() => {
-        if (this.pin.length < 4) {
-          new Notice("AutoOC: PIN must be at least 4 characters.");
-          return;
-        }
-        if (this.mode === "create") {
-          if (this.pin !== this.confirmPin) {
-            new Notice("AutoOC: PIN confirmation does not match.");
-            return;
-          }
-          this.store.setPin(this.pin);
-          new Notice("AutoOC: Secrets PIN created.");
-          this.finish(true);
-          return;
-        }
-        if (!this.store.verifyPin(this.pin)) {
-          new Notice("AutoOC: incorrect PIN.");
-          return;
-        }
-        this.finish(true);
-      }));
-  }
-
-  onClose() {
-    if (!this.settled) this.resolve?.(false);
-    this.resolve = undefined;
-    this.contentEl.empty();
-  }
-}
-
-class SecretEditModal extends Modal {
-  private draft: { name: string; envName: string; type: SecretType; profile: string; value: string; notes: string };
-
-  constructor(app: App, private plugin: AutoOCPlugin, private secret: SecretRecord | undefined, private onSaved: () => void) {
-    super(app);
-    this.draft = {
-      name: secret?.name || "",
-      envName: secret?.envName || "",
-      type: secret?.type || "token",
-      profile: secret?.profile || "default",
-      value: "",
-      notes: secret?.notes || "",
-    };
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("auto-oc-modal");
-    setAutoOCModalSize(this, 720);
-    setupModalX(this);
-    preventBackdropClose(this);
-    contentEl.createEl("h3", { text: this.secret ? "Edit Secret" : "New Secret" });
-
-    new Setting(contentEl)
-      .setName("Name")
-      .setDesc("Human-readable name, for example jira-token or web-login-password.")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setValue(this.draft.name).onChange((v) => {
-          this.draft.name = v;
-          if (!this.secret && !this.draft.envName.trim()) this.draft.envName = normalizeEnvName(v);
-        });
-        window.setTimeout(() => text.inputEl.focus(), 50);
-      });
-
-    new Setting(contentEl)
-      .setName("Environment variable")
-      .setDesc("Use this in opencode MCP config as {env:NAME}.")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setPlaceholder("AUTOOC_JIRA_TOKEN").setValue(this.draft.envName).onChange((v) => (this.draft.envName = v));
-      });
-
-    new Setting(contentEl)
-      .setName("Type")
-      .addDropdown((dd) => {
-        for (const type of SECRET_TYPES) dd.addOption(type, type);
-        dd.setValue(this.draft.type);
-        dd.onChange((v) => (this.draft.type = v as SecretType));
-      });
-
-    new Setting(contentEl)
-      .setName("Profile")
-      .setDesc("default is always injected. Other profiles are reserved for future per-task selection.")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setValue(this.draft.profile).onChange((v) => (this.draft.profile = v || "default"));
-      });
-
-    new Setting(contentEl)
-      .setName(this.secret ? "New value" : "Value")
-      .setDesc(this.secret
-        ? "Paste the new password/token as plain text. AutoOC encrypts it when you save. Leave empty to keep the current value."
-        : "Paste the password/token as plain text. AutoOC encrypts it when you save; the table never shows it."
-      )
-      .addTextArea((ta) => {
-        ta.inputEl.addClass("auto-oc-modal-textarea");
-        ta.inputEl.rows = 4;
-        ta.inputEl.spellcheck = false;
-        ta.setValue(this.draft.value).onChange((v) => (this.draft.value = v));
-      });
-
-    new Setting(contentEl)
-      .setName("Notes")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setValue(this.draft.notes).onChange((v) => (this.draft.notes = v));
-      });
-
-    new Setting(contentEl)
-      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.close()))
-      .addButton((btn) => btn.setButtonText("Save Secret").setCta().onClick(() => {
-        if (!this.draft.name.trim()) {
-          new Notice("AutoOC: secret name is required.");
-          return;
-        }
-        if (!this.secret && !this.draft.value) {
-          new Notice("AutoOC: secret value is required.");
-          return;
-        }
-        try {
-          this.plugin.secretStore.upsert({
-            id: this.secret?.id,
-            name: this.draft.name,
-            envName: this.draft.envName || this.draft.name,
-            type: this.draft.type,
-            profile: this.draft.profile || "default",
-            value: this.draft.value || undefined,
-            notes: this.draft.notes,
-          });
-          new Notice("AutoOC: secret saved.");
-          this.onSaved();
-          this.close();
-        } catch (e) {
-          new Notice(`AutoOC: could not save secret — ${String(e)}`);
-        }
-      }));
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
-class SecretRevealModal extends Modal {
-  constructor(app: App, private secret: SecretRecord, private value: string) {
-    super(app);
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("auto-oc-modal");
-    setupModalX(this);
-    contentEl.createEl("h3", { text: `Secret: ${this.secret.name}` });
-    contentEl.createEl("p", { text: this.secret.envName, cls: "setting-item-description" });
-    const textarea = contentEl.createEl("textarea", { cls: "auto-oc-modal-textarea" });
-    textarea.value = this.value;
-    textarea.readOnly = true;
-    textarea.rows = 4;
-    textarea.style.width = "100%";
-    new Setting(contentEl)
-      .addButton((btn) => btn.setButtonText("Copy value").onClick(async () => {
-        await copyTextToClipboard(this.value);
-        new Notice("AutoOC: secret copied.");
-      }))
-      .addButton((btn) => btn.setButtonText("Close").onClick(() => this.close()));
-  }
-
-  onClose() {
-    this.value = "";
-    this.contentEl.empty();
-  }
-}
-
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
@@ -8614,6 +7929,8 @@ class CreateTaskModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const dependencyError = autoOCDependencyError(this.draft);
+    if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 900);
     preventBackdropClose(this);
@@ -9205,6 +8522,8 @@ class EditWorkflowStepModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const dependencyError = autoOCDependencyError(this.draft);
+    if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 760);
     preventBackdropClose(this);
@@ -9377,6 +8696,8 @@ class CreateWorkflowModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const dependencyError = autoOCDependencyError(this.draft);
+    if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 1100);
     preventBackdropClose(this);
@@ -11428,7 +10749,7 @@ class OpenCodeCliModal extends Modal {
   private launch(cwd: string) {
     try {
       const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      openOpencodeCli(bin, cwd, this.plugin.getSecretsEnv(), [], {
+      openOpencodeCli(bin, cwd, {}, [], {
         onError: (error) => new Notice(`AutoOC: could not open OpenCode CLI: ${String(error)}`),
         linuxTerminal: this.plugin.settings.linuxTerminal,
       });

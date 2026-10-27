@@ -69,7 +69,7 @@ test('preflight rejects an unauthorized task directory and deferred store depend
       if(kind==='store') {delete config.tasks[0].workingDirectory;config.tasks[0].requiresAutoOCSecrets=true;}
       const original=JSON.stringify(config);fs.writeFileSync(file,original);
       const result=call('run','--vault',root,'--workflow','w');
-      assert.equal(result.status,1);assert.match(result.stderr,kind==='store'?/secret store is unavailable/:/outside the selected vault/);
+      assert.equal(result.status,1);assert.match(result.stderr,kind==='store'?/Secrets was retired/:/outside the selected vault/);
       assert.equal(fs.readFileSync(file,'utf8'),original);
       assert.ok(!fs.existsSync(path.join(root,'must-not-exist.txt')));
       assert.ok(!fs.existsSync(path.join(folder,'runtime')));

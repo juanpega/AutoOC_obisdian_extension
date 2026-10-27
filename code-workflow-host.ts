@@ -1,3 +1,4 @@
+import { assertWorkflowDependencies } from "./retired-dependency";
 import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
 import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
@@ -33,6 +34,7 @@ export interface WorkflowTaskAdapter {
 }
 
 export function supportsSharedWorkflow(definition:PreparedWorkflow,tasks?:WorkflowTaskAdapter):boolean {
+  assertWorkflowDependencies(definition.workflow, definition.tasks);
   return !definition.workflow.requiresAutoOCSecrets &&
     !definition.tasks.some(task=>task.requiresAutoOCSecrets) &&
     !definition.workflow.steps.some((step:any)=>!["code","delay","task"].includes(step.stepKind || "task")) &&
@@ -58,6 +60,7 @@ export async function runCodeWorkflowHost(options: {
   lease?: ExecutionLease;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
+  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
   if (options.reconcile && !options.resumeRunId) throw new Error("Reconciliation requires an existing run identity");

@@ -758,6 +758,7 @@
           ...w,
           steps: w.steps.map((s) => ({
             id: s.id,
+            requiresAutoOCSecrets: s.requiresAutoOCSecrets,
             stepKind: s.stepKind || "task",
             taskId: s.taskId,
             transitionMode: s.transitionMode,
@@ -1447,6 +1448,11 @@
     wirePanelFields();
   }
 
+  function retiredDependencyWarning(item) {
+    if (item.requiresAutoOCSecrets === undefined || item.requiresAutoOCSecrets === false) return "";
+    return '<p class="hint">AutoOC Secrets was retired. This definition requires adaptation before execution. Its dependency declaration is preserved.</p>';
+  }
+
   function editorTaskHtml(t) {
     const isCodex = t.taskKind === "codex";
     const isCopilot = t.taskKind === "copilot";
@@ -1473,7 +1479,7 @@
       <div class="field" style="background:var(--accent-soft);border:1px solid var(--accent);border-radius:4px;padding:6px 10px;margin-top:-2px"><label class="checkbox-row" style="margin:0"><input type="checkbox" data-f="forceModel" ${t.forceModel ? "checked" : ""} style="width:auto" /> <strong style="color:var(--accent)">Force model</strong> <span class="hint-inline">skip --agent; use exactly the selected model</span></label></div>
       <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="interactiveTerminal" ${t.interactiveTerminal ? "checked" : ""} /> Open as an interactive OpenCode CLI task</label></div>
       <div class="field"><label class="checkbox-row"><input type="checkbox" data-f="useRalphLoop" ${t.useRalphLoop ? "checked" : ""} /> Use Ralph Loop</label></div>`;
-    return `
+    return `${retiredDependencyWarning(t) }
       <div class="field"><label>Name *</label><input data-f="name" value="${esc(t.name)}" /></div>
       <div class="field"><label>Task type</label><select data-f="taskMode"><option value="opencode" ${taskMode === "opencode" ? "selected" : ""}>OpenCode</option><option value="opencode-cli" ${taskMode === "opencode-cli" ? "selected" : ""}>OpenCode CLI</option><option value="codex" ${taskMode === "codex" ? "selected" : ""}>Codex (background)</option><option value="codex-app" ${taskMode === "codex-app" ? "selected" : ""}>ChatGPT / Codex</option><option value="copilot" ${taskMode === "copilot" ? "selected" : ""}>GitHub Copilot CLI</option><option value="code" ${taskMode === "code" ? "selected" : ""}>Local JavaScript</option></select></div>
       ${isCode ? "" : '<div class="field"><label>Prompt</label><textarea data-f="prompt" rows="5">' + esc(t.prompt) + '</textarea></div>'}
@@ -1510,7 +1516,7 @@
   }
 
   function editorWorkflowHtml(w) {
-    return `
+    return `${retiredDependencyWarning(w) }
       <div class="field"><label>Name *</label><input data-f="name" value="${esc(w.name)}" /></div>
       <div class="field"><label>Description</label><textarea data-f="description" rows="2">${esc(w.description)}</textarea></div>
       <div class="row-2">
@@ -1571,7 +1577,7 @@
         <div class="hint-inline">Available globals: <code>input</code>, <code>outputs</code> (map of stepId → output), <code>JSON</code>, <code>Math</code>, <code>Date</code>. The result of the expression assigned to <code>${esc(s.codeOutputVar || "output")}</code> is passed to the next step.</div>
       `;
     }
-    return `
+    return `${retiredDependencyWarning(s) }
       ${body}
       <div class="section">
         <h4>Outgoing transitions (${(s.transitions || []).length})</h4>
