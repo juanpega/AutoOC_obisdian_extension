@@ -27,6 +27,7 @@ test('distributed ZIP and its skill support task, workflow, gates, error, stop a
   const version=ok('version');
   assert.equal(version.version,JSON.parse(fs.readFileSync(path.join(install,'manifest.json'))).version);
   assert.equal(version.taskSelection,true);assert.ok(version.capabilities.includes('recover-lease'));
+  for(const capability of ['inspect-terminal','dispose-terminal'])assert.ok(version.capabilities.includes(capability));
   assert.match(fs.readFileSync(path.join(install,'skills/autooc-runtime/SKILL.md'),'utf8'),/node CLI run --vault VAULT --task TASK_ID/);
   assert.match(ok('help').execution,/--task/);
   fs.writeFileSync(config,JSON.stringify({custom:'preserve',tasks:[{id:'task',name:'Task',taskKind:'code',codeAllowVault:true,code:'vault.append("task.txt","once"); output="task result";'}],workflows:[
@@ -60,16 +61,29 @@ test('distributed ZIP and its skill support task, workflow, gates, error, stop a
   t.after(()=>{if(child.exitCode===null)child.kill();});
   const until=Date.now()+10000;let stopId;
   while(Date.now()<until){
-    const current=JSON.parse(fs.readFileSync(config));stopId=current.workflows.find(w=>w.id==='stop').runtimeExecution?.runId;
-    if(stopId)break;
+    const current=JSON.parse(fs.readFileSync(config)),binding=current.workflows.find(w=>w.id==='stop').runtimeExecution;
+    if(binding?.phase==='in_flight'){stopId=binding.runId;break;}
     if(child.exitCode!==null)break;
     await new Promise(resolve=>setTimeout(resolve,30));
   }
-  assert.ok(stopId,`running identity was published; exit=${child.exitCode}; stderr=${error}; stdout=${output}`);
+  assert.ok(stopId,`in-flight delay identity was published; exit=${child.exitCode}; stderr=${error}; stdout=${output}`);
   assert.equal(call('run','--vault',vault,'--workflow','full').status,1);
   const stopping=ok('stop','--vault',vault,'--workflow','stop','--run',stopId);assert.equal(stopping.requested,true);
   const status=await ended;assert.ok([1,130].includes(status),error);assert.equal(JSON.parse(output).phase,'failed');
   assert.ok(!fs.existsSync(path.join(vault,'forbidden.txt')));
+  const blocked=call('run','--vault',vault,'--workflow','restart');
+  assert.equal(blocked.status,1);assert.match(blocked.stderr,/requires continuation or reconciliation/);
+  assert.ok(!fs.existsSync(path.join(vault,'restart.txt')));
+  const stoppedFile=path.join(install,'runtime',stopId+'.json'),stopped=JSON.parse(fs.readFileSync(stoppedFile,'utf8'));
+  const inspection=ok('inspect-terminal','--vault',vault,'--run',stopId),decision=path.join(root,'fixture-disposition.json');
+  assert.equal(inspection.runId,stopId);assert.equal(inspection.phase,'failed');
+  // Simulated human decision for this synthetic attempt only, never a real vault authorization.
+  fs.writeFileSync(decision,JSON.stringify({...inspection,reason:'Synthetic fixture disposition; preserve the stopped attempt and unknown outcome',acknowledgedUnknownEffects:true}));
+  const disposed=ok('dispose-terminal','--vault',vault,'--decision',decision);
+  assert.equal(disposed.phase,'failed');assert.equal(disposed.disposition.outcome,'unknown');
+  assert.equal(disposed.disposition.acknowledgedUnknownEffects,true);
+  const historical=JSON.parse(fs.readFileSync(stoppedFile,'utf8'));
+  assert.deepEqual(historical.steps,stopped.steps);assert.equal(historical.revision,stopped.revision+1);
   const driver=path.join(root,'pause.cjs');
   fs.writeFileSync(driver,`require(${JSON.stringify(path.join(install,'autooc-runtime.cjs'))}).runInstalledWorkflow({vault:${JSON.stringify(vault)},workflowId:'restart',newExecution:true,maxSteps:1,redact:s=>s}).then(s=>console.log(JSON.stringify(s))).catch(e=>{console.error(e);process.exitCode=1;});`);
   const first=spawnSync(process.execPath,[driver],{encoding:'utf8',timeout:15000});assert.equal(first.status,0,first.stderr);

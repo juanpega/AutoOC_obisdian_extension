@@ -36,7 +36,7 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 - `LegacyOutputRedaction` en `legacy-output-redaction.ts`: componente interno de solo lectura para enmascarar valores históricos conocidos. No expone gestión, PIN, valores ni variables de entorno.
 - Visual Builder modal: `VisualBuilderModal` embeds the generated Visual Builder HTML through `iframe.srcdoc`, sends current tasks/workflows via `postMessage`, receives edited state back, and smart-merges it into plugin settings while preserving runtime status/output fields.
 - Standalone Visual Builder: `util/ui_workflow_builder/index.html` is a self-contained HTML/CSS/JS workflow editor. `scripts/inline-visual-builder.mjs` embeds it into `visualBuilderHtml.generated.ts` before build/dev.
-- Build and packaging scripts: `esbuild.config.mjs` bundles `main.ts` to CommonJS `main.js`; `deploy.mjs` copies plugin files into an Obsidian vault; `package-release.ps1` creates release zips.
+- Herramientas de construcción y distribución: `esbuild.config.mjs` construye `main.js`, `autooc-cli.cjs` y `autooc-runtime.cjs`; `scripts/release-artifacts.mjs` genera y verifica la integridad de los siete artefactos. `scripts/package-release.mjs` crea el ZIP multiplataforma mediante `npm run pack:release`. `deploy.mjs` instala el paquete en una bóveda autorizada; no es un comando de consulta.
 - Library files: `library/index.json` and sibling JSON files provide importable sample/task workflow packages fetched from the repository URL configured in settings.
 
 ## Repository Structure
@@ -51,9 +51,12 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 ├─ tsconfig.json                   # TypeScript compiler options
 ├─ esbuild.config.mjs              # Bundle configuration
 ├─ deploy.mjs                      # Local vault deployment helper
-├─ package-release.ps1             # Release zip helper
 ├─ scripts/
-│  └─ inline-visual-builder.mjs    # Embeds Visual Builder HTML into TypeScript
+│  ├─ inline-visual-builder.mjs     # Incrusta el Visual Builder en TypeScript
+│  ├─ release-artifacts.mjs         # Integridad y copia de los siete artefactos
+│  ├─ package-release.mjs           # Empaquetado ZIP multiplataforma
+│  ├─ measure-catalog-responsiveness.cjs    # Diagnóstico sintético del catálogo
+│  └─ measure-historical-responsiveness.cjs # Diagnóstico sintético de históricos
 ├─ util/ui_workflow_builder/
 │  └─ index.html                   # Standalone Visual Builder app
 ├─ visualBuilderHtml.generated.ts  # Generated embedded Visual Builder source
@@ -147,8 +150,10 @@ El archivo histórico `secrets.vault.json` permanece en la instalación seleccio
 Build configuration is separate:
 
 - `package.json` scripts run the Visual Builder inlining step before dev/build.
-- `esbuild.config.mjs` bundles `main.ts` to `main.js`, keeps Obsidian/Electron/CodeMirror/Node built-ins external, and emits CommonJS for Obsidian.
+- `esbuild.config.mjs` genera el bundle CommonJS de Obsidian manteniendo externos Obsidian/Electron/CodeMirror y los módulos de Node; también genera CLI/runtime para Node 18 y el descriptor de integridad del paquete completo.
 - `tsconfig.json` enables strict null checks, ESNext modules for TypeScript input, ES6/DOM libs, and bundler module resolution.
+
+Los dos scripts `measure-*-responsiveness.cjs` son herramientas manuales complementarias: reciben un bundle, una ruta de informe y un número de iteraciones. El primero mide carga, guardado y transiciones con un catálogo sintético; el segundo mide arranque y carga/guardado con históricos sintéticos vinculados a journals. Crean bóvedas temporales propias y usan dobles de Obsidian. Sus resultados no acreditan GUI real ni rendimiento con datos de usuario. No están conectados a npm y esa ausencia no demuestra obsolescencia; se conservan para diagnóstico y reproducción de mediciones.
 
 ## Extension Points
 
