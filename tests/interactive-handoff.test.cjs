@@ -917,18 +917,18 @@ test('real Code → task → Windows launcher keeps literal payload and waits fo
   }
 });
 
-test('late callbacks after stop, deletion or relaunch cannot complete another task attempt', async () => {
+test('late callbacks after stop or deletion cannot complete an attempt; uncertain relaunch is rejected', async () => {
   for (const mode of ['stop', 'delete', 'relaunch']) {
     const h = pluginHarness('data'); let completions = 0;
     await h.plugin.runTask(h.task, async () => { completions++; });
     if (mode === 'delete') h.plugin.settings.tasks = [];
-    else { await h.plugin.killTask(h.task.id, h.plugin.taskStopIdentity(h.task)); if (mode === 'relaunch') await h.plugin.runTask(h.task, async () => { completions++; }); }
+    else { await h.plugin.killTask(h.task.id, h.plugin.taskStopIdentity(h.task)); if (mode === 'relaunch') await assert.rejects(h.plugin.runTask(h.task, async () => { completions++; }), /outcome is unconfirmed/); }
     h.signal(0, { status: 'started', confirmed: true }); await drain();
     assert.equal(completions, 0, mode);
     if (mode === 'relaunch') {
-      assert.equal(h.task.status, 'running');
-      h.signal(1, { status: 'started', confirmed: true }); await drain();
-      assert.equal(completions, 1);
+      assert.equal(h.task.status, 'failed');
+      assert.equal(h.calls.length, 1, 'no replacement launcher while external outcome is unknown');
+      assert.equal(completions, 0);
     }
   }
 });
@@ -997,4 +997,157 @@ test('Windows PowerShell parses generated observer and runner without launching 
     const result = cp.spawnSync('powershell.exe', ['-NoProfile', '-Command', parse], { input: script, encoding: 'utf8', windowsHide: true });
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
+});
+
+
+// REQ-20261027-001: real entry points with controlled persistence/client boundaries.
+function playButton() {
+  const attrs = new Map();
+  return {setAttr(k, v) {attrs.set(k, String(v));}, getAttribute(k) {return attrs.get(k);}};
+}
+function attachPlayViews(p, kind, id) {
+  const views = [[], []];
+  p.app.workspace = {getLeavesOfType: () => views.map(buttons => ({view:{containerEl:{querySelectorAll: () => buttons}}}))};
+  for (const buttons of views) for (const compact of [true, false]) {
+    const b = playButton(); p.configureStartButton(b, kind, id, compact); buttons.push(b);
+  }
+  return views;
+}
+function assertStarting(views) {
+  for (const buttons of views) for (const b of buttons) {
+    assert.equal(b.disabled, true); assert.match(b.textContent, /Iniciando/);
+    assert.equal(b.getAttribute('aria-label'), 'Iniciando…'); assert.equal(b.getAttribute('aria-busy'), 'true');
+  }
+}
+
+for (const kind of ['code', 'codex', 'copilot']) test(`Play reserves once before deferred legacy save: ${kind}`, async () => {
+  const h = legacyHarness(kind), p = h.plugin; let release, saves = 0, launches = 0, completions = 0;
+  p.createVaultMutationBatch = () => ({record(){}, async flush(){}});
+  if (kind === 'copilot') p.createCopilotClient = () => ({async run(){launches++; return {exitCode:0,output:'once'};},dispose(){}});
+  if (kind === 'codex') p.createCodexClient = () => ({async run(){launches++; return {status:'completed',output:'once'};},dispose(){}});
+  if (kind === 'code') h.task.code = 'output="once";';
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const views = attachPlayViews(p, 'task', h.task.id);
+  const first = p.runTask(h.task, async () => {completions++;});
+  assertStarting(views);
+  // A stale representation may still call the method with a different object.
+  await p.runTask({...h.task}); assert.equal(saves, 1); assert.equal(launches, 0);
+  p.configureStartButton(views[1][0], 'task', h.task.id, true); assertStarting(views);
+  release(); await first; await drain(); await drain();
+  assert.equal(completions, 1); assert.equal(launches, kind === 'code' ? 0 : 1);
+  assert.equal(h.task.status, 'completed'); assert.equal(p.getDefinitionStartState('task', h.task.id), 'available');
+});
+
+for (const kind of ['task', 'workflow']) test(`Play blocks delegates and direct shared starts until checkpoint: ${kind}`, async () => {
+  const h = stopCardHarness(), p = h.plugin;
+  delete p.sharedWorkflowExecution; delete h.task.runtimeExecution;
+  h.task.status = 'pending'; h.task.taskKind = 'code'; h.task.code = 'output="once";';
+  Object.assign(h.workflow,{name:'Shared',status:'pending',steps:[{id:'a',stepKind:'code',code:'output="once";'}]});
+  p.app = {vault:{adapter:{basePath:'fixture'}}};
+  p.selectedExecutionLocation = () => ({vault:'fixture',installationDirectory:'fixture/install'});
+  p.settingsWriter = {fork(){return this;}};
+  let releaseSave, finish, checkpoint, saves = 0, runs = 0;
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => releaseSave = resolve) : Promise.resolve();
+  p.loadSettings = async () => {};
+  h.setRunner(async options => {runs++; checkpoint = options.onCheckpoint; return await new Promise(resolve => finish = resolve);});
+  const id = kind === 'task' ? h.task.id : h.workflow.id;
+  const views = attachPlayViews(p, kind, id);
+  const run = () => kind === 'task' ? p.runTask({...h.task}) : p.runWorkflow({...h.workflow});
+  const first = run(); assertStarting(views); await run(); assert.equal(saves, 1);
+  await assert.rejects(p.runSharedWorkflow(kind === 'task' ? '@task:t' : id, undefined, false, true, kind === 'task' ? id : undefined), /already starting/);
+  releaseSave(); await drain(); assert.equal(runs, 1); assertStarting(views);
+  const state = {workflowId:kind === 'task' ? '@task:t' : id,runId:'play-run',revision:1,phase:'in_flight',steps:[]};
+  await checkpoint(state); p.refreshStartControls();
+  assert.equal(p.getDefinitionStartState(kind,id), 'active');
+  for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,true);
+  await assert.rejects(run(), /Shared workflow owns/); assert.equal(runs,1);
+  finish({...state,phase:'completed'}); await first;
+  assert.equal(p.getDefinitionStartState(kind,id),'available');
+});
+
+test('Play permits retry after confirmed preflight failure and preserves recovery blocks', async () => {
+  const h = legacyHarness('code'), p = h.plugin;
+  Object.assign(h.workflow,{name:'Empty',status:'pending',steps:[]});
+  const views = attachPlayViews(p,'workflow',h.workflow.id);
+  await p.runWorkflow(h.workflow); assert.equal(p.getDefinitionStartState('workflow',h.workflow.id),'available');
+  h.workflow.steps = [{id:'a',stepKind:'code',code:'output="once";'}];
+  p.createVaultMutationBatch = () => ({record(){},async flush(){}});
+  await p.runWorkflow(h.workflow); assert.equal(h.workflow.status,'completed');
+  assert.ok(h.notices.some(text => /has no steps/.test(text)));
+  h.task.runtimeExecution = {requiresReconciliation:true,runId:'uncertain',phase:'in_flight'};
+  p.configureStartButton(views[0][0],'task',h.task.id,true);
+  assert.equal(views[0][0].disabled,true);
+  await assert.rejects(p.runTask(h.task), /Unfinished attempt uncertain/);
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'blocked');
+});
+
+
+for (const interactiveTerminal of [true, false]) test(`repeated OpenCode Play cannot pass deferred save: interactive=${interactiveTerminal}`, async () => {
+  const h = pluginHarness('fixture'), p = h.plugin; let release, saves = 0;
+  h.task.interactiveTerminal = interactiveTerminal;
+  const views = attachPlayViews(p,'task',h.task.id);
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const first = p.runTask(h.task); assertStarting(views);
+  await p.runTask({...h.task}); assert.equal(saves,1); assert.equal(h.calls.length,0);
+  await p.killTask(h.task.id,p.taskStopIdentity(h.task));
+  release(); await first; assert.equal(h.calls.length,0);
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'blocked');
+  await assert.rejects(p.runTask(h.task), /outcome is unconfirmed/);
+});
+
+test('cancelled Codex start releases only its indicator and never launches after initial save', async () => {
+  const h = legacyHarness('codex'), p = h.plugin; let release, saves = 0, launches = 0;
+  p.createCodexClient = () => {launches++; throw Error('must not launch');};
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const views = attachPlayViews(p,'task',h.task.id);
+  await p.runTask(h.task); assertStarting(views);
+  await p.killTask(h.task.id,p.taskStopIdentity(h.task));
+  release(); await drain(); await drain();
+  assert.equal(launches,0); assert.equal(p.getDefinitionStartState('task',h.task.id),'blocked');
+  for (const buttons of views) for (const b of buttons) {assert.equal(b.disabled,true); assert.equal(b.getAttribute('aria-busy'),'false');}
+});
+
+test('independent definition IDs do not share the pending-start token', async () => {
+  const h = legacyHarness('code'), p = h.plugin;
+  p.settings.tasks.push({...h.task,id:'other'});
+  const resolvers = []; p.createVaultMutationBatch = () => ({record(){},async flush(){}});
+  p.saveSettings = () => resolvers.length < 2 ? new Promise(resolve => resolvers.push(resolve)) : Promise.resolve();
+  const first = p.runTask(h.task), second = p.runTask(p.settings.tasks[1]);
+  assert.equal(p.getDefinitionStartState('task','t'),'starting');
+  assert.equal(p.getDefinitionStartState('task','other'),'starting');
+  assert.equal(resolvers.length,2);
+  resolvers.forEach(resolve => resolve()); await Promise.all([first,second]);
+  assert.equal(p.settings.tasks.filter(task => task.status === 'completed').length,2);
+});
+
+
+test('shared save failure releases Play for retry without invoking the runtime', async () => {
+  const h = stopCardHarness(), p = h.plugin;
+  delete p.sharedWorkflowExecution; delete h.task.runtimeExecution;
+  Object.assign(h.workflow,{name:'Retry',status:'pending',steps:[{id:'a',stepKind:'code',code:'output="once";'}]});
+  p.app = {vault:{adapter:{basePath:'fixture'}}};
+  p.selectedExecutionLocation = () => ({vault:'fixture',installationDirectory:'fixture/install'});
+  p.settingsWriter = {fork(){return this;}};
+  let runs = 0;
+  p.saveSettings = async () => {throw Error('synthetic save failure before host');};
+  p.loadSettings = async () => {};
+  h.setRunner(async () => {runs++; return {phase:'completed'};});
+  const views = attachPlayViews(p,'workflow',h.workflow.id);
+  await assert.rejects(p.runWorkflow(h.workflow), /synthetic save failure/);
+  assert.equal(runs,0); assert.equal(p.sharedWorkflowExecution,undefined);
+  for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,false);
+  p.saveSettings = async () => {};
+  await p.runWorkflow(h.workflow); assert.equal(runs,1);
+});
+
+
+test('a workflow containing its uncertain stopped legacy task cannot restart from stale controls', async () => {
+  const h = legacyHarness(), p = h.plugin;
+  h.task.legacyExecution = {token:'old',workflowId:h.workflow.id,stopState:'unconfirmed'};
+  Object.assign(h.workflow,{status:'failed',name:'Uncertain'});
+  let launches = 0; p.runWorkflowStepById = async () => {launches++;};
+  const views = attachPlayViews(p,'workflow',h.workflow.id);
+  for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,true);
+  await assert.rejects(p.runWorkflow({...h.workflow}), /outcome is unconfirmed/);
+  assert.equal(launches,0); assert.equal(h.workflow.status,'failed');
 });

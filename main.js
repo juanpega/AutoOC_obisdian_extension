@@ -8735,6 +8735,8 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     this.lifecycleTimers = /* @__PURE__ */ new Set();
     this.ready = false;
     this.startupError = null;
+    // Ephemeral ownership is keyed by canonical identity, never persisted.
+    this.definitionStarts = /* @__PURE__ */ new Map();
     this.vaultRefreshStopped = false;
     this.codeTaskRuns = /* @__PURE__ */ new Map();
   }
@@ -9367,6 +9369,17 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
   }
   async runSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId, external) {
     var _a;
+    const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
+    if ((_a = this.definitionStarts) == null ? void 0 : _a.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
+    const result = await this.withDefinitionStart(
+      kind,
+      id,
+      (release) => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release)
+    );
+    return result;
+  }
+  async executeSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId, external, releaseStart) {
+    var _a;
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -9418,6 +9431,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
           else await this.loadSettings();
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
+          releaseStart == null ? void 0 : releaseStart();
           if (this.sharedWorkflowExecution !== execution) return;
           this.refreshOpenViews();
           await (external == null ? void 0 : external.progress(checkpoint));
@@ -9458,6 +9472,71 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
     const binding = task.runtimeExecution;
     if (!this.lifecycleStopped && live && (state == null ? void 0 : state.phase) === "in_flight" && task.status === "running" && live.taskId === task.id && live.runId === state.runId && live.workflowId === state.workflowId && live.stepIndex === state.steps.length - 1 && live.stepId === ((_a = state.steps[live.stepIndex]) == null ? void 0 : _a.stepId) && (binding == null ? void 0 : binding.runId) === live.runId && binding.stepIndex === live.stepIndex && binding.stepId === live.stepId) return live.output;
     return task.output || "";
+  }
+  getDefinitionStartState(kind, id) {
+    var _a, _b;
+    if ((_a = this.definitionStarts) == null ? void 0 : _a.has(`${kind}:${id}`)) return "starting";
+    const item = kind === "task" ? this.settings.tasks.find((t) => t.id === id) : this.settings.workflows.find((w) => w.id === id);
+    if (!item) return "blocked";
+    if (kind === "task" ? this.isTaskActive(item) : this.isWorkflowExecuting(id)) return "active";
+    const binding = item.runtimeExecution;
+    if (((_b = item.legacyExecution) == null ? void 0 : _b.stopState) || kind === "workflow" && this.hasUncertainLegacyTask(id) || binding && (binding.requiresReconciliation || !["completed", "failed", "abandoned"].includes(binding.phase) || binding.phase !== "abandoned" && binding.terminalUncertainty && !binding.disposition)) return "blocked";
+    return "available";
+  }
+  hasUncertainLegacyTask(workflowId) {
+    const workflow = this.settings.workflows.find((item) => item.id === workflowId);
+    return this.settings.tasks.some((task) => {
+      var _a;
+      return ((_a = task.legacyExecution) == null ? void 0 : _a.workflowId) === workflowId && !!task.legacyExecution.stopState && (workflow == null ? void 0 : workflow.steps.some((step) => (!step.stepKind || step.stepKind === "task") && step.taskId === task.id));
+    });
+  }
+  configureStartButton(button, kind, id, compact) {
+    button.setAttr("data-autooc-start-kind", kind);
+    button.setAttr("data-autooc-start-id", id);
+    button.setAttr("data-autooc-start-compact", String(compact));
+    const state = this.getDefinitionStartState(kind, id);
+    const label = state === "starting" ? "Iniciando\u2026" : state === "active" ? "Running\u2026" : state === "blocked" ? "Recovery required" : kind === "task" ? "Run" : "Run Workflow";
+    button.disabled = state !== "available";
+    button.textContent = state === "starting" ? "\u23F3 Iniciando\u2026" : compact ? "\u25B6" : `\u25B6 ${label}`;
+    button.title = label;
+    button.setAttr("aria-label", label);
+    button.setAttr("aria-busy", String(state === "starting"));
+  }
+  refreshStartControls() {
+    var _a, _b, _c, _d;
+    for (const leaf of ((_c = (_b = (_a = this.app) == null ? void 0 : _a.workspace) == null ? void 0 : _b.getLeavesOfType) == null ? void 0 : _c.call(_b, VIEW_TYPE)) || []) {
+      const buttons = (_d = leaf.view.containerEl) == null ? void 0 : _d.querySelectorAll("button[data-autooc-start-kind]");
+      buttons == null ? void 0 : buttons.forEach((button) => this.configureStartButton(
+        button,
+        button.getAttribute("data-autooc-start-kind"),
+        button.getAttribute("data-autooc-start-id"),
+        button.getAttribute("data-autooc-start-compact") === "true"
+      ));
+    }
+  }
+  async withDefinitionStart(kind, id, execute) {
+    var _a, _b;
+    this.assertLifecycleOpen();
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    const key = `${kind}:${id}`;
+    this.definitionStarts || (this.definitionStarts = /* @__PURE__ */ new Map());
+    if (this.definitionStarts.has(key)) return;
+    const token = Symbol(key);
+    this.definitionStarts.set(key, token);
+    const release = () => {
+      if (this.definitionStarts.get(key) === token) this.definitionStarts.delete(key);
+    };
+    try {
+      this.refreshStartControls();
+      return await execute(release);
+    } finally {
+      if (kind !== "task" || ((_b = (_a = this.legacyAttempts) == null ? void 0 : _a.get(id)) == null ? void 0 : _b.releaseStart) !== release) release();
+      try {
+        this.refreshStartControls();
+      } catch (e) {
+        console.warn("AutoOC: Play controls could not refresh.");
+      }
+    }
   }
   refreshOpenViews() {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
@@ -10528,6 +10607,16 @@ DONE:%s
     if (((_a = current == null ? void 0 : current.legacyExecution) == null ? void 0 : _a.token) === attempt.identity.token) attempt.task = current;
     return !attempt.cancelled && ((_b = this.legacyAttempts) == null ? void 0 : _b.get(attempt.identity.taskId)) === attempt && this.settings.tasks.find((item) => item.id === attempt.identity.taskId) === attempt.task && ((_c = attempt.task.legacyExecution) == null ? void 0 : _c.token) === attempt.identity.token && (!attempt.owner || ((_d = this.workflowRuntime) == null ? void 0 : _d.get(attempt.owner.workflowId)) === attempt.owner.context);
   }
+  finishLegacyStart(attempt) {
+    var _a;
+    (_a = attempt.releaseStart) == null ? void 0 : _a.call(attempt);
+    delete attempt.releaseStart;
+    try {
+      this.refreshStartControls();
+    } catch (e) {
+      console.warn("AutoOC: Play controls could not refresh.");
+    }
+  }
   legacyCompletion(attempt, callback) {
     return async (task, code) => {
       if (!this.isLegacyCurrent(attempt)) return;
@@ -10536,6 +10625,7 @@ DONE:%s
       await this.saveSettings();
       if (!this.isLegacyCurrent(attempt)) return;
       this.legacyAttempts.delete(task.id);
+      this.finishLegacyStart(attempt);
       if (callback) await callback(task, code);
     };
   }
@@ -10605,7 +10695,10 @@ DONE:%s
     }
   }
   async runTask(task, onComplete, overrides = {}, owner) {
-    var _a, _b, _c, _d, _e, _f;
+    return this.withDefinitionStart("task", task.id, (release) => this.executeTask(task, onComplete, overrides, owner, release));
+  }
+  async executeTask(task, onComplete, overrides = {}, owner, releaseStart) {
+    var _a, _b, _c, _d, _e, _f, _g;
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -10619,28 +10712,41 @@ DONE:%s
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };
     const binding = effectiveTask.runtimeExecution;
     if (!owner && (binding == null ? void 0 : binding.requiresReconciliation)) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
+    if (((_a = effectiveTask.legacyExecution) == null ? void 0 : _a.stopState) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
+      throw new Error("Previous task outcome is unconfirmed; recovery is required before starting a new attempt.");
+    }
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
       const vault = this.app.vault.adapter.basePath;
       const workflow = standaloneTaskWorkflow(effectiveTask.id);
       const definition = prepareWorkflowDefinition(workflow, this.settings.tasks, this.settings);
       if (supportsSharedWorkflow(definition, createWorkflowTaskAdapter(definition, vault))) {
-        await this.runSharedWorkflow(workflow.id, void 0, false, true, effectiveTask.id);
+        await this.executeSharedWorkflow(workflow.id, void 0, false, true, effectiveTask.id, void 0, releaseStart);
         return;
       }
     }
     const attempt = this.beginLegacyAttempt(effectiveTask, owner);
+    attempt.releaseStart = releaseStart;
     if ((effectiveTask.taskKind || "opencode") === "code") {
-      await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
+      try {
+        await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
+      } finally {
+        this.finishLegacyStart(attempt);
+      }
       return;
     }
     if (effectiveTask.taskKind === "codex") {
-      void this.runCodexTask(effectiveTask, onComplete, owner, attempt);
+      void this.runCodexTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
+        new import_obsidian.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+      }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
     if (effectiveTask.taskKind === "copilot") {
-      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt);
+      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
+        new import_obsidian.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+      }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
+    delete attempt.releaseStart;
     onComplete = this.legacyCompletion(attempt, onComplete);
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
     if (branchWasProvided && typeof effectiveTask.branch !== "string") {
@@ -10652,7 +10758,7 @@ DONE:%s
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_a = effectiveTask.branch) == null ? void 0 : _a.trim())) delete effectiveTask.branch;
+    if (!((_b = effectiveTask.branch) == null ? void 0 : _b.trim())) delete effectiveTask.branch;
     if (effectiveTask.branch) {
       const { isValidGitBranchName } = require_import_utils();
       if (!isValidGitBranchName(effectiveTask.branch)) {
@@ -10665,7 +10771,7 @@ DONE:%s
         return;
       }
     }
-    if (!((_b = effectiveTask.prompt) == null ? void 0 : _b.trim())) {
+    if (!((_c = effectiveTask.prompt) == null ? void 0 : _c.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
@@ -10674,7 +10780,7 @@ DONE:%s
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_c = effectiveTask.model) == null ? void 0 : _c.trim())) {
+    if (!((_d = effectiveTask.model) == null ? void 0 : _d.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
@@ -10713,9 +10819,10 @@ DONE:%s
       current.status = "running";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
-      (_d = this.view) == null ? void 0 : _d.resetDashboardTaskShift(task.id);
+      (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
+      this.finishLegacyStart(attempt);
       try {
         let prompt2 = effectiveTask.prompt;
         if (effectiveTask.useRalphLoop) {
@@ -10748,9 +10855,10 @@ DONE:%s
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
+    (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
+    this.finishLegacyStart(attempt);
     new import_obsidian.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
     const bin = args[0];
@@ -10916,7 +11024,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       new import_obsidian.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
-    const timeoutSeconds = (_f = this.settings.taskTimeoutSeconds) != null ? _f : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -11047,6 +11155,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     try {
       await this.saveSettings();
       if (!this.isLegacyCurrent(attempt) || cancelled) return;
+      this.finishLegacyStart(attempt);
       const validationError = getCopilotTaskValidationError(task);
       if (validationError) throw new Error(validationError);
       if (!((_c = task.prompt) == null ? void 0 : _c.trim())) throw new Error("Copilot task prompt is empty.");
@@ -11157,6 +11266,7 @@ ${current.output}`);
     (_b = this.view) == null ? void 0 : _b.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     if (!isCurrent()) return;
+    this.finishLegacyStart(attempt);
     new import_obsidian.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
     const scheduleSave = () => {
       if (saveTimer) return;
@@ -11345,6 +11455,7 @@ ${current.output}`;
     new import_obsidian.Notice(`AutoOC: running code task "${current.name}"...`);
     try {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      this.finishLegacyStart(attempt);
       const out = await runWithVaultMutations(() => this.createVaultMutationBatch(), (onVaultMutation) => executeCodeTask({
         ...current,
         code,
@@ -11459,7 +11570,7 @@ ${current.output}`;
     throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
   }
   async killWorkflow(id) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
     if (((_a = this.sharedWorkflowExecution) == null ? void 0 : _a.workflowId) === id) {
       this.sharedWorkflowExecution.controller.abort();
       return;
@@ -11468,17 +11579,20 @@ ${current.output}`;
     if (!wf) return;
     const context = (_b = this.workflowRuntime) == null ? void 0 : _b.get(id);
     if (!context) return;
+    const startToken = (_c = this.definitionStarts) == null ? void 0 : _c.get(`workflow:${id}`);
     const execution = wf.legacyExecution;
     const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
-    const attempt = (step == null ? void 0 : step.taskId) ? (_c = this.legacyAttempts) == null ? void 0 : _c.get(step.taskId) : void 0;
-    const owned = !!attempt && ((_d = attempt.owner) == null ? void 0 : _d.context) === context && attempt.identity.workflowId === id && attempt.identity.stepId === (step == null ? void 0 : step.id) && attempt.identity.stepIndex === stepIndex;
+    const attempt = (step == null ? void 0 : step.taskId) ? (_d = this.legacyAttempts) == null ? void 0 : _d.get(step.taskId) : void 0;
+    const owned = !!attempt && ((_e = attempt.owner) == null ? void 0 : _e.context) === context && attempt.identity.workflowId === id && attempt.identity.stepId === (step == null ? void 0 : step.id) && attempt.identity.stepIndex === stepIndex;
     wf.status = "failed";
-    (_e = this.workflowDelayControllers.get(id)) == null ? void 0 : _e.abort();
+    (_f = this.workflowDelayControllers.get(id)) == null ? void 0 : _f.abort();
     if (owned) await this.killTask(attempt.identity.taskId, { ...attempt.identity });
-    else if (((_f = this.workflowRuntime) == null ? void 0 : _f.get(id)) === context) this.workflowRuntime.delete(id);
-    if ((_g = this.workflowRuntime) == null ? void 0 : _g.has(id)) return;
+    else if (((_g = this.workflowRuntime) == null ? void 0 : _g.get(id)) === context) this.workflowRuntime.delete(id);
+    if ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id)) return;
     await this.saveSettings();
-    if (wf.legacyExecution !== execution || ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id))) return;
+    if (wf.legacyExecution !== execution || ((_i = this.workflowRuntime) == null ? void 0 : _i.has(id))) return;
+    if (((_j = this.definitionStarts) == null ? void 0 : _j.get(`workflow:${id}`)) === startToken) (_k = this.definitionStarts) == null ? void 0 : _k.delete(`workflow:${id}`);
+    this.refreshStartControls();
     new import_obsidian.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
   async runDueAll() {
@@ -11809,6 +11923,9 @@ ${current.output}`;
     await this.saveSettings();
   }
   async runWorkflow(workflow) {
+    return this.withDefinitionStart("workflow", workflow.id, (release) => this.executeWorkflow(workflow, release));
+  }
+  async executeWorkflow(workflow, releaseStart) {
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -11816,6 +11933,10 @@ ${current.output}`;
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+    const binding = wf.runtimeExecution;
+    if (this.hasUncertainLegacyTask(wf.id) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
+      throw new Error("Previous workflow outcome is unconfirmed; recovery is required before starting a new attempt.");
+    }
     if (this.settings.workflows.some((item) => {
       const execution = item.runtimeExecution;
       return execution && !["completed", "failed", "abandoned"].includes(execution.phase);
@@ -11842,7 +11963,7 @@ ${current.output}`;
       const definition = prepareWorkflowDefinition(wf, this.settings.tasks, this.settings);
       const vault = this.app.vault.adapter.basePath;
       if (supportsSharedWorkflow(definition, createWorkflowTaskAdapter(definition, vault))) {
-        await this.runSharedWorkflow(wf.id, void 0, false, true);
+        await this.executeSharedWorkflow(wf.id, void 0, false, true, void 0, void 0, releaseStart);
         return;
       }
     }
@@ -11860,6 +11981,8 @@ ${current.output}`;
     });
     await this.saveSettings();
     if (this.workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
+    releaseStart == null ? void 0 : releaseStart();
+    this.refreshStartControls();
     new import_obsidian.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
     const entryStep = this.findEntryStep(wf);
     if (!entryStep) {
@@ -13665,7 +13788,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "\u25B6", cls: "auto-oc-btn-run" });
     btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
-    btnQuickRun.disabled = task.status === "running";
+    this.plugin.configureStartButton(btnQuickRun, "task", task.id, true);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try {
@@ -13806,7 +13929,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: task.status === "running" ? "\u23F3 Running\u2026" : "\u25B6 Run",
       cls: "auto-oc-btn-run"
     });
-    btnRun.disabled = task.status === "running";
+    this.plugin.configureStartButton(btnRun, "task", task.id, false);
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try {
@@ -14003,7 +14126,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     renderWorkflowResults(resultsRoot);
   }
   renderWorkflowCard(parent, workflow) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j;
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     card.setAttr("data-auto-oc-workflow-id", workflow.id);
     const summary = card.createDiv("auto-oc-card-summary");
@@ -14018,7 +14141,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "\u25B6", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
-    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready", "in_flight"].includes((_b = workflow.runtimeExecution) == null ? void 0 : _b.phase);
+    this.plugin.configureStartButton(btnQuickRun, "workflow", workflow.id, true);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try {
@@ -14069,7 +14192,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
     const isExpandedWf = this.expandedWorkflows.has(workflow.id);
     details.style.display = isExpandedWf ? "block" : "none";
     const areaMeta = details.createDiv("auto-oc-card-meta");
-    areaMeta.createEl("span", { text: `\u{1F5C2} ${((_c = workflow.area) == null ? void 0 : _c.trim()) || "No area"}` });
+    areaMeta.createEl("span", { text: `\u{1F5C2} ${((_b = workflow.area) == null ? void 0 : _b.trim()) || "No area"}` });
     if (workflow.description) {
       const desc = details.createDiv("auto-oc-prompt-preview");
       desc.createEl("span", { text: workflow.description.slice(0, 200) });
@@ -14114,7 +14237,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           cls: `auto-oc-badge auto-oc-badge-${task.status}`
         });
       }
-      const stepArea = ((_d = step.area) == null ? void 0 : _d.trim()) || ((_e = workflow.area) == null ? void 0 : _e.trim());
+      const stepArea = ((_c = step.area) == null ? void 0 : _c.trim()) || ((_d = workflow.area) == null ? void 0 : _d.trim());
       if (stepArea) {
         stepHeader.createSpan({
           text: `\u{1F5C2} ${stepArea}`,
@@ -14156,7 +14279,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
           };
         } else if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-          stepMeta.createSpan({ text: `Pauses for ${(_f = step.delayValue) != null ? _f : 5} ${(_g = step.delayUnit) != null ? _g : "minutes"}` });
+          stepMeta.createSpan({ text: `Pauses for ${(_e = step.delayValue) != null ? _e : 5} ${(_f = step.delayUnit) != null ? _f : "minutes"}` });
           const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
           const btnDelayLog = stepActions.createEl("button", {
             text: "\u{1F4C4} Log",
@@ -14179,7 +14302,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
         continue;
       }
       const taskMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
-      const modelLabel = (_i = (_h = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _h.label) != null ? _i : task.model;
+      const modelLabel = (_h = (_g = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _g.label) != null ? _h : task.model;
       if ((task.taskKind || "opencode") === "code") {
         taskMeta.createSpan({ text: "{ } Code task" });
       } else {
@@ -14275,8 +14398,8 @@ var AutoOCView = class extends import_obsidian.ItemView {
         const days = wfScheduleMonthDays.join(", ");
         schedMeta.createEl("span", { text: `\u{1F501} Day ${days || "no days"} of each month at ${wfScheduleTime}` });
       } else if (wfScheduleType === "interval") {
-        const value = (_j = workflow.scheduleIntervalValue) != null ? _j : 10;
-        const unit = (_k = workflow.scheduleIntervalUnit) != null ? _k : "minutes";
+        const value = (_i = workflow.scheduleIntervalValue) != null ? _i : 10;
+        const unit = (_j = workflow.scheduleIntervalUnit) != null ? _j : "minutes";
         schedMeta.createEl("span", { text: `\u{1F501} Every ${value} ${unit}` });
       }
     }
@@ -14322,7 +14445,7 @@ var AutoOCView = class extends import_obsidian.ItemView {
       text: this.plugin.isWorkflowExecuting(workflow.id) ? "\u23F3 Running\u2026" : "\u25B6 Run Workflow",
       cls: "auto-oc-btn-run"
     });
-    btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
+    this.plugin.configureStartButton(btnRun, "workflow", workflow.id, false);
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try {

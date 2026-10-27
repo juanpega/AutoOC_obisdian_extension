@@ -453,7 +453,7 @@ type LegacyStopIdentity = { kind: "legacy"; token: string; taskId: string; workf
 type SharedStopIdentity = { kind: "shared"; taskId: string; runId: string; workflowId: string; stepId: string; stepIndex: number };
 type TaskStopIdentity = LegacyStopIdentity | SharedStopIdentity;
 type LegacyAttempt = { identity: LegacyStopIdentity; task: ScheduledTask; owner?: LegacyOwner; cancelled: boolean;
-  handle?: { kill(): unknown }; stopPromise?: Promise<string> };
+  handle?: { kill(): unknown }; stopPromise?: Promise<string>; releaseStart?: () => void };
 type DefaultAiEngine = "opencode" | "codex" | "copilot";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
@@ -2561,6 +2561,15 @@ export default class AutoOCPlugin extends Plugin {
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
       external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void|Promise<void>}) {
+    const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
+    if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
+    const result = await this.withDefinitionStart(kind, id,
+      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release));
+    return result!;
+  }
+
+  private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void|Promise<void>}, releaseStart?: () => void) {
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -2607,6 +2616,7 @@ export default class AutoOCPlugin extends Plugin {
           else await this.loadSettings();
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
+          releaseStart?.();
           if (this.sharedWorkflowExecution !== execution) return;
           this.refreshOpenViews();
           await external?.progress(checkpoint);
@@ -2645,6 +2655,72 @@ export default class AutoOCPlugin extends Plugin {
         live.stepIndex === state.steps.length - 1 && live.stepId === state.steps[live.stepIndex]?.stepId &&
         binding?.runId === live.runId && binding.stepIndex === live.stepIndex && binding.stepId === live.stepId) return live.output;
     return task.output || "";
+  }
+
+  // Ephemeral ownership is keyed by canonical identity, never persisted.
+  private definitionStarts = new Map<string, symbol>();
+
+  getDefinitionStartState(kind: "task" | "workflow", id: string): "available" | "starting" | "active" | "blocked" {
+    if (this.definitionStarts?.has(`${kind}:${id}`)) return "starting";
+    const item = kind === "task" ? this.settings.tasks.find(t => t.id === id) : this.settings.workflows.find(w => w.id === id);
+    if (!item) return "blocked";
+    if (kind === "task" ? this.isTaskActive(item as ScheduledTask) : this.isWorkflowExecuting(id)) return "active";
+    const binding = (item as any).runtimeExecution;
+    if ((item as ScheduledTask).legacyExecution?.stopState || kind === "workflow" && this.hasUncertainLegacyTask(id) || binding && (binding.requiresReconciliation ||
+        !["completed", "failed", "abandoned"].includes(binding.phase) || binding.phase !== "abandoned" && binding.terminalUncertainty && !binding.disposition)) return "blocked";
+    return "available";
+  }
+
+  private hasUncertainLegacyTask(workflowId: string): boolean {
+    const workflow = this.settings.workflows.find(item => item.id === workflowId);
+    return this.settings.tasks.some(task => task.legacyExecution?.workflowId === workflowId && !!task.legacyExecution.stopState &&
+      workflow?.steps.some(step => (!step.stepKind || step.stepKind === "task") && step.taskId === task.id));
+  }
+
+  configureStartButton(button: HTMLButtonElement, kind: "task" | "workflow", id: string, compact: boolean): void {
+    button.setAttr("data-autooc-start-kind", kind);
+    button.setAttr("data-autooc-start-id", id);
+    button.setAttr("data-autooc-start-compact", String(compact));
+    const state = this.getDefinitionStartState(kind, id);
+    const label = state === "starting" ? "Iniciando…" : state === "active" ? "Running…" : state === "blocked" ? "Recovery required" : kind === "task" ? "Run" : "Run Workflow";
+    button.disabled = state !== "available";
+    button.textContent = state === "starting" ? "⏳ Iniciando…" : compact ? "▶" : `▶ ${label}`;
+    button.title = label;
+    button.setAttr("aria-label", label);
+    button.setAttr("aria-busy", String(state === "starting"));
+  }
+
+  private refreshStartControls(): void {
+    // Update only Play controls: no catalog writes, rendering, or dashboard work.
+    for (const leaf of this.app?.workspace?.getLeavesOfType?.(VIEW_TYPE) || []) {
+      const buttons = leaf.view.containerEl?.querySelectorAll<HTMLButtonElement>("button[data-autooc-start-kind]");
+      buttons?.forEach(button => this.configureStartButton(button,
+        button.getAttribute("data-autooc-start-kind") as "task" | "workflow",
+        button.getAttribute("data-autooc-start-id")!, button.getAttribute("data-autooc-start-compact") === "true"));
+    }
+  }
+
+  private async withDefinitionStart<T>(kind: "task" | "workflow", id: string, execute: (release: () => void) => Promise<T>): Promise<T | undefined> {
+    this.assertLifecycleOpen();
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    const key = `${kind}:${id}`;
+    this.definitionStarts ||= new Map();
+    if (this.definitionStarts.has(key)) return;
+    const token = Symbol(key);
+    this.definitionStarts.set(key, token);
+    const release = () => {
+      if (this.definitionStarts.get(key) === token) this.definitionStarts.delete(key);
+    };
+    try {
+      this.refreshStartControls();
+      return await execute(release);
+    } finally {
+      // Fire-and-forget adapters retain the indicator until their initial save
+      // settles. Their attempt already owns exclusion throughout this interval.
+      if (kind !== "task" || this.legacyAttempts?.get(id)?.releaseStart !== release) release();
+      // A view failure must not mask an execution/storage failure.
+      try { this.refreshStartControls(); } catch { console.warn("AutoOC: Play controls could not refresh."); }
+    }
   }
 
   private refreshOpenViews():void {
@@ -3739,6 +3815,12 @@ export default class AutoOCPlugin extends Plugin {
       (!attempt.owner || (this as any).workflowRuntime?.get(attempt.owner.workflowId) === attempt.owner.context);
   }
 
+  private finishLegacyStart(attempt: LegacyAttempt): void {
+    attempt.releaseStart?.();
+    delete attempt.releaseStart;
+    try { this.refreshStartControls(); } catch { console.warn("AutoOC: Play controls could not refresh."); }
+  }
+
   private legacyCompletion(attempt: LegacyAttempt, callback?: (task: ScheduledTask, code: number) => Promise<void>) {
     return async (task: ScheduledTask, code: number) => {
       if (!this.isLegacyCurrent(attempt)) return;
@@ -3747,6 +3829,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       if (!this.isLegacyCurrent(attempt)) return;
       this.legacyAttempts.delete(task.id);
+      this.finishLegacyStart(attempt);
       if (callback) await callback(task, code);
     };
   }
@@ -3806,6 +3889,16 @@ export default class AutoOCPlugin extends Plugin {
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
     owner?: LegacyOwner,
   ) {
+    return this.withDefinitionStart("task", task.id, release => this.executeTask(task, onComplete, overrides, owner, release));
+  }
+
+  private async executeTask(
+    task: ScheduledTask,
+    onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
+    owner?: LegacyOwner,
+    releaseStart?: () => void,
+  ) {
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
@@ -3820,34 +3913,44 @@ export default class AutoOCPlugin extends Plugin {
 
     const binding=(effectiveTask as any).runtimeExecution;
     if(!owner && binding?.requiresReconciliation) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
+    if (effectiveTask.legacyExecution?.stopState || binding?.phase !== "abandoned" && binding?.terminalUncertainty && !binding.disposition) {
+      throw new Error("Previous task outcome is unconfirmed; recovery is required before starting a new attempt.");
+    }
 
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
       const vault = (this.app.vault.adapter as any).basePath;
       const workflow = standaloneTaskWorkflow(effectiveTask.id);
       const definition = prepareWorkflowDefinition(workflow, this.settings.tasks, this.settings);
       if (supportsSharedWorkflow(definition, createWorkflowTaskAdapter(definition, vault))) {
-        await this.runSharedWorkflow(workflow.id, undefined, false, true, effectiveTask.id);
+        await this.executeSharedWorkflow(workflow.id, undefined, false, true, effectiveTask.id, undefined, releaseStart);
         return;
       }
     }
 
     const attempt = this.beginLegacyAttempt(effectiveTask, owner);
+    attempt.releaseStart = releaseStart;
 
     if ((effectiveTask.taskKind || "opencode") === "code") {
-      await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
+      try { await this.runCodeTask(effectiveTask, onComplete, owner, attempt); }
+      finally { this.finishLegacyStart(attempt); }
       return;
     }
 
     if (effectiveTask.taskKind === "codex") {
-      void this.runCodexTask(effectiveTask, onComplete, owner, attempt);
+      void this.runCodexTask(effectiveTask, onComplete, owner, attempt).catch(error => {
+        new Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000);
+      }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
 
     if (effectiveTask.taskKind === "copilot") {
-      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt);
+      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt).catch(error => {
+        new Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000);
+      }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
 
+    delete attempt.releaseStart;
     onComplete = this.legacyCompletion(attempt, onComplete);
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
     if (branchWasProvided && typeof effectiveTask.branch !== "string") {
@@ -3930,6 +4033,7 @@ export default class AutoOCPlugin extends Plugin {
       this.view?.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
+      this.finishLegacyStart(attempt);
 
       try {
         let prompt = effectiveTask.prompt;
@@ -3964,6 +4068,7 @@ export default class AutoOCPlugin extends Plugin {
     await this.saveSettings();
 
     if (!this.isLegacyCurrent(attempt)) return;
+    this.finishLegacyStart(attempt);
     new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(effectiveTask);
@@ -4247,6 +4352,7 @@ export default class AutoOCPlugin extends Plugin {
     try {
       await this.saveSettings();
       if (!this.isLegacyCurrent(attempt) || cancelled) return;
+      this.finishLegacyStart(attempt);
       const validationError = getCopilotTaskValidationError(task);
       if (validationError) throw new Error(validationError);
       if (!task.prompt?.trim()) throw new Error("Copilot task prompt is empty.");
@@ -4360,6 +4466,7 @@ export default class AutoOCPlugin extends Plugin {
     this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     if (!isCurrent()) return;
+    this.finishLegacyStart(attempt);
     new Notice(`AutoOC: running Codex task "${task.name}"…`);
 
     const scheduleSave = () => {
@@ -4548,6 +4655,7 @@ export default class AutoOCPlugin extends Plugin {
 
     try {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      this.finishLegacyStart(attempt);
       const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCodeTask({
         ...current, code, vaultBase: vaultBasePath,
         cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
@@ -4672,6 +4780,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const context = (this as any).workflowRuntime?.get(id);
     if (!context) return;
+    const startToken = this.definitionStarts?.get(`workflow:${id}`);
     const execution = wf.legacyExecution;
     const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
     const attempt = step?.taskId ? this.legacyAttempts?.get(step.taskId) : undefined;
@@ -4685,6 +4794,8 @@ export default class AutoOCPlugin extends Plugin {
     if ((this as any).workflowRuntime?.has(id)) return;
     await this.saveSettings();
     if (wf.legacyExecution !== execution || (this as any).workflowRuntime?.has(id)) return;
+    if (this.definitionStarts?.get(`workflow:${id}`) === startToken) this.definitionStarts?.delete(`workflow:${id}`);
+    this.refreshStartControls();
     new Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
 
@@ -5076,6 +5187,10 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runWorkflow(workflow: Workflow) {
+    return this.withDefinitionStart("workflow", workflow.id, release => this.executeWorkflow(workflow, release));
+  }
+
+  private async executeWorkflow(workflow: Workflow, releaseStart?: () => void) {
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -5083,6 +5198,10 @@ export default class AutoOCPlugin extends Plugin {
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+    const binding = (wf as any).runtimeExecution;
+    if (this.hasUncertainLegacyTask(wf.id) || binding?.phase !== "abandoned" && binding?.terminalUncertainty && !binding.disposition) {
+      throw new Error("Previous workflow outcome is unconfirmed; recovery is required before starting a new attempt.");
+    }
 
     if (this.settings.workflows.some(item => {
       const execution = (item as any).runtimeExecution;
@@ -5115,7 +5234,7 @@ export default class AutoOCPlugin extends Plugin {
       const definition=prepareWorkflowDefinition(wf,this.settings.tasks,this.settings);
       const vault=(this.app.vault.adapter as any).basePath;
       if (supportsSharedWorkflow(definition,createWorkflowTaskAdapter(definition,vault))) {
-        await this.runSharedWorkflow(wf.id,undefined,false,true);
+        await this.executeSharedWorkflow(wf.id,undefined,false,true,undefined,undefined,releaseStart);
         return;
       }
     }
@@ -5136,6 +5255,8 @@ export default class AutoOCPlugin extends Plugin {
     });
     await this.saveSettings();
     if ((this as any).workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
+    releaseStart?.();
+    this.refreshStartControls();
     new Notice(`AutoOC: ⚡ Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
 
     // Find the entry step: one with no incoming transitions, or the first step.
@@ -7072,7 +7193,7 @@ class AutoOCView extends ItemView {
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
-    btnQuickRun.disabled = task.status === "running";
+    this.plugin.configureStartButton(btnQuickRun, "task", task.id, true);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
@@ -7207,7 +7328,7 @@ class AutoOCView extends ItemView {
       text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
-    btnRun.disabled = task.status === "running";
+    this.plugin.configureStartButton(btnRun, "task", task.id, false);
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
@@ -7437,7 +7558,7 @@ class AutoOCView extends ItemView {
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
-    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready","in_flight"].includes((workflow as any).runtimeExecution?.phase);
+    this.plugin.configureStartButton(btnQuickRun, "workflow", workflow.id, true);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runWorkflow(workflow); }
@@ -7746,7 +7867,7 @@ class AutoOCView extends ItemView {
       text: this.plugin.isWorkflowExecuting(workflow.id) ? "⏳ Running…" : "▶ Run Workflow",
       cls: "auto-oc-btn-run",
     });
-    btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
+    this.plugin.configureStartButton(btnRun, "workflow", workflow.id, false);
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runWorkflow(workflow); }
