@@ -192,6 +192,72 @@ antigua no necesita incorporar estos comandos.
 
 ## Guardado interrumpido: protocolo del candidato de desarrollo
 
+### Inspección y recuperación explícita de guardados (candidato)
+
+Verifica `version` y `help` mediante la ruta absoluta de la CLI seleccionada.
+Solo usa estos comandos si anuncia ambas capacidades. Pertenecen al candidato;
+compartir versión con un paquete publicado no demuestra su disponibilidad.
+
+```text
+node CLI inspect-settings-write --vault VAULT
+node CLI recover-settings-write --vault VAULT --decision DECISION_JSON
+```
+
+VAULT y DECISION_JSON deben ser rutas absolutas. La inspección no crea runtime,
+locks, decisiones ni respaldos. Devuelve `schemaVersion:1`, instalación canónica,
+identidades físicas, inventario con SHA-256 (incluidas ausencias), `inspectionHash`,
+integridad del catálogo, coherencia de checkpoints, estado del escritor y
+`blockingReasons`. Los contenidos de catálogo, resultados y prompts no salen
+en el diagnóstico. `recoverable:false` es un diagnóstico completado, no permiso
+para retirar archivos. Conserva la salida y revisa sus motivos.
+
+Tras autorización explícita del operador, prepara este JSON con los valores
+exactos de una inspección recuperable; no inventes identidades ni hashes:
+
+```json
+{
+  "schemaVersion": 1,
+  "action": "recover-settings-write",
+  "vault": "RUTA_CANONICA_DE_LA_INSPECCION",
+  "installationDirectory": "INSTALACION_CANONICA_DE_LA_INSPECCION",
+  "inspectionHash": "SHA256_DE_LA_INSPECCION",
+  "token": "TOKEN_DEL_LOCK",
+  "transactionId": "TRANSACCION_DEL_LOCK",
+  "reason": "Motivo revisado expresamente por el operador",
+  "preserveCatalog": true,
+  "executionsResumed": false
+}
+```
+
+La CLI reinspecciona y exige coincidencia completa bajo el guard compartido
+`runtime/lease-recovery.lock`. Un escritor activo, PID reutilizado, permisos
+insuficientes, inicio de proceso no verificable, catálogo corrupto o checkpoints
+inciertos impiden recuperar. Los nuevos locks incorporan token, transacción,
+PID, inicio del proceso obtenido del sistema operativo e identidad física.
+Si no se puede consultar el inicio, guardan `processStart:null` y la recuperación
+explícita queda bloqueada. Los UUID antiguos siguen siendo inspeccionables y
+compatibles con las pruebas de recuperación automática anteriores; esta ruta
+explícita no recupera UUID sin inicio de proceso verificable. La edad nunca
+demuestra abandono. No fabricar metadatos para convertir un lock antiguo.
+
+La recuperación copia los bytes exactos del catálogo a un respaldo privado,
+lo sincroniza y verifica antes de archivar lock, intent y temporales en
+`runtime/settings-write-explicit-UUID/`. No promueve temporales, cambia estados,
+recupera `execution.lock` ni reanuda tareas. Devuelve `executionsResumed:false`
+y `temporaryPromoted:false`. Una decisión consumida no se reutiliza. En Windows
+Node no permite fsync de directorios: la salida indica `directorySync:not_supported`;
+los archivos y recibos sí se sincronizan. La durabilidad ante pérdida de energía
+debe validarse por separado en cada plataforma.
+
+Si hay efectos parciales, el código de salida es no cero y el JSON informa
+`recovered:false`, etapa comprometida (`committed`), archivo, lista `moved` y
+`guardRetained`. Conserva guard, respaldo, originales y archivo. `failure.json`
+puede faltar si también falla su escritura. Inspeccionar otra vez sigue siendo
+posible, pero este candidato no implementa continuación de una recuperación
+parcial: requiere un procedimiento específico revisado y autorizado. No borrar
+el guard, mover evidencia, repetir decisiones ni usar `recover-lease` para
+desbloquearla. La reanudación y recuperación de reserva permanecen separadas.
+
 El candidato incorpora `data.json.write-intent`, vinculado mediante SHA-256 al
 propietario de ejecución, identidades físicas y catálogo previo/preparado.
 Al arrancar en Obsidian, archiva automáticamente solo una escritura demostrada

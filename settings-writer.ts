@@ -4,9 +4,68 @@ import { createHash, randomUUID } from "crypto";
 import { StringDecoder } from "string_decoder";
 import { performance } from "perf_hooks";
 import { setImmediate } from "timers";
+import { execFile } from "child_process";
 import { captureJsonStructure, cloneCapturedJson, cloneJsonStructure, encodeCapturedJson, hashJsonCooperatively, hashTextCooperatively, parseCooperatively } from "./cooperative-json";
 
 export type ObservedVersion = {textHash: string | null; valueHash: string | null};
+
+export interface SettingsWriteLock {
+  schemaVersion: 1; token: string; transactionId: string; pid: number;
+  processStart: string | null; directoryIdentity: string;
+}
+const uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+// No command line enumeration, shell, or age-based owner inference.
+export async function settingsProcessStart(pid: number): Promise<string | null> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === 'linux') {
+      const text = await fs.promises.readFile(`/proc/${pid}/stat`, 'utf8');
+      const ticks = text.slice(text.lastIndexOf(')') + 2).split(' ')[19];
+      const boot = (await fs.promises.readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim();
+      return /^\d+$/.test(ticks) ? `linux:${boot}:${ticks}` : null;
+    }
+    const systemRoot=process.env.SystemRoot || 'C:\\Windows';
+    if(process.platform==='win32'&&!path.isAbsolute(systemRoot))return null;
+    const executable = process.platform === 'win32'
+      ? path.join(systemRoot,'System32','WindowsPowerShell','v1.0','powershell.exe') : '/bin/ps';
+    const args = process.platform === 'win32'
+      ? ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`]
+      : ['-p', String(pid), '-o', 'lstart='];
+    if (process.platform !== 'win32' && process.platform !== 'darwin') return null;
+    const value = await new Promise<string>((resolve, reject) => execFile(executable, args,
+      {windowsHide:true, timeout:5000, maxBuffer:4096}, (error, stdout) => error ? reject(error) : resolve(stdout.trim())));
+    if (process.platform === 'win32') return /^\d{15,20}$/.test(value) ? `windows:${value}` : null;
+    return /^[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value) ? `darwin:${value}` : null;
+  } catch { return null; }
+}
+// Obsidian can reload this bundle several times in the same Electron process.
+// Cache only that process's OS observation, never another writer's liveness.
+const processStartKey=Symbol.for('autooc.settings.process-start.v1');
+function ownProcessStart():Promise<string|null> {
+  const host=process as typeof process & {[processStartKey]?:Promise<string|null>};
+  return host[processStartKey] ||= settingsProcessStart(process.pid);
+}
+export function parseSettingsWriteLock(text: string): SettingsWriteLock | {token:string; legacy:true} {
+  if (uuid.test(text)) return {token:text, legacy:true};
+  let value:any; try { value=JSON.parse(text); } catch { throw new Error('Incomplete settings write lock identity'); }
+  if (value?.schemaVersion!==1 || !uuid.test(value.token) || !uuid.test(value.transactionId) ||
+      !Number.isSafeInteger(value.pid) || value.pid<=0 || typeof value.directoryIdentity!=='string' || !/^[0-9]+:[0-9]+:[0-9.]+$/.test(value.directoryIdentity) ||
+      !(value.processStart===null || typeof value.processStart==='string' && /^(?:linux:[a-f0-9-]{36}:\d+|windows:\d{15,20}|darwin:[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})$/.test(value.processStart))) {
+    throw new Error('Incomplete settings write lock identity');
+  }
+  return {schemaVersion:1,token:value.token,transactionId:value.transactionId,pid:value.pid,
+    processStart:value.processStart,directoryIdentity:value.directoryIdentity};
+}
+export function settingsWriteLockToken(file: string): string {
+  const stat=fs.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || stat.size>16384) throw new Error('Unsafe settings write lock');
+  return parseSettingsWriteLock(fs.readFileSync(file,'utf8')).token;
+}
+export function assertNoSettingsRecovery(directory: string): void {
+  try {fs.lstatSync(path.join(directory,'runtime','lease-recovery.lock'));}
+  catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
+  throw new Error('Settings recovery guard requires reconciliation');
+}
 
 export interface SettingsWriteIntent {
   schemaVersion:1; token:string; directoryIdentity:string; runtimeIdentity:string;
@@ -40,7 +99,7 @@ async function beginSettingsWriteIntent(file:string,token:string,originalHash:st
   let published:string|undefined;
   const assertOwned=()=>{
     const currentOwnerStat=fs.lstatSync(ownerFile);
-    if(currentOwnerStat.dev!==ownerStat.dev||currentOwnerStat.ino!==ownerStat.ino||currentOwnerStat.size!==ownerStat.size||currentOwnerStat.mtimeMs!==ownerStat.mtimeMs||currentOwnerStat.ctimeMs!==ownerStat.ctimeMs||settingsDirectoryIdentity(path.dirname(ownerFile))!==ownerDirectoryIdentity||regularIntentText(ownerFile)!==ownerText||fs.readFileSync(file+'.write-lock','utf8')!==token||settingsDirectoryIdentity(directory)!==intent.directoryIdentity||settingsDirectoryIdentity(runtime)!==intent.runtimeIdentity)throw new Error('Settings intent ownership changed');
+    if(currentOwnerStat.dev!==ownerStat.dev||currentOwnerStat.ino!==ownerStat.ino||currentOwnerStat.size!==ownerStat.size||currentOwnerStat.mtimeMs!==ownerStat.mtimeMs||currentOwnerStat.ctimeMs!==ownerStat.ctimeMs||settingsDirectoryIdentity(path.dirname(ownerFile))!==ownerDirectoryIdentity||regularIntentText(ownerFile)!==ownerText||settingsWriteLockToken(file+'.write-lock')!==token||settingsDirectoryIdentity(directory)!==intent.directoryIdentity||settingsDirectoryIdentity(runtime)!==intent.runtimeIdentity)throw new Error('Settings intent ownership changed');
     if(published!==undefined&&regularIntentText(intentFile)!==published)throw new Error('Settings write intent changed');
   };
   const replaceMetadata=async(from:string,to:string)=>{
@@ -185,19 +244,29 @@ export class SettingsWriter {
     const operation = this.tail.then(async () => {
       file = path.resolve(file);
       await fs.promises.mkdir(path.dirname(file), {recursive:true});
+      assertNoSettingsRecovery(path.dirname(file));
+      const processStart = await ownProcessStart();
+      assertNoSettingsRecovery(path.dirname(file));
       const lock = file + ".write-lock";
       const token = randomUUID();
       // Never steal a stale lock: a dead writer needs explicit recovery.
       // Publish the tiny token without yielding an empty lock to observers.
       // Only its durable flush can be slow; wait for it off the input thread
       // before taking a snapshot or touching the catalog.
+      const lockText = JSON.stringify({schemaVersion:1, token, transactionId:randomUUID(), pid:process.pid,
+        processStart, directoryIdentity:settingsDirectoryIdentity(path.dirname(file))} satisfies SettingsWriteLock);
       const descriptor = fs.openSync(lock, "wx", 0o600);
+      let lockStat:fs.Stats;
       let intent:Awaited<ReturnType<typeof beginSettingsWriteIntent>>;
+      // Early publication/flush/close failures retain the lock, including an
+      // incomplete one. They never authorize automatic recovery or a snapshot.
       try {
-        fs.writeFileSync(descriptor, token);
+        lockStat = fs.fstatSync(descriptor);
+        fs.writeFileSync(descriptor, lockText);
         await new Promise<void>((resolve, reject) => fs.fsync(descriptor, error => error ? reject(error) : resolve()));
       } finally { fs.closeSync(descriptor); }
       try {
+        assertNoSettingsRecovery(path.dirname(file));
         const observed = this.observed.get(file), currentHash = await settingsFingerprint(file);
         if (!observed || observed.textHash !== currentHash) {
           const current = await readSettingsTextAsync(file);
@@ -212,7 +281,7 @@ export class SettingsWriter {
         const captured = captureJsonStructure(snapshot());
         // Async preparation opens a window for an external non-cooperating
         // editor or lock replacement. Verify both before replacing any bytes.
-        if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== token) {
+        if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== lockText) {
           throw new Error("Settings write lock ownership changed");
         }
         if (await settingsFingerprint(file) !== currentHash) {
@@ -223,7 +292,8 @@ export class SettingsWriter {
           if (await settingsFingerprint(file) !== currentHash) {
             throw new Error("AutoOC configuration changed during replacement; reload before saving");
           }
-          if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== token) {
+          assertNoSettingsRecovery(path.dirname(file));
+          if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== lockText) {
             throw new Error("Settings write lock ownership changed");
           }
           validate?.();
@@ -232,7 +302,8 @@ export class SettingsWriter {
         this.cached.set(file,cloneCapturedJson(captured));
       } finally {
         try{await intent?.finish();}finally{
-        if (fs.lstatSync(lock).isSymbolicLink() || fs.readFileSync(lock,"utf8") !== token) {
+        const currentLock=fs.lstatSync(lock);
+        if (currentLock.isSymbolicLink() || currentLock.dev!==lockStat.dev || currentLock.ino!==lockStat.ino || currentLock.birthtimeMs!==lockStat.birthtimeMs || fs.readFileSync(lock,"utf8") !== lockText) {
           throw new Error("Settings write lock ownership changed");
         }
         fs.unlinkSync(lock);

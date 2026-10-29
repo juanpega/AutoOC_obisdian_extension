@@ -210,6 +210,16 @@ soportada del instalador antes de ejecutar más trabajo. No edites sus registros
 
 ## Guardados interrumpidos (candidato local)
 
+El candidato añade `inspect-settings-write --vault <ruta-absoluta>` y
+`recover-settings-write --vault <ruta-absoluta> --decision <JSON-absoluto>`.
+Comprueba `version` y `help` de la CLI seleccionada por ruta absoluta antes de
+usarlos: no se presupone que una instalación anterior los incluya. La inspección
+no escribe y devuelve identidades, hashes y motivos de bloqueo, sin contenido
+del catálogo. La decisión requiere revisión expresa de esa inspección; su
+esquema y los límites están en [la guía del runtime](skills/autooc-runtime/SKILL.md#inspección-y-recuperación-explícita-de-guardados-candidato).
+La recuperación crea un respaldo verificado y archiva la evidencia. Conserva
+catálogo, checkpoints y reserva; la reanudación es otra acción independiente.
+
 Al cerrar o recargar mientras AutoOC guarda, el plugin mantiene abierta la
 ventana hasta terminar. El aviso indica cuándo puedes repetir el cierre o la
 recarga. Si el proceso termina forzosamente, el siguiente arranque puede

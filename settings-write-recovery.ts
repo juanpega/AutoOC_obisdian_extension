@@ -5,6 +5,7 @@ import {readExecutionLeaseOwner,recoverExecutionLeaseAsync} from './execution-le
 import {readSettingsTextAsync,settingsFingerprint,settingsDirectoryIdentity,type SettingsWriteIntent} from './settings-writer';
 import {parseCooperatively,hashTextCooperatively} from './cooperative-json';
 import {assertIdleCatalog,assertIdleJournals} from './execution-idle';
+import { settingsWriteLockToken } from './settings-writer';
 
 function statFile(file:string){const s=fs.lstatSync(file);if(!s.isFile()||s.isSymbolicLink()||s.nlink!==1)throw new Error('Unsafe interrupted settings artifact');return s;}
 function small(file:string){const s=statFile(file);if(s.size>16384)throw new Error('Oversized settings recovery marker');return fs.readFileSync(file,'utf8');}
@@ -31,7 +32,7 @@ export async function recoverInterruptedSettingsWrite(directory:string,assertOpe
       if(anchor?.token!==intent.token||anchor?.sha256!==createHash('sha256').update(intentText,'utf8').digest('hex'))throw new Error('Interrupted settings proof is not bound to its execution owner');
       if(settingsDirectoryIdentity(directory)!==intent.directoryIdentity||settingsDirectoryIdentity(runtime)!==intent.runtimeIdentity||
         small(intentFile)!==intentText||JSON.stringify(readExecutionLeaseOwner(runtime))!==JSON.stringify(currentOwner))throw new Error('Interrupted settings installation or proof changed');
-      if(exists(file+'.write-lock')&&small(file+'.write-lock')!==intent.token)throw new Error('Interrupted settings lock token changed');
+      if(exists(file+'.write-lock')&&settingsWriteLockToken(file+'.write-lock')!==intent.token)throw new Error('Interrupted settings lock token changed');
       if(fs.readdirSync(runtime).some(n=>n==='update-pending.json'||n.endsWith('.tmp')||n.endsWith('.write-lock')))throw new Error('Runtime maintenance is unresolved');
     };
     assertContext();

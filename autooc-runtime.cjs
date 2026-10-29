@@ -389,7 +389,7 @@ function catalogTransaction(file, operation) {
 // execution-coordinator.ts
 var fs4 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
-var import_child_process = require("child_process");
+var import_child_process2 = require("child_process");
 
 // execution-journal.ts
 var fs3 = __toESM(require("fs"));
@@ -404,6 +404,73 @@ var import_crypto3 = require("crypto");
 var import_string_decoder = require("string_decoder");
 var import_perf_hooks2 = require("perf_hooks");
 var import_timers2 = require("timers");
+var import_child_process = require("child_process");
+var uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+async function settingsProcessStart(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === "linux") {
+      const text = await fs2.promises.readFile(`/proc/${pid}/stat`, "utf8");
+      const ticks = text.slice(text.lastIndexOf(")") + 2).split(" ")[19];
+      const boot = (await fs2.promises.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+      return /^\d+$/.test(ticks) ? `linux:${boot}:${ticks}` : null;
+    }
+    const systemRoot = process.env.SystemRoot || "C:\\Windows";
+    if (process.platform === "win32" && !path3.isAbsolute(systemRoot)) return null;
+    const executable = process.platform === "win32" ? path3.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/ps";
+    const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`] : ["-p", String(pid), "-o", "lstart="];
+    if (process.platform !== "win32" && process.platform !== "darwin") return null;
+    const value = await new Promise((resolve8, reject) => (0, import_child_process.execFile)(
+      executable,
+      args,
+      { windowsHide: true, timeout: 5e3, maxBuffer: 4096 },
+      (error, stdout) => error ? reject(error) : resolve8(stdout.trim())
+    ));
+    if (process.platform === "win32") return /^\d{15,20}$/.test(value) ? `windows:${value}` : null;
+    return /^[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value) ? `darwin:${value}` : null;
+  } catch {
+    return null;
+  }
+}
+var processStartKey = Symbol.for("autooc.settings.process-start.v1");
+function ownProcessStart() {
+  const host = process;
+  return host[processStartKey] ||= settingsProcessStart(process.pid);
+}
+function parseSettingsWriteLock(text) {
+  if (uuid.test(text)) return { token: text, legacy: true };
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("Incomplete settings write lock identity");
+  }
+  if (value?.schemaVersion !== 1 || !uuid.test(value.token) || !uuid.test(value.transactionId) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.directoryIdentity !== "string" || !/^[0-9]+:[0-9]+:[0-9.]+$/.test(value.directoryIdentity) || !(value.processStart === null || typeof value.processStart === "string" && /^(?:linux:[a-f0-9-]{36}:\d+|windows:\d{15,20}|darwin:[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})$/.test(value.processStart))) {
+    throw new Error("Incomplete settings write lock identity");
+  }
+  return {
+    schemaVersion: 1,
+    token: value.token,
+    transactionId: value.transactionId,
+    pid: value.pid,
+    processStart: value.processStart,
+    directoryIdentity: value.directoryIdentity
+  };
+}
+function settingsWriteLockToken(file) {
+  const stat = fs2.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) throw new Error("Unsafe settings write lock");
+  return parseSettingsWriteLock(fs2.readFileSync(file, "utf8")).token;
+}
+function assertNoSettingsRecovery(directory) {
+  try {
+    fs2.lstatSync(path3.join(directory, "runtime", "lease-recovery.lock"));
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error("Settings recovery guard requires reconciliation");
+}
 function settingsDirectoryIdentity(directory) {
   const stat = fs2.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe settings directory");
@@ -434,7 +501,7 @@ async function beginSettingsWriteIntent(file, token, originalHash) {
   let published;
   const assertOwned = () => {
     const currentOwnerStat = fs2.lstatSync(ownerFile);
-    if (currentOwnerStat.dev !== ownerStat.dev || currentOwnerStat.ino !== ownerStat.ino || currentOwnerStat.size !== ownerStat.size || currentOwnerStat.mtimeMs !== ownerStat.mtimeMs || currentOwnerStat.ctimeMs !== ownerStat.ctimeMs || settingsDirectoryIdentity(path3.dirname(ownerFile)) !== ownerDirectoryIdentity || regularIntentText(ownerFile) !== ownerText || fs2.readFileSync(file + ".write-lock", "utf8") !== token || settingsDirectoryIdentity(directory) !== intent.directoryIdentity || settingsDirectoryIdentity(runtime) !== intent.runtimeIdentity) throw new Error("Settings intent ownership changed");
+    if (currentOwnerStat.dev !== ownerStat.dev || currentOwnerStat.ino !== ownerStat.ino || currentOwnerStat.size !== ownerStat.size || currentOwnerStat.mtimeMs !== ownerStat.mtimeMs || currentOwnerStat.ctimeMs !== ownerStat.ctimeMs || settingsDirectoryIdentity(path3.dirname(ownerFile)) !== ownerDirectoryIdentity || regularIntentText(ownerFile) !== ownerText || settingsWriteLockToken(file + ".write-lock") !== token || settingsDirectoryIdentity(directory) !== intent.directoryIdentity || settingsDirectoryIdentity(runtime) !== intent.runtimeIdentity) throw new Error("Settings intent ownership changed");
     if (published !== void 0 && regularIntentText(intentFile) !== published) throw new Error("Settings write intent changed");
   };
   const replaceMetadata = async (from, to) => {
@@ -604,17 +671,31 @@ var SettingsWriter = class _SettingsWriter {
     const operation = this.tail.then(async () => {
       file = path3.resolve(file);
       await fs2.promises.mkdir(path3.dirname(file), { recursive: true });
+      assertNoSettingsRecovery(path3.dirname(file));
+      const processStart = await ownProcessStart();
+      assertNoSettingsRecovery(path3.dirname(file));
       const lock = file + ".write-lock";
       const token = (0, import_crypto3.randomUUID)();
+      const lockText = JSON.stringify({
+        schemaVersion: 1,
+        token,
+        transactionId: (0, import_crypto3.randomUUID)(),
+        pid: process.pid,
+        processStart,
+        directoryIdentity: settingsDirectoryIdentity(path3.dirname(file))
+      });
       const descriptor = fs2.openSync(lock, "wx", 384);
+      let lockStat;
       let intent;
       try {
-        fs2.writeFileSync(descriptor, token);
+        lockStat = fs2.fstatSync(descriptor);
+        fs2.writeFileSync(descriptor, lockText);
         await new Promise((resolve8, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve8()));
       } finally {
         fs2.closeSync(descriptor);
       }
       try {
+        assertNoSettingsRecovery(path3.dirname(file));
         const observed = this.observed.get(file), currentHash = await settingsFingerprint(file);
         if (!observed || observed.textHash !== currentHash) {
           const current = await readSettingsTextAsync(file);
@@ -626,7 +707,7 @@ var SettingsWriter = class _SettingsWriter {
         validate?.();
         intent = await beginSettingsWriteIntent(file, token, currentHash);
         const captured = captureJsonStructure(snapshot());
-        if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== token) {
+        if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== lockText) {
           throw new Error("Settings write lock ownership changed");
         }
         if (await settingsFingerprint(file) !== currentHash) {
@@ -637,7 +718,8 @@ var SettingsWriter = class _SettingsWriter {
           if (await settingsFingerprint(file) !== currentHash) {
             throw new Error("AutoOC configuration changed during replacement; reload before saving");
           }
-          if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== token) {
+          assertNoSettingsRecovery(path3.dirname(file));
+          if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== lockText) {
             throw new Error("Settings write lock ownership changed");
           }
           validate?.();
@@ -648,7 +730,8 @@ var SettingsWriter = class _SettingsWriter {
         try {
           await intent?.finish();
         } finally {
-          if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== token) {
+          const currentLock = fs2.lstatSync(lock);
+          if (currentLock.isSymbolicLink() || currentLock.dev !== lockStat.dev || currentLock.ino !== lockStat.ino || currentLock.birthtimeMs !== lockStat.birthtimeMs || fs2.readFileSync(lock, "utf8") !== lockText) {
             throw new Error("Settings write lock ownership changed");
           }
           fs2.unlinkSync(lock);
@@ -1194,7 +1277,7 @@ function resources(definition, vault) {
       parent = next;
     }
     if (gitRoot) {
-      const common = (0, import_child_process.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+      const common = (0, import_child_process2.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
       result.repositories.add(physicalPath(path5.resolve(gitRoot, common)));
     }
   }
@@ -1813,14 +1896,14 @@ async function reconcileWorkflowTask(journal, definition, read, host) {
 
 // workflow-branch.ts
 var path8 = __toESM(require("path"));
-var import_child_process2 = require("child_process");
+var import_child_process3 = require("child_process");
 function validateBranchOptions(task) {
   if (task.branch !== void 0 && typeof task.branch !== "string") throw new Error("Branch must be a string");
   if (task.createBranch !== void 0 && typeof task.createBranch !== "boolean") throw new Error("createBranch must be boolean");
   if (task.createBranch && !task.branch?.trim()) throw new Error("Creating a branch requires its name");
   if (task.branch?.trim()) {
     try {
-      (0, import_child_process2.execFileSync)("git", ["check-ref-format", "--branch", task.branch], { stdio: "ignore", windowsHide: true });
+      (0, import_child_process3.execFileSync)("git", ["check-ref-format", "--branch", task.branch], { stdio: "ignore", windowsHide: true });
     } catch {
       throw new Error("Invalid Git branch name");
     }
@@ -1829,7 +1912,7 @@ function validateBranchOptions(task) {
 }
 function git(cwd, args) {
   try {
-    const output = (0, import_child_process2.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const output = (0, import_child_process3.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     return args.includes("-z") ? output : output.trim();
   } catch {
     throw new Error("Git branch operation failed; working tree preserved, no forced checkout or cleanup");
@@ -2327,7 +2410,7 @@ async function executeCodexTask(client, request) {
 }
 
 // codex-client.ts
-var import_child_process3 = require("child_process");
+var import_child_process4 = require("child_process");
 var import_string_decoder2 = require("string_decoder");
 var fs10 = __toESM(require("fs"));
 var os = __toESM(require("os"));
@@ -2448,7 +2531,7 @@ function openCodexUrl(url) {
     env: { ...process.env, AUTOOC_CODEX_URL: url }
   } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
   return new Promise((resolve8, reject) => {
-    const child = (0, import_child_process3.spawn)(launcher.bin, launcher.args, {
+    const child = (0, import_child_process4.spawn)(launcher.bin, launcher.args, {
       detached: false,
       stdio: "ignore",
       windowsHide: true,
@@ -2486,7 +2569,7 @@ var CodexAppServerClient = class {
   }
   async initialize() {
     if (this.initialized) return;
-    this.child = (0, import_child_process3.spawn)(this.bin, ["app-server"], {
+    this.child = (0, import_child_process4.spawn)(this.bin, ["app-server"], {
       cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true
@@ -2852,7 +2935,7 @@ var fs14 = __toESM(require("fs"));
 var path14 = __toESM(require("path"));
 
 // copilot-client.ts
-var import_child_process4 = require("child_process");
+var import_child_process5 = require("child_process");
 var fs12 = __toESM(require("fs"));
 var os2 = __toESM(require("os"));
 var path12 = __toESM(require("path"));
@@ -2941,7 +3024,7 @@ var CopilotCliClient = class {
         } else {
           args = buildCopilotArgs(prompt, options);
         }
-        this.child = (0, import_child_process4.spawn)(this.bin, args, {
+        this.child = (0, import_child_process5.spawn)(this.bin, args, {
           cwd: this.cwd,
           env: { ...process.env, ...options.env },
           stdio: "pipe",
@@ -2979,7 +3062,7 @@ var CopilotCliClient = class {
     const child = this.child;
     if (!child?.pid || child.exitCode !== null) return;
     if (process.platform === "win32") {
-      const killer = (0, import_child_process4.spawn)("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = (0, import_child_process5.spawn)("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       killer.on("error", () => {
         try {
           child.kill();
@@ -3010,7 +3093,7 @@ var fs13 = __toESM(require("fs"));
 var path13 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
 var crypto = __toESM(require("crypto"));
-var import_child_process5 = require("child_process");
+var import_child_process6 = require("child_process");
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
   const candidates = [];
@@ -3097,7 +3180,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
     const envScript = buildPowerShellEnvLines(env).join("; ");
     const runCommand = args.length > 0 ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList` : `& ${psSingleQuoted(bin)}`;
     const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
-    const launcher = (0, import_child_process5.spawn)(
+    const launcher = (0, import_child_process6.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
       { detached: true, stdio: "ignore", windowsHide: false }
@@ -3110,7 +3193,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   const command = buildPosixLaunchCommand(bin, cwd, env, args);
   if (process.platform === "darwin") {
     const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
-    const launcher = (0, import_child_process5.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process6.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher.on?.("error", (error) => options.onError?.(error));
     launcher.on?.("spawn", () => options.onLaunched?.());
     launcher.unref();
@@ -3123,7 +3206,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
         "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)"
       );
     }
-    const launcher = (0, import_child_process5.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process6.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
     launcher.on?.("error", (error) => options.onError?.(error));
     launcher.on?.("spawn", () => options.onLaunched?.());
     launcher.unref();
@@ -3233,7 +3316,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     };
     poll = setInterval(readState, 100);
     timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
-    const launcher = (0, import_child_process5.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
+    const launcher = (0, import_child_process6.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
       // A detached hidden PowerShell can exit without executing its command on
       // Windows. The observer does not need a new process group; unref below
       // releases the host after confirmation while its visible session runs.

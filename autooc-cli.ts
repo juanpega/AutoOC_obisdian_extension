@@ -11,12 +11,22 @@ import { abandonInstalledExecution } from "./execution-abandonment";
 import {requestPluginExecution,requestPluginWorkflowEdit} from "./cli-plugin-requests";
 import {workflowEditDefinition,workflowEditHash,validWorkflowEdit} from "./workflow-edit";
 import {resolveInstalledWorkflowLocation} from "./installed-workflow-location";
+import {inspectSettingsWrite, recoverSettingsWrite, readSettingsWriteDecision} from './settings-write-inspection';
 import {maintainRelease,readDecisionFile} from "./release-maintenance";
 declare const AUTOOC_VERSION: string;
 const version = AUTOOC_VERSION;
 
 async function main(args: string[]) {
   const [command, ...rest] = args;
+  if(command==='inspect-settings-write'||command==='recover-settings-write') {
+    const inspect=command==='inspect-settings-write';
+    if(rest.length!==(inspect?2:4)||rest[0]!=='--vault'||!path.isAbsolute(rest[1]||'')||
+       !inspect&&(rest[2]!=='--decision'||!path.isAbsolute(rest[3]||'')))throw new Error('Use inspect-settings-write --vault <absolute path> or recover-settings-write --vault <absolute path> --decision <absolute JSON file>');
+    if(inspect)return {version,...await inspectSettingsWrite(rest[1])};
+    const result=await recoverSettingsWrite(rest[1],readSettingsWriteDecision(rest[3]));
+    if(!result.recovered)process.exitCode=1;
+    return {version,...result};
+  }
   if(command==="maintain-release") {
     if(rest[0]!=="--vault" || !path.isAbsolute(rest[1] || '') || !(rest.length===3 && rest[2]==="--inspect" || rest.length===4 && rest[2]==="--decisions"))throw new Error('Use maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file>');
     return maintainRelease({sourceDirectory:__dirname,vault:rest[1],version,decisions:rest[2]==="--decisions" ? readDecisionFile(rest[3]) : undefined});
@@ -75,8 +85,8 @@ async function main(args: string[]) {
     }
     return {version,...recoverExecutionLease(directory,rest[3])};
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon","inspect-terminal","dispose-terminal","maintain-release","export-workflow","edit-workflow"], taskSelection:true, pluginRequests:1,workflowEditing:1 };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition:"inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.",maintenance:"maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file> from a separate extracted corrected package; decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.",abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground:true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon","inspect-terminal","dispose-terminal","maintain-release","export-workflow","edit-workflow"], taskSelection:true, pluginRequests:1,workflowEditing:1 };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", settingsWriteRecovery:"inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition:"inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.",maintenance:"maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file> from a separate extracted corrected package; decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.",abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground:true };
   if (["run","resume","reconcile","stop"].includes(command)) {
     const values = new Map<string,string>();
     const target = rest.includes("--task") ? "--task" : "--workflow";
