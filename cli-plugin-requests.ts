@@ -1,3 +1,4 @@
+import {presentationFields, type ExecutionPresentation} from "./execution-presentation";
 import * as fs from "fs";
 import * as path from "path";
 import {randomUUID} from "crypto";
@@ -13,10 +14,10 @@ export interface PluginCommand {
   taskId?: string;
   runId?: string;
 }
-export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"revision"|"nextStepId">;
-export function executionSummary(state: RunCheckpoint): ExecutionSummary {
+export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"revision"|"nextStepId"> & Partial<ExecutionPresentation>;
+export function executionSummary(state: ExecutionSummary, presentation: Partial<ExecutionPresentation> = state): ExecutionSummary {
   const {runId,workflowId,phase,revision,nextStepId}=state;
-  return {runId,workflowId,phase,revision,nextStepId};
+  return {runId,workflowId,phase,revision,nextStepId,...presentationFields(presentation)};
 }
 const uuid=/^[a-f0-9-]{36}$/;
 function regularDirectory(directory:string):void {
@@ -83,7 +84,7 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // The files carry only IDs/progress, never executable payloads or configuration.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint)=>Promise<void>)=>Promise<RunCheckpoint>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
@@ -163,9 +164,9 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
             await receipt(id,{status:"completed",editResult:result});
             return;
           }
-          const result=await execute(request,execution.controller.signal,state=>{
+          const result=await execute(request,execution.controller.signal,(state,presentation)=>{
             if(!acceptingProgress)return Promise.resolve();
-            const next=executionSummary(state);checkpoint=next;
+            const next=executionSummary(state,presentation);checkpoint=next;
             publications=publications.then(()=>receipt(id,{status:"running",checkpoint:next}));
             // Old consumers may not await the callback. Keep it in the ordered
             // chain and observe rejection now, then propagate it at the barrier.
@@ -238,6 +239,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
   if(!validCommand(command))throw new Error("Invalid CLI command");
   if(Buffer.byteLength(JSON.stringify(command),'utf8')>60000)throw new Error("Workflow edit payload exceeds 60KB; split the edit into smaller patches");
   await replace(file,{protocol:1,owner:owner.token,id,expiresAt,...command},check,false);
+  let observedPresentation:string|undefined;
   let accepted=false,lastProgress="",runId="runId" in command?command.runId:undefined;
   for(;;){
     try {
@@ -259,6 +261,14 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
             "runId" in command && command.runId && checkpoint.runId!==command.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision<0 ||
             !["ready","in_flight","completed","failed","abandoned"].includes(checkpoint.phase) ||
             !(checkpoint.nextStepId===null || typeof checkpoint.nextStepId==="string")))throw new Error("Invalid CLI receipt checkpoint");
+        if(checkpoint) {
+          if(runId && checkpoint.runId!==runId)throw new Error("CLI receipt run identity changed");
+          const metadata=presentationFields(checkpoint);
+          const serializedMetadata=JSON.stringify(metadata);
+          if(observedPresentation !== undefined && serializedMetadata !== observedPresentation)throw new Error("CLI receipt presentation changed");
+          observedPresentation=serializedMetadata;
+          if(metadata.executionKind !== undefined && metadata.executionKind !== (command.taskId ? "task" : "workflow"))throw new Error("CLI receipt execution kind mismatch");
+        }
         if(result.checkpoint){
           runId=result.checkpoint.runId;
           const serialized=JSON.stringify(result.checkpoint);

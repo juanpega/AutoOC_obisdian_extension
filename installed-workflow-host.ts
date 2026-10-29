@@ -1,3 +1,4 @@
+import {executionPresentation, type ExecutionPresentation} from "./execution-presentation";
 import { catalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { samePhysicalPath } from "./path-identity";
@@ -34,11 +35,14 @@ export async function runInstalledWorkflow(options: {
   maxSteps?: number;
   redact: (output:string) => string;
   lease?: ExecutionLease;
-  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog)=>Promise<void>;
+  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog, presentation?:ExecutionPresentation)=>Promise<void>;
   onTaskOutput?: (event:WorkflowTaskOutput)=>void;
   vaultMutations?: VaultMutationBatchFactory;
   catalogWriter?: SettingsWriter;
   catalogVersion?: ()=>ObservedVersion;
+  // Opt in at presentation boundaries. The default result remains a reusable
+  // durable checkpoint for runtime callers and strict progress validation.
+  includePresentation?: boolean;
 }) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
@@ -94,6 +98,7 @@ export async function runInstalledWorkflow(options: {
   return {definition,replaceCompletedRunId};
   });
   const {definition,replaceCompletedRunId}=prepared;
+  const presentation=executionPresentation(definition.workflow,options.taskId);
   // Only the frozen selected definition is needed while the host is suspended.
   // Do not retain unrelated large workflows through every checkpoint.
 
@@ -127,11 +132,11 @@ export async function runInstalledWorkflow(options: {
       activeRunId=checkpoint.runId;
       checkStop();
       const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
-        onCommitted:async catalog=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog);admission?.confirm(checkpoint);}});
+        onCommitted:async catalog=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation});admission?.confirm(checkpoint);}});
     },
   });
   if(stopError) throw stopError;
-  return result;
+  return options.includePresentation ? {...result,...presentation} : result;
   } finally {clearInterval(timer);options.signal?.removeEventListener("abort",abort);}
   } finally {
     admission?.finish();

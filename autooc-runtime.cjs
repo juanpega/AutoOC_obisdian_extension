@@ -2358,6 +2358,14 @@ async function persistWorkflowProgress(options) {
   });
 }
 
+// execution-presentation.ts
+function executionPresentation(workflow, taskId) {
+  if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
+    throw new Error("Invalid execution presentation identity");
+  }
+  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+}
+
 // installed-workflow-host.ts
 var fs18 = __toESM(require("fs"));
 var path18 = __toESM(require("path"));
@@ -4110,6 +4118,7 @@ async function runInstalledWorkflow(options) {
       return { definition: definition2, replaceCompletedRunId: replaceCompletedRunId2 };
     });
     const { definition, replaceCompletedRunId } = prepared;
+    const presentation = executionPresentation(definition.workflow, options.taskId);
     let activeRunId = options.resumeRunId;
     const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
     const controller = new AbortController();
@@ -4161,14 +4170,14 @@ async function runInstalledWorkflow(options) {
             baseline: options.catalogVersion || (() => admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
             onCommitted: async (catalog2) => {
               if (admission) admission.coordinator.catalogVersion = catalog2.version;
-              await options.onCheckpoint?.(checkpoint, catalog2);
+              await options.onCheckpoint?.(checkpoint, catalog2, { ...presentation });
               admission?.confirm(checkpoint);
             }
           });
         }
       });
       if (stopError) throw stopError;
-      return result;
+      return options.includePresentation ? { ...result, ...presentation } : result;
     } finally {
       clearInterval(timer);
       options.signal?.removeEventListener("abort", abort);

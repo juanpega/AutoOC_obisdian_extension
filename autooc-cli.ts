@@ -8,7 +8,7 @@ import { standaloneTaskWorkflow } from "./standalone-task";
 import { recoverExecutionLease,readExecutionLeaseOwner } from "./execution-lease";
 import { answerWorkflowApproval } from "./workflow-approval";
 import { abandonInstalledExecution } from "./execution-abandonment";
-import {requestPluginExecution,requestPluginWorkflowEdit} from "./cli-plugin-requests";
+import {executionSummary, type ExecutionSummary,requestPluginExecution,requestPluginWorkflowEdit} from "./cli-plugin-requests";
 import {workflowEditDefinition,workflowEditHash,validWorkflowEdit} from "./workflow-edit";
 import {resolveInstalledWorkflowLocation} from "./installed-workflow-location";
 import {inspectSettingsWrite, recoverSettingsWrite, readSettingsWriteDecision} from './settings-write-inspection';
@@ -115,15 +115,17 @@ async function main(args: string[]) {
     process.on("SIGINT",abort);process.on("SIGTERM",abort);
     try {
       const location=resolveInstalledWorkflowLocation(values.get("--vault")!);
+      const progress=(host:"obsidian"|"standalone",state:ExecutionSummary)=>process.stderr.write(JSON.stringify({event:"progress",host,...executionSummary(state)})+"\n");
       const delegated=await requestPluginExecution(location.runtimeDirectory,{
         command:command as "run"|"resume"|"reconcile",workflowId:values.get("--workflow"),taskId:values.get("--task"),runId:values.get("--run")
-      },controller.signal,state=>process.stderr.write(JSON.stringify({event:"progress",host:"obsidian",...state})+"\n"));
+      },controller.signal,state=>progress("obsidian",state));
       const result = delegated || await runInstalledWorkflow({vault:values.get("--vault")!,workflowId:values.get("--workflow"),taskId:values.get("--task"),
         resumeRunId:values.get("--run"),newExecution:command === "run",reconcile:command === "reconcile",
-        signal:controller.signal,redact:text=>text});
+        signal:controller.signal,redact:text=>text,includePresentation:true,
+        onCheckpoint:async (checkpoint,_catalog,presentation)=>{progress("standalone",executionSummary(checkpoint,presentation));}});
       if (controller.signal.aborted) process.exitCode=130;
       else if (result.phase === "failed") process.exitCode=1;
-      return {version,experimental:true,runId:result.runId,workflowId:result.workflowId,phase:result.phase,revision:result.revision,nextStepId:result.nextStepId};
+      return {version,experimental:true,...executionSummary(result)};
     } finally {process.off("SIGINT",abort);process.off("SIGTERM",abort);}
   }
   if (!["list", "status"].includes(command) || rest.length !== 2 || rest[0] !== "--vault" || !path.isAbsolute(rest[1])) {

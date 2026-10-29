@@ -4252,6 +4252,21 @@ async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
   return { archive, primaryHash, executionsResumed: false, temporaryPromoted: false };
 }
 
+// execution-presentation.ts
+function executionPresentation(workflow, taskId) {
+  if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
+    throw new Error("Invalid execution presentation identity");
+  }
+  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+}
+function presentationFields(value) {
+  if (value.workflowName === void 0 && value.executionKind === void 0) return {};
+  if (value.workflowName !== void 0 && typeof value.workflowName !== "string" || !["workflow", "task"].includes(value.executionKind)) {
+    throw new Error("Invalid execution presentation metadata");
+  }
+  return { ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {}, executionKind: value.executionKind };
+}
+
 // cli-plugin-requests.ts
 var fs9 = __toESM(require("fs"));
 var path9 = __toESM(require("path"));
@@ -4329,9 +4344,9 @@ async function applyWorkflowEdit(host, command) {
 }
 
 // cli-plugin-requests.ts
-function executionSummary(state) {
+function executionSummary(state, presentation = state) {
   const { runId, workflowId, phase, revision, nextStepId } = state;
-  return { runId, workflowId, phase, revision, nextStepId };
+  return { runId, workflowId, phase, revision, nextStepId, ...presentationFields(presentation) };
 }
 var uuid2 = /^[a-f0-9-]{36}$/;
 function regularDirectory(directory) {
@@ -4506,9 +4521,9 @@ function createPluginRequestHost(lease, execute, edit) {
             await receipt(id, { status: "completed", editResult: result2 });
             return;
           }
-          const result = await execute(request, execution.controller.signal, (state) => {
+          const result = await execute(request, execution.controller.signal, (state, presentation) => {
             if (!acceptingProgress) return Promise.resolve();
-            const next = executionSummary(state);
+            const next = executionSummary(state, presentation);
             checkpoint = next;
             publications = publications.then(() => receipt(id, { status: "running", checkpoint: next }));
             void publications.catch(() => {
@@ -7556,6 +7571,7 @@ async function runInstalledWorkflow(options) {
       return { definition: definition2, replaceCompletedRunId: replaceCompletedRunId2 };
     });
     const { definition, replaceCompletedRunId } = prepared;
+    const presentation = executionPresentation(definition.workflow, options.taskId);
     let activeRunId = options.resumeRunId;
     const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
     const controller = new AbortController();
@@ -7608,14 +7624,14 @@ async function runInstalledWorkflow(options) {
             onCommitted: async (catalog2) => {
               var _a2;
               if (admission) admission.coordinator.catalogVersion = catalog2.version;
-              await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, checkpoint, catalog2));
+              await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, checkpoint, catalog2, { ...presentation }));
               admission == null ? void 0 : admission.confirm(checkpoint);
             }
           });
         }
       });
       if (stopError) throw stopError;
-      return result;
+      return options.includePresentation ? { ...result, ...presentation } : result;
     } finally {
       clearInterval(timer);
       (_d = options.signal) == null ? void 0 : _d.removeEventListener("abort", abort);
@@ -9579,6 +9595,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
         newExecution,
         lease: this.pluginExecutionLease,
         signal: execution.controller.signal,
+        includePresentation: !!external,
         catalogWriter: this.settingsWriter.fork(),
         catalogVersion: () => this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations: () => this.createVaultMutationBatch(),
@@ -9587,7 +9604,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
           if (this.lifecycleStopped || this.sharedWorkflowExecutions.get(workflowId) !== execution || execution.controller.signal.aborted || event.runId !== execution.runId || event.workflowId !== workflowId) return;
           execution.liveOutput = event;
         },
-        onCheckpoint: async (checkpoint, catalog) => {
+        onCheckpoint: async (checkpoint, catalog, presentation) => {
           if (this.lifecycleStopped) {
             if (catalog) await this.settingsWriter.adoptConfirmed(location.configurationFile, catalog.version, () => true);
             return;
@@ -9610,7 +9627,7 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
           releaseStart == null ? void 0 : releaseStart();
           if (this.sharedWorkflowExecutions.get(workflowId) !== execution) return;
           this.refreshOpenViews();
-          await (external == null ? void 0 : external.progress(checkpoint));
+          await (external == null ? void 0 : external.progress(checkpoint, presentation));
         }
       });
     } catch (error) {

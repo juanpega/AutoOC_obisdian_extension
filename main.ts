@@ -1,3 +1,4 @@
+import type {ExecutionPresentation} from "./execution-presentation";
 import { catalogTransaction } from "./catalog-transaction";
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
@@ -2284,7 +2285,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void|Promise<void>}) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}) {
     const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
     if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
     const pending = this.withDefinitionStart(kind, id,
@@ -2295,7 +2296,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void|Promise<void>}, releaseStart?: () => void) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void) {
     if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
     const selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
     if (selected) assertWorkflowDependencies(selected, this.settings.tasks);
@@ -2323,7 +2324,7 @@ export default class AutoOCPlugin extends Plugin {
       this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
         vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
-        lease:this.pluginExecutionLease, signal:execution.controller.signal,
+        lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations:()=>this.createVaultMutationBatch(),
@@ -2333,7 +2334,7 @@ export default class AutoOCPlugin extends Plugin {
               event.runId !== execution.runId || event.workflowId !== workflowId) return;
           execution.liveOutput = event;
         },
-        onCheckpoint:async (checkpoint,catalog)=>{
+        onCheckpoint:async (checkpoint,catalog,presentation)=>{
           if(this.lifecycleStopped) {
             if(catalog)await this.settingsWriter.adoptConfirmed(location.configurationFile,catalog.version,()=>true);
             return;
@@ -2356,7 +2357,7 @@ export default class AutoOCPlugin extends Plugin {
           releaseStart?.();
           if (this.sharedWorkflowExecutions.get(workflowId) !== execution) return;
           this.refreshOpenViews();
-          await external?.progress(checkpoint);
+          await external?.progress(checkpoint,presentation);
         },
       });
     } catch (error) { executionFailed = true; throw error; }

@@ -1344,6 +1344,21 @@ async function abandonInstalledExecution(options) {
   }
 }
 
+// execution-presentation.ts
+function executionPresentation(workflow, taskId) {
+  if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
+    throw new Error("Invalid execution presentation identity");
+  }
+  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+}
+function presentationFields(value) {
+  if (value.workflowName === void 0 && value.executionKind === void 0) return {};
+  if (value.workflowName !== void 0 && typeof value.workflowName !== "string" || !["workflow", "task"].includes(value.executionKind)) {
+    throw new Error("Invalid execution presentation metadata");
+  }
+  return { ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {}, executionKind: value.executionKind };
+}
+
 // catalog-transaction.ts
 var path6 = __toESM(require("path"));
 var import_async_hooks = require("async_hooks");
@@ -4146,6 +4161,7 @@ async function runInstalledWorkflow(options) {
       return { definition: definition2, replaceCompletedRunId: replaceCompletedRunId2 };
     });
     const { definition, replaceCompletedRunId } = prepared;
+    const presentation = executionPresentation(definition.workflow, options.taskId);
     let activeRunId = options.resumeRunId;
     const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
     const controller = new AbortController();
@@ -4197,14 +4213,14 @@ async function runInstalledWorkflow(options) {
             baseline: options.catalogVersion || (() => admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
             onCommitted: async (catalog2) => {
               if (admission) admission.coordinator.catalogVersion = catalog2.version;
-              await options.onCheckpoint?.(checkpoint, catalog2);
+              await options.onCheckpoint?.(checkpoint, catalog2, { ...presentation });
               admission?.confirm(checkpoint);
             }
           });
         }
       });
       if (stopError) throw stopError;
-      return result;
+      return options.includePresentation ? { ...result, ...presentation } : result;
     } finally {
       clearInterval(timer);
       options.signal?.removeEventListener("abort", abort);
@@ -4259,9 +4275,9 @@ function workflowEditHash(workflow) {
 }
 
 // cli-plugin-requests.ts
-function executionSummary(state) {
+function executionSummary(state, presentation = state) {
   const { runId, workflowId, phase, revision, nextStepId } = state;
-  return { runId, workflowId, phase, revision, nextStepId };
+  return { runId, workflowId, phase, revision, nextStepId, ...presentationFields(presentation) };
 }
 function regularDirectory3(directory) {
   const stat = fs20.lstatSync(directory);
@@ -4361,6 +4377,7 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
   if (!validCommand(command)) throw new Error("Invalid CLI command");
   if (Buffer.byteLength(JSON.stringify(command), "utf8") > 6e4) throw new Error("Workflow edit payload exceeds 60KB; split the edit into smaller patches");
   await replace(file, { protocol: 1, owner: owner.token, id, expiresAt, ...command }, check, false);
+  let observedPresentation;
   let accepted = false, lastProgress = "", runId = "runId" in command ? command.runId : void 0;
   for (; ; ) {
     try {
@@ -4378,6 +4395,14 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
           if (result.status === "rejected" || result.status === "failed") throw new Error(result.error);
         }
         if (checkpoint && (typeof checkpoint.runId !== "string" || !/^[a-zA-Z0-9-]+$/.test(checkpoint.runId) || checkpoint.workflowId !== (command.taskId ? "@task:" + command.taskId : command.workflowId) || "runId" in command && command.runId && checkpoint.runId !== command.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision < 0 || !["ready", "in_flight", "completed", "failed", "abandoned"].includes(checkpoint.phase) || !(checkpoint.nextStepId === null || typeof checkpoint.nextStepId === "string"))) throw new Error("Invalid CLI receipt checkpoint");
+        if (checkpoint) {
+          if (runId && checkpoint.runId !== runId) throw new Error("CLI receipt run identity changed");
+          const metadata = presentationFields(checkpoint);
+          const serializedMetadata = JSON.stringify(metadata);
+          if (observedPresentation !== void 0 && serializedMetadata !== observedPresentation) throw new Error("CLI receipt presentation changed");
+          observedPresentation = serializedMetadata;
+          if (metadata.executionKind !== void 0 && metadata.executionKind !== (command.taskId ? "task" : "workflow")) throw new Error("CLI receipt execution kind mismatch");
+        }
         if (result.checkpoint) {
           runId = result.checkpoint.runId;
           const serialized = JSON.stringify(result.checkpoint);
@@ -5138,12 +5163,13 @@ async function main(args) {
     process.on("SIGTERM", abort);
     try {
       const location2 = resolveInstalledWorkflowLocation(values.get("--vault"));
+      const progress = (host, state) => process.stderr.write(JSON.stringify({ event: "progress", host, ...executionSummary(state) }) + "\n");
       const delegated = await requestPluginExecution(location2.runtimeDirectory, {
         command,
         workflowId: values.get("--workflow"),
         taskId: values.get("--task"),
         runId: values.get("--run")
-      }, controller.signal, (state) => process.stderr.write(JSON.stringify({ event: "progress", host: "obsidian", ...state }) + "\n"));
+      }, controller.signal, (state) => progress("obsidian", state));
       const result = delegated || await runInstalledWorkflow({
         vault: values.get("--vault"),
         workflowId: values.get("--workflow"),
@@ -5152,11 +5178,15 @@ async function main(args) {
         newExecution: command === "run",
         reconcile: command === "reconcile",
         signal: controller.signal,
-        redact: (text) => text
+        redact: (text) => text,
+        includePresentation: true,
+        onCheckpoint: async (checkpoint, _catalog, presentation) => {
+          progress("standalone", executionSummary(checkpoint, presentation));
+        }
       });
       if (controller.signal.aborted) process.exitCode = 130;
       else if (result.phase === "failed") process.exitCode = 1;
-      return { version, experimental: true, runId: result.runId, workflowId: result.workflowId, phase: result.phase, revision: result.revision, nextStepId: result.nextStepId };
+      return { version, experimental: true, ...executionSummary(result) };
     } finally {
       process.off("SIGINT", abort);
       process.off("SIGTERM", abort);

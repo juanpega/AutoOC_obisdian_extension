@@ -109,7 +109,18 @@ node "C:/ruta/vault/.obsidian/plugins/auto-oc/autooc-cli.cjs" run --vault "C:/ru
 node "C:/ruta/vault/.obsidian/plugins/auto-oc/autooc-cli.cjs" run --vault "C:/ruta/vault" --workflow ID_WORKFLOW
 ```
 
-El plugin y la CLI deben pertenecer al mismo paquete compatible. Con Obsidian abierto, el plugin mantiene la reserva y ejecuta la petición; con el plugin descargado y sin reserva, la CLI ejecuta directamente. El resultado final es JSON por stdout y el progreso delegado se informa por stderr. No se habilitan ejecuciones simultáneas ni se abre ningún puerto de red. Cerrar solo el Dashboard no detiene la tarea.
+El plugin y la CLI deben pertenecer al mismo paquete compatible. Con Obsidian abierto, el plugin mantiene la reserva y ejecuta la petición; con el plugin descargado y sin reserva, la CLI ejecuta directamente. El resultado final es un único documento JSON por stdout y el progreso de ambos hosts se informa como objetos JSON por línea en stderr. La delegación respeta las reglas de concurrencia del host y no abre ningún puerto de red. Cerrar solo el Dashboard no detiene la tarea.
+
+`run`, `resume` y `reconcile` incluyen `workflowName` y `executionKind` junto con `workflowId`, `runId`, fase, revisión y siguiente paso. El nombre procede de la definición preparada en la instalación seleccionada. El primer evento se publica antes de ejecutar el primer paso; los nombres duplicados se distinguen por sus IDs. `--task` conserva `@task:ID`, con `executionKind: "task"` y `workflowName: "Standalone task"`.
+
+Ejemplo sintético de stderr y stdout, respectivamente:
+
+```json
+{"event":"progress","host":"standalone","runId":"aa11","workflowId":"weekly","phase":"ready","revision":0,"nextStepId":"first","workflowName":"Informe semanal","executionKind":"workflow"}
+{"version":"1.6.9","experimental":true,"runId":"aa11","workflowId":"weekly","phase":"completed","revision":3,"nextStepId":null,"workflowName":"Informe semanal","executionKind":"workflow"}
+```
+
+En delegación, `host` es `obsidian`. Solo se proyectan los campos permitidos: no se incluyen prompts, código, resultados privados ni configuración ajena. Los nombres se escapan con JSON, incluidos saltos de línea y comillas. Las definiciones antiguas sin nombre omiten `workflowName`. Un plugin anterior puede omitir ambos campos nuevos; la CLI acepta ese recibo sin inventar un nombre ni repetir la ejecución. La identificación temprana completa requiere ambos componentes compatibles. Compilar estos componentes no acredita su instalación ni su carga en Obsidian.
 
 Para observar la ejecución en el Dashboard, carga AutoOC antes de lanzar la CLI. Si la CLI ya está ejecutando autónomamente, abrir Obsidian no transfiere esa ejecución al plugin: la reserva sigue protegida hasta terminar o reconciliar.
 
