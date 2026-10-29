@@ -1038,6 +1038,165 @@ for (const kind of ['code', 'codex', 'copilot']) test(`Play reserves once before
   assert.equal(h.task.status, 'completed'); assert.equal(p.getDefinitionStartState('task', h.task.id), 'available');
 });
 
+// C12: retain real dispatch and completion, controlling only storage and effects.
+function busyConsumerHarness(kind = 'copilot') {
+  const timers = [];
+  const h = legacyHarness(kind, {setTimeout(fn, ms) { const t = {fn, ms}; timers.push(t); return t; }});
+  const p = h.plugin, wf = h.workflow;
+  Object.assign(wf, {name:'Busy consumer', status:'running', currentStep:0, steps:[
+    {id:'busy', stepKind:'task', taskId:h.task.id, status:'running', transitions:[]},
+  ]});
+  p.workflowRuntime = new Map([[wf.id, {stepOutputs:new Map()}]]);
+  const effects = [];
+  p.createVaultMutationBatch = () => ({record(){}, async flush(){}});
+  h.task.code = 'console.log("single Code effect"); output="owner result";';
+  p.redactSecrets = value => {if (value === 'single Code effect') effects.push(value); return value;};
+  p.createCopilotClient = p.createCodexClient = () => ({
+    async run(){effects.push(kind); return {exitCode:0,status:'completed',output:'owner result'};}, dispose(){},
+  });
+  let release, saves = 0, completions = 0;
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const ownerContext = {stepOutputs:new Map()};
+  const ownerWf = {id:'owner',status:'running',steps:[]}; p.settings.workflows.push(ownerWf);
+  p.workflowRuntime.set(ownerWf.id, ownerContext);
+  const owner = {workflowId:'owner',stepId:'owner-step',stepIndex:0,context:ownerContext};
+  const first = p.runTask(h.task, async (_task, code) => {assert.equal(code,0); completions++;}, {}, owner);
+  const snapshot = JSON.stringify(h.task), attempt = p.legacyAttempts.get(h.task.id);
+  const token = p.definitionStarts.get('task:' + h.task.id);
+  return {...h, timers, effects, first, release:() => release(), completions:() => completions,
+    assertOwner(){assert.equal(JSON.stringify(h.task),snapshot); assert.equal(p.legacyAttempts.get(h.task.id),attempt);
+      assert.equal(attempt.owner,owner); assert.equal(p.definitionStarts.get('task:' + h.task.id),token);}};
+}
+
+for (const kind of ['code','codex','copilot']) test(`C12 deferred start rejects real consumer and preserves owner: ${kind}`, async () => {
+  const h = busyConsumerHarness(kind), p = h.plugin, wf = h.workflow;
+  let rejected = 0;
+  const run = p.runTask.bind(p);
+  p.runTask = (task, callback, ...args) => run(task, async (result, code) => {
+    rejected++; assert.equal(code,-1); assert.equal(result.status,'failed'); assert.notEqual(result,h.task);
+    assert.equal(result.legacyExecution,undefined); assert.equal(result.runtimeExecution,undefined);
+    await callback(result,code);
+  }, ...args);
+  try {
+    await p.runTaskStep(wf,wf.steps[0],0);
+    assert.equal(rejected,1); assert.equal(wf.status,'failed'); assert.equal(wf.steps[0].status,'failed');
+    assert.match(wf.steps[0].output,/already running|already starting/);
+    assert.equal(p.workflowRuntime.has(wf.id),false); assert.equal(h.effects.length,0);
+    h.assertOwner();
+  } finally {h.release(); await h.first; await drain(); await drain();}
+  assert.equal(h.effects.length,1); assert.equal(h.completions(),1);
+  assert.equal(h.task.status,'completed'); assert.match(h.task.output,/owner result/);
+  assert.doesNotMatch(h.task.output,/Workflow failed/);
+  assert.equal(p.definitionStarts.has('task:' + h.task.id),false);
+});
+
+for (const mode of ['force','conditional']) test(`C12 busy consumer recovers once through real ${mode} transition`, async () => {
+  const h = busyConsumerHarness(), p = h.plugin, wf = h.workflow;
+  wf.steps[0].transitions = [{toStepId:'recover',mode,condition:'input.includes("rejected")'}];
+  wf.steps.push({id:'recover',stepKind:'code',code:'output="recovered";',transitions:[]});
+  let deliveries = 0;
+  const run = p.runTask.bind(p);
+  p.runTask = (task, callback, ...args) => run(task, async (result, code) => {
+    deliveries++; await callback(result,code); await callback(result,code);
+  }, ...args);
+  try {
+    await p.runTaskStep(wf,wf.steps[0],0);
+    assert.equal(deliveries,1); assert.equal(wf.steps[0].status,'failed');
+    assert.equal(wf.status,'running'); assert.equal(wf.currentStep,1);
+    assert.equal(h.timers.length,1); h.assertOwner();
+    h.timers[0].fn(); await drain(); await drain();
+    assert.equal(wf.status,'completed'); assert.equal(wf.steps[1].output,'recovered');
+    assert.equal(p.workflowRuntime.has(wf.id),false);
+  } finally {h.release(); await h.first; await drain(); await drain();}
+  assert.equal(h.completions(),1); assert.equal(h.effects.length,1);
+});
+
+for (const action of ['stop','replace','restart']) test(`C12 late rejection evaluation cannot continue after ${action}`, async () => {
+  const h = busyConsumerHarness(), p = h.plugin, wf = h.workflow;
+  wf.steps[0].transitions = [{toStepId:'recover',mode:'eval',evaluatePrompt:'Recover?'}];
+  wf.steps.push({id:'recover',stepKind:'code',code:'output="obsolete";',transitions:[]});
+  let finishEvaluation;
+  p.evaluateWithOpencode = () => new Promise(resolve => finishEvaluation = resolve);
+  const consumer = p.runTaskStep(wf,wf.steps[0],0); await drain();
+  assert.equal(typeof finishEvaluation,'function');
+  if (action === 'stop') await p.killWorkflow(wf.id);
+  else {
+    if (action === 'restart') await p.killWorkflow(wf.id);
+    p.stoppingWorkflows.delete(wf.id);
+    p.settings.workflows[0] = {...wf,status:'running',steps:[{id:'new',status:'running'}]};
+    p.workflowRuntime.set(wf.id,{stepOutputs:new Map([['new','untouched']])});
+  }
+  const current = p.settings.workflows[0], context = p.workflowRuntime.get(wf.id), snapshot = JSON.stringify(current);
+  finishEvaluation({output:'YES'}); await consumer;
+  assert.equal(JSON.stringify(current),snapshot); assert.equal(p.workflowRuntime.get(wf.id),context);
+  assert.equal(h.timers.length,0); h.assertOwner();
+  h.release(); await h.first; await drain(); await drain(); assert.equal(h.completions(),1);
+});
+
+test('C12 active task rejects without exposing or altering the owner result', async () => {
+  const h = busyConsumerHarness(), p = h.plugin; let finish;
+  h.task.scheduleDays = [1,2];
+  p.createCopilotClient = () => ({run:() => new Promise(resolve => finish=resolve),dispose(){}});
+  h.release(); await h.first; await drain();
+  assert.equal(typeof finish,'function'); assert.equal(p.definitionStarts.has('task:' + h.task.id),false);
+  const snapshot = JSON.stringify(h.task), attempt = p.legacyAttempts.get(h.task.id);
+  await p.runTaskStep(h.workflow,h.workflow.steps[0],0);
+  assert.equal(h.workflow.status,'failed'); assert.equal(p.workflowRuntime.has(h.workflow.id),false);
+  assert.equal(JSON.stringify(h.task),snapshot); assert.equal(p.legacyAttempts.get(h.task.id),attempt);
+  let rejected = 0;
+  await p.runTask(h.task,async result => {
+    rejected++; result.scheduleDays.push(3); result.output='consumer mutation';
+    assert.equal(result.legacyExecution,undefined);
+  });
+  assert.equal(rejected,1); assert.equal(JSON.stringify(h.task),snapshot);
+  finish({exitCode:0,output:'owner result'}); await drain(); await drain();
+  assert.equal(h.completions(),1); assert.equal(h.task.output,'owner result');
+});
+
+for (const kind of ['code','codex','copilot']) test(`C12 two callback-free Plays keep one effect: ${kind}`, async () => {
+  const h = legacyHarness(kind), p = h.plugin; let release, saves=0, effects=0;
+  p.createVaultMutationBatch = () => ({record(){},async flush(){}});
+  h.task.code = 'console.log("effect"); output="once";';
+  p.redactSecrets = value => {if(value === 'effect') effects++; return value;};
+  p.createCopilotClient = p.createCodexClient = () => ({async run(){effects++;return {exitCode:0,status:'completed',output:'once'};},dispose(){}});
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release=resolve) : Promise.resolve();
+  const views = attachPlayViews(p,'task',h.task.id);
+  const first = p.runTask(h.task); await p.runTask({...h.task});
+  assertStarting(views); assert.equal(effects,0); assert.equal(saves,1);
+  release(); await first; await drain(); await drain();
+  assert.equal(effects,1); assert.equal(h.task.status,'completed');
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'available');
+});
+
+test('C12 OpenCode double Play completes one confirmed launch after deferred save', async () => {
+  const h = pluginHarness('fixture'), p = h.plugin; let release, saves=0;
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release=resolve) : Promise.resolve();
+  const views = attachPlayViews(p,'task',h.task.id);
+  const first = p.runTask(h.task); await p.runTask({...h.task});
+  assertStarting(views); assert.equal(h.calls.length,0); assert.equal(saves,1);
+  release(); await first; assert.equal(h.calls.length,1);
+  h.signal(0,{status:'started',confirmed:true}); await drain();
+  assert.equal(h.task.status,'completed'); assert.equal(h.calls.length,1);
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'available');
+});
+
+test('C12 queued recovery cannot run in a replacement consumer context', async () => {
+  const h = busyConsumerHarness(), p = h.plugin, wf = h.workflow;
+  wf.steps[0].transitions = [{toStepId:'recover',mode:'force'}];
+  wf.steps.push({id:'recover',stepKind:'code',code:'output="obsolete";',transitions:[]});
+  await p.runTaskStep(wf,wf.steps[0],0); assert.equal(h.timers.length,1);
+  const context = {stepOutputs:new Map()}; p.workflowRuntime.set(wf.id,context);
+  const snapshot = JSON.stringify(wf); h.timers[0].fn(); await drain();
+  assert.equal(JSON.stringify(wf),snapshot); assert.equal(p.workflowRuntime.get(wf.id),context);
+  h.assertOwner(); h.release(); await h.first; await drain(); await drain(); assert.equal(h.completions(),1);
+});
+
+test('C12 busy callback persistence errors propagate without releasing the owner token', async () => {
+  const h = busyConsumerHarness(), p = h.plugin;
+  await assert.rejects(p.runTask(h.task,async () => {throw Error('consumer storage failed');}),/consumer storage failed/);
+  h.assertOwner(); h.release(); await h.first; await drain(); await drain(); assert.equal(h.completions(),1);
+});
+
 for (const kind of ['task', 'workflow']) test(`Play blocks delegates and direct shared starts until checkpoint: ${kind}`, async () => {
   const h = stopCardHarness(), p = h.plugin;
   p.sharedWorkflowExecution = undefined; delete h.task.runtimeExecution;

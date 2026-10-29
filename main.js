@@ -9712,13 +9712,13 @@ var AutoOCPlugin = class extends import_obsidian.Plugin {
       ));
     }
   }
-  async withDefinitionStart(kind, id, execute) {
+  async withDefinitionStart(kind, id, execute, onBusy) {
     var _a, _b;
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const key = `${kind}:${id}`;
     this.definitionStarts || (this.definitionStarts = /* @__PURE__ */ new Map());
-    if (this.definitionStarts.has(key)) return;
+    if (this.definitionStarts.has(key)) return onBusy ? await onBusy() : void 0;
     const token = Symbol(key);
     this.definitionStarts.set(key, token);
     const release = () => {
@@ -10894,7 +10894,21 @@ DONE:%s
     }
   }
   async runTask(task, onComplete, overrides = {}, owner) {
-    return this.withDefinitionStart("task", task.id, (release) => this.executeTask(task, onComplete, overrides, owner, release));
+    return this.withDefinitionStart(
+      "task",
+      task.id,
+      (release) => this.executeTask(task, onComplete, overrides, owner, release),
+      onComplete ? () => onComplete(this.busyTaskResult(task), -1) : void 0
+    );
+  }
+  busyTaskResult(task) {
+    const result = JSON.parse(JSON.stringify(task));
+    delete result.legacyExecution;
+    delete result.runtimeExecution;
+    delete result.pendingCodexApproval;
+    result.status = "failed";
+    result.output = "[AutoOC] Task request rejected: task is already starting or already running.";
+    return result;
   }
   async executeTask(task, onComplete, overrides = {}, owner, releaseStart) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
@@ -10906,7 +10920,7 @@ DONE:%s
     assertNoRetiredDependency(this.settings.tasks[idx]);
     if (this.isTaskActive(this.settings.tasks[idx])) {
       new import_obsidian.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
-      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
     const effectiveTask = { ...this.settings.tasks[idx], ...overrides };

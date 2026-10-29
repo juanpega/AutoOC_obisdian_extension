@@ -2443,12 +2443,12 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
-  private async withDefinitionStart<T>(kind: "task" | "workflow", id: string, execute: (release: () => void) => Promise<T>): Promise<T | undefined> {
+  private async withDefinitionStart<T>(kind: "task" | "workflow", id: string, execute: (release: () => void) => Promise<T>, onBusy?: () => Promise<T>): Promise<T | undefined> {
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const key = `${kind}:${id}`;
     this.definitionStarts ||= new Map();
-    if (this.definitionStarts.has(key)) return;
+    if (this.definitionStarts.has(key)) return onBusy ? await onBusy() : undefined;
     const token = Symbol(key);
     this.definitionStarts.set(key, token);
     const release = () => {
@@ -3633,7 +3633,21 @@ export default class AutoOCPlugin extends Plugin {
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
     owner?: LegacyOwner,
   ) {
-    return this.withDefinitionStart("task", task.id, release => this.executeTask(task, onComplete, overrides, owner, release));
+    return this.withDefinitionStart("task", task.id,
+      release => this.executeTask(task, onComplete, overrides, owner, release),
+      onComplete ? () => onComplete(this.busyTaskResult(task), -1) : undefined);
+  }
+
+  private busyTaskResult(task: ScheduledTask): ScheduledTask {
+    // Completion consumers may mutate their result. Never hand them the owner
+    // or its nested execution/definition objects for a rejected request.
+    const result: ScheduledTask = JSON.parse(JSON.stringify(task));
+    delete result.legacyExecution;
+    delete (result as any).runtimeExecution;
+    delete result.pendingCodexApproval;
+    result.status = "failed";
+    result.output = "[AutoOC] Task request rejected: task is already starting or already running.";
+    return result;
   }
 
   private async executeTask(
@@ -3651,7 +3665,7 @@ export default class AutoOCPlugin extends Plugin {
     assertNoRetiredDependency(this.settings.tasks[idx]);
     if (this.isTaskActive(this.settings.tasks[idx])) {
       new Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
-      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
