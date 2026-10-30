@@ -946,11 +946,44 @@ test('live CLI owner leaves a visible recovery view without scheduling or catalo
   const view=p.createDashboard({}),elements=[];
   view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};
   await view.onOpen();assert.ok(elements.some(e=>e.text==='Retry loading AutoOC'));
+  assert.ok(elements.some(e=>e.text?.includes('This Obsidian window still holds a previous AutoOC reservation')));
   assert.equal(elements.some(e=>e.text==='Recover closed session and open AutoOC'),false);
   await assert.rejects(p.saveSettings(),/stopped/);
   await p.onunload();assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),lease);
   assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);owner.releasePluginExecution(false);
   const successor=create();await successor.onload();assert.equal(successor.ready,true);await successor.onunload();
+});
+
+for(const scenario of ['idle','active','pending-write','uncertain','changed-owner']) test('bundle reload asks only its stopped predecessor to relinquish: '+scenario,async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),owner=create();await owner.onload();
+  const file=path.join(runtime,'execution.lock/owner.json'),before=fs.readFileSync(file);
+  const assertIdle=owner.assertPluginCanRelease;
+  owner.assertPluginCanRelease=()=>{throw Error('temporary drain failure');};
+  await owner.onunload();assert.deepEqual(fs.readFileSync(file),before);
+  owner.assertPluginCanRelease=assertIdle;
+  assert.throws(()=>globalThis[Symbol.for('autooc.stoppedLeaseOwners.v1')].get(JSON.parse(before).token)(directory),/installation changed/);
+  assert.deepEqual(fs.readFileSync(file),before,'a copied token in another runtime cannot release this owner');
+  if(scenario==='active')owner.lifecycleStopped=false;
+  if(scenario==='pending-write')fs.writeFileSync(path.join(directory,'data.json.write-lock'),'pending');
+  if(scenario==='uncertain'){
+    owner.executionAttempted=true;
+    fs.writeFileSync(path.join(runtime,'proof.json'),JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]}));
+  }
+  if(scenario==='changed-owner')fs.writeFileSync(file,JSON.stringify({...JSON.parse(before),token:require('crypto').randomUUID()}));
+  const expected=fs.readFileSync(file),catalog=fs.readFileSync(path.join(directory,'data.json'));
+  // Reload the bundle itself, not just a second instance of the cached class.
+  const Plugin=loadPlugin(path.join(directory,'main.js')),next=create();Object.setPrototypeOf(next,Plugin.prototype);
+  try {
+    await next.onload();assert.equal(next.ready,scenario==='idle');
+    if(scenario==='idle')assert.notEqual(JSON.parse(fs.readFileSync(file)).token,JSON.parse(before).token);
+    else assert.deepEqual(fs.readFileSync(file),expected);
+    assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),catalog);
+  }finally{
+    await next.onunload();
+    if(scenario!=='idle'){
+      fs.writeFileSync(file,before);owner.releasePluginExecution(false);
+    }
+  }
 });
 
 for(const mode of ['released','manual-race','replaced-owner','unloaded'])test('startup waits for external owner: '+mode,async t=>{
