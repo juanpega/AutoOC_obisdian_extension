@@ -17,6 +17,71 @@ function fixture(t,execute,edit){
 }
 const state={runId:'aa11',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('presentation survives both mailbox projections before releasing execution; private fields are excluded',async t=>{
+  const metadata={workflowName:'Prueba "ñ"\n第二行',executionKind:'workflow'};
+  let release;const gate=new Promise(resolve=>release=resolve);t.after(()=>release());
+  const f=fixture(t,async(command,signal,report)=>{
+    await report({...state,phase:'ready',revision:0,steps:[{output:'PRIVATE_RESULT'}]}, {...metadata,private:'PRIVATE_CONFIG'});
+    await gate;
+    return {...state,...metadata,private:'PRIVATE_RESULT'};
+  });
+  let early;const observed=new Promise(resolve=>early=resolve),progress=[];
+  const running=requestPluginExecution(f.runtime,{command:'run',workflowId:'w'},undefined,s=>{progress.push(s);early(s);});
+  await f.host.poll();
+  const first=await observed;
+  assert.equal(first.phase,'ready');assert.equal(first.workflowName,metadata.workflowName);assert.equal(first.runId,state.runId);
+  release();assert.deepEqual(await running,{...state,...metadata});
+  const receipts=fs.readdirSync(f.directory).filter(n=>n.endsWith('.receipt')).map(n=>fs.readFileSync(path.join(f.directory,n),'utf8')).join('');
+  assert.doesNotMatch(receipts+JSON.stringify(progress),/PRIVATE_|steps/);
+});
+
+for(const metadata of [{workflowName:42,executionKind:'workflow'},{workflowName:'Name'},{workflowName:'Name',executionKind:'task'}]) {
+  test('client rejects malformed or mismatched presentation without replay: '+JSON.stringify(metadata),async t=>{
+    let effects=0;const f=fixture(t,async()=>{effects++;return state;});
+    const running=requestPluginExecution(f.runtime,{command:'run',workflowId:'w'});
+    const rejected=assert.rejects(running,/presentation|execution kind/);
+    const request=fs.readdirSync(f.directory).find(n=>n.endsWith('.request')),id=request.slice(0,-8);
+    fs.writeFileSync(path.join(f.directory,id+'.receipt'),JSON.stringify({protocol:1,owner:f.lease.token,id,status:'completed',checkpoint:{...state,...metadata}}));
+    await rejected;assert.equal(effects,0);
+  });
+}
+
+test('summary accepts legacy hosts and rejects invalid presentation at publication',()=>{
+  const {executionSummary}=load('cli-plugin-requests');
+  assert.deepEqual(executionSummary({...state,steps:[{output:'PRIVATE'}]}),state);
+  assert.throws(()=>executionSummary({...state,workflowName:'Name'}),/presentation/);
+});
+
+test('distinct CLI requests overlap and cancellation never reaches their peer',async t=>{
+  const entries=new Map(),finish=new Map();
+  const f=fixture(t,async(command,signal,progress)=>{
+    entries.set(command.workflowId,signal);
+    const checkpoint={...state,workflowId:command.workflowId,runId:command.workflowId+'-run',phase:'in_flight'};
+    await progress(checkpoint,{workflowName:'Shared name',executionKind:'workflow'});
+    await new Promise(resolve=>{finish.set(command.workflowId,resolve);signal.addEventListener('abort',resolve,{once:true});});
+    return {...checkpoint,workflowName:'Shared name',executionKind:'workflow',phase:signal.aborted?'failed':'completed'};
+  });
+  const a=f.request({workflowId:'a'});await f.host.poll();
+  const b=f.request({workflowId:'b'});await f.host.poll();
+  while(!finish.has('b'))await settle();
+  const third=f.request({workflowId:'c'});await f.host.poll();assert.equal(f.receipt(third).status,'rejected');assert.match(f.receipt(third).error,/limit reached \(2\)/);
+  fs.writeFileSync(path.join(f.directory,a+'.cancel'),'{}');await f.host.poll();
+  assert.equal(entries.get('a').aborted,true);assert.equal(entries.get('b').aborted,false);
+  finish.get('b')();await f.host.drain();
+  assert.equal(f.receipt(a).checkpoint.runId,'a-run');assert.equal(f.receipt(b).checkpoint.runId,'b-run');
+  assert.equal(f.receipt(b).checkpoint.phase,'completed');
+  assert.equal(f.receipt(a).checkpoint.workflowName,'Shared name');assert.equal(f.receipt(b).checkpoint.workflowName,'Shared name');
+  assert.equal(f.receipt(a).checkpoint.phase,'failed');
+});
+
+test('mailbox returns fixed admission reasons while keeping provider details private',async t=>{
+  for(const [message,expected] of [['Execution resource is occupied (workspace or Git repository)','Execution resource is occupied'],['private-provider-value','Plugin execution or receipt publication failed']]) {
+    const f=fixture(t,async()=>{throw new Error(message);});
+    const id=f.request();await f.host.poll();await f.host.drain();
+    assert.ok(f.receipt(id).error.startsWith(expected));assert.doesNotMatch(f.receipt(id).error,/private-provider-value/);
+  }
+});
 test('external workflow editing uses the live owner, durable receipt and no execution or replay',async t=>{
   let effects=0,edits=0;
   const result={workflowId:'w',definitionHash:'a'.repeat(64)};

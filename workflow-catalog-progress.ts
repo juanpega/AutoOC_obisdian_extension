@@ -1,3 +1,4 @@
+import { catalogTransaction } from "./catalog-transaction";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { projectWorkflowProgress, validateProgressBinding } from "./workflow-progress";
@@ -24,12 +25,20 @@ export async function persistWorkflowProgress(options: {
   taskId?: string;
   vaultBase?: string;
   writer?: SettingsWriter;
+  baseline?: ()=>ObservedVersion;
+  onCommitted?: (catalog:PersistedWorkflowCatalog)=>Promise<void>;
 }): Promise<PersistedWorkflowCatalog> {
+  return catalogTransaction(options.configurationFile,async()=>{
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
   }
   const writer = options.writer || new SettingsWriter();
+  if(options.baseline) {
+    const baseline=options.baseline();
+    if(baseline.textHash && baseline.textHash===baseline.valueHash)await writer.adoptConfirmed(options.configurationFile,baseline,()=>true);
+    else await writer.assertUnchanged(options.configurationFile);
+  }
   const config: any = await writer.loadAsync(options.configurationFile);
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
     throw new Error("Invalid AutoOC catalog");
@@ -93,6 +102,9 @@ export async function persistWorkflowProgress(options: {
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? projected : workflow)};
   await writer.save(options.configurationFile, () => next);
   if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
-  return {catalog:next,version:writer.confirmedVersion(options.configurationFile),
+  const confirmed={catalog:next,version:writer.confirmedVersion(options.configurationFile),
     runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};
+  await options.onCommitted?.(confirmed);
+  return confirmed;
+  });
 }

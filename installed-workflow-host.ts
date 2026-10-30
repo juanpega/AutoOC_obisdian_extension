@@ -1,7 +1,10 @@
+import {executionPresentation, type ExecutionPresentation} from "./execution-presentation";
+import { catalogTransaction } from "./catalog-transaction";
+import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
 import * as path from "path";
-import { SettingsWriter } from "./settings-writer";
+import { SettingsWriter, type ObservedVersion } from "./settings-writer";
 import { prepareWorkflowDefinition } from "./workflow-definition";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { runCodeWorkflowHost, type WorkflowTaskOutput } from "./code-workflow-host";
@@ -32,10 +35,14 @@ export async function runInstalledWorkflow(options: {
   maxSteps?: number;
   redact: (output:string) => string;
   lease?: ExecutionLease;
-  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog)=>Promise<void>;
+  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog, presentation?:ExecutionPresentation)=>Promise<void>;
   onTaskOutput?: (event:WorkflowTaskOutput)=>void;
   vaultMutations?: VaultMutationBatchFactory;
   catalogWriter?: SettingsWriter;
+  catalogVersion?: ()=>ObservedVersion;
+  // Opt in at presentation boundaries. The default result remains a reusable
+  // durable checkpoint for runtime callers and strict progress validation.
+  includePresentation?: boolean;
 }) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
@@ -49,15 +56,18 @@ export async function runInstalledWorkflow(options: {
   }
   // Reserve existing runtimes before cooperative I/O can admit a second caller.
   // New runtimes remain deferred until successful preflight.
-  if (preparingInstallations.has(runtimeDirectory)) throw Object.assign(new Error("Installation already has an advancing session"), {code:"EEXIST"});
-  preparingInstallations.add(runtimeDirectory);
+  if (!options.lease && preparingInstallations.has(runtimeDirectory)) throw Object.assign(new Error("Installation already has an advancing session"), {code:"EEXIST"});
+  if(!options.lease)preparingInstallations.add(runtimeDirectory);
   let ownedLease: ExecutionLease | undefined;
+  let admission:ExecutionAdmission|undefined;
   try {
   if (!options.lease && fs.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
   const reader = options.catalogWriter || new SettingsWriter();
+  const prepared=await catalogTransaction(configurationFile,async()=>{
   let config:any = await reader.loadAsync(configurationFile);
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
-  if (config.tasks.some((task:any)=>task.status === "running") || config.workflows.some((workflow:any)=>workflow.status === "running")) {
+  const coordinator=options.lease ? executionCoordinator(options.lease) : undefined;
+  if ([...config.tasks,...config.workflows].some((item:any)=>item.status === "running" && !coordinator?.knows(item.runtimeExecution?.runId))) {
     throw new Error("Catalog has unresolved running activity; verify its owner before execution");
   }
   const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : undefined;
@@ -84,9 +94,14 @@ export async function runInstalledWorkflow(options: {
       throw new Error("Cannot replace an unfinished execution");
     }
   }
+  admission=coordinator?.admit(definition,vault,options.resumeRunId);
+  return {definition,replaceCompletedRunId};
+  });
+  const {definition,replaceCompletedRunId}=prepared;
+  const presentation=executionPresentation(definition.workflow,options.taskId);
   // Only the frozen selected definition is needed while the host is suspended.
   // Do not retain unrelated large workflows through every checkpoint.
-  config = undefined;
+
   let activeRunId=options.resumeRunId;
   // An explicit resume acknowledges the old request; a new request still stops it.
   const acknowledged = activeRunId ? readStopRequest(runtimeDirectory,activeRunId) : undefined;
@@ -104,7 +119,7 @@ export async function runInstalledWorkflow(options: {
   timer.unref?.();
   try {
   const result = await runCodeWorkflowHost({
-    definition, runtimeDirectory, vaultBase:vault,
+    definition, runtimeDirectory, vaultBase:vault, admission,
     resumeRunId:options.resumeRunId, reconcile:options.reconcile,
     maxSteps:options.maxSteps, signal:controller.signal, redact:options.redact,
     lease:options.lease || ownedLease,
@@ -113,16 +128,18 @@ export async function runInstalledWorkflow(options: {
     tasks:createWorkflowTaskAdapter(definition,vault,options.vaultMutations),
     evaluate:createWorkflowEvaluator(definition,vault,controller.signal),
     onCheckpoint:async checkpoint=>{
+      admission?.bind(checkpoint);
       activeRunId=checkpoint.runId;
       checkStop();
-      const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,vaultBase:vault,writer:reader});
-      await options.onCheckpoint?.(checkpoint,catalog);
+      const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
+        onCommitted:async catalog=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation});admission?.confirm(checkpoint);}});
     },
   });
   if(stopError) throw stopError;
-  return result;
+  return options.includePresentation ? {...result,...presentation} : result;
   } finally {clearInterval(timer);options.signal?.removeEventListener("abort",abort);}
   } finally {
-    try { ownedLease?.release(); } finally { preparingInstallations.delete(runtimeDirectory); }
+    admission?.finish();
+    try { ownedLease?.release(); } finally { if(!options.lease)preparingInstallations.delete(runtimeDirectory); }
   }
 }

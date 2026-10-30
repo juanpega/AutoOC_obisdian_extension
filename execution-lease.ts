@@ -89,3 +89,21 @@ export function recoverExecutionLease(runtimeDirectory:string,expectedToken:stri
     return {recovered:true,archived,executionsResumed:false};
   } finally {fs.rmdirSync(guard);}
 }
+
+// Startup settings recovery needs cooperative reads while holding the same
+// exclusion guard. It never relaxes the synchronous explicit CLI operation.
+export async function recoverExecutionLeaseAsync(runtimeDirectory:string,expectedToken:string,assertSafe:(owner:ReturnType<typeof readExecutionLeaseOwner>)=>Promise<void>) {
+  const root=fs.realpathSync(runtimeDirectory),guard=path.join(root,'lease-recovery.lock');
+  fs.mkdirSync(guard);
+  try {
+    const owner=readExecutionLeaseOwner(root);
+    if(owner.token!==expectedToken)throw new Error('Execution lease recovery identity changed');
+    const assertAbsent=()=>{let absent=false;try{process.kill(owner.pid,0);}catch(e){absent=(e as NodeJS.ErrnoException).code==='ESRCH';}if(!absent)throw new Error('Execution lease owner is live or cannot be verified absent');};
+    assertAbsent();await assertSafe(owner);assertAbsent();
+    if(JSON.stringify(readExecutionLeaseOwner(root))!==JSON.stringify(owner))throw new Error('Execution lease changed during recovery');
+    const archived='abandoned-lease-'+owner.token;
+    if(fs.existsSync(path.join(root,archived)))throw new Error('Recovery archive already exists');
+    fs.renameSync(path.join(root,'execution.lock'),path.join(root,archived));
+    return {recovered:true,archived,executionsResumed:false};
+  }finally{fs.rmdirSync(guard);}
+}

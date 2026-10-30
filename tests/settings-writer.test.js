@@ -16,6 +16,33 @@ mod.require=name=>name==='./cooperative-json'?codec.exports:originalRequire(name
 mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText, file);
 const { atomicSettingsWrite, SettingsWriter } = mod.exports;
 
+for(const phase of ['create','write','close'])test('early lock '+phase+' failure preserves catalog and incomplete evidence',async t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-early-lock-')),target=path.join(dir,'data.json');
+  fs.writeFileSync(target,'{"revision":0}');
+  const writer=new SettingsWriter();await writer.loadAsync(target);
+  const open=fs.openSync,write=fs.writeFileSync,close=fs.closeSync;let lockFd,snapshots=0;
+  t.after(()=>{
+    assert.equal(path.dirname(fs.realpathSync(dir)),fs.realpathSync(os.tmpdir()));
+    assert(path.basename(dir).startsWith('autooc-early-lock-'));
+    fs.rmSync(dir,{recursive:true,force:true,maxRetries:10,retryDelay:50});
+  });
+  t.mock.method(fs,'openSync',(file,...args)=>{
+    if(file===target+'.write-lock'&&phase==='create')throw Object.assign(new Error('injected lock create'),{code:'EIO'});
+    const fd=open.call(fs,file,...args);if(file===target+'.write-lock')lockFd=fd;return fd;
+  });
+  t.mock.method(fs,'writeFileSync',(fd,...args)=>{
+    if(fd===lockFd&&phase==='write') {write.call(fs,fd,'{');throw Object.assign(new Error('injected lock write'),{code:'EIO'});}
+    return write.call(fs,fd,...args);
+  });
+  t.mock.method(fs,'closeSync',fd=>{close.call(fs,fd);if(fd===lockFd&&phase==='close')throw Object.assign(new Error('injected lock close'),{code:'EIO'});});
+  await assert.rejects(writer.save(target,()=>{snapshots++;return {revision:1};}),/injected lock/);
+  t.mock.restoreAll();
+  assert.equal(snapshots,0);assert.equal(fs.readFileSync(target,'utf8'),'{"revision":0}');
+  assert.equal(fs.existsSync(target+'.write-lock'),phase!=='create');
+  if(phase==='write')assert.throws(()=>mod.exports.parseSettingsWriteLock(fs.readFileSync(target+'.write-lock','utf8')),/Incomplete/);
+  if(phase==='close')assert.equal(mod.exports.parseSettingsWriteLock(fs.readFileSync(target+'.write-lock','utf8')).pid,process.pid);
+});
+
 for(const fallback of [false,true])test('large ASCII decoding avoids retaining all pieces alongside their joined duplicate'+(fallback?' without native isAscii':''),async t=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-ascii-')),target=path.join(dir,'data.json');
   const expected=('synthetic ASCII inert\n').repeat(1300000);fs.writeFileSync(target,expected);
@@ -58,12 +85,14 @@ test('lock durability yields to input and precedes snapshot or publication',asyn
       gate.then(()=>sync.call(this,descriptor,callback));
     };
     saving=writer.save(target,()=>{snapshots++;return {revision:1};});
-    const reached=await Promise.race([syncing.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),100))]);
+    // The initial OS identity query precedes lock publication. The input-yield
+    // assertion below measures the held fsync, independently of that startup.
+    const reached=await Promise.race([syncing.then(()=>true),new Promise(resolve=>setTimeout(()=>resolve(false),10000))]);
     assert.equal(reached,true,'lock fsync must yield rather than block the input thread');
     let ticks=0;await new Promise(resolve=>setTimeout(()=>{ticks++;resolve();},5));
     assert.equal(ticks,1);
     assert.equal(snapshots,0,'snapshot waits for durable ownership');
-    assert.match(fs.readFileSync(target+'.write-lock','utf8'),/^[a-f0-9-]{36}$/,'token published before yielding');
+    assert.match(JSON.parse(fs.readFileSync(target+'.write-lock','utf8')).token,/^[a-f0-9-]{36}$/,'token published before yielding');
     assert.equal(fs.readFileSync(target,'utf8'),'{"revision":0}');
     await assert.rejects(new SettingsWriter().save(target,()=>({foreign:true})),e=>e.code==='EEXIST');
     release();await saving;
@@ -87,7 +116,7 @@ test('failed asynchronous lock flush preserves prior bytes and ownership without
     await assert.rejects(writer.drain(),/synthetic flush failure/);
     assert.equal(snapshots,0);
     assert.equal(fs.readFileSync(target,'utf8'),'{"revision":0}');
-    assert.match(fs.readFileSync(target+'.write-lock','utf8'),/^[a-f0-9-]{36}$/);
+    assert.match(JSON.parse(fs.readFileSync(target+'.write-lock','utf8')).token,/^[a-f0-9-]{36}$/);
   }finally{
     fs.fsync=sync;
     if(fs.existsSync(target+'.write-lock'))fs.unlinkSync(target+'.write-lock');

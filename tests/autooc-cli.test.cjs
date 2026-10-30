@@ -7,6 +7,60 @@ const { spawnSync } = require('node:child_process');
 const cli = path.resolve(__dirname, '../autooc-cli.cjs');
 const call = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
 
+test('workflow name arrives before a retained Code step finishes and stays out of journals',async t=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-name-'));
+  const folder=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(folder,{recursive:true});
+  const name='Mismo nombre "ñ"\n第二行';
+  const workflow=id=>({id,name,steps:[{id:'gate',stepKind:'code',codeAllowVault:true,
+    code:'const end=Date.now()+15000; while(!vault.exists("release") && Date.now()<end) {} if(!vault.exists("release")) throw Error("gate timeout"); output="PRIVATE_RESULT";'}]});
+  fs.writeFileSync(path.join(folder,'data.json'),JSON.stringify({private:'PRIVATE_CONFIG',tasks:[],workflows:[workflow('a'),workflow('b')]}));
+  t.after(()=>{assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));fs.rmSync(root,{recursive:true});});
+  const identities=[];
+  for(const id of ['a','b']) {
+    const child=require('node:child_process').spawn(process.execPath,[cli,'run','--vault',root,'--workflow',id],{windowsHide:true});
+    let stdout='',stderr='',pending='',early,ended=false;
+    const done=new Promise((resolve,reject)=>{child.on('error',reject);child.on('close',code=>{ended=true;resolve(code);});});
+    const watchdog=setTimeout(()=>child.kill(),25000);
+    child.stdout.on('data',s=>stdout+=s);
+    child.stderr.on('data',s=>{
+      stderr+=s;pending+=s;
+      while(pending.includes('\n')) {
+        const index=pending.indexOf('\n'),line=pending.slice(0,index);pending=pending.slice(index+1);
+        const event=JSON.parse(line);
+        if(!early) {
+          early=event;
+          assert.equal(ended,false);assert.equal(stdout,'');
+          fs.writeFileSync(path.join(root,'release'),'go');
+        }
+      }
+    });
+    try {
+      assert.equal(await done,0,stderr);
+      assert.equal(early.phase,'ready');assert.equal(early.workflowName,name);assert.equal(early.host,'standalone');
+      const result=JSON.parse(stdout);assert.equal(result.workflowName,name);assert.equal(result.executionKind,'workflow');
+      assert.equal(result.workflowId,id);assert.equal(result.runId,early.runId);identities.push(result.runId);
+      for(const event of stderr.trim().split('\n').map(JSON.parse)) {
+        assert.equal(event.workflowId,id);assert.equal(event.runId,result.runId);assert.equal(event.workflowName,name);
+        assert.deepEqual(Object.keys(event).sort(),['event','executionKind','host','nextStepId','phase','revision','runId','workflowId','workflowName'].sort());
+      }
+      assert.doesNotMatch(stdout+stderr,/PRIVATE_|gate timeout|vault\.exists/);
+      const journal=JSON.parse(fs.readFileSync(path.join(folder,'runtime',result.runId+'.json')));
+      assert.equal(journal.workflowName,undefined);assert.equal(journal.executionKind,undefined);
+      assert.equal(journal.definitionHash,require('../autooc-runtime.cjs').prepareWorkflowDefinition(workflow(id),[],{private:'PRIVATE_CONFIG'}).hash);
+      const runtime=require('../autooc-runtime.cjs');
+      const options={vault:root,workflowId:id,resumeRunId:result.runId,redact:s=>s};
+      assert.deepEqual(await runtime.runInstalledWorkflow(options),journal,'default result stays reusable as a durable checkpoint');
+      const {workflowName,executionKind,...durable}=await runtime.runInstalledWorkflow({...options,includePresentation:true});
+      assert.equal(workflowName,name);assert.equal(executionKind,'workflow');assert.deepEqual(durable,journal);
+      for(const command of ['resume','reconcile']) {
+        const continued=call(command,'--vault',root,'--workflow',id,'--run',result.runId);
+        assert.equal(continued.status,0,continued.stderr);assert.equal(JSON.parse(continued.stdout).workflowName,name);
+      }
+    } finally {clearTimeout(watchdog);if(!ended){child.kill();await done;}if(fs.existsSync(path.join(root,'release')))fs.unlinkSync(path.join(root,'release'));}
+  }
+  assert.notEqual(identities[0],identities[1]);
+});
+
 test('every CLI command keeps the default installation and never discovers a custom one',async()=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-selection-'));
   const custom=path.join(root,'custom/plugins/auto-oc'),normal=path.join(root,'.obsidian/plugins/auto-oc');
@@ -22,6 +76,8 @@ test('every CLI command keeps the default installation and never discovers a cus
     }
     fs.mkdirSync(normal,{recursive:true});fs.writeFileSync(path.join(normal,'data.json'),JSON.stringify(catalog('DEFAULT')));
     const executed=call('run','--vault',root,'--workflow','w');assert.equal(executed.status,0,executed.stderr);
+    assert.equal(JSON.parse(executed.stdout).workflowName,"DEFAULT");
+    assert.ok(executed.stderr.trim().split("\n").every(line=>JSON.parse(line).workflowName==="DEFAULT"));
     const runId=JSON.parse(executed.stdout).runId;
     for(const [command,...raw] of commands) {
       if(command==='run')continue; // Already executed above; preserve its binding for recovery.
@@ -69,7 +125,7 @@ test('preflight rejects an unauthorized task directory and deferred store depend
       if(kind==='store') {delete config.tasks[0].workingDirectory;config.tasks[0].requiresAutoOCSecrets=true;}
       const original=JSON.stringify(config);fs.writeFileSync(file,original);
       const result=call('run','--vault',root,'--workflow','w');
-      assert.equal(result.status,1);assert.match(result.stderr,kind==='store'?/secret store is unavailable/:/outside the selected vault/);
+      assert.equal(result.status,1);assert.match(result.stderr,kind==='store'?/Secrets was retired/:/outside the selected vault/);
       assert.equal(fs.readFileSync(file,'utf8'),original);
       assert.ok(!fs.existsSync(path.join(root,'must-not-exist.txt')));
       assert.ok(!fs.existsSync(path.join(folder,'runtime')));
@@ -91,6 +147,7 @@ test('standalone task uses a durable identity and never inserts a workflow or re
     assert.equal(first.status,0,first.stderr);
     const state = JSON.parse(first.stdout);
     assert.equal(state.phase,'completed');
+    assert.equal(state.executionKind,'task');assert.equal(state.workflowName,'Standalone task');
     const resumed = call('resume','--vault',root,'--task','single','--run',state.runId);
     assert.equal(resumed.status,0,resumed.stderr);
     assert.equal(JSON.parse(resumed.stdout).runId,state.runId);
@@ -112,6 +169,19 @@ test('standalone task uses a durable identity and never inserts a workflow or re
     assert.ok(path.basename(root).startsWith('autooc-single-task-'));
     fs.rmSync(root,{recursive:true});
   }
+});
+
+test('standalone presentation never inherits the workflow of a historical task binding',()=>{
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-task-name-'));
+  try {
+    const folder=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(folder,{recursive:true});
+    fs.writeFileSync(path.join(folder,'data.json'),JSON.stringify({tasks:[{id:'t',name:'Task',taskKind:'code',code:'output="PRIVATE";'}],
+      workflows:[{id:'w',name:'Historical workflow',steps:[{id:'one',stepKind:'task',taskId:'t'}]}]}));
+    const previous=call('run','--vault',root,'--workflow','w');assert.equal(previous.status,0,previous.stderr);
+    const executed=call('run','--vault',root,'--task','t');assert.equal(executed.status,0,executed.stderr);
+    const result=JSON.parse(executed.stdout);assert.equal(result.workflowId,'@task:t');assert.equal(result.executionKind,'task');
+    assert.equal(result.workflowName,'Standalone task');assert.doesNotMatch(executed.stdout+executed.stderr,/Historical workflow|PRIVATE/);
+  } finally {assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));fs.rmSync(root,{recursive:true});}
 });
 
 test('bundled CLI reads metadata without execution, mutations or secret output', () => {

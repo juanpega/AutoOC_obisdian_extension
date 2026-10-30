@@ -2,19 +2,25 @@
 
 ## High-Level Overview
 
+La concurrencia se admite en `execution-coordinator.ts` dentro de un único host con una única reserva global. Antes de crear el journal se reservan definición, todas las tareas referenciadas, directorios físicos y repositorios Git comunes. Se admite un máximo de dos sesiones con política explícita `independent`; la ausencia de política equivale a `exclusive`. Code con capacidades amplias, modos interactivos y evaluación por modelo son exclusivos. Las rutas y metadatos se vuelven a verificar antes de efectos. No hay ramas paralelas dentro de un workflow ni escritores autónomos competidores.
+
+`catalog-transaction.ts` serializa carga, proyección, reemplazo atómico y publicación confirmada. Los guardados del plugin participan en esa misma secuencia y se registran sincrónicamente como pendientes para actualización y descarga. `SettingsWriter` mantiene sus fingerprints, locks e intenciones de recuperación. Cada sesión conserva su definición congelada, controlador, journal, revisión y salida; las publicaciones internas actualizan la base común, mientras los cambios externos o locales sin guardar causan conflicto explícito. Los errores posteriores al journal retienen la reserva de recursos y no permiten repetir el efecto.
+
+El plugin mantiene una colección de sesiones; la parada, aprobación y salida se buscan por identidad. El buzón CLI anuncia `concurrentExecutions: 2` y mantiene publicaciones y cancelaciones por requestId. La descarga bloquea la admisión, cancela y drena todas las sesiones y conserva la reserva global ante incertidumbre. El límite es compartido entre scheduler, Play y CLI delegada. Una instalación con propietario CLI externo conserva la vista de espera anterior, sin transferencia automática.
+
 La ubicación de la ejecución compartida se valida en `installed-workflow-location.ts`. `runInstalledWorkflow` acepta `installationDirectory` opcional (absoluto o relativo al vault); si se omite, usa `.obsidian/plugins/auto-oc`. Una selección explícita inválida falla sin alternativa. El resolvedor comprueba contención, componentes de directorio, catálogo y runtime sin crear archivos; solo el inicio de ejecución crea el runtime. Se rechazan enlaces simbólicos y junctions en los componentes de instalación.
 
-El plugin obtiene esa ubicación de `app.vault.configDir` y `manifest.id`, la vincula a su reserva y la reutiliza para guardar/cargar el catálogo, ejecutar, recuperar journals y responder aprobaciones. Una reserva de otra instalación se rechaza antes de leer el catálogo o iniciar efectos. Cambiar la selección durante la reserva requiere una recarga segura. El bundle autónomo exporta el resolvedor; la interfaz CLI mantiene su selección predeterminada explícita. Los servicios auxiliares y el almacén de secretos conservan su contrato existente.
+El plugin obtiene esa ubicación de `app.vault.configDir` y `manifest.id`, la vincula a su reserva y la reutiliza para guardar/cargar el catálogo, ejecutar, recuperar journals y responder aprobaciones. Una reserva de otra instalación se rechaza antes de leer el catálogo o iniciar efectos. Cambiar la selección durante la reserva requiere una recarga segura. El bundle autónomo exporta el resolvedor; la interfaz CLI mantiene su selección predeterminada explícita. El almacén histórico se conserva sin modificaciones; Secrets se ha retirado, como se detalla más abajo.
 
 AutoOC is an Obsidian desktop plugin that schedules, runs, and monitors OpenCode CLI tasks from inside an Obsidian vault. The plugin is implemented primarily in `main.ts`, bundled into `main.js`, and loaded by Obsidian using `manifest.json`.
 
 The system has three main runtime surfaces:
 
-- The Obsidian sidebar view (`AutoOCView`) for dashboard, tasks, workflows, secrets, logs, imports, exports, and controls.
-- The plugin controller (`AutoOCPlugin`) that owns settings, scheduling, task execution, workflow execution, secrets, updates, and integrations.
+- The Obsidian sidebar view (`AutoOCView`) for dashboard, tasks, workflows, logs, imports, exports, and controls.
+- The plugin controller (`AutoOCPlugin`) that owns settings, scheduling, task execution, workflow execution, updates, and integrations.
 - The Visual Builder (`util/ui_workflow_builder/index.html`) embedded as generated HTML in an iframe modal for visual workflow editing.
 
-At runtime, Obsidian persists plugin settings through `loadData()` / `saveData()`. Secrets are stored separately in the vault plugin folder at `.obsidian/plugins/auto-oc/secrets.vault.json` and encrypted with Electron secure storage when available.
+Obsidian conserva la configuración de tareas y workflows. Secrets se ha retirado: el archivo histórico queda separado y no se borra, reescribe, migra ni exporta.
 
 The plugin launches OpenCode as an external process. On Windows, non-interactive tasks are launched through temporary PowerShell scripts started by `wscript.exe` so execution is detached from Electron and does not show a console window. Output is written to temporary files, polled by the plugin, redacted, stored in settings, and optionally copied to `.opencode/logs/<taskId>/`.
 
@@ -27,10 +33,10 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 - Workflow runner: `runWorkflow()`, `runWorkflowStepById()`, `runWorkflowStep()`, `runTaskStep()`, `runDelayStep()`, `runCodeStep()`, `completeStep()`, and `resolveNextStep()` coordinate step execution and route to the next step.
 - Task runner: `runTask()` launches OpenCode tasks or delegates to `runCodeTask()` for local JavaScript code tasks. Non-interactive OpenCode output is collected through temporary files.
 - Code execution sandbox: code tasks and code workflow steps use Node `vm.runInContext()`. Optional APIs expose vault-local file operations, broader filesystem operations, and terminal execution when the task/step explicitly enables them.
-- `SecretStore` in `main.ts`: loads, saves, encrypts, decrypts, lists, and redacts local secrets. It also builds environment variables injected into OpenCode child processes.
+- `LegacyOutputRedaction` en `legacy-output-redaction.ts`: componente interno de solo lectura para enmascarar valores históricos conocidos. No expone gestión, PIN, valores ni variables de entorno.
 - Visual Builder modal: `VisualBuilderModal` embeds the generated Visual Builder HTML through `iframe.srcdoc`, sends current tasks/workflows via `postMessage`, receives edited state back, and smart-merges it into plugin settings while preserving runtime status/output fields.
 - Standalone Visual Builder: `util/ui_workflow_builder/index.html` is a self-contained HTML/CSS/JS workflow editor. `scripts/inline-visual-builder.mjs` embeds it into `visualBuilderHtml.generated.ts` before build/dev.
-- Build and packaging scripts: `esbuild.config.mjs` bundles `main.ts` to CommonJS `main.js`; `deploy.mjs` copies plugin files into an Obsidian vault; `package-release.ps1` creates release zips.
+- Herramientas de construcción y distribución: `esbuild.config.mjs` construye `main.js`, `autooc-cli.cjs` y `autooc-runtime.cjs`; `scripts/release-artifacts.mjs` genera y verifica la integridad de los siete artefactos. `scripts/package-release.mjs` crea el ZIP multiplataforma mediante `npm run pack:release`. `deploy.mjs` instala el paquete en una bóveda autorizada; no es un comando de consulta.
 - Library files: `library/index.json` and sibling JSON files provide importable sample/task workflow packages fetched from the repository URL configured in settings.
 
 ## Repository Structure
@@ -45,9 +51,12 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 ├─ tsconfig.json                   # TypeScript compiler options
 ├─ esbuild.config.mjs              # Bundle configuration
 ├─ deploy.mjs                      # Local vault deployment helper
-├─ package-release.ps1             # Release zip helper
 ├─ scripts/
-│  └─ inline-visual-builder.mjs    # Embeds Visual Builder HTML into TypeScript
+│  ├─ inline-visual-builder.mjs     # Incrusta el Visual Builder en TypeScript
+│  ├─ release-artifacts.mjs         # Integridad y copia de los siete artefactos
+│  ├─ package-release.mjs           # Empaquetado ZIP multiplataforma
+│  ├─ measure-catalog-responsiveness.cjs    # Diagnóstico sintético del catálogo
+│  └─ measure-historical-responsiveness.cjs # Diagnóstico sintético de históricos
 ├─ util/ui_workflow_builder/
 │  └─ index.html                   # Standalone Visual Builder app
 ├─ visualBuilderHtml.generated.ts  # Generated embedded Visual Builder source
@@ -61,10 +70,10 @@ The project does not currently use a `src/` directory. Most runtime code lives i
 ## Core Flow
 
 1. Obsidian loads `main.js` using `manifest.json`.
-2. `AutoOCPlugin.onload()` calls `loadSettings()`, initializes the secret store, registers the sidebar view, commands, ribbon icon, settings tab, scheduler interval, delayed startup check, and background update check.
+2. `AutoOCPlugin.onload()` llama a `loadSettings()`, carga el enmascarador histórico de solo lectura y registra la vista, comandos, configuración, programación y comprobaciones de arranque y actualización.
 3. The scheduler calls `runDueAll()` every 5 seconds and once after layout readiness. It finds due tasks and workflows with schedule helpers.
 4. A user or scheduler starts a task with `runTask()`.
-5. If the task is an OpenCode task, the plugin builds OpenCode arguments, injects decrypted secrets as temporary environment variables, launches the process, polls temp files, redacts secret values, updates task status/output, and writes logs if enabled.
+5. If the task is an OpenCode task, the plugin builds OpenCode arguments, launches the process, polls temp files, redacts secret values, updates task status/output, and writes logs if enabled.
 6. If the task is a code task, `runCodeTask()` executes JavaScript in a `vm` sandbox and updates the task state from the returned output variable.
 7. A user or scheduler starts a workflow with `runWorkflow()`.
 8. The workflow runner finds an entry step, tracks per-step runtime output in an in-memory `workflowRuntime` map, executes each step by kind, then resolves the next step using transitions.
@@ -95,12 +104,11 @@ Workflow execution
   -> transition resolver
   -> next step or workflow completion
 
-Secrets
-  -> SecretStore
-  -> secrets.vault.json encrypted values
-  -> decrypted in memory only when needed
-  -> injected as AUTOOC_* environment variables into OpenCode processes
-  -> redaction pass before output is stored
+Salidas del plugin
+  -> LegacyOutputRedaction
+  <- archivo histórico conservado (solo lectura)
+  -> descifrado en memoria solo para enmascarar
+  -> salida enmascarada antes de mostrar o guardar
 ```
 
 Settings are the canonical persisted state for tasks, workflows, runtime status, outputs, dashboard positions, OpenCode defaults, scheduling, logs, and library URL. Secrets intentionally live outside settings.
@@ -108,12 +116,12 @@ Settings are the canonical persisted state for tasks, workflows, runtime status,
 ## External Dependencies
 
 - Obsidian plugin API: provides `Plugin`, `ItemView`, `Modal`, `PluginSettingTab`, `Notice`, settings persistence, workspace views, vault adapter writes, and UI primitives.
-- Electron secure storage: accessed through `safeStorage` for encrypting/decrypting secrets when available.
-- Node built-ins: `child_process`, `fs`, `path`, `os`, `crypto`, and `vm` are used heavily for process launch, file access, paths, secret PIN hashing, and sandboxed code execution.
+- Electron safeStorage: descifra valores históricos únicamente para enmascarar salidas cuando está disponible.
+- Módulos Node: `child_process`, `fs`, `path`, `os`, `crypto` y `vm` permiten lanzar procesos, acceder a archivos, resolver rutas, mantener identidades y ejecutar código de confianza.
 - OpenCode CLI: the primary external execution engine. The plugin expects `opencode` or a configured binary path and calls commands such as `opencode models`, `opencode agent list`, and `opencode run`.
 - Ralph Loop: optional OpenCode plugin installed by editing `~/.config/opencode/opencode.json` and adding `opencode-ralph-loop`.
 - `uv`: optional dependency needed to run the generated `autooc-mcp.py` FastMCP helper script.
-- FastMCP / Python MCP runtime: used by the generated `autooc-mcp` helper, which exposes secret metadata and credential lookup tools to agents.
+- El antiguo puente MCP está retirado; las configuraciones de terceros no se modifican. El generador heredado ya no ofrece herramientas de credenciales.
 - GitHub raw URLs: used for update checks, self-update downloads, and the default workflow/task library URL.
 - Build-time dev dependencies: TypeScript, esbuild, Obsidian types, `builtin-modules`, `tslib`, and Node types.
 
@@ -137,13 +145,15 @@ Main settings include:
 
 `loadSettings()` also performs migration and cleanup: stale `running` tasks/workflows are marked failed, missing schedule fields are added, legacy linear workflow steps receive IDs/transitions/positions, and missing defaults are filled.
 
-Secrets use a separate `SecretsVault` schema in `.obsidian/plugins/auto-oc/secrets.vault.json`. Secret values are encrypted with Electron secure storage; the optional UI PIN controls reveal/edit/delete access but is not the encryption key.
+El archivo histórico `secrets.vault.json` permanece en la instalación seleccionada y nunca se escribe desde el enmascarador. No hay controles de gestión ni PIN. `requiresAutoOCSecrets` permanece en el modelo, exportaciones, hashes y ambos editores. `retired-dependency.ts` rechaza declaraciones verdaderas o mal tipadas en tareas, pasos y workflows completos antes del primer efecto, sin fallback clásico, también al continuar. No detecta dependencias ocultas en prompts o scripts.
 
 Build configuration is separate:
 
 - `package.json` scripts run the Visual Builder inlining step before dev/build.
-- `esbuild.config.mjs` bundles `main.ts` to `main.js`, keeps Obsidian/Electron/CodeMirror/Node built-ins external, and emits CommonJS for Obsidian.
+- `esbuild.config.mjs` genera el bundle CommonJS de Obsidian manteniendo externos Obsidian/Electron/CodeMirror y los módulos de Node; también genera CLI/runtime para Node 18 y el descriptor de integridad del paquete completo.
 - `tsconfig.json` enables strict null checks, ESNext modules for TypeScript input, ES6/DOM libs, and bundler module resolution.
+
+Los dos scripts `measure-*-responsiveness.cjs` son herramientas manuales complementarias: reciben un bundle, una ruta de informe y un número de iteraciones. El primero mide carga, guardado y transiciones con un catálogo sintético; el segundo mide arranque y carga/guardado con históricos sintéticos vinculados a journals. Crean bóvedas temporales propias y usan dobles de Obsidian. Sus resultados no acreditan GUI real ni rendimiento con datos de usuario. No están conectados a npm y esa ausencia no demuestra obsolescencia; se conservan para diagnóstico y reproducción de mediciones.
 
 ## Extension Points
 
@@ -154,7 +164,7 @@ Build configuration is separate:
 - Add library content by adding JSON packages under `library/` and registering them in `library/index.json`.
 - Add new settings by extending `AutoOCSettings`, `DEFAULT_SETTINGS`, `AutoOCSettingTab`, and any relevant migration/default handling.
 - Add OpenCode integrations through the existing process-launch path, but preserve argument separation before `--` so prompt text is not parsed as CLI flags.
-- Add MCP helper behavior by changing `getAutoOcMcpServerSource()` and the generated config block, while keeping secret values protected.
+- No restaurar gestión ni inyección de credenciales mediante el generador MCP heredado.
 
 Important: the README states that new features must be implemented in both the classic list UI and the Visual Builder. Treat the data model as the source of truth and keep JSON import/export round-trips compatible.
 
@@ -167,7 +177,7 @@ Important: the README states that new features must be implemented in both the c
 - OpenCode CLI arguments are built as arrays and prompt text is placed after `--` to avoid prompt content being interpreted as CLI options.
 - Workflows are DAG-capable. The entry step is inferred from missing incoming transitions, with visual `position.x` used as a tie-breaker.
 - Code tasks and code steps use Node `vm` with explicit optional capabilities. Vault access is constrained to the vault root, but broader file and terminal access can be enabled per task/step.
-- Secrets are separated from Obsidian settings and injected into child processes as temporary environment variables. Output redaction happens before task output is persisted.
+- Ningún lanzamiento, terminal ni evaluación recibe valores del almacén AutoOC. Se conserva el entorno ordinario y la autenticación del proveedor. El plugin enmascara valores históricos conocidos de cuatro o más caracteres cuando safeStorage permite descifrarlos, antes de mostrar o persistir salidas; avisa si la lectura o el descifrado son incompletos. No garantiza protección universal de credenciales externas ni en el host autónomo.
 - Updates are implemented in-plugin by downloading `main.js`, `manifest.json`, and `styles.css` from GitHub raw URLs and writing into the plugin folder.
 
 ## Sensitive or Risky Areas
@@ -212,10 +222,8 @@ flowchart TD
     TaskRunner --> TempFiles[OS temp files\nstdout/stderr/done/prompt]
     TempFiles --> TaskOutput[Task status/output]
 
-    Plugin --> SecretStore[SecretStore]
-    SecretStore --> SecretsFile[secrets.vault.json\nencrypted values]
-    SecretStore --> Env[AUTOOC_* env vars]
-    Env --> OpenCode
+    Plugin --> Redaction[LegacyOutputRedaction]
+    SecretsFile[Archivo histórico conservado] --> Redaction
 
     Plugin --> Logs[.opencode/logs]
     TaskOutput --> Logs

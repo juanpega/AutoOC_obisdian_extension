@@ -169,7 +169,7 @@ for (const entry of ['card', 'workflow']) for (const standalone of [false, true]
     fs.mkdirSync(install, { recursive: true });
     fs.writeFileSync(file, JSON.stringify({ logsEnabled, tasks: [{ id: 't', name: 'Task', taskKind: 'codex', prompt: 'fixture', scheduleType: 'manual' }],
       workflows: [{ id: 'wf', name: 'Shared', steps: [{ id: 'a', stepKind: 'task', taskId: 't' }] }] }));
-    delete p.pluginExecutionLease; delete p.sharedWorkflowExecution; delete p.saveSettings;
+    delete p.pluginExecutionLease; p.sharedWorkflowExecution = undefined; delete p.saveSettings;
     p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
     p.manifest = { id: 'auto-oc' }; p.redactSecrets = text => text;
     h.Client.prototype.run = async function() { return { status: 'completed', output: 'historical result', threadId: 'thread-history', turnId: 'turn-history' }; };
@@ -241,7 +241,7 @@ function stopCardHarness(globals = {}) {
   const notices = [], elements = [], bundle = { exports: {} };
   class Stub {}
   const obsidian = { Plugin: Stub, Notice: class { constructor(text) { notices.push(text); } }, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; }; module.exports.setConfirmation = answer => { ConfirmModal.prototype.openAndWait = answer; };', {
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.TestView = AutoOCView; module.exports.TestClient = CodexAppServerClient; module.exports.setRunner = runner => { runInstalledWorkflow = runner; catalogTransaction = (file, operation) => operation(); }; module.exports.setConfirmation = answer => { ConfirmModal.prototype.openAndWait = answer; };', {
     module: bundle, exports: bundle.exports, require: name => name === 'obsidian' ? obsidian : require(name),
     process, Buffer, console, AbortController, setTimeout, clearTimeout, setInterval, clearInterval, ...globals,
   });
@@ -277,7 +277,7 @@ function stopCardHarness(globals = {}) {
 test('task card abandons only the confirmed historical attempt after edits and permits a fresh task', async () => {
   const os=require('node:os'), root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-card-abandon-'));
   const h=stopCardHarness(), p=h.plugin;
-  delete p.sharedWorkflowExecution;delete p.pluginExecutionLease;delete p.saveSettings;
+  p.sharedWorkflowExecution = undefined;delete p.pluginExecutionLease;delete p.saveSettings;
   const install=path.join(root,'.obsidian/plugins/auto-oc'),runtime=path.join(install,'runtime');fs.mkdirSync(runtime,{recursive:true});
   p.app={vault:{adapter:{basePath:root},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[]}};p.manifest={id:'auto-oc'};p.redactSecrets=s=>s;
   const state={schemaVersion:1,runId:'old-attempt',workflowId:'@task:t',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'task',steps:[{stepId:'task',status:'in_flight'}]};
@@ -291,7 +291,7 @@ test('task card abandons only the confirmed historical attempt after edits and p
     h.setConfirmation(async()=>false);await button.onclick({stopPropagation(){}});
     assert.deepEqual(JSON.parse(fs.readFileSync(file)),state,'cancel is read-only');
     h.setConfirmation(async()=>{p.sharedWorkflowExecution={workflowId:'other'};return true;});
-    await assert.rejects(p.confirmAbandonTaskExecution('t'),/still active/);delete p.sharedWorkflowExecution;
+    await assert.rejects(p.confirmAbandonTaskExecution('t'),/still active/);p.sharedWorkflowExecution = undefined;
     h.setConfirmation(async()=>{const changed={...state,revision:2};fs.writeFileSync(file,JSON.stringify(changed));return true;});
     await assert.rejects(p.confirmAbandonTaskExecution('t'),/revision changed/);
     assert.equal(JSON.parse(fs.readFileSync(file)).phase,'in_flight');
@@ -311,7 +311,7 @@ test('task card abandons only the confirmed historical attempt after edits and p
 
 function legacyHarness(kind = 'copilot', globals = {}) {
   const h = stopCardHarness(globals), p = h.plugin;
-  delete p.sharedWorkflowExecution; delete p.pluginExecutionLease; delete h.task.runtimeExecution;
+  p.sharedWorkflowExecution = undefined; delete p.pluginExecutionLease; delete h.task.runtimeExecution;
   Object.assign(h.task, {taskKind:kind,prompt:'fixture',code:'output="code result";',status:'pending',model:'test/model'});
   p.app = {vault:{adapter:{basePath:require('node:os').tmpdir()}}};
   p.saveSettings = async () => {};
@@ -625,7 +625,7 @@ test('same occurrence remains stoppable across thread and approval checkpoint re
 
 test('legacy stop and standalone owner cancellation preserve their separate behavior', async () => {
   const legacy = stopCardHarness();
-  delete legacy.task.runtimeExecution; delete legacy.plugin.sharedWorkflowExecution;
+  delete legacy.task.runtimeExecution; legacy.plugin.sharedWorkflowExecution = undefined;
   let killed = 0, finish;
   legacy.task.taskKind = 'copilot'; legacy.task.prompt = 'fixture';
   legacy.plugin.app = { vault: { adapter: { basePath: '.' } } };
@@ -653,7 +653,7 @@ test('real shared host receives card stop, preserves uncertain Codex outcome and
     fs.writeFileSync(file, JSON.stringify({ logsEnabled: false, tasks: [{ id: 't', name: 'Task', taskKind: 'codex', prompt: 'fixture', scheduleType: 'manual' }],
       workflows: [{ id: 'wf', name: 'Fixture', steps: [{ id: 'a', stepKind: 'task', taskId: 't', transitionMode: 'force' },
         { id: 'b', stepKind: 'code', codeAllowVault: true, code: 'vault.write("next-effect.txt", "bad");' }] }] }));
-    delete p.pluginExecutionLease; delete p.sharedWorkflowExecution; delete p.saveSettings;
+    delete p.pluginExecutionLease; p.sharedWorkflowExecution = undefined; delete p.saveSettings;
     p.app = { vault: { adapter: { basePath: root }, configDir: '.obsidian' }, workspace: { getLeavesOfType: () => [] } };
     p.manifest = { id: 'auto-oc' }; p.redactSecrets = text => text;
     let finish, started, interrupts = 0, runs = 0;
@@ -707,7 +707,7 @@ test('shared checkpoints cannot regress, change run or overwrite a replacement o
   const h = stopCardHarness(), p = h.plugin;
   let callback, finish, ready, loads = 0;
   const started = new Promise(resolve => ready = resolve);
-  delete p.sharedWorkflowExecution;
+  p.sharedWorkflowExecution = undefined;
   p.app = { vault: { adapter: { basePath: 'fixture' } } };
   // This unit fixture controls the host and persistence; location validation
   // is exercised through real installations in workflow-compatibility.
@@ -730,7 +730,7 @@ test('shared checkpoints cannot regress, change run or overwrite a replacement o
 
 test('task GUI buttons surface blocked starts without changing status or swallowing rejection', async () => {
   const h = stopCardHarness(), p = h.plugin;
-  delete p.sharedWorkflowExecution;
+  p.sharedWorkflowExecution = undefined;
   Object.assign(h.task, { status: 'pending', taskKind: 'opencode', interactiveTerminal: true, model: 'test/model' });
   delete h.task.runtimeExecution;
   p.redactSecrets = text => text.replace('PRIVATE_SENTINEL', '[redacted]');
@@ -917,18 +917,18 @@ test('real Code → task → Windows launcher keeps literal payload and waits fo
   }
 });
 
-test('late callbacks after stop, deletion or relaunch cannot complete another task attempt', async () => {
+test('late callbacks after stop or deletion cannot complete an attempt; uncertain relaunch is rejected', async () => {
   for (const mode of ['stop', 'delete', 'relaunch']) {
     const h = pluginHarness('data'); let completions = 0;
     await h.plugin.runTask(h.task, async () => { completions++; });
     if (mode === 'delete') h.plugin.settings.tasks = [];
-    else { await h.plugin.killTask(h.task.id, h.plugin.taskStopIdentity(h.task)); if (mode === 'relaunch') await h.plugin.runTask(h.task, async () => { completions++; }); }
+    else { await h.plugin.killTask(h.task.id, h.plugin.taskStopIdentity(h.task)); if (mode === 'relaunch') await assert.rejects(h.plugin.runTask(h.task, async () => { completions++; }), /outcome is unconfirmed/); }
     h.signal(0, { status: 'started', confirmed: true }); await drain();
     assert.equal(completions, 0, mode);
     if (mode === 'relaunch') {
-      assert.equal(h.task.status, 'running');
-      h.signal(1, { status: 'started', confirmed: true }); await drain();
-      assert.equal(completions, 1);
+      assert.equal(h.task.status, 'failed');
+      assert.equal(h.calls.length, 1, 'no replacement launcher while external outcome is unknown');
+      assert.equal(completions, 0);
     }
   }
 });
@@ -997,4 +997,316 @@ test('Windows PowerShell parses generated observer and runner without launching 
     const result = cp.spawnSync('powershell.exe', ['-NoProfile', '-Command', parse], { input: script, encoding: 'utf8', windowsHide: true });
     assert.equal(result.status, 0, result.stdout + result.stderr);
   }
+});
+
+
+// REQ-20261027-001: real entry points with controlled persistence/client boundaries.
+function playButton() {
+  const attrs = new Map();
+  return {setAttr(k, v) {attrs.set(k, String(v));}, getAttribute(k) {return attrs.get(k);}};
+}
+function attachPlayViews(p, kind, id) {
+  const views = [[], []];
+  p.app.workspace = {getLeavesOfType: () => views.map(buttons => ({view:{containerEl:{querySelectorAll: () => buttons}}}))};
+  for (const buttons of views) for (const compact of [true, false]) {
+    const b = playButton(); p.configureStartButton(b, kind, id, compact); buttons.push(b);
+  }
+  return views;
+}
+function assertStarting(views) {
+  for (const buttons of views) for (const b of buttons) {
+    assert.equal(b.disabled, true); assert.match(b.textContent, /Iniciando/);
+    assert.equal(b.getAttribute('aria-label'), 'Iniciando…'); assert.equal(b.getAttribute('aria-busy'), 'true');
+  }
+}
+
+for (const kind of ['code', 'codex', 'copilot']) test(`Play reserves once before deferred legacy save: ${kind}`, async () => {
+  const h = legacyHarness(kind), p = h.plugin; let release, saves = 0, launches = 0, completions = 0;
+  p.createVaultMutationBatch = () => ({record(){}, async flush(){}});
+  if (kind === 'copilot') p.createCopilotClient = () => ({async run(){launches++; return {exitCode:0,output:'once'};},dispose(){}});
+  if (kind === 'codex') p.createCodexClient = () => ({async run(){launches++; return {status:'completed',output:'once'};},dispose(){}});
+  if (kind === 'code') h.task.code = 'output="once";';
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const views = attachPlayViews(p, 'task', h.task.id);
+  const first = p.runTask(h.task, async () => {completions++;});
+  assertStarting(views);
+  // A stale representation may still call the method with a different object.
+  await p.runTask({...h.task}); assert.equal(saves, 1); assert.equal(launches, 0);
+  p.configureStartButton(views[1][0], 'task', h.task.id, true); assertStarting(views);
+  release(); await first; await drain(); await drain();
+  assert.equal(completions, 1); assert.equal(launches, kind === 'code' ? 0 : 1);
+  assert.equal(h.task.status, 'completed'); assert.equal(p.getDefinitionStartState('task', h.task.id), 'available');
+});
+
+// C12: retain real dispatch and completion, controlling only storage and effects.
+function busyConsumerHarness(kind = 'copilot') {
+  const timers = [];
+  const h = legacyHarness(kind, {setTimeout(fn, ms) { const t = {fn, ms}; timers.push(t); return t; }});
+  const p = h.plugin, wf = h.workflow;
+  Object.assign(wf, {name:'Busy consumer', status:'running', currentStep:0, steps:[
+    {id:'busy', stepKind:'task', taskId:h.task.id, status:'running', transitions:[]},
+  ]});
+  p.workflowRuntime = new Map([[wf.id, {stepOutputs:new Map()}]]);
+  const effects = [];
+  p.createVaultMutationBatch = () => ({record(){}, async flush(){}});
+  h.task.code = 'console.log("single Code effect"); output="owner result";';
+  p.redactSecrets = value => {if (value === 'single Code effect') effects.push(value); return value;};
+  p.createCopilotClient = p.createCodexClient = () => ({
+    async run(){effects.push(kind); return {exitCode:0,status:'completed',output:'owner result'};}, dispose(){},
+  });
+  let release, saves = 0, completions = 0;
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const ownerContext = {stepOutputs:new Map()};
+  const ownerWf = {id:'owner',status:'running',steps:[]}; p.settings.workflows.push(ownerWf);
+  p.workflowRuntime.set(ownerWf.id, ownerContext);
+  const owner = {workflowId:'owner',stepId:'owner-step',stepIndex:0,context:ownerContext};
+  const first = p.runTask(h.task, async (_task, code) => {assert.equal(code,0); completions++;}, {}, owner);
+  const snapshot = JSON.stringify(h.task), attempt = p.legacyAttempts.get(h.task.id);
+  const token = p.definitionStarts.get('task:' + h.task.id);
+  return {...h, timers, effects, first, release:() => release(), completions:() => completions,
+    assertOwner(){assert.equal(JSON.stringify(h.task),snapshot); assert.equal(p.legacyAttempts.get(h.task.id),attempt);
+      assert.equal(attempt.owner,owner); assert.equal(p.definitionStarts.get('task:' + h.task.id),token);}};
+}
+
+for (const kind of ['code','codex','copilot']) test(`C12 deferred start rejects real consumer and preserves owner: ${kind}`, async () => {
+  const h = busyConsumerHarness(kind), p = h.plugin, wf = h.workflow;
+  let rejected = 0;
+  const run = p.runTask.bind(p);
+  p.runTask = (task, callback, ...args) => run(task, async (result, code) => {
+    rejected++; assert.equal(code,-1); assert.equal(result.status,'failed'); assert.notEqual(result,h.task);
+    assert.equal(result.legacyExecution,undefined); assert.equal(result.runtimeExecution,undefined);
+    await callback(result,code);
+  }, ...args);
+  try {
+    await p.runTaskStep(wf,wf.steps[0],0);
+    assert.equal(rejected,1); assert.equal(wf.status,'failed'); assert.equal(wf.steps[0].status,'failed');
+    assert.match(wf.steps[0].output,/already running|already starting/);
+    assert.equal(p.workflowRuntime.has(wf.id),false); assert.equal(h.effects.length,0);
+    h.assertOwner();
+  } finally {h.release(); await h.first; await drain(); await drain();}
+  assert.equal(h.effects.length,1); assert.equal(h.completions(),1);
+  assert.equal(h.task.status,'completed'); assert.match(h.task.output,/owner result/);
+  assert.doesNotMatch(h.task.output,/Workflow failed/);
+  assert.equal(p.definitionStarts.has('task:' + h.task.id),false);
+});
+
+for (const mode of ['force','conditional']) test(`C12 busy consumer recovers once through real ${mode} transition`, async () => {
+  const h = busyConsumerHarness(), p = h.plugin, wf = h.workflow;
+  wf.steps[0].transitions = [{toStepId:'recover',mode,condition:'input.includes("rejected")'}];
+  wf.steps.push({id:'recover',stepKind:'code',code:'output="recovered";',transitions:[]});
+  let deliveries = 0;
+  const run = p.runTask.bind(p);
+  p.runTask = (task, callback, ...args) => run(task, async (result, code) => {
+    deliveries++; await callback(result,code); await callback(result,code);
+  }, ...args);
+  try {
+    await p.runTaskStep(wf,wf.steps[0],0);
+    assert.equal(deliveries,1); assert.equal(wf.steps[0].status,'failed');
+    assert.equal(wf.status,'running'); assert.equal(wf.currentStep,1);
+    assert.equal(h.timers.length,1); h.assertOwner();
+    h.timers[0].fn(); await drain(); await drain();
+    assert.equal(wf.status,'completed'); assert.equal(wf.steps[1].output,'recovered');
+    assert.equal(p.workflowRuntime.has(wf.id),false);
+  } finally {h.release(); await h.first; await drain(); await drain();}
+  assert.equal(h.completions(),1); assert.equal(h.effects.length,1);
+});
+
+for (const action of ['stop','replace','restart']) test(`C12 late rejection evaluation cannot continue after ${action}`, async () => {
+  const h = busyConsumerHarness(), p = h.plugin, wf = h.workflow;
+  wf.steps[0].transitions = [{toStepId:'recover',mode:'eval',evaluatePrompt:'Recover?'}];
+  wf.steps.push({id:'recover',stepKind:'code',code:'output="obsolete";',transitions:[]});
+  let finishEvaluation;
+  p.evaluateWithOpencode = () => new Promise(resolve => finishEvaluation = resolve);
+  const consumer = p.runTaskStep(wf,wf.steps[0],0); await drain();
+  assert.equal(typeof finishEvaluation,'function');
+  if (action === 'stop') await p.killWorkflow(wf.id);
+  else {
+    if (action === 'restart') await p.killWorkflow(wf.id);
+    p.stoppingWorkflows.delete(wf.id);
+    p.settings.workflows[0] = {...wf,status:'running',steps:[{id:'new',status:'running'}]};
+    p.workflowRuntime.set(wf.id,{stepOutputs:new Map([['new','untouched']])});
+  }
+  const current = p.settings.workflows[0], context = p.workflowRuntime.get(wf.id), snapshot = JSON.stringify(current);
+  finishEvaluation({output:'YES'}); await consumer;
+  assert.equal(JSON.stringify(current),snapshot); assert.equal(p.workflowRuntime.get(wf.id),context);
+  assert.equal(h.timers.length,0); h.assertOwner();
+  h.release(); await h.first; await drain(); await drain(); assert.equal(h.completions(),1);
+});
+
+test('C12 active task rejects without exposing or altering the owner result', async () => {
+  const h = busyConsumerHarness(), p = h.plugin; let finish;
+  h.task.scheduleDays = [1,2];
+  p.createCopilotClient = () => ({run:() => new Promise(resolve => finish=resolve),dispose(){}});
+  h.release(); await h.first; await drain();
+  assert.equal(typeof finish,'function'); assert.equal(p.definitionStarts.has('task:' + h.task.id),false);
+  const snapshot = JSON.stringify(h.task), attempt = p.legacyAttempts.get(h.task.id);
+  await p.runTaskStep(h.workflow,h.workflow.steps[0],0);
+  assert.equal(h.workflow.status,'failed'); assert.equal(p.workflowRuntime.has(h.workflow.id),false);
+  assert.equal(JSON.stringify(h.task),snapshot); assert.equal(p.legacyAttempts.get(h.task.id),attempt);
+  let rejected = 0;
+  await p.runTask(h.task,async result => {
+    rejected++; result.scheduleDays.push(3); result.output='consumer mutation';
+    assert.equal(result.legacyExecution,undefined);
+  });
+  assert.equal(rejected,1); assert.equal(JSON.stringify(h.task),snapshot);
+  finish({exitCode:0,output:'owner result'}); await drain(); await drain();
+  assert.equal(h.completions(),1); assert.equal(h.task.output,'owner result');
+});
+
+for (const kind of ['code','codex','copilot']) test(`C12 two callback-free Plays keep one effect: ${kind}`, async () => {
+  const h = legacyHarness(kind), p = h.plugin; let release, saves=0, effects=0;
+  p.createVaultMutationBatch = () => ({record(){},async flush(){}});
+  h.task.code = 'console.log("effect"); output="once";';
+  p.redactSecrets = value => {if(value === 'effect') effects++; return value;};
+  p.createCopilotClient = p.createCodexClient = () => ({async run(){effects++;return {exitCode:0,status:'completed',output:'once'};},dispose(){}});
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release=resolve) : Promise.resolve();
+  const views = attachPlayViews(p,'task',h.task.id);
+  const first = p.runTask(h.task); await p.runTask({...h.task});
+  assertStarting(views); assert.equal(effects,0); assert.equal(saves,1);
+  release(); await first; await drain(); await drain();
+  assert.equal(effects,1); assert.equal(h.task.status,'completed');
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'available');
+});
+
+test('C12 OpenCode double Play completes one confirmed launch after deferred save', async () => {
+  const h = pluginHarness('fixture'), p = h.plugin; let release, saves=0;
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release=resolve) : Promise.resolve();
+  const views = attachPlayViews(p,'task',h.task.id);
+  const first = p.runTask(h.task); await p.runTask({...h.task});
+  assertStarting(views); assert.equal(h.calls.length,0); assert.equal(saves,1);
+  release(); await first; assert.equal(h.calls.length,1);
+  h.signal(0,{status:'started',confirmed:true}); await drain();
+  assert.equal(h.task.status,'completed'); assert.equal(h.calls.length,1);
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'available');
+});
+
+test('C12 queued recovery cannot run in a replacement consumer context', async () => {
+  const h = busyConsumerHarness(), p = h.plugin, wf = h.workflow;
+  wf.steps[0].transitions = [{toStepId:'recover',mode:'force'}];
+  wf.steps.push({id:'recover',stepKind:'code',code:'output="obsolete";',transitions:[]});
+  await p.runTaskStep(wf,wf.steps[0],0); assert.equal(h.timers.length,1);
+  const context = {stepOutputs:new Map()}; p.workflowRuntime.set(wf.id,context);
+  const snapshot = JSON.stringify(wf); h.timers[0].fn(); await drain();
+  assert.equal(JSON.stringify(wf),snapshot); assert.equal(p.workflowRuntime.get(wf.id),context);
+  h.assertOwner(); h.release(); await h.first; await drain(); await drain(); assert.equal(h.completions(),1);
+});
+
+test('C12 busy callback persistence errors propagate without releasing the owner token', async () => {
+  const h = busyConsumerHarness(), p = h.plugin;
+  await assert.rejects(p.runTask(h.task,async () => {throw Error('consumer storage failed');}),/consumer storage failed/);
+  h.assertOwner(); h.release(); await h.first; await drain(); await drain(); assert.equal(h.completions(),1);
+});
+
+for (const kind of ['task', 'workflow']) test(`Play blocks delegates and direct shared starts until checkpoint: ${kind}`, async () => {
+  const h = stopCardHarness(), p = h.plugin;
+  p.sharedWorkflowExecution = undefined; delete h.task.runtimeExecution;
+  h.task.status = 'pending'; h.task.taskKind = 'code'; h.task.code = 'output="once";';
+  Object.assign(h.workflow,{name:'Shared',status:'pending',steps:[{id:'a',stepKind:'code',code:'output="once";'}]});
+  p.app = {vault:{adapter:{basePath:'fixture'}}};
+  p.selectedExecutionLocation = () => ({vault:'fixture',installationDirectory:'fixture/install'});
+  p.settingsWriter = {fork(){return this;}};
+  let releaseSave, finish, checkpoint, saves = 0, runs = 0;
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => releaseSave = resolve) : Promise.resolve();
+  p.loadSettings = async () => {};
+  h.setRunner(async options => {runs++; checkpoint = options.onCheckpoint; return await new Promise(resolve => finish = resolve);});
+  const id = kind === 'task' ? h.task.id : h.workflow.id;
+  const views = attachPlayViews(p, kind, id);
+  const run = () => kind === 'task' ? p.runTask({...h.task}) : p.runWorkflow({...h.workflow});
+  const first = run(); assertStarting(views); await run(); assert.equal(saves, 1);
+  await assert.rejects(p.runSharedWorkflow(kind === 'task' ? '@task:t' : id, undefined, false, true, kind === 'task' ? id : undefined), /already starting/);
+  releaseSave(); await drain(); assert.equal(runs, 1); assertStarting(views);
+  const state = {workflowId:kind === 'task' ? '@task:t' : id,runId:'play-run',revision:1,phase:'in_flight',steps:[]};
+  await checkpoint(state); p.refreshStartControls();
+  assert.equal(p.getDefinitionStartState(kind,id), 'active');
+  for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,true);
+  await assert.rejects(run(), /Shared workflow owns/); assert.equal(runs,1);
+  finish({...state,phase:'completed'}); await first;
+  assert.equal(p.getDefinitionStartState(kind,id),'available');
+});
+
+test('Play permits retry after confirmed preflight failure and preserves recovery blocks', async () => {
+  const h = legacyHarness('code'), p = h.plugin;
+  Object.assign(h.workflow,{name:'Empty',status:'pending',steps:[]});
+  const views = attachPlayViews(p,'workflow',h.workflow.id);
+  await p.runWorkflow(h.workflow); assert.equal(p.getDefinitionStartState('workflow',h.workflow.id),'available');
+  h.workflow.steps = [{id:'a',stepKind:'code',code:'output="once";'}];
+  p.createVaultMutationBatch = () => ({record(){},async flush(){}});
+  await p.runWorkflow(h.workflow); assert.equal(h.workflow.status,'completed');
+  assert.ok(h.notices.some(text => /has no steps/.test(text)));
+  h.task.runtimeExecution = {requiresReconciliation:true,runId:'uncertain',phase:'in_flight'};
+  p.configureStartButton(views[0][0],'task',h.task.id,true);
+  assert.equal(views[0][0].disabled,true);
+  await assert.rejects(p.runTask(h.task), /Unfinished attempt uncertain/);
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'blocked');
+});
+
+
+for (const interactiveTerminal of [true, false]) test(`repeated OpenCode Play cannot pass deferred save: interactive=${interactiveTerminal}`, async () => {
+  const h = pluginHarness('fixture'), p = h.plugin; let release, saves = 0;
+  h.task.interactiveTerminal = interactiveTerminal;
+  const views = attachPlayViews(p,'task',h.task.id);
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const first = p.runTask(h.task); assertStarting(views);
+  await p.runTask({...h.task}); assert.equal(saves,1); assert.equal(h.calls.length,0);
+  await p.killTask(h.task.id,p.taskStopIdentity(h.task));
+  release(); await first; assert.equal(h.calls.length,0);
+  assert.equal(p.getDefinitionStartState('task',h.task.id),'blocked');
+  await assert.rejects(p.runTask(h.task), /outcome is unconfirmed/);
+});
+
+test('cancelled Codex start releases only its indicator and never launches after initial save', async () => {
+  const h = legacyHarness('codex'), p = h.plugin; let release, saves = 0, launches = 0;
+  p.createCodexClient = () => {launches++; throw Error('must not launch');};
+  p.saveSettings = () => ++saves === 1 ? new Promise(resolve => release = resolve) : Promise.resolve();
+  const views = attachPlayViews(p,'task',h.task.id);
+  await p.runTask(h.task); assertStarting(views);
+  await p.killTask(h.task.id,p.taskStopIdentity(h.task));
+  release(); await drain(); await drain();
+  assert.equal(launches,0); assert.equal(p.getDefinitionStartState('task',h.task.id),'blocked');
+  for (const buttons of views) for (const b of buttons) {assert.equal(b.disabled,true); assert.equal(b.getAttribute('aria-busy'),'false');}
+});
+
+test('independent definition IDs do not share the pending-start token', async () => {
+  const h = legacyHarness('code'), p = h.plugin;
+  p.settings.tasks.push({...h.task,id:'other'});
+  const resolvers = []; p.createVaultMutationBatch = () => ({record(){},async flush(){}});
+  p.saveSettings = () => resolvers.length < 2 ? new Promise(resolve => resolvers.push(resolve)) : Promise.resolve();
+  const first = p.runTask(h.task), second = p.runTask(p.settings.tasks[1]);
+  assert.equal(p.getDefinitionStartState('task','t'),'starting');
+  assert.equal(p.getDefinitionStartState('task','other'),'starting');
+  assert.equal(resolvers.length,2);
+  resolvers.forEach(resolve => resolve()); await Promise.all([first,second]);
+  assert.equal(p.settings.tasks.filter(task => task.status === 'completed').length,2);
+});
+
+
+test('shared save failure releases Play for retry without invoking the runtime', async () => {
+  const h = stopCardHarness(), p = h.plugin;
+  p.sharedWorkflowExecution = undefined; delete h.task.runtimeExecution;
+  Object.assign(h.workflow,{name:'Retry',status:'pending',steps:[{id:'a',stepKind:'code',code:'output="once";'}]});
+  p.app = {vault:{adapter:{basePath:'fixture'}}};
+  p.selectedExecutionLocation = () => ({vault:'fixture',installationDirectory:'fixture/install'});
+  p.settingsWriter = {fork(){return this;}};
+  let runs = 0;
+  p.saveSettings = async () => {throw Error('synthetic save failure before host');};
+  p.loadSettings = async () => {};
+  h.setRunner(async () => {runs++; return {phase:'completed'};});
+  const views = attachPlayViews(p,'workflow',h.workflow.id);
+  await assert.rejects(p.runWorkflow(h.workflow), /synthetic save failure/);
+  assert.equal(runs,0); assert.equal(p.sharedWorkflowExecution,undefined);
+  for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,false);
+  p.saveSettings = async () => {};
+  await p.runWorkflow(h.workflow); assert.equal(runs,1);
+});
+
+
+test('a workflow containing its uncertain stopped legacy task cannot restart from stale controls', async () => {
+  const h = legacyHarness(), p = h.plugin;
+  h.task.legacyExecution = {token:'old',workflowId:h.workflow.id,stopState:'unconfirmed'};
+  Object.assign(h.workflow,{status:'failed',name:'Uncertain'});
+  let launches = 0; p.runWorkflowStepById = async () => {launches++;};
+  const views = attachPlayViews(p,'workflow',h.workflow.id);
+  for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,true);
+  await assert.rejects(p.runWorkflow({...h.workflow}), /outcome is unconfirmed/);
+  assert.equal(launches,0); assert.equal(h.workflow.status,'failed');
 });

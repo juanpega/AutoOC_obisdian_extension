@@ -1,7 +1,10 @@
+import { catalogTransaction } from "./catalog-transaction";
+import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
+import { assertWorkflowDependencies } from "./retired-dependency";
 import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
 import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
-import { ExecutionJournal, type RunCheckpoint } from "./execution-journal";
+import { ExecutionJournal, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { prepareWorkflowDefinition, type PreparedWorkflow } from "./workflow-definition";
 import { findWorkflowEntry } from "./workflow-routing";
 import { advanceWorkflowSession } from "./workflow-session";
@@ -14,7 +17,7 @@ import type { WorkflowSessionHost } from "./workflow-session";
 import type { CodexApprovalRequest } from "./codex-client";
 import { prepareTaskBranch, verifyWorkflowBranch } from "./workflow-branch";
 import { awaitWorkflowApproval } from "./workflow-approval";
-const advancingLeases = new WeakSet<ExecutionLease>();
+
 
 // Transient display snapshot, never a durable result or a routing input.
 export interface WorkflowTaskOutput {
@@ -33,6 +36,7 @@ export interface WorkflowTaskAdapter {
 }
 
 export function supportsSharedWorkflow(definition:PreparedWorkflow,tasks?:WorkflowTaskAdapter):boolean {
+  assertWorkflowDependencies(definition.workflow, definition.tasks);
   return !definition.workflow.requiresAutoOCSecrets &&
     !definition.tasks.some(task=>task.requiresAutoOCSecrets) &&
     !definition.workflow.steps.some((step:any)=>!["code","delay","task"].includes(step.stepKind || "task")) &&
@@ -56,8 +60,10 @@ export async function runCodeWorkflowHost(options: {
   onCheckpoint?: (checkpoint:RunCheckpoint) => Promise<void>;
   onTaskOutput?: (event:WorkflowTaskOutput) => void;
   lease?: ExecutionLease;
+  admission?: ExecutionAdmission;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
+  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
   if (options.reconcile && !options.resumeRunId) throw new Error("Reconciliation requires an existing run identity");
@@ -69,18 +75,36 @@ export async function runCodeWorkflowHost(options: {
   const entry = findWorkflowEntry(steps);
   if (!entry) throw new Error("Workflow has no entry step");
   const lease = options.lease || acquireExecutionLease(options.runtimeDirectory);
-  lease.assertOwned();
-  if (!samePhysicalPath(options.runtimeDirectory,lease.directory)) throw new Error("Execution lease belongs to another runtime");
-  if (advancingLeases.has(lease)) throw new Error("Execution lease already has an advancing session");
-  advancingLeases.add(lease);
+  const ownsLease = !options.lease;
+  let ownedAdmission: ExecutionAdmission | undefined;
+  let failed = false;
+  let failure: unknown;
+  // Protect every operation after acquisition, including admission preflight.
   try {
+    lease.assertOwned();
+    if (!samePhysicalPath(options.runtimeDirectory,lease.directory)) throw new Error("Execution lease belongs to another runtime");
+    const admission=options.admission || executionCoordinator(lease).admit(definition,options.vaultBase,options.resumeRunId);
+    if (!options.admission) ownedAdmission = admission;
+    admission.assertOwned(lease,definition);
+    if(!options.admission) {
+      const publish=options.onCheckpoint;
+      options={...options,onCheckpoint:async checkpoint=>{admission.bind(checkpoint);await publish?.(checkpoint);admission.confirm(checkpoint);}};
+    }
     const resumed = options.resumeRunId === undefined ? undefined : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
     if (resumed?.snapshot().phase === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
+    if(resumed)admission.bind(resumed.snapshot());
     // Reject changed branches before beginning a step or advancing a durable
     // result. A denied resume must leave its checkpoint recoverable unchanged.
     if (resumed && definition.workflow.handoffBranch && ["ready","in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed,options.vaultBase);
+    }
+    if(resumed && ["completed","failed"].includes(resumed.snapshot().phase)) {
+      // An already terminal resume performs no effect, but its confirmed
+      // projection still resolves the provisional admission of this call.
+      const state=resumed.snapshot();
+      await options.onCheckpoint?.(state);
+      return state;
     }
     if (resumed?.snapshot().phase === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result) {
       if (!options.reconcile || !options.tasks?.reconcile) throw new Error("Interrupted execution requires reconciliation; cannot replay effects");
@@ -101,18 +125,24 @@ export async function runCodeWorkflowHost(options: {
     // surface unresolved checkpoints across the vault, not only this workflow.
     // Read-only reconciliation above may observe an existing result, but no
     // new effects may overlap any other unfinished execution.
+    const journal=await catalogTransaction(lease.directory+"/journal-admission",async()=>{
     for (const file of fs.readdirSync(lease.directory)) {
       if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
       if (fs.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
       const prior = JSON.parse(fs.readFileSync(lease.directory + "/" + file, "utf8"));
       ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
-      if (prior.runId !== options.resumeRunId && !["completed", "failed", "abandoned"].includes(prior.phase)) {
+      const resolved=prior.phase==='abandoned' || prior.disposition || ["completed","failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
+      if (prior.runId !== options.resumeRunId && !admission.knows(prior.runId) && !resolved) {
         throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
       }
     }
     const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
+    admission.bind(journal.snapshot());
+    return journal;
+    });
     return await advanceWorkflowSession(journal, definition, {
       async execute(step:any, input, outputs, signal) {
+        admission.assertOwned(lease,definition);
         if(definition.workflow.handoffBranch)verifyWorkflowBranch(journal,options.vaultBase);
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find(task => task.id === step.taskId);
@@ -161,8 +191,20 @@ export async function runCodeWorkflowHost(options: {
       onTransitionError:()=>{},
       onCheckpoint:options.onCheckpoint,
     }, {signal:options.signal, maxSteps:options.maxSteps});
+  } catch (error) {
+    failed = true;
+    failure = error;
+    throw error;
   } finally {
-    advancingLeases.delete(lease);
-    if (!options.lease) lease.release();
+    const cleanupErrors: unknown[] = [];
+    try { ownedAdmission?.finish(); } catch (error) { cleanupErrors.push(error); }
+    // Admission cleanup must never prevent the identity-checked release.
+    try { if (ownsLease) lease.release(); } catch (error) { cleanupErrors.push(error); }
+    if (cleanupErrors.length) {
+      const errors = failed ? [failure, ...cleanupErrors] : cleanupErrors;
+      throw Object.assign(new Error(`Workflow resource cleanup failed: ${errors.map(String).join('; ')}`), {
+        cause: failed ? failure : cleanupErrors[0], errors,
+      });
+    }
   }
 }

@@ -1,3 +1,4 @@
+import {presentationFields, type ExecutionPresentation} from "./execution-presentation";
 import * as fs from "fs";
 import * as path from "path";
 import {randomUUID} from "crypto";
@@ -5,6 +6,7 @@ import {performance} from "perf_hooks";
 import {readExecutionLeaseOwner, type ExecutionLease} from "./execution-lease";
 import type {RunCheckpoint} from "./execution-journal";
 import {validWorkflowEdit, type WorkflowEditCommand, type WorkflowEditResult} from "./workflow-edit";
+import {executionAdmissionDiagnostic} from "./execution-coordinator";
 
 export interface PluginCommand {
   command: "run" | "resume" | "reconcile";
@@ -12,10 +14,10 @@ export interface PluginCommand {
   taskId?: string;
   runId?: string;
 }
-export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"revision"|"nextStepId">;
-export function executionSummary(state: RunCheckpoint): ExecutionSummary {
+export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"revision"|"nextStepId"> & Partial<ExecutionPresentation>;
+export function executionSummary(state: ExecutionSummary, presentation: Partial<ExecutionPresentation> = state): ExecutionSummary {
   const {runId,workflowId,phase,revision,nextStepId}=state;
-  return {runId,workflowId,phase,revision,nextStepId};
+  return {runId,workflowId,phase,revision,nextStepId,...presentationFields(presentation)};
 }
 const uuid=/^[a-f0-9-]{36}$/;
 function regularDirectory(directory:string):void {
@@ -82,17 +84,17 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // The files carry only IDs/progress, never executable payloads or configuration.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint)=>Promise<void>)=>Promise<RunCheckpoint>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:2});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined;
-  let active:{id:string;controller:AbortController;done?:Promise<void>}|undefined;
+  const active=new Map<string,{id:string;controller:AbortController;editing:boolean;definition:string;done?:Promise<void>}>();
   const seen=new Set<string>();
   const check=()=>{regularDirectory(directory);lease.assertOwned();};
   const checkDescriptor=()=>{
@@ -111,7 +113,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
   };
   const close=()=>{
     if(closed)return;
-    closed=true;active?.controller.abort();
+    closed=true;for(const execution of active.values())execution.controller.abort();
     check();if(fs.existsSync(descriptor)){checkDescriptor();fs.unlinkSync(descriptor);}
   };
   const fail=()=>{
@@ -129,7 +131,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
       catch(error){if(closed)return;throw error;}
     }
     if(closed)return;
-    if(active && fs.existsSync(path.join(directory,active.id+".cancel"))) {read(path.join(directory,active.id+".cancel"));active.controller.abort();}
+    for(const execution of active.values())if(fs.existsSync(path.join(directory,execution.id+".cancel"))) {read(path.join(directory,execution.id+".cancel"));execution.controller.abort();}
     for(const name of fs.readdirSync(directory)) {
       if(!name.endsWith(".request"))continue;
       const id=name.slice(0,-8);if(!uuid.test(id))continue;
@@ -143,8 +145,11 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
         await receipt(id,{status:"rejected",error:"Expired, cancelled or invalid CLI request"});continue;
       }
       if(closed)return;
-      if(active){await receipt(id,{status:"rejected",error:"AutoOC is already executing a CLI request"});continue;}
-      const execution:{id:string;controller:AbortController;done?:Promise<void>}={id,controller:new AbortController()};active=execution;
+      const duplicate=[...active.values()].some(e=>e.definition===`${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`);
+      const busy=duplicate ? "AutoOC is already executing this CLI definition" : active.size>=2 ? "Concurrent execution limit reached (2)" :
+        [...active.values()].some(e=>e.editing) || request.command==="edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : undefined;
+      if(busy){await receipt(id,{status:"rejected",error:busy});continue;}
+      const execution={id,controller:new AbortController(),editing:request.command==="edit-workflow",definition:`${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`,done:undefined as Promise<void>|undefined};active.set(id,execution);
       let checkpoint:ExecutionSummary|undefined;
       const accepted=receipt(id,{status:"accepted"});
       execution.done=(async()=>{
@@ -159,9 +164,9 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
             await receipt(id,{status:"completed",editResult:result});
             return;
           }
-          const result=await execute(request,execution.controller.signal,state=>{
+          const result=await execute(request,execution.controller.signal,(state,presentation)=>{
             if(!acceptingProgress)return Promise.resolve();
-            const next=executionSummary(state);checkpoint=next;
+            const next=executionSummary(state,presentation);checkpoint=next;
             publications=publications.then(()=>receipt(id,{status:"running",checkpoint:next}));
             // Old consumers may not await the callback. Keep it in the ordered
             // chain and observe rejection now, then propagate it at the barrier.
@@ -171,13 +176,13 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
           acceptingProgress=false;
           await publications;
           await receipt(id,{status:"completed",checkpoint:executionSummary(result)});
-        } catch {
+        } catch (error) {
           acceptingProgress=false;
           await publications.catch(()=>{});
           // Raw provider/filesystem errors can contain secrets. Details stay in the existing runtime evidence.
-          try {await receipt(id,{status:"failed",checkpoint,error:request.command==="edit-workflow"?"Workflow edit failed; keep Obsidian open. Export the current definition, check active execution and inspect this receipt before retrying":"Plugin execution or receipt publication failed; inspect AutoOC and the recorded run before retrying"});}
+          try {await receipt(id,{status:"failed",checkpoint,error:request.command==="edit-workflow"?"Workflow edit failed; keep Obsidian open. Export the current definition, check active execution and inspect this receipt before retrying":executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect AutoOC and the recorded run before retrying"});}
           catch {fail();} // An uncertain receipt never authorizes replay.
-        } finally {if(active===execution)active=undefined;}
+        } finally {if(active.get(id)===execution)active.delete(id);}
       })();
       // poll completes only after acceptance has either failed or invoked the
       // executor. Terminal work is tracked separately and must drain on close.
@@ -190,9 +195,9 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
     polling=pollOnce().catch(()=>{fail();throw failure;}).finally(()=>{polling=undefined;});
     return polling;
   };
-  return {poll,close, get hasPendingWork(){return !!polling || !!active || !!failure;},async drain(){
+  return {poll,close, get hasPendingWork(){return !!polling || active.size>0 || !!failure;},async drain(){
     await polling;
-    await active?.done;
+    await Promise.all([...active.values()].map(e=>e.done));
     if(failure)throw failure;
   }};
 }
@@ -234,6 +239,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
   if(!validCommand(command))throw new Error("Invalid CLI command");
   if(Buffer.byteLength(JSON.stringify(command),'utf8')>60000)throw new Error("Workflow edit payload exceeds 60KB; split the edit into smaller patches");
   await replace(file,{protocol:1,owner:owner.token,id,expiresAt,...command},check,false);
+  let observedPresentation:string|undefined;
   let accepted=false,lastProgress="",runId="runId" in command?command.runId:undefined;
   for(;;){
     try {
@@ -255,6 +261,14 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
             "runId" in command && command.runId && checkpoint.runId!==command.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision<0 ||
             !["ready","in_flight","completed","failed","abandoned"].includes(checkpoint.phase) ||
             !(checkpoint.nextStepId===null || typeof checkpoint.nextStepId==="string")))throw new Error("Invalid CLI receipt checkpoint");
+        if(checkpoint) {
+          if(runId && checkpoint.runId!==runId)throw new Error("CLI receipt run identity changed");
+          const metadata=presentationFields(checkpoint);
+          const serializedMetadata=JSON.stringify(metadata);
+          if(observedPresentation !== undefined && serializedMetadata !== observedPresentation)throw new Error("CLI receipt presentation changed");
+          observedPresentation=serializedMetadata;
+          if(metadata.executionKind !== undefined && metadata.executionKind !== (command.taskId ? "task" : "workflow"))throw new Error("CLI receipt execution kind mismatch");
+        }
         if(result.checkpoint){
           runId=result.checkpoint.runId;
           const serialized=JSON.stringify(result.checkpoint);

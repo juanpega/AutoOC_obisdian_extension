@@ -22,3 +22,6 @@ export { createCodeWorkflowAdapter } from "./code-workflow-adapter";
 export { createWorkflowTaskAdapter, combineWorkflowTaskAdapters } from "./workflow-task-adapters";
 export type { PreparedWorkflow } from "./workflow-definition";
 export type { RunCheckpoint } from "./execution-journal";
+
+export { executionCoordinator, validateConcurrency } from "./execution-coordinator";
+export type { ConcurrencyPolicy } from "./execution-coordinator";

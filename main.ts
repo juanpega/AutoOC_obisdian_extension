@@ -1,4 +1,10 @@
+import type {ExecutionPresentation} from "./execution-presentation";
+import { catalogTransaction } from "./catalog-transaction";
+import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
+import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
+import { LegacyOutputRedaction } from "./legacy-output-redaction";
 import { samePhysicalPath } from "./path-identity";
+import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
 import {createPluginRequestHost} from "./cli-plugin-requests";
 import {applyWorkflowEdit} from "./workflow-edit";
 import { buildOpenCodeScript } from "./opencode-script";
@@ -452,7 +458,7 @@ type LegacyStopIdentity = { kind: "legacy"; token: string; taskId: string; workf
 type SharedStopIdentity = { kind: "shared"; taskId: string; runId: string; workflowId: string; stepId: string; stepIndex: number };
 type TaskStopIdentity = LegacyStopIdentity | SharedStopIdentity;
 type LegacyAttempt = { identity: LegacyStopIdentity; task: ScheduledTask; owner?: LegacyOwner; cancelled: boolean;
-  handle?: { kill(): unknown }; stopPromise?: Promise<string> };
+  handle?: { kill(): unknown }; stopPromise?: Promise<string>; releaseStart?: () => void };
 type DefaultAiEngine = "opencode" | "codex" | "copilot";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
@@ -474,6 +480,7 @@ interface WorkflowTransition {
 }
 
 interface WorkflowStep {
+  requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
   name?: string;
@@ -505,6 +512,7 @@ interface WorkflowStep {
 }
 
 interface ScheduledTask {
+  concurrency?: ConcurrencyPolicy;
   legacyExecution?: LegacyStopIdentity & { startedAt: string; finishedAt?: string; stopState?: "requested" | "unconfirmed" | "error"; stopError?: string };
   id: string;
   taskKind?: TaskKind;
@@ -527,7 +535,7 @@ interface ScheduledTask {
   output: string;
   createdAt: string;       // ISO string;
   workingDirectory?: string; // Optional path override
-  requiresAutoOCSecrets?: boolean; // Shared runtime must reject this dependency.
+  requiresAutoOCSecrets?: boolean; // All hosts reject this retired dependency.
   branch?: string;           // Git branch name
   createBranch?: boolean;    // Create branch if it doesn't exist
   code?: string;
@@ -552,6 +560,8 @@ interface ScheduledTask {
 type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 
 interface Workflow {
+  concurrency?: ConcurrencyPolicy;
+  requiresAutoOCSecrets?: boolean;
   legacyExecution?: { token: string };
   id: string;
   name: string;
@@ -645,6 +655,7 @@ function renderAreaSuggestions(
 //   - internal id, status, lastRun, output, createdAt
 //   - model (taken from the importer's system default)
 interface ExportTask {
+  concurrency?: ConcurrencyPolicy;
   exportId: string;
   requiresAutoOCSecrets?: boolean;
   taskKind?: TaskKind;
@@ -733,6 +744,7 @@ function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin):
 }
 
 interface ExportWorkflowStep {
+  requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
   name?: string;
@@ -760,6 +772,8 @@ interface ExportWorkflowStep {
 }
 
 interface ExportWorkflow {
+  concurrency?: ConcurrencyPolicy;
+  requiresAutoOCSecrets?: boolean;
   exportId: string;
   name: string;
   area?: string;
@@ -799,56 +813,6 @@ interface LibraryIndex {
   library: LibraryEntry[];
 }
 
-type SecretType = "token" | "api_key" | "username" | "password" | "cookie" | "basic_auth" | "custom";
-
-interface SecretRecord {
-  id: string;
-  name: string;
-  envName: string;
-  type: SecretType;
-  profile: string;
-  encryptedValue: string;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface SecretsVaultPin {
-  enabled: boolean;
-  salt: string;
-  hash: string;
-}
-
-interface SecretsVault {
-  schemaVersion: number;
-  pin?: SecretsVaultPin;
-  secrets: SecretRecord[];
-}
-
-const SECRET_TYPES: SecretType[] = ["token", "api_key", "username", "password", "cookie", "basic_auth", "custom"];
-const SECRETS_SCHEMA_VERSION = 1;
-const SECRETS_UNLOCK_MS = 5 * 60 * 1000;
-
-function normalizeEnvName(value: string): string {
-  const cleaned = value
-    .trim()
-    .replace(/[^A-Za-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .toUpperCase();
-  const prefixed = cleaned.startsWith("AUTOOC_") ? cleaned : `AUTOOC_${cleaned || "SECRET"}`;
-  return /^[A-Za-z_]/.test(prefixed) ? prefixed : `AUTOOC_${prefixed}`;
-}
-
-function hashSecretPin(pin: string, salt: string): string {
-  return crypto.pbkdf2Sync(pin, salt, 120_000, 32, "sha256").toString("base64");
-}
-
-function timingSafeEqualText(a: string, b: string): boolean {
-  const aBuf = Buffer.from(a);
-  const bBuf = Buffer.from(b);
-  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
-}
-
 function tryGetSafeStorage(): any | null {
   try {
     const electron = typeof window !== "undefined" && (window as any).require
@@ -858,144 +822,6 @@ function tryGetSafeStorage(): any | null {
     if (safeStorage?.isEncryptionAvailable?.()) return safeStorage;
   } catch { /* ignore */ }
   return null;
-}
-
-class SecretStore {
-  private vault: SecretsVault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
-  private unlockedUntil = 0;
-
-  constructor(private vaultBasePath: string) {}
-
-  get filePath(): string {
-    return path.join(this.vaultBasePath, ".obsidian", "plugins", "auto-oc", "secrets.vault.json");
-  }
-
-  load(): void {
-    const file = this.filePath;
-    if (!fs.existsSync(file)) {
-      this.vault = { schemaVersion: SECRETS_SCHEMA_VERSION, secrets: [] };
-      return;
-    }
-    const raw = fs.readFileSync(file, "utf8");
-    const parsed = raw.trim() ? JSON.parse(raw) : {};
-    this.vault = {
-      schemaVersion: parsed.schemaVersion || SECRETS_SCHEMA_VERSION,
-      pin: parsed.pin,
-      secrets: Array.isArray(parsed.secrets) ? parsed.secrets : [],
-    };
-  }
-
-  save(): void {
-    const file = this.filePath;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, `${JSON.stringify(this.vault, null, 2)}\n`, "utf8");
-  }
-
-  isSecureStorageAvailable(): boolean {
-    return !!tryGetSafeStorage();
-  }
-
-  hasPin(): boolean {
-    return !!this.vault.pin?.enabled && !!this.vault.pin.hash && !!this.vault.pin.salt;
-  }
-
-  isUnlocked(): boolean {
-    return !this.hasPin() || Date.now() < this.unlockedUntil;
-  }
-
-  lock(): void {
-    this.unlockedUntil = 0;
-  }
-
-  verifyPin(pin: string): boolean {
-    const pinData = this.vault.pin;
-    if (!pinData?.enabled) return true;
-    const hash = hashSecretPin(pin, pinData.salt);
-    const ok = timingSafeEqualText(hash, pinData.hash);
-    if (ok) this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
-    return ok;
-  }
-
-  setPin(pin: string): void {
-    const salt = crypto.randomBytes(16).toString("base64");
-    this.vault.pin = { enabled: true, salt, hash: hashSecretPin(pin, salt) };
-    this.unlockedUntil = Date.now() + SECRETS_UNLOCK_MS;
-    this.save();
-  }
-
-  resetPin(): void {
-    delete this.vault.pin;
-    this.unlockedUntil = 0;
-    this.save();
-  }
-
-  list(): SecretRecord[] {
-    return [...this.vault.secrets].sort((a, b) => a.name.localeCompare(b.name));
-  }
-
-  encryptValue(value: string): string {
-    const safeStorage = tryGetSafeStorage();
-    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
-    return Buffer.from(safeStorage.encryptString(value)).toString("base64");
-  }
-
-  decryptValue(record: SecretRecord): string {
-    const safeStorage = tryGetSafeStorage();
-    if (!safeStorage) throw new Error("Secure storage is not available on this system.");
-    return safeStorage.decryptString(Buffer.from(record.encryptedValue, "base64"));
-  }
-
-  upsert(input: { id?: string; name: string; envName: string; type: SecretType; profile: string; value?: string; notes?: string }): void {
-    const now = new Date().toISOString();
-    const existing = input.id ? this.vault.secrets.find((s) => s.id === input.id) : undefined;
-    if (existing) {
-      existing.name = input.name.trim();
-      existing.envName = normalizeEnvName(input.envName || input.name);
-      existing.type = input.type;
-      existing.profile = input.profile.trim() || "default";
-      existing.notes = input.notes || "";
-      existing.updatedAt = now;
-      if (input.value !== undefined) existing.encryptedValue = this.encryptValue(input.value);
-    } else {
-      this.vault.secrets.push({
-        id: generateId(),
-        name: input.name.trim(),
-        envName: normalizeEnvName(input.envName || input.name),
-        type: input.type,
-        profile: input.profile.trim() || "default",
-        encryptedValue: this.encryptValue(input.value || ""),
-        notes: input.notes || "",
-        createdAt: now,
-        updatedAt: now,
-      });
-    }
-    this.save();
-  }
-
-  delete(id: string): void {
-    this.vault.secrets = this.vault.secrets.filter((s) => s.id !== id);
-    this.save();
-  }
-
-  getEnv(profile = "default"): Record<string, string> {
-    const result: Record<string, string> = {};
-    for (const secret of this.vault.secrets) {
-      if (secret.profile && secret.profile !== "default" && secret.profile !== profile) continue;
-      result[secret.envName] = this.decryptValue(secret);
-    }
-    return result;
-  }
-
-  getRedactionValues(): string[] {
-    const values: string[] = [];
-    for (const secret of this.vault.secrets) {
-      try {
-        const value = this.decryptValue(secret);
-        if (value && value.length >= 4) values.push(value);
-      } catch { /* ignore */ }
-    }
-    return values;
-  }
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1247,6 +1073,7 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
   return {
     exportId,
     taskKind: task.taskKind,
+    concurrency: task.concurrency,
     copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : undefined,
     requiresAutoOCSecrets: task.requiresAutoOCSecrets,
     name: task.name,
@@ -1284,6 +1111,8 @@ function toExportWorkflow(
 ): ExportWorkflow {
   return {
     exportId,
+    requiresAutoOCSecrets: workflow.requiresAutoOCSecrets,
+    concurrency: workflow.concurrency,
     name: workflow.name,
     area: workflow.area,
     description: workflow.description,
@@ -1298,6 +1127,7 @@ function toExportWorkflow(
     handoffOutput: workflow.handoffOutput,
     steps: workflow.steps.map((step) => ({
       id: step.id,
+      requiresAutoOCSecrets: step.requiresAutoOCSecrets,
       stepKind: step.stepKind || "task",
       name: step.name,
       area: step.area,
@@ -1416,90 +1246,8 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("autooc-mcp")
 SCRIPT_PATH = Path(__file__).resolve()
 VAULT_PATH = Path(os.environ.get("AUTOOC_VAULT_PATH") or SCRIPT_PATH.parents[3])
-SECRETS_PATH = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc" / "secrets.vault.json"
 PLUGIN_DIR = VAULT_PATH / ".obsidian" / "plugins" / "auto-oc"
 BRIDGE_PATH = PLUGIN_DIR / "mcp-bridge.json"
-
-
-def read_secrets_metadata() -> list[dict[str, Any]]:
-    try:
-        if not SECRETS_PATH.exists():
-            return []
-        data = json.loads(SECRETS_PATH.read_text(encoding="utf-8") or "{}")
-        secrets = data.get("secrets") if isinstance(data, dict) else []
-        if not isinstance(secrets, list):
-            return []
-        return [
-            {
-                "name": secret.get("name"),
-                "envName": secret.get("envName"),
-                "type": secret.get("type"),
-                "profile": secret.get("profile") or "default",
-                "updatedAt": secret.get("updatedAt"),
-            }
-            for secret in secrets
-            if isinstance(secret, dict)
-        ]
-    except Exception as exc:
-        return [{"error": str(exc)}]
-
-
-def normalize_key(value: str | None) -> str:
-    text = str(value or "").strip()
-    text = re.sub(r"^https?://", "", text, flags=re.I)
-    text = re.sub(r"^www\.", "", text, flags=re.I)
-    text = text.split("/")[0].split(":")[0]
-    text = re.sub(r"\.[^.]+$", "", text)
-    text = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")
-    return text.upper()
-
-
-def secret_value_for(secret: dict[str, Any] | None) -> str:
-    if not secret:
-        return ""
-    env_name = secret.get("envName")
-    return os.environ.get(str(env_name), "") if env_name else ""
-
-
-def find_secret_by_name_or_env(name: str) -> dict[str, Any] | None:
-    wanted = normalize_key(name)
-    for secret in read_secrets_metadata():
-        if normalize_key(secret.get("name")) == wanted or normalize_key(secret.get("envName")) == wanted:
-            return secret
-    return None
-
-
-def find_web_credentials(site: str) -> dict[str, Any]:
-    key = normalize_key(site)
-    secrets = read_secrets_metadata()
-
-    def is_for_site(secret: dict[str, Any]) -> bool:
-        return key in normalize_key(secret.get("name")) or key in normalize_key(secret.get("envName"))
-
-    def is_user(secret: dict[str, Any]) -> bool:
-        name = normalize_key(secret.get("name"))
-        env = normalize_key(secret.get("envName"))
-        type_name = str(secret.get("type") or "").lower()
-        return type_name == "username" or "USER" in name or "USER" in env
-
-    def is_pass(secret: dict[str, Any]) -> bool:
-        name = normalize_key(secret.get("name"))
-        env = normalize_key(secret.get("envName"))
-        type_name = str(secret.get("type") or "").lower()
-        return type_name == "password" or "PASS" in name or "PASS" in env
-
-    user = next((secret for secret in secrets if is_for_site(secret) and is_user(secret)), None)
-    password = next((secret for secret in secrets if is_for_site(secret) and is_pass(secret)), None)
-    username_value = secret_value_for(user)
-    password_value = secret_value_for(password)
-    return {
-        "site": site,
-        "usernameEnv": user.get("envName") if user else None,
-        "passwordEnv": password.get("envName") if password else None,
-        "username": username_value,
-        "password": password_value,
-        "found": bool(username_value and password_value),
-    }
 
 
 def bridge_post(endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -1534,47 +1282,6 @@ def vault_note_path(note_path: str) -> Path | None:
         return candidate if candidate.suffix.lower() == ".md" else None
     except Exception:
         return None
-
-
-@mcp.tool()
-def secrets_status() -> dict[str, Any]:
-    """Show AutoOC secrets vault status without revealing secret values."""
-    secrets = [secret for secret in read_secrets_metadata() if "error" not in secret]
-    return {"vaultPath": str(VAULT_PATH), "secretsPath": str(SECRETS_PATH), "secretsCount": len(secrets)}
-
-
-@mcp.tool()
-def list_secret_envs() -> list[dict[str, Any]]:
-    """List AutoOC secret names and environment variable names without revealing values."""
-    return read_secrets_metadata()
-
-
-@mcp.tool()
-def mcp_header_template() -> dict[str, Any]:
-    """Return a headers template mapping AutoOC secret names to {env:...} references."""
-    headers: dict[str, str] = {}
-    for secret in read_secrets_metadata():
-        name = secret.get("name")
-        env_name = secret.get("envName")
-        if name and env_name:
-            headers[str(name)] = "{env:" + str(env_name) + "}"
-    return {"headers": headers}
-
-
-@mcp.tool()
-def get_secret_value(name: str) -> dict[str, Any]:
-    """Return one AutoOC secret value by secret name or env var. Use only when the task explicitly needs the credential."""
-    secret = find_secret_by_name_or_env(name)
-    if not secret:
-        return {"found": False}
-    value = secret_value_for(secret)
-    return {"found": bool(value), "name": secret.get("name"), "envName": secret.get("envName"), "value": value}
-
-
-@mcp.tool()
-def get_web_credentials(site: str) -> dict[str, Any]:
-    """Return username and password for a website from AutoOC secrets."""
-    return find_web_credentials(site)
 
 
 @mcp.tool()
@@ -1878,7 +1585,9 @@ export default class AutoOCPlugin extends Plugin {
   private settingsPublicationState: "ready" | "loading" | "conflict" = "ready";
   private settingsWritableCatalog?: {file:string;version:ObservedVersion};
   settings!: AutoOCSettings;
-  secretStore!: SecretStore;
+  private legacyOutputRedaction = new LegacyOutputRedaction(() => {
+    new Notice("AutoOC: historical output masking is unavailable or incomplete. The historical store was kept unchanged.");
+  });
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
@@ -1898,7 +1607,19 @@ export default class AutoOCPlugin extends Plugin {
   private workflowEditPending = false;
   private cliRequestTimer?: number;
   private pluginExecutionLocation?: InstalledWorkflowLocation;
-  private sharedWorkflowExecution?: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint;liveOutput?:WorkflowTaskOutput};
+  private sharedWorkflowExecutions = new Map<string, {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint;liveOutput?:WorkflowTaskOutput}>();
+  // Compatibility for exclusive maintenance reservations and existing observers.
+  private get sharedWorkflowExecution() { return this.sharedWorkflowExecutions?.values().next().value; }
+  private set sharedWorkflowExecution(value: {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint;liveOutput?:WorkflowTaskOutput} | undefined) {
+    this.sharedWorkflowExecutions ||= new Map();
+    this.sharedWorkflowExecutions.clear();
+    if(value)this.sharedWorkflowExecutions.set(value.workflowId,value);
+  }
+  private sharedExecution(workflowId?:string,taskId?:string,runId?:string) {
+    return [...(this.sharedWorkflowExecutions?.values() || [])].find(e=>(!workflowId || e.workflowId===workflowId) && (!taskId || e.taskId===taskId || e.checkpoint?.steps.some(s=>this.settings.workflows.find(w=>w.id===e.workflowId)?.steps.some(step=>step.id===s.stepId && step.taskId===taskId))) && (!runId || e.runId===runId));
+  }
+  private sharedSettingsBaseline?: ReturnType<typeof captureJsonStructure>;
+  private sharedCompletions = new Set<Promise<unknown>>();
   private mcpBridgeServer?: http.Server;
   private mcpBridgeToken = "";
 
@@ -1914,6 +1635,8 @@ export default class AutoOCPlugin extends Plugin {
   private startupWaitingForOwner = false;
   private startupRecoveryDisposed = false;
   private startupRetry?: Promise<void>;
+  private settingsRecoveryPromise?: Promise<unknown>;
+  private windowCloseDrain?: Promise<void>;
   private observedJournalSnapshot?: string;
   private observationProof?: string;
   private executionAttempted = false;
@@ -1960,7 +1683,7 @@ export default class AutoOCPlugin extends Plugin {
   private journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs.existsSync(path.join(directory, 'data.json.write-lock')) || fs.readdirSync(directory).some(name => name.startsWith('data.json.') && name.endsWith('.tmp'))) throw new Error('Unfinished configuration write');
+    if (fs.existsSync(path.join(directory, 'data.json.write-lock')) || fs.existsSync(path.join(directory,'data.json.write-intent')) || fs.readdirSync(directory).some(name => name.startsWith('data.json.') && name.endsWith('.tmp'))) throw new Error('Unfinished configuration write');
     const names = fs.readdirSync(runtime).sort();
     if (names.some(name => name === 'update-pending.json' || name.endsWith('.tmp') || name.endsWith('.write-lock'))) throw new Error('Unfinished runtime write or update');
     return {runtime,names:names.filter(name => /^[a-zA-Z0-9-]+\.json$/.test(name))};
@@ -2116,8 +1839,20 @@ export default class AutoOCPlugin extends Plugin {
 
   async onload() {
     this.startupPending = true;
+    this.registerWindowCloseGuard();
     try {
-      try { this.reservePluginExecution(); }
+      try {
+        const location=this.selectedExecutionLocation(false);
+        if(fs.existsSync(location.configurationFile+'.write-intent')){
+          if(!await hasCompleteInstalledReleaseAsync(location.installationDirectory,PLUGIN_BUILD_VERSION))throw new Error('Interrupted settings recovery requires a complete verified package');
+          this.settingsRecoveryPromise=recoverInterruptedSettingsWrite(location.installationDirectory,()=>this.assertLifecycleOpen());
+          try{
+            const recovered=await this.settingsRecoveryPromise;
+            if(recovered)new Notice('AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.',10000);
+          }finally{this.settingsRecoveryPromise=undefined;}
+        }
+        this.reservePluginExecution();
+      }
       catch (error) {
         this.startupPending = false;
         this.lifecycleStopped = true;
@@ -2231,11 +1966,6 @@ export default class AutoOCPlugin extends Plugin {
       // Closing a vault window need not emit workspace quit. Start the same
       // guarded cleanup synchronously before Electron destroys that renderer.
       // Pending writes/effects still retain their reservation if not drained.
-      if (typeof window.addEventListener === 'function') {
-        const close = () => { void this.onunload().catch(error => console.warn('AutoOC window cleanup retained reservation', error)); };
-        window.addEventListener('beforeunload', close);
-        this.register(() => window.removeEventListener('beforeunload', close));
-      }
       this.ready = true;
       this.startCliRequests();
       this.cliRequestTimer = window.setInterval(() => {
@@ -2259,7 +1989,34 @@ export default class AutoOCPlugin extends Plugin {
     } finally { this.startupPending = false; }
   }
 
+  private registerWindowCloseGuard():void {
+    if(typeof window.addEventListener!=='function')return;
+    const close=(event:BeforeUnloadEvent)=>{
+      const publishingCLI=this.cliRequestHost?.hasPendingWork&&!this.sharedWorkflowExecution&&!this.runningProcesses.size&&!this.runningCodexClients.size&&!this.legacyAttempts.size;
+      if(this.settingsWriter.hasPendingWrites||publishingCLI||this.settingsRecoveryPromise){
+        // Electron destroys the renderer without awaiting async onunload.
+        // Do not turn reload/navigation into window.close(): retain the user's
+        // original action and let them retry once durable publication finishes.
+        event.preventDefault();(event as any).returnValue=false;
+        if(!this.windowCloseDrain){
+          new Notice('AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.',8000);
+          this.windowCloseDrain=Promise.all([this.settingsWriter.drain(),publishingCLI?this.cliRequestHost?.drain():undefined,this.settingsRecoveryPromise]).then(()=>{
+            new Notice('AutoOC: saving finished. You can close or reload the window.');
+          }).catch(error=>{
+            console.warn('AutoOC window kept open after save failure',error);
+            new Notice('AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.',10000);
+          }).finally(()=>{this.windowCloseDrain=undefined;});
+        }
+        return;
+      }
+      void this.onunload().catch(error=>console.warn('AutoOC window cleanup retained reservation',error));
+    };
+    window.addEventListener('beforeunload',close);
+    this.register(()=>window.removeEventListener('beforeunload',close));
+  }
+
   async onunload() {
+    const drainingSharedSessions=this.sharedCompletions.size>0;
     this.startupRecoveryDisposed = true;
     this.stopStartupWait();
     this.lifecycleStopped = true;
@@ -2284,7 +2041,7 @@ export default class AutoOCPlugin extends Plugin {
       try { this.assertPluginCanRelease(); }
       catch (error) { unresolved = true; console.warn("AutoOC retained execution reservation", error); }
     }
-    this.sharedWorkflowExecution?.controller.abort();
+    for(const execution of this.sharedWorkflowExecutions?.values() || [])execution.controller.abort();
     for (const controller of this.workflowDelayControllers.values()) controller.abort();
     this.workflowDelayControllers.clear();
     // Capture/close only this instance's bridge before relinquishing ownership.
@@ -2302,11 +2059,15 @@ export default class AutoOCPlugin extends Plugin {
       this.app.workspace.detachLeavesOfType(VIEW_TYPE);
       this.releasePluginExecution(!!unresolved);
     }
-    if (mayReleaseAfterWrites) {
+    if (mayReleaseAfterWrites || drainingSharedSessions) {
       try {
+        const settled=await Promise.allSettled([...this.sharedCompletions]);
+        if(settled.some(result=>result.status==="rejected"))throw new Error("Shared execution drain is uncertain; reservation retained");
         await Promise.all([this.settingsWriter.drain(), closingRequestHost?.drain()]);
         if (this.pluginExecutionLease === drainingLease) {
-          this.assertPluginCanRelease();
+          if(drainingSharedSessions && !this.sharedWorkflowExecutions.size && !this.legacyAttempts.size && !this.runningProcesses.size && !this.runningCodexClients.size && !this.workflowDelayControllers.size && !this.startupPending) {
+            assertInstalledExecutionIdle(this.selectedExecutionLocation().installationDirectory);
+          } else this.assertPluginCanRelease();
           this.releasePluginExecution(false);
         }
       } catch (error) { console.warn("AutoOC retained execution reservation after pending writes", error); }
@@ -2473,7 +2234,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   isWorkflowExecuting(workflowId:string):boolean {
-    if (this.sharedWorkflowExecution?.workflowId === workflowId) return true;
+    if (this.sharedExecution(workflowId)) return true;
     const workflow=this.settings.workflows.find(item=>item.id===workflowId);
     return !!workflow && (!(workflow as any).runtimeExecution || !!workflow.legacyExecution) && workflow.status === "running";
   }
@@ -2524,19 +2285,33 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint)=>void|Promise<void>}) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}) {
+    const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
+    if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
+    const pending = this.withDefinitionStart(kind, id,
+      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release));
+    this.sharedCompletions.add(pending);
+    try { return (await pending)!; }
+    finally { this.sharedCompletions.delete(pending); }
+  }
+
+  private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void) {
+    if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
+    const selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
+    if (selected) assertWorkflowDependencies(selected, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
     const location = this.selectedExecutionLocation();
-    if (this.sharedWorkflowExecution) throw new Error("A shared workflow is already executing");
+    if (this.sharedExecution(workflowId)) throw new Error("A shared workflow is already executing");
     if (Array.from(this.legacyAttempts?.values() || []).some(attempt => !attempt.cancelled) ||
         this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size) {
       throw new Error("Legacy tasks must finish before shared execution");
     }
     const execution = {workflowId,taskId,runId:undefined as string | undefined,controller:new AbortController(),checkpoint:undefined as RunCheckpoint | undefined,liveOutput:undefined as WorkflowTaskOutput | undefined};
-    this.sharedWorkflowExecution = execution;
+    this.sharedWorkflowExecutions.set(workflowId,execution);
     const abort = () => execution.controller.abort();
     external?.signal.addEventListener("abort", abort, {once:true});
     if (external?.signal.aborted) abort();
@@ -2544,25 +2319,32 @@ export default class AutoOCPlugin extends Plugin {
     let lastCatalog: PersistedWorkflowCatalog | undefined, executionFailed = false;
     try {
       await this.saveSettings(false);
+      if(this.sharedSettingsBaseline && !matchesJsonStructure(this.settings,this.sharedSettingsBaseline))throw new Error("AutoOC settings changed during save; local edits preserved; reload before continuing");
       expectedSettings = captureJsonStructure(this.settings);
+      this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
         vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
-        lease:this.pluginExecutionLease, signal:execution.controller.signal,
+        lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
         catalogWriter:this.settingsWriter.fork(),
+        catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations:()=>this.createVaultMutationBatch(),
         redact:output=>this.redactSecrets(output),
         onTaskOutput:event=>{
-          if (this.lifecycleStopped || this.sharedWorkflowExecution !== execution || execution.controller.signal.aborted ||
+          if (this.lifecycleStopped || this.sharedWorkflowExecutions.get(workflowId) !== execution || execution.controller.signal.aborted ||
               event.runId !== execution.runId || event.workflowId !== workflowId) return;
           execution.liveOutput = event;
         },
-        onCheckpoint:async (checkpoint,catalog)=>{
-          if (this.lifecycleStopped || this.sharedWorkflowExecution !== execution || checkpoint.workflowId !== workflowId) return;
+        onCheckpoint:async (checkpoint,catalog,presentation)=>{
+          if(this.lifecycleStopped) {
+            if(catalog)await this.settingsWriter.adoptConfirmed(location.configurationFile,catalog.version,()=>true);
+            return;
+          }
+          if (this.sharedWorkflowExecutions.get(workflowId) !== execution || checkpoint.workflowId !== workflowId) return;
           if (execution.runId && checkpoint.runId !== execution.runId || execution.checkpoint && checkpoint.revision < execution.checkpoint.revision) return;
           if (catalog && (catalog.runId !== checkpoint.runId || catalog.workflowId !== checkpoint.workflowId || catalog.revision !== checkpoint.revision)) {
             throw new Error("Confirmed catalog progress identity mismatch");
           }
-          if (!expectedSettings || !matchesJsonStructure(this.settings,expectedSettings)) {
+          if (!expectedSettings || !matchesJsonStructure(this.settings,this.sharedSettingsBaseline || expectedSettings)) {
             throw new Error("AutoOC settings changed during execution; local edits preserved; reload before continuing");
           }
           execution.runId = checkpoint.runId;
@@ -2571,23 +2353,28 @@ export default class AutoOCPlugin extends Plugin {
           else await this.loadSettings();
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
-          if (this.sharedWorkflowExecution !== execution) return;
+          this.sharedSettingsBaseline = expectedSettings;
+          releaseStart?.();
+          if (this.sharedWorkflowExecutions.get(workflowId) !== execution) return;
           this.refreshOpenViews();
-          await external?.progress(checkpoint);
+          await external?.progress(checkpoint,presentation);
         },
       });
     } catch (error) { executionFailed = true; throw error; }
     finally {
       external?.signal.removeEventListener("abort", abort);
-      const stillOwned = this.sharedWorkflowExecution === execution;
-      if (stillOwned) this.sharedWorkflowExecution = undefined;
+      const stillOwned = this.sharedWorkflowExecutions.get(workflowId) === execution;
+      if (stillOwned) this.sharedWorkflowExecutions.delete(workflowId);
       // Reproject the last confirmed snapshot after ownership ends. Do not
       // overwrite a local edit or mask the original execution/storage error.
-      if (stillOwned && !this.lifecycleStopped && expectedSettings && matchesJsonStructure(this.settings,expectedSettings)) {
+      if (stillOwned && !this.lifecycleStopped && expectedSettings && matchesJsonStructure(this.settings,this.sharedSettingsBaseline || expectedSettings)) {
         try {
-          if (lastCatalog) await this.loadSettingsSnapshot(lastCatalog);
-          else await this.loadSettings();
-          this.refreshOpenViews();
+          await catalogTransaction(location.configurationFile,async()=>{
+            if(lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog);
+            else await this.loadSettings();
+            this.sharedSettingsBaseline=captureJsonStructure(this.settings);
+            this.refreshOpenViews();
+          });
         } catch (error) {
           if (!executionFailed) throw error;
           console.warn("AutoOC: final catalog refresh could not be confirmed.");
@@ -2596,19 +2383,87 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
+  ownsExecution(workflowId:string,runId:string):boolean {return this.ownsSharedRun(workflowId,runId);}
+
   private ownsSharedRun(workflowId:string, runId:string):boolean {
-    if (this.sharedWorkflowExecution?.workflowId !== workflowId || this.sharedWorkflowExecution.runId !== runId || !this.pluginExecutionLease) return false;
+    if (!this.sharedExecution(workflowId,undefined,runId) || !this.pluginExecutionLease) return false;
     try { this.pluginExecutionLease.assertOwned(); return true; } catch { return false; }
   }
 
   taskLogOutput(task:ScheduledTask):string {
-    const execution=this.sharedWorkflowExecution,live=execution?.liveOutput,state=execution?.checkpoint;
+    const execution=this.sharedExecution((task as any).runtimeExecution?.workflowId,undefined,(task as any).runtimeExecution?.runId),live=execution?.liveOutput,state=execution?.checkpoint;
     const binding=(task as any).runtimeExecution;
     if (!this.lifecycleStopped && live && state?.phase === "in_flight" && task.status === "running" &&
         live.taskId === task.id && live.runId === state.runId && live.workflowId === state.workflowId &&
         live.stepIndex === state.steps.length - 1 && live.stepId === state.steps[live.stepIndex]?.stepId &&
         binding?.runId === live.runId && binding.stepIndex === live.stepIndex && binding.stepId === live.stepId) return live.output;
     return task.output || "";
+  }
+
+  // Ephemeral ownership is keyed by canonical identity, never persisted.
+  private definitionStarts = new Map<string, symbol>();
+
+  getDefinitionStartState(kind: "task" | "workflow", id: string): "available" | "starting" | "active" | "blocked" {
+    if (this.definitionStarts?.has(`${kind}:${id}`)) return "starting";
+    const item = kind === "task" ? this.settings.tasks.find(t => t.id === id) : this.settings.workflows.find(w => w.id === id);
+    if (!item) return "blocked";
+    if (kind === "task" ? this.isTaskActive(item as ScheduledTask) : this.isWorkflowExecuting(id)) return "active";
+    const binding = (item as any).runtimeExecution;
+    if ((item as ScheduledTask).legacyExecution?.stopState || kind === "workflow" && this.hasUncertainLegacyTask(id) || binding && (binding.requiresReconciliation ||
+        !["completed", "failed", "abandoned"].includes(binding.phase) || binding.phase !== "abandoned" && binding.terminalUncertainty && !binding.disposition)) return "blocked";
+    return "available";
+  }
+
+  private hasUncertainLegacyTask(workflowId: string): boolean {
+    const workflow = this.settings.workflows.find(item => item.id === workflowId);
+    return this.settings.tasks.some(task => task.legacyExecution?.workflowId === workflowId && !!task.legacyExecution.stopState &&
+      workflow?.steps.some(step => (!step.stepKind || step.stepKind === "task") && step.taskId === task.id));
+  }
+
+  configureStartButton(button: HTMLButtonElement, kind: "task" | "workflow", id: string, compact: boolean): void {
+    button.setAttr("data-autooc-start-kind", kind);
+    button.setAttr("data-autooc-start-id", id);
+    button.setAttr("data-autooc-start-compact", String(compact));
+    const state = this.getDefinitionStartState(kind, id);
+    const label = state === "starting" ? "Iniciando…" : state === "active" ? "Running…" : state === "blocked" ? "Recovery required" : kind === "task" ? "Run" : "Run Workflow";
+    button.disabled = state !== "available";
+    button.textContent = state === "starting" ? "⏳ Iniciando…" : compact ? "▶" : `▶ ${label}`;
+    button.title = label;
+    button.setAttr("aria-label", label);
+    button.setAttr("aria-busy", String(state === "starting"));
+  }
+
+  private refreshStartControls(): void {
+    // Update only Play controls: no catalog writes, rendering, or dashboard work.
+    for (const leaf of this.app?.workspace?.getLeavesOfType?.(VIEW_TYPE) || []) {
+      const buttons = leaf.view.containerEl?.querySelectorAll<HTMLButtonElement>("button[data-autooc-start-kind]");
+      buttons?.forEach(button => this.configureStartButton(button,
+        button.getAttribute("data-autooc-start-kind") as "task" | "workflow",
+        button.getAttribute("data-autooc-start-id")!, button.getAttribute("data-autooc-start-compact") === "true"));
+    }
+  }
+
+  private async withDefinitionStart<T>(kind: "task" | "workflow", id: string, execute: (release: () => void) => Promise<T>, onBusy?: () => Promise<T>): Promise<T | undefined> {
+    this.assertLifecycleOpen();
+    if (this.updateInProgress) throw new Error("Plugin update is in progress");
+    const key = `${kind}:${id}`;
+    this.definitionStarts ||= new Map();
+    if (this.definitionStarts.has(key)) return onBusy ? await onBusy() : undefined;
+    const token = Symbol(key);
+    this.definitionStarts.set(key, token);
+    const release = () => {
+      if (this.definitionStarts.get(key) === token) this.definitionStarts.delete(key);
+    };
+    try {
+      this.refreshStartControls();
+      return await execute(release);
+    } finally {
+      // Fire-and-forget adapters retain the indicator until their initial save
+      // settles. Their attempt already owns exclusion throughout this interval.
+      if (kind !== "task" || this.legacyAttempts?.get(id)?.releaseStart !== release) release();
+      // A view failure must not mask an execution/storage failure.
+      try { this.refreshStartControls(); } catch { console.warn("AutoOC: Play controls could not refresh."); }
+    }
   }
 
   private refreshOpenViews():void {
@@ -2638,7 +2493,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private isTaskActive(task: ScheduledTask): boolean {
-    if (this.sharedWorkflowExecution?.taskId === task.id) return true;
+    if (this.sharedExecution(undefined,task.id)) return true;
     const canonical = this.settings.tasks.find((t) => t.id === task.id);
     return !!this.legacyAttempts?.get(task.id) && !this.legacyAttempts.get(task.id)!.cancelled || canonical?.status === "running" || this.runningProcesses.has(task.id);
   }
@@ -2916,11 +2771,13 @@ export default class AutoOCPlugin extends Plugin {
         if (!item) return send(404, { ok: false, error: `${kind} not found` });
         if (request.url === "/play") {
           if (kind === "task") {
+            assertNoRetiredDependency(item as ScheduledTask);
             if (this.isTaskActive(item as ScheduledTask)) {
               return send(409, { ok: false, id: item.id, name: item.name, status: "conflict", error: `Task "${item.name}" is already running.` });
             }
             void this.runTask(item as ScheduledTask);
           } else {
+            assertWorkflowDependencies(item as Workflow, this.settings.tasks);
             const workflowPlayError = this.getMcpWorkflowPlayError(item as Workflow);
             if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
             void this.runWorkflow(item as Workflow);
@@ -3135,12 +2992,10 @@ export default class AutoOCPlugin extends Plugin {
       this.settingsWritableCatalog = localFile ? {file:localFile,version:this.settingsWriter.confirmedVersion(localFile)} : undefined;
       this.settingsPublicationState = "ready";
     };
-    this.secretStore = new SecretStore(vaultBasePath);
-    try {
-      this.secretStore.load();
-    } catch (e) {
-      new Notice(`AutoOC: could not load secrets vault — ${String(e)}`);
-      this.secretStore = new SecretStore(vaultBasePath);
+    this.legacyOutputRedaction.load(path.join(location?.installationDirectory || path.resolve(vaultBasePath, this.manifest?.dir || path.join(this.app.vault.configDir || ".obsidian", "plugins", this.manifest?.id || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
+    for (const item of [...nextSettings.tasks, ...nextSettings.workflows, ...nextSettings.workflows.flatMap(w => w.steps || [])]) {
+      const error = autoOCDependencyError(item);
+      if (error) new Notice(error);
     }
     nextSettings.tasks = nextSettings.tasks.map(task => {
       if (!task.legacyExecution) return task;
@@ -3217,6 +3072,10 @@ export default class AutoOCPlugin extends Plugin {
       await publish();
       return;
     }
+    // A confirmed execution snapshot is already migrated. In particular the
+    // initial ready checkpoint may not yet bind a task: never migrate its
+    // frozen definition or perform a second write inside its publication.
+    if(confirmed){await publish();return;}
     delete (nextSettings as any).chatHistory;
     delete (nextSettings as any).chatModel;
     let changed = false;
@@ -3425,6 +3284,16 @@ export default class AutoOCPlugin extends Plugin {
 
   async saveSettings(refreshView = true, validate?:()=>void) {
     this.assertLifecycleOpen();
+    const basePath=(this.app.vault.adapter as any).basePath;
+    if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate);
+    return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile,async()=>{
+      await this.saveSettingsWithinTransaction(refreshView,validate);
+    }));
+  }
+
+  private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void) {
+    // Entry authorized this save before it entered the host queue. Unload
+    // drains accepted saves while rejecting all later calls at the entry.
     const basePath = (this.app.vault.adapter as any).basePath;
     const file = basePath ? this.selectedExecutionLocation().configurationFile : undefined;
     // A rejected offside load may already have observed a newer disk version.
@@ -3437,32 +3306,19 @@ export default class AutoOCPlugin extends Plugin {
       this.settingsPublicationState = "ready";
     }
     this.settingsLoadRevision++;
+    let savedSettings:ReturnType<typeof captureJsonStructure>|undefined;
     if (file) {
-      await this.settingsWriter.save(file, () => this.settings,validate);
+      await this.settingsWriter.save(file, () => {savedSettings=captureJsonStructure(this.settings);return this.settings;},validate);
       this.settingsWritableCatalog = {file,version:this.settingsWriter.confirmedVersion(file)};
     } else {
       await this.saveData(this.settings);
     }
+    this.sharedSettingsBaseline=savedSettings;
     if (refreshView) this.view?.refresh();
   }
 
-  getSecretsEnv(profile = "default"): Record<string, string> {
-    if (!this.secretStore?.isSecureStorageAvailable()) return {};
-    try {
-      return this.secretStore.getEnv(profile);
-    } catch (e) {
-      new Notice(`AutoOC: could not load secrets for environment — ${String(e)}`);
-      return {};
-    }
-  }
-
   redactSecrets(text: string): string {
-    if (!text || !this.secretStore?.isSecureStorageAvailable()) return text;
-    let redacted = text;
-    for (const value of this.secretStore.getRedactionValues()) {
-      redacted = redacted.split(value).join("[secret:redacted]");
-    }
-    return redacted;
+    return this.legacyOutputRedaction?.redact(text) ?? text;
   }
 
   // ── Version / update helpers ────────────────────────────────────────────────
@@ -3577,7 +3433,7 @@ export default class AutoOCPlugin extends Plugin {
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
-      const secretEnv = this.getSecretsEnv();
+      const secretEnv = {};
       let settled = false;
       let hiddenProc: HiddenProcessHandle | null = null;
       const cleanup = (removeScript = true) => {
@@ -3703,6 +3559,12 @@ export default class AutoOCPlugin extends Plugin {
       (!attempt.owner || (this as any).workflowRuntime?.get(attempt.owner.workflowId) === attempt.owner.context);
   }
 
+  private finishLegacyStart(attempt: LegacyAttempt): void {
+    attempt.releaseStart?.();
+    delete attempt.releaseStart;
+    try { this.refreshStartControls(); } catch { console.warn("AutoOC: Play controls could not refresh."); }
+  }
+
   private legacyCompletion(attempt: LegacyAttempt, callback?: (task: ScheduledTask, code: number) => Promise<void>) {
     return async (task: ScheduledTask, code: number) => {
       if (!this.isLegacyCurrent(attempt)) return;
@@ -3711,6 +3573,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.saveSettings();
       if (!this.isLegacyCurrent(attempt)) return;
       this.legacyAttempts.delete(task.id);
+      this.finishLegacyStart(attempt);
       if (callback) await callback(task, code);
     };
   }
@@ -3770,48 +3633,87 @@ export default class AutoOCPlugin extends Plugin {
     overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
     owner?: LegacyOwner,
   ) {
+    return this.withDefinitionStart("task", task.id,
+      release => this.executeTask(task, onComplete, overrides, owner, release),
+      onComplete ? () => onComplete(this.busyTaskResult(task), -1) : undefined);
+  }
+
+  private busyTaskResult(task: ScheduledTask): ScheduledTask {
+    // Completion consumers may mutate their result. Never hand them the owner
+    // or its nested execution/definition objects for a rejected request.
+    const result: ScheduledTask = JSON.parse(JSON.stringify(task));
+    delete result.legacyExecution;
+    delete (result as any).runtimeExecution;
+    delete result.pendingCodexApproval;
+    result.status = "failed";
+    result.output = "[AutoOC] Task request rejected: task is already starting or already running.";
+    return result;
+  }
+
+  private async executeTask(
+    task: ScheduledTask,
+    onComplete?: (task: ScheduledTask, exitCode: number) => Promise<void>,
+    overrides: Partial<Pick<ScheduledTask, "prompt" | "branch" | "createBranch">> = {},
+    owner?: LegacyOwner,
+    releaseStart?: () => void,
+  ) {
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
+    if(this.sharedWorkflowExecution && this.settings.tasks.find(t=>t.id===task.id)?.concurrency!=="independent")throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
+    assertNoRetiredDependency(this.settings.tasks[idx]);
     if (this.isTaskActive(this.settings.tasks[idx])) {
       new Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
-      if (onComplete) await onComplete(this.settings.tasks[idx], -1);
+      if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
     const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
+    assertNoRetiredDependency(effectiveTask);
 
     const binding=(effectiveTask as any).runtimeExecution;
     if(!owner && binding?.requiresReconciliation) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
+    if (effectiveTask.legacyExecution?.stopState || binding?.phase !== "abandoned" && binding?.terminalUncertainty && !binding.disposition) {
+      throw new Error("Previous task outcome is unconfirmed; recovery is required before starting a new attempt.");
+    }
 
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
       const vault = (this.app.vault.adapter as any).basePath;
       const workflow = standaloneTaskWorkflow(effectiveTask.id);
       const definition = prepareWorkflowDefinition(workflow, this.settings.tasks, this.settings);
       if (supportsSharedWorkflow(definition, createWorkflowTaskAdapter(definition, vault))) {
-        await this.runSharedWorkflow(workflow.id, undefined, false, true, effectiveTask.id);
+        const pending=this.executeSharedWorkflow(workflow.id, undefined, false, true, effectiveTask.id, undefined, releaseStart);
+        this.sharedCompletions.add(pending);
+        try {await pending;}finally{this.sharedCompletions.delete(pending);}
         return;
       }
     }
 
+    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     const attempt = this.beginLegacyAttempt(effectiveTask, owner);
+    attempt.releaseStart = releaseStart;
 
     if ((effectiveTask.taskKind || "opencode") === "code") {
-      await this.runCodeTask(effectiveTask, onComplete, owner, attempt);
+      try { await this.runCodeTask(effectiveTask, onComplete, owner, attempt); }
+      finally { this.finishLegacyStart(attempt); }
       return;
     }
 
     if (effectiveTask.taskKind === "codex") {
-      void this.runCodexTask(effectiveTask, onComplete, owner, attempt);
+      void this.runCodexTask(effectiveTask, onComplete, owner, attempt).catch(error => {
+        new Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000);
+      }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
 
     if (effectiveTask.taskKind === "copilot") {
-      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt);
+      void this.runCopilotTask(effectiveTask, onComplete, owner, attempt).catch(error => {
+        new Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000);
+      }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
 
+    delete attempt.releaseStart;
     onComplete = this.legacyCompletion(attempt, onComplete);
     const branchWasProvided = Object.prototype.hasOwnProperty.call(effectiveTask, "branch");
     if (branchWasProvided && typeof effectiveTask.branch !== "string") {
@@ -3859,7 +3761,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const vaultBasePath = (this.app.vault.adapter as any).basePath || ".";
     const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
-    const secretEnv = this.getSecretsEnv();
+    const secretEnv = {};
 
     if (effectiveTask.interactiveTerminal) {
       const current = this.settings.tasks[idx];
@@ -3894,6 +3796,7 @@ export default class AutoOCPlugin extends Plugin {
       this.view?.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
+      this.finishLegacyStart(attempt);
 
       try {
         let prompt = effectiveTask.prompt;
@@ -3928,6 +3831,7 @@ export default class AutoOCPlugin extends Plugin {
     await this.saveSettings();
 
     if (!this.isLegacyCurrent(attempt)) return;
+    this.finishLegacyStart(attempt);
     new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(effectiveTask);
@@ -4188,6 +4092,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ): Promise<void> {
+    assertNoRetiredDependency(this.settings.tasks.find(t => t.id === task.id) || task);
     const findCurrent = () => this.settings.tasks.find((candidate) => candidate.id === task.id);
     let current = findCurrent();
     if (!current) return;
@@ -4211,6 +4116,7 @@ export default class AutoOCPlugin extends Plugin {
     try {
       await this.saveSettings();
       if (!this.isLegacyCurrent(attempt) || cancelled) return;
+      this.finishLegacyStart(attempt);
       const validationError = getCopilotTaskValidationError(task);
       if (validationError) throw new Error(validationError);
       if (!task.prompt?.trim()) throw new Error("Copilot task prompt is empty.");
@@ -4232,7 +4138,7 @@ export default class AutoOCPlugin extends Plugin {
         model,
         allowAllTools: task.copilotAllowAllTools === true,
         timeoutMs: Math.max(0, this.settings.taskTimeoutSeconds ?? DEFAULT_TASK_TIMEOUT_SECONDS) * 1000,
-        env: this.getSecretsEnv(),
+        env: {},
       });
       current = findCurrent();
       if (!this.isLegacyCurrent(attempt) || cancelled || !current || current.status !== "running") return;
@@ -4280,6 +4186,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ): Promise<void> {
+    assertNoRetiredDependency(this.settings.tasks.find(t => t.id === task.id) || task);
     const idx = this.settings.tasks.findIndex((candidate) => candidate.id === task.id);
     if (idx === -1) return;
     let current = this.settings.tasks[idx];
@@ -4324,6 +4231,7 @@ export default class AutoOCPlugin extends Plugin {
     this.view?.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     if (!isCurrent()) return;
+    this.finishLegacyStart(attempt);
     new Notice(`AutoOC: running Codex task "${task.name}"…`);
 
     const scheduleSave = () => {
@@ -4478,6 +4386,7 @@ export default class AutoOCPlugin extends Plugin {
     owner?: LegacyOwner,
     reserved?: LegacyAttempt,
   ) {
+    assertNoRetiredDependency(this.settings.tasks.find(t => t.id === task.id) || task);
     this.assertLifecycleOpen();
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
@@ -4512,14 +4421,15 @@ export default class AutoOCPlugin extends Plugin {
 
     try {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
+      this.finishLegacyStart(attempt);
       const out = await runWithVaultMutations(()=>this.createVaultMutationBatch(), onVaultMutation => executeCodeTask({
         ...current, code, vaultBase: vaultBasePath,
         cwd: current.workingDirectory || this.settings.workingDirectory || vaultBasePath,
-        log: (...args) => { if (!isCurrent()) return; current.output += args.map(String).join(" ") + "\n"; },
+        log: (...args) => { if (!isCurrent()) return; current.output += this.redactSecrets(args.map(String).join(" ")) + "\n"; },
         onVaultMutation,
       }));
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
-      current.output = (current.output || "") + out;
+      current.output = this.redactSecrets((current.output || "") + out);
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
       new Notice(`AutoOC: ✅ code task "${current.name}" completed.`);
       if (this.settings.logsEnabled) {
@@ -4532,7 +4442,7 @@ export default class AutoOCPlugin extends Plugin {
     } catch (err) {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.status = "failed";
-      current.output = (current.output || "") + `[code error: ${String(err)}]`;
+      current.output = this.redactSecrets((current.output || "") + `[code error: ${String(err)}]`);
       this.view?.startGradualSink(current.id);
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, current.id, current.output);
@@ -4602,7 +4512,7 @@ export default class AutoOCPlugin extends Plugin {
       return attempt.stopPromise;
     }
     const binding = this.taskStopIdentity(task || {id} as ScheduledTask);
-    const execution = this.sharedWorkflowExecution;
+    const execution = this.sharedExecution(observed?.workflowId,undefined,observed?.runId) || this.sharedExecution(undefined,id);
     if (observed || binding || execution?.taskId === id) {
       if (observed && observed.kind !== "shared") throw new Error("Task execution changed or is not owned here");
       const checkpoint = execution?.checkpoint;
@@ -4626,9 +4536,11 @@ export default class AutoOCPlugin extends Plugin {
     throw new Error("Task execution changed or is not owned here; refresh or reconcile before stopping.");
   }
 
-  async killWorkflow(id: string) {
-    if (this.sharedWorkflowExecution?.workflowId === id) {
-      this.sharedWorkflowExecution.controller.abort();
+  async killWorkflow(id: string, expectedRunId?:string) {
+    const shared=this.sharedExecution(id);
+    if(expectedRunId && shared?.runId!==expectedRunId)throw new Error("Workflow execution changed; refresh before stopping");
+    if (shared) {
+      shared.controller.abort();
       return;
     }
     const wf = this.settings.workflows.find((w) => w.id === id);
@@ -4636,6 +4548,7 @@ export default class AutoOCPlugin extends Plugin {
 
     const context = (this as any).workflowRuntime?.get(id);
     if (!context) return;
+    const startToken = this.definitionStarts?.get(`workflow:${id}`);
     const execution = wf.legacyExecution;
     const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
     const attempt = step?.taskId ? this.legacyAttempts?.get(step.taskId) : undefined;
@@ -4649,6 +4562,8 @@ export default class AutoOCPlugin extends Plugin {
     if ((this as any).workflowRuntime?.has(id)) return;
     await this.saveSettings();
     if (wf.legacyExecution !== execution || (this as any).workflowRuntime?.has(id)) return;
+    if (this.definitionStarts?.get(`workflow:${id}`) === startToken) this.definitionStarts?.delete(`workflow:${id}`);
+    this.refreshStartControls();
     new Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
 
@@ -4667,6 +4582,8 @@ export default class AutoOCPlugin extends Plugin {
   async runDueTasks() {
     const dueTasks = this.settings.tasks.filter((task) => isTaskDue(task));
     for (let i = 0; i < dueTasks.length; i++) {
+      const error = autoOCDependencyError(dueTasks[i]);
+      if (error) { new Notice(error); continue; }
       await this.runTask(dueTasks[i]);
       if (i < dueTasks.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
@@ -4675,6 +4592,8 @@ export default class AutoOCPlugin extends Plugin {
   async runDueWorkflows() {
     const dueWorkflows = this.settings.workflows.filter((wf) => isWorkflowDue(wf));
     for (let i = 0; i < dueWorkflows.length; i++) {
+      try { assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks); }
+      catch (error) { new Notice(String(error)); continue; }
       await this.runWorkflow(dueWorkflows[i]);
       if (i < dueWorkflows.length - 1) await delay(DUE_LAUNCH_GAP_MS);
     }
@@ -4896,6 +4815,7 @@ export default class AutoOCPlugin extends Plugin {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
+    for(const item of [...(data.tasks || []),...(data.workflows || [])])validateConcurrency(item);
     const exportIdToTaskId = new Map<string, string>();
     let tasksImported = 0;
 
@@ -4936,6 +4856,7 @@ export default class AutoOCPlugin extends Plugin {
         lastRun: "",
         output: "",
         createdAt: new Date().toISOString(),
+        concurrency: et.concurrency,
         workingDirectory: et.workingDirectory,
         branch: importedTaskKind === "opencode" ? et.branch : "",
         createBranch: importedTaskKind === "opencode" ? et.createBranch : false,
@@ -4969,6 +4890,7 @@ export default class AutoOCPlugin extends Plugin {
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
           stepKind,
+          requiresAutoOCSecrets: s.requiresAutoOCSecrets,
           name: (s as any).name,
           area: (s as any).area || ew.area || "",
           taskId: (s as any).taskExportId ? exportIdToTaskId.get((s as any).taskExportId) : undefined,
@@ -5006,6 +4928,7 @@ export default class AutoOCPlugin extends Plugin {
 
       const workflow: Workflow = {
         id: generateId(),
+        requiresAutoOCSecrets: ew.requiresAutoOCSecrets,
         name: this.ensureUniqueWorkflowName(ew.name),
         area: ew.area ?? "",
         description: ew.description ?? "",
@@ -5014,6 +4937,7 @@ export default class AutoOCPlugin extends Plugin {
         currentStep: -1,
         createdAt: new Date().toISOString(),
         handoffBranch: ew.handoffBranch ?? false,
+        concurrency: ew.concurrency,
         handoffOutput: ew.handoffOutput ?? true,
         scheduleType: ew.scheduleType ?? "manual",
         scheduleTime: ew.scheduleTime ?? nowTimeString(),
@@ -5028,6 +4952,10 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     await this.saveSettings();
+    for (const item of [...this.settings.tasks, ...this.settings.workflows, ...this.settings.workflows.flatMap(w => w.steps || [])]) {
+      const error = autoOCDependencyError(item);
+      if (error) new Notice(error);
+    }
     return { tasksImported, workflowsImported };
   }
 
@@ -5040,17 +4968,26 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runWorkflow(workflow: Workflow) {
+    return this.withDefinitionStart("workflow", workflow.id, release => this.executeWorkflow(workflow, release));
+  }
+
+  private async executeWorkflow(workflow: Workflow, releaseStart?: () => void) {
+    assertWorkflowDependencies(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
+    if(this.sharedWorkflowExecution && this.settings.workflows.find(w=>w.id===workflow.id)?.concurrency!=="independent")throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
+    const binding = (wf as any).runtimeExecution;
+    if (this.hasUncertainLegacyTask(wf.id) || binding?.phase !== "abandoned" && binding?.terminalUncertainty && !binding.disposition) {
+      throw new Error("Previous workflow outcome is unconfirmed; recovery is required before starting a new attempt.");
+    }
 
     if (this.settings.workflows.some(item => {
       const execution = (item as any).runtimeExecution;
-      return execution && !["completed", "failed", "abandoned"].includes(execution.phase);
+      return execution && !["completed", "failed", "abandoned"].includes(execution.phase) && !this.ownsSharedRun(item.id,execution.runId);
     })) {
       new Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
       return;
@@ -5079,11 +5016,14 @@ export default class AutoOCPlugin extends Plugin {
       const definition=prepareWorkflowDefinition(wf,this.settings.tasks,this.settings);
       const vault=(this.app.vault.adapter as any).basePath;
       if (supportsSharedWorkflow(definition,createWorkflowTaskAdapter(definition,vault))) {
-        await this.runSharedWorkflow(wf.id,undefined,false,true);
+        const pending=this.executeSharedWorkflow(wf.id,undefined,false,true,undefined,undefined,releaseStart);
+        this.sharedCompletions.add(pending);
+        try {await pending;}finally{this.sharedCompletions.delete(pending);}
         return;
       }
     }
 
+    if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     wf.legacyExecution = {token:require("crypto").randomUUID()};
     // Initialize the runtime context that flows between steps.
     (this as any).workflowRuntime = (this as any).workflowRuntime || new Map();
@@ -5100,6 +5040,8 @@ export default class AutoOCPlugin extends Plugin {
     });
     await this.saveSettings();
     if ((this as any).workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
+    releaseStart?.();
+    this.refreshStartControls();
     new Notice(`AutoOC: ⚡ Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
 
     // Find the entry step: one with no incoming transitions, or the first step.
@@ -5127,6 +5069,7 @@ export default class AutoOCPlugin extends Plugin {
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
     const wf = this.settings.workflows[wfIdx];
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
     if (!wf || wf.status !== "running") return;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
@@ -5187,6 +5130,7 @@ export default class AutoOCPlugin extends Plugin {
   async runWorkflowStep(wfIdx: number, stepIndex: number) {
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
     if (!step) {
@@ -5221,6 +5165,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDelayStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    assertWorkflowDependencies(wf, this.settings.tasks);
     const spec = workflowDelay(step.delayValue, step.delayUnit);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     if (this.stoppingWorkflows.has(wf.id) || wf.status !== "running") return;
@@ -5240,6 +5185,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runCodeStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    assertWorkflowDependencies(wf, this.settings.tasks);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     const inputVar = step.codeInputVar || "input";
     const outputVar = step.codeOutputVar || "output";
@@ -5255,19 +5201,21 @@ export default class AutoOCPlugin extends Plugin {
         onVaultMutation,
       }));
       if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
-      if (ctx) ctx.stepOutputs.set(step.id, out);
+      const masked = this.redactSecrets(out);
+      if (ctx) ctx.stepOutputs.set(step.id, masked);
       new Notice(`AutoOC: ⚙ Code step completed in "${wf.name}" (${out.length} chars)`);
-      await this.completeStep(wf, step, stepIndex, true, out);
+      await this.completeStep(wf, step, stepIndex, true, masked);
     } catch (err) {
       if ((this as any).workflowRuntime.get(wf.id) !== ctx) return;
-      const msg = `[code error: ${String(err)}]`;
+      const msg = this.redactSecrets(`[code error: ${String(err)}]`);
       if (ctx) ctx.stepOutputs.set(step.id, msg);
-      new Notice(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`);
+      new Notice(this.redactSecrets(`AutoOC: ❌ Code step failed in "${wf.name}" — ${String(err)}`));
       await this.completeStep(wf, step, stepIndex, false, msg);
     }
   }
 
   async runTaskStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
+    assertWorkflowDependencies(wf, this.settings.tasks);
     const executionContext = (this as any).workflowRuntime?.get(wf.id);
     const isCurrentExecution = () => executionContext !== undefined &&
       (this as any).workflowRuntime?.get(wf.id) === executionContext &&
@@ -5362,6 +5310,7 @@ export default class AutoOCPlugin extends Plugin {
 
   // Complete a non-task step and move to the next one.
   async completeStep(wf: Workflow, step: WorkflowStep, stepIndex: number, succeeded: boolean, output: string) {
+    output = this.redactSecrets(output);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     const isCurrentExecution = () => ctx !== undefined && (this as any).workflowRuntime.get(wf.id) === ctx &&
       this.settings.workflows.find(w => w.id === wf.id)?.status === "running" && !this.stoppingWorkflows.has(wf.id);
@@ -5413,7 +5362,7 @@ class AutoOCView extends ItemView {
   private filterText: string = "";
   private filterStatus: string = "all";
   private filterArea: string = "all";
-  private currentTab: "dashboard" | "tasks" | "workflows" | "secrets" = "dashboard";
+  private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
@@ -5927,13 +5876,6 @@ class AutoOCView extends ItemView {
     });
     btnWorkflows.onclick = () => { this.currentTab = "workflows"; this.render(); };
 
-    const btnSecrets = navRow.createEl("button", {
-      text: "🔒 Secrets",
-      cls: "auto-oc-tab-btn",
-    });
-    btnSecrets.title = "Manage local secrets injected into OpenCode as temporary environment variables";
-    btnSecrets.onclick = () => { this.currentTab = "secrets"; this.render(); };
-
     const btnVisualBuilder = navRow.createEl("button", {
       text: "✨ WF Visual Builder",
       cls: "auto-oc-tab-btn",
@@ -5983,12 +5925,6 @@ class AutoOCView extends ItemView {
         cls: "auto-oc-btn-primary",
       });
       btnNewWorkflow.onclick = () => new CreateWorkflowModal(this.app, this.plugin).open();
-    } else if (this.currentTab === "secrets") {
-      const btnNewSecret = toolsRow.createEl("button", {
-        text: "+ New Secret",
-        cls: "auto-oc-btn-primary",
-      });
-      btnNewSecret.onclick = () => this.openSecretEditor();
     }
     const toolsSpacer = toolsRow.createDiv("auto-oc-tab-spacer");
     toolsSpacer.style.flex = "1";
@@ -6010,76 +5946,16 @@ class AutoOCView extends ItemView {
     if (this.currentTab === "dashboard") btnDashboard.addClass("active");
     else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
-    else if (this.currentTab === "secrets") btnSecrets.addClass("active");
 
     // ── Content ──
     if (this.currentTab === "dashboard") {
       this.renderDashboard(containerEl);
     } else if (this.currentTab === "workflows") {
       this.renderWorkflows(containerEl);
-    } else if (this.currentTab === "secrets") {
-      this.renderSecrets(containerEl);
+
     } else {
       this.renderTasks(containerEl);
     }
-  }
-
-  private async ensureSecretsUnlocked(): Promise<boolean> {
-    const store = this.plugin.secretStore;
-    if (!store.hasPin()) {
-      const created = await new SecretsPinModal(this.app, store, "create").openAndWait();
-      if (created) this.render();
-      return created;
-    }
-    if (store.isUnlocked()) return true;
-    return new SecretsPinModal(this.app, store, "unlock").openAndWait();
-  }
-
-  private async openSecretEditor(secret?: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    new SecretEditModal(this.app, this.plugin, secret, () => this.render()).open();
-  }
-
-  private async revealSecret(secret: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    try {
-      const value = this.plugin.secretStore.decryptValue(secret);
-      new SecretRevealModal(this.app, secret, value).open();
-    } catch (e) {
-      new Notice(`AutoOC: could not reveal secret — ${String(e)}`);
-    }
-  }
-
-  private async copySecretValue(secret: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    try {
-      await copyTextToClipboard(this.plugin.secretStore.decryptValue(secret));
-      new Notice(`AutoOC: copied ${secret.name}.`);
-    } catch (e) {
-      new Notice(`AutoOC: could not copy secret — ${String(e)}`);
-    }
-  }
-
-  private async deleteSecret(secret: SecretRecord): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    const confirmed = await new ConfirmModal(this.app, `Delete secret "${secret.name}"?`, "This cannot be undone.").openAndWait();
-    if (!confirmed) return;
-    this.plugin.secretStore.delete(secret.id);
-    new Notice(`AutoOC: deleted secret ${secret.name}.`);
-    this.render();
-  }
-
-  private async resetSecretsPin(): Promise<void> {
-    if (!await this.ensureSecretsUnlocked()) return;
-    const confirmed = await new ConfirmModal(
-      this.app,
-      "Reset Secrets PIN?",
-      "This only removes the UI PIN. Encrypted secrets are kept. You can create a new PIN afterwards."
-    ).openAndWait();
-    if (!confirmed) return;
-    this.plugin.secretStore.resetPin();
-    new Notice("AutoOC: Secrets PIN reset. Secrets were kept.");
-    this.render();
   }
 
   private async copyAutoOcMcpInstallJson(): Promise<void> {
@@ -6106,101 +5982,6 @@ class AutoOCView extends ItemView {
   private async copyUvInstallCommand(): Promise<void> {
     await copyTextToClipboard(getUvInstallCommand());
     new Notice("AutoOC: uv install command copied.");
-  }
-
-  private renderSecrets(containerEl: HTMLElement): void {
-    const section = containerEl.createDiv("auto-oc-section auto-oc-secrets-section");
-    section.createEl("h4", { text: "Secrets" });
-    section.createEl("p", {
-      text: "Paste values normally; AutoOC encrypts them when saving and injects them into OpenCode as temporary env vars.",
-      cls: "setting-item-description",
-    });
-
-    const uvStatus = describeUvStatus();
-    if (!uvStatus.available) {
-      const uvWarning = section.createDiv("auto-oc-secrets-runtime-warning");
-      uvWarning.createEl("strong", { text: "autooc-mcp needs uv" });
-      uvWarning.createEl("p", {
-        text: "uv is not installed or AutoOC cannot find it. Install uv before using the autooc-mcp installer.",
-      });
-      const copyUv = uvWarning.createEl("button", { text: "Copy uv install command", cls: "auto-oc-btn-secondary" });
-      copyUv.onclick = () => this.copyUvInstallCommand();
-    }
-
-    if (!this.plugin.secretStore.isSecureStorageAvailable()) {
-      section.createEl("p", {
-        text: "Secure storage is not available on this system. Secrets cannot be created or revealed.",
-        cls: "setting-item-description auto-oc-update-error",
-      });
-      return;
-    }
-
-    const actions = section.createDiv("auto-oc-task-actions");
-    actions.addClass("auto-oc-secrets-toolbar");
-    const lockBtn = actions.createEl("button", { text: "Lock", cls: "auto-oc-btn-secondary" });
-    lockBtn.onclick = () => { this.plugin.secretStore.lock(); this.render(); };
-    const resetBtn = actions.createEl("button", { text: "Reset PIN", cls: "auto-oc-btn-secondary" });
-    resetBtn.onclick = () => this.resetSecretsPin();
-
-    if (!this.plugin.secretStore.hasPin()) {
-      section.createEl("p", {
-        text: "No UI PIN is set yet. Create one before managing secrets.",
-        cls: "setting-item-description",
-      });
-      const btn = section.createEl("button", { text: "Create PIN", cls: "auto-oc-btn-primary" });
-      btn.onclick = () => this.ensureSecretsUnlocked();
-      return;
-    }
-
-    if (!this.plugin.secretStore.isUnlocked()) {
-      section.createEl("p", { text: "Secrets are locked.", cls: "setting-item-description" });
-      const btn = section.createEl("button", { text: "Unlock Secrets", cls: "auto-oc-btn-primary" });
-      btn.onclick = async () => { if (await this.ensureSecretsUnlocked()) this.render(); };
-      return;
-    }
-
-    const installMcpBtn = actions.createEl("button", { text: "Install autooc-mcp in OpenCode", cls: "auto-oc-btn-primary" });
-    installMcpBtn.title = "Write autooc-mcp into the global OpenCode config and create the local MCP server file.";
-    installMcpBtn.onclick = () => this.installAutoOcMcpInOpenCode();
-
-    const copyMcpBtn = actions.createEl("button", { text: "Copy autooc-mcp install JSON", cls: "auto-oc-btn-secondary" });
-    copyMcpBtn.title = "Copy the OpenCode/harness config block that installs the local autooc-mcp server.";
-    copyMcpBtn.onclick = () => this.copyAutoOcMcpInstallJson();
-
-    const secrets = this.plugin.secretStore.list();
-    if (secrets.length === 0) {
-      section.createEl("p", { text: "No secrets yet. Use + New Secret to add one.", cls: "setting-item-description" });
-      return;
-    }
-
-    const tableWrap = section.createDiv("auto-oc-secrets-table-wrap");
-    const table = tableWrap.createEl("table", { cls: "auto-oc-secrets-table" });
-    const thead = table.createEl("thead");
-    const headRow = thead.createEl("tr");
-    ["Name", "Env Var", "Type", "Profile", "Updated", "Actions"].forEach((h) => headRow.createEl("th", { text: h }));
-    const tbody = table.createEl("tbody");
-    for (const secret of secrets) {
-      const row = tbody.createEl("tr");
-      row.createEl("td", { text: secret.name, cls: "auto-oc-secret-name" });
-      row.createEl("td", { text: secret.envName, cls: "auto-oc-secret-env" });
-      const typeTd = row.createEl("td");
-      typeTd.createSpan({ text: secret.type, cls: "auto-oc-secret-chip" });
-      const profileTd = row.createEl("td");
-      profileTd.createSpan({ text: secret.profile || "default", cls: "auto-oc-secret-chip auto-oc-secret-profile" });
-      row.createEl("td", { text: secret.updatedAt ? new Date(secret.updatedAt).toLocaleString() : "" });
-      const actionTd = row.createEl("td", { cls: "auto-oc-secrets-actions-cell" });
-      const actionWrap = actionTd.createDiv("auto-oc-secrets-actions");
-      const reveal = actionWrap.createEl("button", { text: "Reveal" });
-      reveal.onclick = () => this.revealSecret(secret);
-      const copyValue = actionWrap.createEl("button", { text: "Copy value" });
-      copyValue.onclick = () => this.copySecretValue(secret);
-      const copyEnv = actionWrap.createEl("button", { text: "Copy env" });
-      copyEnv.onclick = async () => { await copyTextToClipboard(secret.envName); new Notice("AutoOC: env var copied."); };
-      const edit = actionWrap.createEl("button", { text: "Edit" });
-      edit.onclick = () => this.openSecretEditor(secret);
-      const del = actionWrap.createEl("button", { text: "Delete", cls: "auto-oc-secret-danger" });
-      del.onclick = () => this.deleteSecret(secret);
-    }
   }
 
   // Renders the extension header at the top of the panel: title,
@@ -7001,6 +6782,8 @@ class AutoOCView extends ItemView {
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
+    const dependencyError = autoOCDependencyError(task);
+    if (dependencyError) parent.createEl("p", {text: dependencyError, cls: "mod-warning"});
     const stopIdentity = this.plugin.taskStopIdentity(task);
     const stopTask = async (button: HTMLButtonElement) => {
       button.disabled = true;
@@ -7033,10 +6816,12 @@ class AutoOCView extends ItemView {
       text: (task as any).runtimeExecution?.disposition ? `${task.status} · human disposition ${(task as any).runtimeExecution.disposition.at} · external outcome unknown` : task.status === "abandoned" ? "abandoned · outcome unknown" : task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
+    const bound=(task as any).runtimeExecution;
+    if(bound)summary.createEl("span",{text:`${bound.runId} · ${this.plugin.ownsExecution(bound.workflowId,bound.runId) ? "propietario local verificado" : "propiedad no verificada"}`,cls:"auto-oc-task-meta"});
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
-    btnQuickRun.disabled = task.status === "running";
+    this.plugin.configureStartButton(btnQuickRun, "task", task.id, true);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
@@ -7171,7 +6956,7 @@ class AutoOCView extends ItemView {
       text: task.status === "running" ? "⏳ Running…" : "▶ Run",
       cls: "auto-oc-btn-run",
     });
-    btnRun.disabled = task.status === "running";
+    this.plugin.configureStartButton(btnRun, "task", task.id, false);
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
@@ -7385,6 +7170,8 @@ class AutoOCView extends ItemView {
   }
 
   private renderWorkflowCard(parent: HTMLElement, workflow: Workflow) {
+    try { assertWorkflowDependencies(workflow, this.plugin.settings.tasks); }
+    catch (error) { parent.createEl("p", {text: String(error), cls: "mod-warning"}); }
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     card.setAttr("data-auto-oc-workflow-id", workflow.id);
     const summary = card.createDiv("auto-oc-card-summary");
@@ -7399,9 +7186,11 @@ class AutoOCView extends ItemView {
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    const bound=(workflow as any).runtimeExecution;
+    if(bound)summary.createEl("span",{text:`${bound.runId} · ${this.plugin.ownsExecution(workflow.id,bound.runId) ? "propietario local verificado" : "propiedad no verificada"}`,cls:"auto-oc-task-meta"});
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
-    btnQuickRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || ["ready","in_flight"].includes((workflow as any).runtimeExecution?.phase);
+    this.plugin.configureStartButton(btnQuickRun, "workflow", workflow.id, true);
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runWorkflow(workflow); }
@@ -7413,7 +7202,7 @@ class AutoOCView extends ItemView {
       btnQuickStop.onclick = async (e) => {
         e.stopPropagation();
         btnQuickStop.disabled = true;
-        await this.plugin.killWorkflow(workflow.id);
+        await this.plugin.killWorkflow(workflow.id, (workflow as any).runtimeExecution?.runId);
       };
     }
     const currentTask = this.plugin.settings.tasks.find((task) => task.id === workflow.steps[workflow.currentStep]?.taskId);
@@ -7710,7 +7499,7 @@ class AutoOCView extends ItemView {
       text: this.plugin.isWorkflowExecuting(workflow.id) ? "⏳ Running…" : "▶ Run Workflow",
       cls: "auto-oc-btn-run",
     });
-    btnRun.disabled = this.plugin.isWorkflowExecuting(workflow.id) || !!needsRecovery;
+    this.plugin.configureStartButton(btnRun, "workflow", workflow.id, false);
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runWorkflow(workflow); }
@@ -7727,7 +7516,7 @@ class AutoOCView extends ItemView {
         e.stopPropagation();
         btnStop.disabled = true;
         btnStop.textContent = "Stopping…";
-        await this.plugin.killWorkflow(workflow.id);
+        await this.plugin.killWorkflow(workflow.id, (workflow as any).runtimeExecution?.runId);
       };
     }
 
@@ -7986,6 +7775,7 @@ class VisualBuilderModal extends Modal {
       const error = getCopilotTaskValidationError(task);
       if (error) { new Notice(`Visual Builder: ${error}`); return; }
     }
+    for(const item of [...state.tasks,...state.workflows])validateConcurrency(item);
     const oldTasks = this.plugin.settings.tasks;
     const oldWorkflows = this.plugin.settings.workflows;
     const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
@@ -8004,12 +7794,13 @@ class VisualBuilderModal extends Modal {
         ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
         taskKind,
+        concurrency: t.concurrency ?? existing?.concurrency,
         name: t.name || "Unnamed",
         area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
         prompt: t.prompt || "",
         model: t.model !== undefined ? t.model : taskKind === "copilot" ? existing?.model ?? this.plugin.settings.defaultCopilotModel ?? "" : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
         copilotAllowAllTools: taskKind === "copilot" ? (t.copilotAllowAllTools ?? existing?.copilotAllowAllTools) === true : undefined,
-        requiresAutoOCSecrets: t.requiresAutoOCSecrets ?? existing?.requiresAutoOCSecrets,
+        requiresAutoOCSecrets: existing && Object.prototype.hasOwnProperty.call(existing, "requiresAutoOCSecrets") ? existing.requiresAutoOCSecrets : t.requiresAutoOCSecrets,
         agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
         reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
@@ -8053,6 +7844,8 @@ class VisualBuilderModal extends Modal {
       return {
         ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
         id,
+        requiresAutoOCSecrets: existing && Object.prototype.hasOwnProperty.call(existing, "requiresAutoOCSecrets") ? existing.requiresAutoOCSecrets : w.requiresAutoOCSecrets,
+        concurrency: w.concurrency ?? existing?.concurrency,
         name: w.name || "Unnamed",
         area: w.area !== undefined ? (w.area || "") : (existing?.area || ""),
         description: w.description || "",
@@ -8060,6 +7853,7 @@ class VisualBuilderModal extends Modal {
           const oldStep = existing?.steps.find((x) => x.id === s.id);
           return {
             id: s.id || generateId(),
+            requiresAutoOCSecrets: oldStep && Object.prototype.hasOwnProperty.call(oldStep, "requiresAutoOCSecrets") ? oldStep.requiresAutoOCSecrets : s.requiresAutoOCSecrets,
             stepKind: s.stepKind || "task",
             name: s.name,
             area: s.area || w.area || existing?.area || "",
@@ -8146,238 +7940,6 @@ class ConfirmModal extends Modal {
   }
 }
 
-class SecretsPinModal extends Modal {
-  private resolve?: (value: boolean) => void;
-  private settled = false;
-  private pin = "";
-  private confirmPin = "";
-
-  constructor(app: App, private store: SecretStore, private mode: "create" | "unlock") {
-    super(app);
-  }
-
-  openAndWait(): Promise<boolean> {
-    this.open();
-    return new Promise((resolve) => { this.resolve = resolve; });
-  }
-
-  private finish(value: boolean): void {
-    this.settled = true;
-    this.resolve?.(value);
-    this.close();
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("auto-oc-modal");
-    setupModalX(this);
-    preventBackdropClose(this);
-    contentEl.createEl("h3", { text: this.mode === "create" ? "Create Secrets PIN" : "Unlock Secrets" });
-    contentEl.createEl("p", {
-      text: this.mode === "create"
-        ? "This PIN protects the Secrets UI. It can be reset without deleting encrypted secrets."
-        : "Enter the Secrets UI PIN.",
-      cls: "setting-item-description",
-    });
-
-    new Setting(contentEl)
-      .setName("PIN")
-      .addText((text) => {
-        text.inputEl.type = "password";
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.onChange((v) => (this.pin = v));
-        window.setTimeout(() => text.inputEl.focus(), 50);
-      });
-
-    if (this.mode === "create") {
-      new Setting(contentEl)
-        .setName("Confirm PIN")
-        .addText((text) => {
-          text.inputEl.type = "password";
-          text.inputEl.addClass("auto-oc-modal-input");
-          text.onChange((v) => (this.confirmPin = v));
-        });
-    }
-
-    new Setting(contentEl)
-      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.finish(false)))
-      .addButton((btn) => btn.setButtonText(this.mode === "create" ? "Create PIN" : "Unlock").setCta().onClick(() => {
-        if (this.pin.length < 4) {
-          new Notice("AutoOC: PIN must be at least 4 characters.");
-          return;
-        }
-        if (this.mode === "create") {
-          if (this.pin !== this.confirmPin) {
-            new Notice("AutoOC: PIN confirmation does not match.");
-            return;
-          }
-          this.store.setPin(this.pin);
-          new Notice("AutoOC: Secrets PIN created.");
-          this.finish(true);
-          return;
-        }
-        if (!this.store.verifyPin(this.pin)) {
-          new Notice("AutoOC: incorrect PIN.");
-          return;
-        }
-        this.finish(true);
-      }));
-  }
-
-  onClose() {
-    if (!this.settled) this.resolve?.(false);
-    this.resolve = undefined;
-    this.contentEl.empty();
-  }
-}
-
-class SecretEditModal extends Modal {
-  private draft: { name: string; envName: string; type: SecretType; profile: string; value: string; notes: string };
-
-  constructor(app: App, private plugin: AutoOCPlugin, private secret: SecretRecord | undefined, private onSaved: () => void) {
-    super(app);
-    this.draft = {
-      name: secret?.name || "",
-      envName: secret?.envName || "",
-      type: secret?.type || "token",
-      profile: secret?.profile || "default",
-      value: "",
-      notes: secret?.notes || "",
-    };
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("auto-oc-modal");
-    setAutoOCModalSize(this, 720);
-    setupModalX(this);
-    preventBackdropClose(this);
-    contentEl.createEl("h3", { text: this.secret ? "Edit Secret" : "New Secret" });
-
-    new Setting(contentEl)
-      .setName("Name")
-      .setDesc("Human-readable name, for example jira-token or web-login-password.")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setValue(this.draft.name).onChange((v) => {
-          this.draft.name = v;
-          if (!this.secret && !this.draft.envName.trim()) this.draft.envName = normalizeEnvName(v);
-        });
-        window.setTimeout(() => text.inputEl.focus(), 50);
-      });
-
-    new Setting(contentEl)
-      .setName("Environment variable")
-      .setDesc("Use this in opencode MCP config as {env:NAME}.")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setPlaceholder("AUTOOC_JIRA_TOKEN").setValue(this.draft.envName).onChange((v) => (this.draft.envName = v));
-      });
-
-    new Setting(contentEl)
-      .setName("Type")
-      .addDropdown((dd) => {
-        for (const type of SECRET_TYPES) dd.addOption(type, type);
-        dd.setValue(this.draft.type);
-        dd.onChange((v) => (this.draft.type = v as SecretType));
-      });
-
-    new Setting(contentEl)
-      .setName("Profile")
-      .setDesc("default is always injected. Other profiles are reserved for future per-task selection.")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setValue(this.draft.profile).onChange((v) => (this.draft.profile = v || "default"));
-      });
-
-    new Setting(contentEl)
-      .setName(this.secret ? "New value" : "Value")
-      .setDesc(this.secret
-        ? "Paste the new password/token as plain text. AutoOC encrypts it when you save. Leave empty to keep the current value."
-        : "Paste the password/token as plain text. AutoOC encrypts it when you save; the table never shows it."
-      )
-      .addTextArea((ta) => {
-        ta.inputEl.addClass("auto-oc-modal-textarea");
-        ta.inputEl.rows = 4;
-        ta.inputEl.spellcheck = false;
-        ta.setValue(this.draft.value).onChange((v) => (this.draft.value = v));
-      });
-
-    new Setting(contentEl)
-      .setName("Notes")
-      .addText((text) => {
-        text.inputEl.addClass("auto-oc-modal-input");
-        text.setValue(this.draft.notes).onChange((v) => (this.draft.notes = v));
-      });
-
-    new Setting(contentEl)
-      .addButton((btn) => btn.setButtonText("Cancel").onClick(() => this.close()))
-      .addButton((btn) => btn.setButtonText("Save Secret").setCta().onClick(() => {
-        if (!this.draft.name.trim()) {
-          new Notice("AutoOC: secret name is required.");
-          return;
-        }
-        if (!this.secret && !this.draft.value) {
-          new Notice("AutoOC: secret value is required.");
-          return;
-        }
-        try {
-          this.plugin.secretStore.upsert({
-            id: this.secret?.id,
-            name: this.draft.name,
-            envName: this.draft.envName || this.draft.name,
-            type: this.draft.type,
-            profile: this.draft.profile || "default",
-            value: this.draft.value || undefined,
-            notes: this.draft.notes,
-          });
-          new Notice("AutoOC: secret saved.");
-          this.onSaved();
-          this.close();
-        } catch (e) {
-          new Notice(`AutoOC: could not save secret — ${String(e)}`);
-        }
-      }));
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
-class SecretRevealModal extends Modal {
-  constructor(app: App, private secret: SecretRecord, private value: string) {
-    super(app);
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.empty();
-    contentEl.addClass("auto-oc-modal");
-    setupModalX(this);
-    contentEl.createEl("h3", { text: `Secret: ${this.secret.name}` });
-    contentEl.createEl("p", { text: this.secret.envName, cls: "setting-item-description" });
-    const textarea = contentEl.createEl("textarea", { cls: "auto-oc-modal-textarea" });
-    textarea.value = this.value;
-    textarea.readOnly = true;
-    textarea.rows = 4;
-    textarea.style.width = "100%";
-    new Setting(contentEl)
-      .addButton((btn) => btn.setButtonText("Copy value").onClick(async () => {
-        await copyTextToClipboard(this.value);
-        new Notice("AutoOC: secret copied.");
-      }))
-      .addButton((btn) => btn.setButtonText("Close").onClick(() => this.close()));
-  }
-
-  onClose() {
-    this.value = "";
-    this.contentEl.empty();
-  }
-}
-
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
@@ -8457,6 +8019,8 @@ class CreateTaskModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const dependencyError = autoOCDependencyError(this.draft);
+    if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 900);
     preventBackdropClose(this);
@@ -8509,6 +8073,12 @@ class CreateTaskModal extends Modal {
           this.onOpen();
         });
       });
+
+    new Setting(contentEl)
+      .setName("Concurrencia")
+      .setDesc("Máximo dos ejecuciones independientes con recursos compatibles. No amplía permisos; por defecto exclusiva.")
+      .addDropdown(dd=>dd.addOption("exclusive","Exclusiva").addOption("independent","Independiente")
+        .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
       .setName("Name")
@@ -8961,6 +8531,7 @@ class CreateTaskModal extends Modal {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
                 prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
+                concurrency: this.draft.concurrency,
                 taskKind: savingTaskKind,
                 interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
                 reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : undefined,
@@ -8977,6 +8548,7 @@ class CreateTaskModal extends Modal {
             const task: ScheduledTask = {
               id: generateId(),
               taskKind: savingTaskKind,
+              concurrency: this.draft.concurrency,
               name: this.draft.name!,
               prompt: savingTaskKind === "code" ? (this.draft.code || "") : this.draft.prompt!,
               model: savingTaskKind === "code" ? "" : this.draft.model!,
@@ -9048,6 +8620,8 @@ class EditWorkflowStepModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const dependencyError = autoOCDependencyError(this.draft);
+    if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 760);
     preventBackdropClose(this);
@@ -9220,6 +8794,8 @@ class CreateWorkflowModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const dependencyError = autoOCDependencyError(this.draft);
+    if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 1100);
     preventBackdropClose(this);
@@ -9241,6 +8817,12 @@ class CreateWorkflowModal extends Modal {
       text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
       cls: "auto-oc-workflow-guide-tip",
     });
+
+    new Setting(contentEl)
+      .setName("Concurrencia")
+      .setDesc("Máximo dos ejecuciones independientes con recursos compatibles. No amplía permisos; por defecto exclusiva.")
+      .addDropdown(dd=>dd.addOption("exclusive","Exclusiva").addOption("independent","Independiente")
+        .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
       .setName("Name")
@@ -9506,6 +9088,7 @@ class CreateWorkflowModal extends Modal {
               const previousArea = existing.area?.trim() || "";
               this.plugin.settings.workflows[idx] = {
                 ...this.editWorkflow,
+                concurrency: this.draft.concurrency,
                 name: this.draft.name!,
                 area: this.draft.area ?? "",
                 description: this.draft.description,
@@ -9529,6 +9112,7 @@ class CreateWorkflowModal extends Modal {
           } else {
             const workflow: Workflow = {
               id: generateId(),
+              concurrency: this.draft.concurrency,
               name: this.draft.name!,
               area: this.draft.area ?? "",
               description: this.draft.description ?? "",
@@ -11271,7 +10855,7 @@ class OpenCodeCliModal extends Modal {
   private launch(cwd: string) {
     try {
       const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      openOpencodeCli(bin, cwd, this.plugin.getSecretsEnv(), [], {
+      openOpencodeCli(bin, cwd, {}, [], {
         onError: (error) => new Notice(`AutoOC: could not open OpenCode CLI: ${String(error)}`),
         linuxTerminal: this.plugin.settings.linuxTerminal,
       });

@@ -5,6 +5,14 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Concurrencia dentro del propietario
+
+En este candidato, `concurrency: "independent"` habilita admisión compatible hasta dos sesiones dentro del mismo host. El editor clásico, Visual Builder e importación/exportación conservan la política. Ausente o `"exclusive"` significa exclusividad; no se modifican retrospectivamente definiciones ni permisos. GUI y peticiones CLI delegadas comparten el mismo límite. El descriptor del buzón compatible anuncia `concurrentExecutions: 2`; no atribuir esta capacidad a otra instalación por compartir número de versión.
+
+Se reservan todas las tareas referenciadas y los espacios físicos del workflow completo. Tareas repetidas, directorios iguales/anidados o repositorios Git comunes se rechazan antes de efectos. Code con acceso a bóveda, archivos o terminal, modos interactivos y evaluación con modelo requieren exclusividad. Los motores no interactivos pueden concurrir con espacios físicos disjuntos. Las declaraciones coordinan tareas de confianza: no constituyen aislamiento ni una frontera de seguridad.
+
+Conservar requestId y runId de cada sesión; cancelar una petición solo detiene su ejecución. No hay cola ni repetición automática al alcanzar el límite. Un fallo de persistencia o propiedad incierta retiene los recursos y exige continuación/reconciliación oficial, sin borrar reservas ni deducir abandono por tiempo. Un segundo host autónomo no puede competir con el propietario. Abrir Obsidian durante una ejecución CLI autónoma mantiene el propietario y la vista informativa, sin arrancar trabajo ni transferirlo. Estas modificaciones de fuentes no acreditan instalación, publicación ni validación GUI.
+
 ## Editar un workflow sin cerrar Obsidian
 
 Consultar primero `version` y `help`. Si `capabilities` incluye `export-workflow` y `edit-workflow`, usar esta vía en la bóveda autorizada con AutoOC activo. No escribir directamente `data.json`, quitar reservas ni pedir cerrar Obsidian para estas ediciones.
@@ -40,7 +48,7 @@ For standalone tasks, use `@task:TASK_ID` as the workflow identity. This preserv
 
 ## Compatibilidad y disponibilidad
 
-Comprobar `version` y `help` de la instalación antes de usarla; la CLI mantiene `experimental: true`. `pluginRequests: 1` identifica el protocolo para ejecutar con el plugin abierto, que requiere también un plugin compatible. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. El almacén de secrets de AutoOC sigue aplazado en la interfaz autónoma.
+Comprobar `version` y `help` de la instalación antes de usarla; la CLI mantiene `experimental: true`. `pluginRequests: 1` identifica el protocolo para ejecutar con el plugin abierto, que requiere también un plugin compatible. Preparar y probar el paquete no significa que esté publicado ni validado en Obsidian real. Las validaciones de versiones anteriores no acreditan este candidato. GitHub Copilot real requiere acceso al proveedor. Secrets se ha retirado del producto; el archivo histórico se conserva sin modificaciones.
 
 El puente MCP local se retira; la CLI y esta skill siguen incluidas sin instalar otro producto AutoOC. Un arranque desde los tres archivos entregados por el actualizador 1.6.0 completa el paquete automáticamente con red y verificación de versión/hashes. El paquete completo no necesita red para cargar. La recuperación automática del plugin solo archiva un propietario muerto con identidad estable y ausencia demostrada de efectos pendientes; nunca reanuda tareas por sí sola. El contrato explícito `recover-lease` de la CLI descrito abajo se conserva.
 
@@ -127,7 +135,7 @@ La operación archiva la reserva en `runtime/abandoned-lease-TOKEN`, conserva jo
 
 ## Autenticación y migración desde MCP
 
-El componente conserva la autenticación del proveedor en su perfil; no extrae ni copia el almacén cifrado de AutoOC. Declarar `requiresAutoOCSecrets: true` en una tarea dependiente de ese almacén: el host compartido la rechaza antes del primer efecto del workflow. La declaración no descubre automáticamente dependencias ocultas en prompts o scripts. El almacén de secretos queda aplazado y no se acredita su validación.
+El componente conserva la autenticación del proveedor en su perfil; no extrae ni copia el almacén cifrado de AutoOC. `requiresAutoOCSecrets: true` se conserva en tareas, workflows y pasos antiguos: todos los hosts, incluido el plugin y sus rutas clásicas, rechazan la definición antes del primer efecto del workflow, también en continuación. La declaración no descubre automáticamente dependencias ocultas en prompts o scripts. No existe gestión, PIN ni inyección automática del almacén. El plugin conserva solo un enmascarador histórico de lectura: valores conocidos de al menos cuatro caracteres descifrables mediante safeStorage; avisa si no pudo aplicarse íntegramente. No exporta valores ni modifica el archivo, no sustituye la autenticación del proveedor y no garantiza protección de credenciales externas. El host autónomo no accede al almacén cifrado.
 
 Migrar invocaciones de ejecución del puente MCP a los comandos anteriores conservando vault, IDs y evidencia. `autooc_play` dependiente de Obsidian no es ejecución autónoma. No retirar MCP de clientes que aún lo necesiten para otras capacidades; en particular, no reemplazar silenciosamente consultas de credenciales. Probar el cliente migrado sobre un vault aislado antes de cambiar su configuración habitual.
 
@@ -181,3 +189,90 @@ repitas `abandon`, no edites journals y no retires reservas. Evidencia ausente,
 insegura, alterada o cambiante y otras incertidumbres siguen bloqueando. Para
 el primer salto desde 1.6.6/1.6.7 usa la CLI del paquete nuevo separado; la CLI
 antigua no necesita incorporar estos comandos.
+
+## Guardado interrumpido: protocolo del candidato de desarrollo
+
+### Inspección y recuperación explícita de guardados (candidato)
+
+Verifica `version` y `help` mediante la ruta absoluta de la CLI seleccionada.
+Solo usa estos comandos si anuncia ambas capacidades. Pertenecen al candidato;
+compartir versión con un paquete publicado no demuestra su disponibilidad.
+
+```text
+node CLI inspect-settings-write --vault VAULT
+node CLI recover-settings-write --vault VAULT --decision DECISION_JSON
+```
+
+VAULT y DECISION_JSON deben ser rutas absolutas. La inspección no crea runtime,
+locks, decisiones ni respaldos. Devuelve `schemaVersion:1`, instalación canónica,
+identidades físicas, inventario con SHA-256 (incluidas ausencias), `inspectionHash`,
+integridad del catálogo, coherencia de checkpoints, estado del escritor y
+`blockingReasons`. Los contenidos de catálogo, resultados y prompts no salen
+en el diagnóstico. `recoverable:false` es un diagnóstico completado, no permiso
+para retirar archivos. Conserva la salida y revisa sus motivos.
+
+Tras autorización explícita del operador, prepara este JSON con los valores
+exactos de una inspección recuperable; no inventes identidades ni hashes:
+
+```json
+{
+  "schemaVersion": 1,
+  "action": "recover-settings-write",
+  "vault": "RUTA_CANONICA_DE_LA_INSPECCION",
+  "installationDirectory": "INSTALACION_CANONICA_DE_LA_INSPECCION",
+  "inspectionHash": "SHA256_DE_LA_INSPECCION",
+  "token": "TOKEN_DEL_LOCK",
+  "transactionId": "TRANSACCION_DEL_LOCK",
+  "reason": "Motivo revisado expresamente por el operador",
+  "preserveCatalog": true,
+  "executionsResumed": false
+}
+```
+
+La CLI reinspecciona y exige coincidencia completa bajo el guard compartido
+`runtime/lease-recovery.lock`. Un escritor activo, PID reutilizado, permisos
+insuficientes, inicio de proceso no verificable, catálogo corrupto o checkpoints
+inciertos impiden recuperar. Los nuevos locks incorporan token, transacción,
+PID, inicio del proceso obtenido del sistema operativo e identidad física.
+Si no se puede consultar el inicio, guardan `processStart:null` y la recuperación
+explícita queda bloqueada. Los UUID antiguos siguen siendo inspeccionables y
+compatibles con las pruebas de recuperación automática anteriores; esta ruta
+explícita no recupera UUID sin inicio de proceso verificable. La edad nunca
+demuestra abandono. No fabricar metadatos para convertir un lock antiguo.
+
+La recuperación copia los bytes exactos del catálogo a un respaldo privado,
+lo sincroniza y verifica antes de archivar lock, intent y temporales en
+`runtime/settings-write-explicit-UUID/`. No promueve temporales, cambia estados,
+recupera `execution.lock` ni reanuda tareas. Devuelve `executionsResumed:false`
+y `temporaryPromoted:false`. Una decisión consumida no se reutiliza. En Windows
+Node no permite fsync de directorios: la salida indica `directorySync:not_supported`;
+los archivos y recibos sí se sincronizan. La durabilidad ante pérdida de energía
+debe validarse por separado en cada plataforma.
+
+Si hay efectos parciales, el código de salida es no cero y el JSON informa
+`recovered:false`, etapa comprometida (`committed`), archivo, lista `moved` y
+`guardRetained`. Conserva guard, respaldo, originales y archivo. `failure.json`
+puede faltar si también falla su escritura. Inspeccionar otra vez sigue siendo
+posible, pero este candidato no implementa continuación de una recuperación
+parcial: requiere un procedimiento específico revisado y autorizado. No borrar
+el guard, mover evidencia, repetir decisiones ni usar `recover-lease` para
+desbloquearla. La reanudación y recuperación de reserva permanecen separadas.
+
+El candidato incorpora `data.json.write-intent`, vinculado mediante SHA-256 al
+propietario de ejecución, identidades físicas y catálogo previo/preparado.
+Al arrancar en Obsidian, archiva automáticamente solo una escritura demostrada
+del propietario ausente y con catálogo e históricos seguros. Conserva el
+principal confirmado y todos los restos en `runtime/settings-write-recovery-TOKEN`
+con recibo; no promueve temporales ni reanuda ejecuciones. El cierre o recarga
+durante un guardado se cancela hasta terminar: esperar el aviso y repetir la
+acción. No convertir ese aviso en una orden de matar el proceso.
+
+Un lock antiguo sin prueba, PID vivo/reutilizado/no verificable, catálogo o
+prueba alterados, incertidumbre histórica, actualización pendiente o fallo
+parcial siguen bloqueando. Conservar la evidencia y diagnosticar el caso exacto.
+La recuperación automática del plugin no autoriza al agente a borrar archivos,
+recuperar otras reservas, aceptar efectos desconocidos ni promover temporales.
+`recover-lease` conserva su autorización humana específica. Metadatos incompletos
+tras un corte eléctrico pueden necesitar intervención. No atribuir esta
+protección al paquete publicado 1.6.9 ni a instalaciones anteriores: verificar
+los hashes del candidato, su entrega y la instalación antes de afirmarlo.

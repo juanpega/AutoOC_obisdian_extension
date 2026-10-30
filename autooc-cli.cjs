@@ -22,8 +22,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // autooc-cli.ts
-var fs23 = __toESM(require("fs"));
-var path21 = __toESM(require("path"));
+var fs25 = __toESM(require("fs"));
+var path24 = __toESM(require("path"));
 
 // execution-journal.ts
 var fs3 = __toESM(require("fs"));
@@ -54,6 +54,7 @@ var import_crypto2 = require("crypto");
 var import_string_decoder = require("string_decoder");
 var import_perf_hooks2 = require("perf_hooks");
 var import_timers2 = require("timers");
+var import_child_process = require("child_process");
 
 // cooperative-json.ts
 var import_crypto = require("crypto");
@@ -68,7 +69,7 @@ async function run(work) {
     const next = work.next();
     if (next.done) return next.value;
     if (import_perf_hooks.performance.now() >= deadline) {
-      await new Promise((resolve7) => (0, import_timers.setImmediate)(resolve7));
+      await new Promise((resolve8) => (0, import_timers.setImmediate)(resolve8));
       deadline = import_perf_hooks.performance.now() + 4;
     }
   }
@@ -261,14 +262,14 @@ async function consume(parts, accept) {
   }());
 }
 async function hashJsonCooperatively(value) {
-  const source = encodeCapturedJson(captureJsonStructure(value)), hash = (0, import_crypto.createHash)("sha256");
+  const source = encodeCapturedJson(captureJsonStructure(value)), hash2 = (0, import_crypto.createHash)("sha256");
   await consume(source, (part) => {
-    hash.update(part, "utf8");
+    hash2.update(part, "utf8");
   });
-  return hash.digest("hex");
+  return hash2.digest("hex");
 }
 async function hashTextCooperatively(text) {
-  const hash = (0, import_crypto.createHash)("sha256");
+  const hash2 = (0, import_crypto.createHash)("sha256");
   await consume(function* () {
     for (let start = 0; start < text.length; ) {
       let end = Math.min(start + CHUNK, text.length);
@@ -277,25 +278,195 @@ async function hashTextCooperatively(text) {
       start = end;
     }
   }(), (part) => {
-    hash.update(part, "utf8");
+    hash2.update(part, "utf8");
   });
-  return hash.digest("hex");
+  return hash2.digest("hex");
 }
 
 // settings-writer.ts
+var uuid = /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i;
+async function settingsProcessStart(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
+  try {
+    if (process.platform === "linux") {
+      const text = await fs2.promises.readFile(`/proc/${pid}/stat`, "utf8");
+      const ticks = text.slice(text.lastIndexOf(")") + 2).split(" ")[19];
+      const boot = (await fs2.promises.readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
+      return /^\d+$/.test(ticks) ? `linux:${boot}:${ticks}` : null;
+    }
+    const systemRoot = process.env.SystemRoot || "C:\\Windows";
+    if (process.platform === "win32" && !path2.isAbsolute(systemRoot)) return null;
+    const executable = process.platform === "win32" ? path2.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/ps";
+    const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`] : ["-p", String(pid), "-o", "lstart="];
+    if (process.platform !== "win32" && process.platform !== "darwin") return null;
+    const value = await new Promise((resolve8, reject) => (0, import_child_process.execFile)(
+      executable,
+      args,
+      { windowsHide: true, timeout: 5e3, maxBuffer: 4096 },
+      (error, stdout) => error ? reject(error) : resolve8(stdout.trim())
+    ));
+    if (process.platform === "win32") return /^\d{15,20}$/.test(value) ? `windows:${value}` : null;
+    return /^[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value) ? `darwin:${value}` : null;
+  } catch {
+    return null;
+  }
+}
+var processStartKey = Symbol.for("autooc.settings.process-start.v1");
+function ownProcessStart() {
+  const host = process;
+  return host[processStartKey] ||= settingsProcessStart(process.pid);
+}
+function parseSettingsWriteLock(text) {
+  if (uuid.test(text)) return { token: text, legacy: true };
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error("Incomplete settings write lock identity");
+  }
+  if (value?.schemaVersion !== 1 || !uuid.test(value.token) || !uuid.test(value.transactionId) || !Number.isSafeInteger(value.pid) || value.pid <= 0 || typeof value.directoryIdentity !== "string" || !/^[0-9]+:[0-9]+:[0-9.]+$/.test(value.directoryIdentity) || !(value.processStart === null || typeof value.processStart === "string" && /^(?:linux:[a-f0-9-]{36}:\d+|windows:\d{15,20}|darwin:[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4})$/.test(value.processStart))) {
+    throw new Error("Incomplete settings write lock identity");
+  }
+  return {
+    schemaVersion: 1,
+    token: value.token,
+    transactionId: value.transactionId,
+    pid: value.pid,
+    processStart: value.processStart,
+    directoryIdentity: value.directoryIdentity
+  };
+}
+function settingsWriteLockToken(file) {
+  const stat = fs2.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) throw new Error("Unsafe settings write lock");
+  return parseSettingsWriteLock(fs2.readFileSync(file, "utf8")).token;
+}
+function assertNoSettingsRecovery(directory) {
+  try {
+    fs2.lstatSync(path2.join(directory, "runtime", "lease-recovery.lock"));
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error("Settings recovery guard requires reconciliation");
+}
+function settingsDirectoryIdentity(directory) {
+  const stat = fs2.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe settings directory");
+  return `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
+}
+function regularIntentText(file) {
+  const stat = fs2.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 16384) throw new Error("Unsafe settings write intent");
+  return fs2.readFileSync(file, "utf8");
+}
+async function beginSettingsWriteIntent(file, token, originalHash) {
+  if (path2.basename(file) !== "data.json") return;
+  const directory = path2.dirname(file), runtime = path2.join(directory, "runtime"), ownerFile = path2.join(runtime, "execution.lock", "owner.json");
+  let ownerText;
+  try {
+    ownerText = regularIntentText(ownerFile);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  const owner = JSON.parse(ownerText);
+  const ownerDirectoryIdentity = settingsDirectoryIdentity(path2.dirname(ownerFile));
+  let ownerStat = fs2.lstatSync(ownerFile);
+  if (owner?.schemaVersion !== 1 || owner.pid !== process.pid || !/^[a-f0-9-]{36}$/.test(owner.token || "") || !Number.isFinite(Date.parse(owner.createdAt))) throw new Error("Settings writer does not own the execution lease");
+  const leaseOwner = { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
+  const intent = { schemaVersion: 1, token, directoryIdentity: settingsDirectoryIdentity(directory), runtimeIdentity: settingsDirectoryIdentity(runtime), owner: leaseOwner, originalHash };
+  const intentFile = file + ".write-intent", updateFile = intentFile + "." + token + ".tmp";
+  let published;
+  const assertOwned = () => {
+    const currentOwnerStat = fs2.lstatSync(ownerFile);
+    if (currentOwnerStat.dev !== ownerStat.dev || currentOwnerStat.ino !== ownerStat.ino || currentOwnerStat.size !== ownerStat.size || currentOwnerStat.mtimeMs !== ownerStat.mtimeMs || currentOwnerStat.ctimeMs !== ownerStat.ctimeMs || settingsDirectoryIdentity(path2.dirname(ownerFile)) !== ownerDirectoryIdentity || regularIntentText(ownerFile) !== ownerText || settingsWriteLockToken(file + ".write-lock") !== token || settingsDirectoryIdentity(directory) !== intent.directoryIdentity || settingsDirectoryIdentity(runtime) !== intent.runtimeIdentity) throw new Error("Settings intent ownership changed");
+    if (published !== void 0 && regularIntentText(intentFile) !== published) throw new Error("Settings write intent changed");
+  };
+  const replaceMetadata = async (from, to) => {
+    for (let attempt = 0; ; attempt++) {
+      assertOwned();
+      try {
+        await fs2.promises.rename(from, to);
+        return;
+      } catch (error) {
+        if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code || "") || attempt >= 4) throw error;
+        await new Promise((resolve8) => setTimeout(resolve8, 50 * (attempt + 1)));
+      }
+    }
+  };
+  const publishOwnerAnchor = async (hash2) => {
+    assertOwned();
+    const next = JSON.parse(ownerText);
+    if (hash2) next.settingsWriteIntent = { token, sha256: hash2 };
+    else delete next.settingsWriteIntent;
+    const nextText = JSON.stringify(next), temporary = path2.join(path2.dirname(ownerFile), "owner.settings-intent." + token + ".tmp");
+    const handle = await fs2.promises.open(temporary, "wx", 384);
+    try {
+      await handle.writeFile(nextText, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    assertOwned();
+    await replaceMetadata(temporary, ownerFile);
+    ownerText = nextText;
+    ownerStat = fs2.lstatSync(ownerFile);
+  };
+  const publish = async (initial = false) => {
+    assertOwned();
+    const text = JSON.stringify(intent), target = initial ? intentFile : updateFile;
+    const handle = await fs2.promises.open(target, "wx", 384);
+    try {
+      await handle.writeFile(text, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    assertOwned();
+    if (!initial) await replaceMetadata(updateFile, intentFile);
+    published = text;
+    await publishOwnerAnchor((0, import_crypto2.createHash)("sha256").update(text, "utf8").digest("hex"));
+  };
+  await publish(true);
+  return {
+    async prepared(temporary, preparedHash) {
+      intent.temporary = path2.basename(temporary);
+      if (preparedHash) intent.preparedHash = preparedHash;
+      await publish();
+    },
+    async finish() {
+      assertOwned();
+      const current = await settingsFingerprint(file);
+      if (current !== intent.originalHash && current !== intent.preparedHash || fs2.existsSync(updateFile) || intent.temporary && fs2.existsSync(path2.join(directory, intent.temporary))) throw new Error("Settings write evidence retained for recovery");
+      assertOwned();
+      await publishOwnerAnchor();
+      await fs2.promises.unlink(intentFile);
+    }
+  };
+}
 var SettingsWriter = class _SettingsWriter {
   constructor() {
     this.tail = Promise.resolve();
     this.observed = /* @__PURE__ */ new Map();
     this.cached = /* @__PURE__ */ new Map();
     this.pending = 0;
+    this.transactions = /* @__PURE__ */ new Set();
+  }
+  // Register host transactions synchronously, before their queued I/O begins.
+  // Updates/unload must see these saves even while another session publishes.
+  trackTransaction(operation) {
+    this.transactions.add(operation);
+    void operation.then(() => this.transactions.delete(operation), () => this.transactions.delete(operation));
+    return operation;
   }
   async drain() {
+    while (this.transactions.size) await Promise.all([...this.transactions]);
     await this.tail;
     if (this.writeFailure) throw this.writeFailure;
   }
   get hasPendingWrites() {
-    return this.pending > 0;
+    return this.pending > 0 || this.transactions.size > 0;
   }
   fork() {
     const fork = new _SettingsWriter();
@@ -337,10 +508,10 @@ var SettingsWriter = class _SettingsWriter {
   load(file) {
     const text = readSettingsText(file);
     const value = parseSettings(text);
-    const hash = (source) => (0, import_crypto2.createHash)("sha256").update(source, "utf8").digest("hex");
+    const hash2 = (source) => (0, import_crypto2.createHash)("sha256").update(source, "utf8").digest("hex");
     this.observed.set(path2.resolve(file), {
-      textHash: text === null ? null : hash(text),
-      valueHash: text === null ? null : hash(JSON.stringify(value, null, 2))
+      textHash: text === null ? null : hash2(text),
+      valueHash: text === null ? null : hash2(JSON.stringify(value, null, 2))
     });
     this.cached.set(path2.resolve(file), cloneJsonStructure(value));
     return value;
@@ -379,16 +550,31 @@ var SettingsWriter = class _SettingsWriter {
     const operation = this.tail.then(async () => {
       file = path2.resolve(file);
       await fs2.promises.mkdir(path2.dirname(file), { recursive: true });
+      assertNoSettingsRecovery(path2.dirname(file));
+      const processStart = await ownProcessStart();
+      assertNoSettingsRecovery(path2.dirname(file));
       const lock = file + ".write-lock";
       const token = (0, import_crypto2.randomUUID)();
+      const lockText = JSON.stringify({
+        schemaVersion: 1,
+        token,
+        transactionId: (0, import_crypto2.randomUUID)(),
+        pid: process.pid,
+        processStart,
+        directoryIdentity: settingsDirectoryIdentity(path2.dirname(file))
+      });
       const descriptor = fs2.openSync(lock, "wx", 384);
+      let lockStat;
+      let intent;
       try {
-        fs2.writeFileSync(descriptor, token);
-        await new Promise((resolve7, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve7()));
+        lockStat = fs2.fstatSync(descriptor);
+        fs2.writeFileSync(descriptor, lockText);
+        await new Promise((resolve8, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve8()));
       } finally {
         fs2.closeSync(descriptor);
       }
       try {
+        assertNoSettingsRecovery(path2.dirname(file));
         const observed = this.observed.get(file), currentHash = await settingsFingerprint(file);
         if (!observed || observed.textHash !== currentHash) {
           const current = await readSettingsTextAsync(file);
@@ -398,8 +584,9 @@ var SettingsWriter = class _SettingsWriter {
           }
         }
         validate?.();
+        intent = await beginSettingsWriteIntent(file, token, currentHash);
         const captured = captureJsonStructure(snapshot());
-        if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== token) {
+        if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== lockText) {
           throw new Error("Settings write lock ownership changed");
         }
         if (await settingsFingerprint(file) !== currentHash) {
@@ -410,18 +597,24 @@ var SettingsWriter = class _SettingsWriter {
           if (await settingsFingerprint(file) !== currentHash) {
             throw new Error("AutoOC configuration changed during replacement; reload before saving");
           }
-          if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== token) {
+          assertNoSettingsRecovery(path2.dirname(file));
+          if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== lockText) {
             throw new Error("Settings write lock ownership changed");
           }
           validate?.();
-        });
+        }, intent?.prepared);
         this.observed.set(file, { textHash: nextHash, valueHash: nextHash });
         this.cached.set(file, cloneCapturedJson(captured));
       } finally {
-        if (fs2.lstatSync(lock).isSymbolicLink() || fs2.readFileSync(lock, "utf8") !== token) {
-          throw new Error("Settings write lock ownership changed");
+        try {
+          await intent?.finish();
+        } finally {
+          const currentLock = fs2.lstatSync(lock);
+          if (currentLock.isSymbolicLink() || currentLock.dev !== lockStat.dev || currentLock.ino !== lockStat.ino || currentLock.birthtimeMs !== lockStat.birthtimeMs || fs2.readFileSync(lock, "utf8") !== lockText) {
+            throw new Error("Settings write lock ownership changed");
+          }
+          fs2.unlinkSync(lock);
         }
-        fs2.unlinkSync(lock);
       }
     });
     const tracked = operation.finally(() => {
@@ -437,9 +630,9 @@ function ioBudget() {
   let started = import_perf_hooks2.performance.now();
   return () => {
     if (import_perf_hooks2.performance.now() - started < 4) return;
-    return new Promise((resolve7) => (0, import_timers2.setImmediate)(() => {
+    return new Promise((resolve8) => (0, import_timers2.setImmediate)(() => {
       started = import_perf_hooks2.performance.now();
-      resolve7();
+      resolve8();
     }));
   };
 }
@@ -456,7 +649,7 @@ async function settingsFingerprint(file) {
     handle = await fs2.promises.open(file, "r");
     const opened = await handle.stat();
     if (!sameSettingsFile(stat, opened)) throw new Error("Configuration identity changed while reading");
-    const buffer = Buffer.allocUnsafe(256 * 1024), hash = (0, import_crypto2.createHash)("sha256"), budget = ioBudget();
+    const buffer = Buffer.allocUnsafe(256 * 1024), hash2 = (0, import_crypto2.createHash)("sha256"), budget = ioBudget();
     let total = 0;
     for (; ; ) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
@@ -464,11 +657,11 @@ async function settingsFingerprint(file) {
         const after = await handle.stat();
         const current = await fs2.promises.lstat(file);
         if (total !== opened.size || !sameSettingsFile(opened, after) || current.isSymbolicLink() || !sameSettingsFile(opened, current)) throw new Error("Configuration changed while reading");
-        return hash.digest("hex");
+        return hash2.digest("hex");
       }
       total += bytesRead;
       if (total > opened.size) throw new Error("Configuration changed while reading");
-      hash.update(buffer.subarray(0, bytesRead));
+      hash2.update(buffer.subarray(0, bytesRead));
       const pause = budget();
       if (pause) await pause;
     }
@@ -513,7 +706,7 @@ async function readSettingsTextAsync(file) {
           ascii = false;
           break;
         }
-        await new Promise((resolve7) => (0, import_timers2.setImmediate)(resolve7));
+        await new Promise((resolve8) => (0, import_timers2.setImmediate)(resolve8));
       }
       if (ascii) {
         const final2 = await handle.stat();
@@ -524,7 +717,7 @@ async function readSettingsTextAsync(file) {
       const decoder = new import_string_decoder.StringDecoder("utf8"), parts = [];
       for (let offset = 0; offset < bytes.length; offset += 256 * 1024) {
         parts.push(decoder.write(bytes.subarray(offset, offset + 256 * 1024)));
-        await new Promise((resolve7) => (0, import_timers2.setImmediate)(resolve7));
+        await new Promise((resolve8) => (0, import_timers2.setImmediate)(resolve8));
       }
       parts.push(decoder.end());
       bytes = void 0;
@@ -570,12 +763,13 @@ async function atomicSettingsWrite(file, data, io = fs2.promises, beforeReplace)
   if (text === void 0) throw new Error("Settings are not serializable");
   await atomicSettingsTextWrite(file, text, io, beforeReplace);
 }
-async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeReplace) {
+async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeReplace, prepared) {
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path2.dirname(file), { recursive: true });
   let handle;
-  const hash = (0, import_crypto2.createHash)("sha256");
+  const hash2 = (0, import_crypto2.createHash)("sha256");
   try {
+    await prepared?.(temp);
     handle = await io.open(temp, "wx", 384);
     const parts = typeof text === "string" ? [text] : text;
     let batch = [], size = 0;
@@ -583,7 +777,7 @@ async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeRepl
       const part = batch.join("");
       batch = [];
       size = 0;
-      hash.update(part, "utf8");
+      hash2.update(part, "utf8");
       await handle.writeFile(part, "utf8");
     };
     for (const part of parts) for (let start = 0; start < part.length; ) {
@@ -599,6 +793,7 @@ async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeRepl
     await handle.sync();
     await handle.close();
     handle = void 0;
+    await prepared?.(temp, hash2.copy().digest("hex"));
     const baseline = beforeReplace ? void 0 : await io.readFile(file).catch((error) => {
       if (error.code === "ENOENT") return null;
       throw error;
@@ -610,7 +805,7 @@ async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeRepl
         break;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve7) => setTimeout(resolve7, 50 * (attempt + 1)));
+        await new Promise((resolve8) => setTimeout(resolve8, 50 * (attempt + 1)));
         if (beforeReplace) continue;
         const current = await io.readFile(file).catch((readError) => {
           if (readError.code === "ENOENT") return null;
@@ -621,7 +816,7 @@ async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeRepl
         }
       }
     }
-    return hash.digest("hex");
+    return hash2.digest("hex");
   } finally {
     if (handle) await handle.close().catch(() => {
     });
@@ -760,8 +955,8 @@ var ExecutionJournal = class _ExecutionJournal {
       if (!["failed", "completed"].includes(state.phase) || !checkpointUncertainties(state).length) throw new Error("No terminal uncertainty to dispose");
       if (acknowledgedUnknownEffects !== true) throw new Error("Explicit acknowledgement of unknown effects is required");
       if (typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("A concise disposition reason is required");
-      const identity = dispositionLocation(location);
-      if (identity.runtimeDirectory !== physicalPath(this.lease.directory)) throw new Error("Disposition lease identity mismatch");
+      const identity2 = dispositionLocation(location);
+      if (identity2.runtimeDirectory !== physicalPath(this.lease.directory)) throw new Error("Disposition lease identity mismatch");
       const snapshot = `disposition-${state.runId}-${state.revision}.snapshot`, file = path3.join(this.lease.directory, snapshot);
       if (fs3.existsSync(file)) {
         const stat = fs3.lstatSync(file);
@@ -777,7 +972,7 @@ var ExecutionJournal = class _ExecutionJournal {
       }
       this.lease.assertOwned();
       state.disposition = {
-        ...identity,
+        ...identity2,
         at: (/* @__PURE__ */ new Date()).toISOString(),
         reason: reason.trim(),
         outcome: "unknown",
@@ -1087,9 +1282,9 @@ function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
 var fs6 = __toESM(require("fs"));
 function inspectTerminalExecution(options) {
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
-  const identity = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+  const identity2 = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
   return {
-    ...identity,
+    ...identity2,
     runId: state.runId,
     workflowId: state.workflowId,
     definitionHash: state.definitionHash,
@@ -1149,9 +1344,177 @@ async function abandonInstalledExecution(options) {
   }
 }
 
+// execution-presentation.ts
+function executionPresentation(workflow, taskId) {
+  if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
+    throw new Error("Invalid execution presentation identity");
+  }
+  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+}
+function presentationFields(value) {
+  if (value.workflowName === void 0 && value.executionKind === void 0) return {};
+  if (value.workflowName !== void 0 && typeof value.workflowName !== "string" || !["workflow", "task"].includes(value.executionKind)) {
+    throw new Error("Invalid execution presentation metadata");
+  }
+  return { ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {}, executionKind: value.executionKind };
+}
+
+// catalog-transaction.ts
+var path6 = __toESM(require("path"));
+var import_async_hooks = require("async_hooks");
+var tails = /* @__PURE__ */ new Map();
+var context = new import_async_hooks.AsyncLocalStorage();
+function catalogTransaction(file, operation) {
+  const key = path6.join(physicalPath(path6.dirname(file)), path6.basename(file));
+  const current = context.getStore();
+  if (current?.key === key && current.active) return operation();
+  const result = (tails.get(key) || Promise.resolve()).then(() => {
+    const state = { key, active: true };
+    return context.run(state, async () => {
+      try {
+        return await operation();
+      } finally {
+        state.active = false;
+      }
+    });
+  });
+  const tail = result.then(() => {
+  }, () => {
+  });
+  tails.set(key, tail);
+  void tail.then(() => {
+    if (tails.get(key) === tail) tails.delete(key);
+  });
+  return result;
+}
+
+// execution-coordinator.ts
+var fs7 = __toESM(require("fs"));
+var path7 = __toESM(require("path"));
+var import_child_process2 = require("child_process");
+function validateConcurrency(item) {
+  if (item.concurrency !== void 0 && item.concurrency !== "exclusive" && item.concurrency !== "independent") throw new Error("Invalid concurrency policy");
+}
+function resources(definition, vault) {
+  const { workflow, tasks, settings } = definition;
+  for (const item of [workflow, ...tasks]) validateConcurrency(item);
+  const standalone = workflow.id.startsWith("@task:");
+  const result = { exclusive: (standalone ? tasks[0]?.concurrency : workflow.concurrency) !== "independent", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
+  for (const item of [...workflow.steps.filter((s) => s.stepKind === "code"), ...tasks]) {
+    if (item.interactiveTerminal || item.taskKind === void 0 && item.stepKind !== "code" && settings.defaultInteractiveTerminal) result.exclusive = true;
+    if (item.stepKind === "code" || item.taskKind === "code") {
+      if (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal || item.branch || workflow.handoffBranch) result.exclusive = true;
+      continue;
+    }
+    const directory = physicalPath(item.workingDirectory || settings.workingDirectory || vault);
+    result.directories.push(directory);
+    let parent = directory, gitRoot;
+    for (; ; ) {
+      if (fs7.existsSync(path7.join(parent, ".git"))) {
+        gitRoot = parent;
+        break;
+      }
+      const next = path7.dirname(parent);
+      if (next === parent) break;
+      parent = next;
+    }
+    if (gitRoot) {
+      const common = (0, import_child_process2.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+      result.repositories.add(physicalPath(path7.resolve(gitRoot, common)));
+    }
+  }
+  if (workflow.steps.some((s) => s.transitionMode === "eval" || s.transitions?.some((t) => t.mode === "eval"))) result.exclusive = true;
+  return result;
+}
+var coordinators = /* @__PURE__ */ new WeakMap();
+function executionCoordinator(lease) {
+  let value = coordinators.get(lease);
+  if (!value) {
+    value = new ExecutionCoordinator(lease);
+    coordinators.set(lease, value);
+  }
+  return value;
+}
+var ExecutionAdmission = class {
+  constructor(coordinator, definition, resources2, vault) {
+    this.coordinator = coordinator;
+    this.definition = definition;
+    this.resources = resources2;
+    this.vault = vault;
+    this.advancing = true;
+    this.confirmedTerminal = false;
+  }
+  assertOwned(lease, definition) {
+    this.coordinator.assertOwned(this, lease);
+    if (this.definition.hash !== definition.hash) throw new Error("Admission definition changed");
+    const current = resources(definition, this.vault);
+    if (JSON.stringify(current.directories) !== JSON.stringify(this.resources.directories) || JSON.stringify([...current.repositories]) !== JSON.stringify([...this.resources.repositories])) throw new Error("Execution resource identity changed; reservation retained");
+  }
+  bind(checkpoint) {
+    this.assertOwned(this.coordinator.lease, this.definition);
+    if (checkpoint.workflowId !== this.definition.workflow.id || checkpoint.definitionHash !== this.definition.hash || this.runId && this.runId !== checkpoint.runId) throw new Error("Admission checkpoint identity changed");
+    this.runId = checkpoint.runId;
+  }
+  knows(runId) {
+    return this.coordinator.knows(runId);
+  }
+  confirm(checkpoint) {
+    this.bind(checkpoint);
+    this.confirmedTerminal = ["completed", "failed", "abandoned"].includes(checkpoint.phase) && !checkpointUncertainties(checkpoint).length;
+  }
+  finish() {
+    this.coordinator.finish(this);
+  }
+};
+var ExecutionCoordinator = class {
+  constructor(lease) {
+    this.lease = lease;
+    this.sessions = /* @__PURE__ */ new Set();
+  }
+  assertOwned(session, lease) {
+    lease.assertOwned();
+    if (lease !== this.lease || !this.sessions.has(session) || !session.advancing) throw new Error("Execution admission is not owned");
+  }
+  knows(runId) {
+    return [...this.sessions].some((s) => s.runId === runId && s.advancing);
+  }
+  admit(definition, vault, resumeRunId) {
+    this.lease.assertOwned();
+    const requested = resources(definition, vault);
+    for (const session2 of this.sessions) {
+      if (session2.advancing || !session2.runId) continue;
+      try {
+        const state = readExecutionCheckpoint(this.lease.directory, session2.runId);
+        if (state.workflowId === session2.definition.workflow.id && state.definitionHash === session2.definition.hash && (state.disposition || state.phase === "abandoned")) this.sessions.delete(session2);
+      } catch {
+      }
+    }
+    const previous = [...this.sessions].find((s) => s.runId === resumeRunId && !!resumeRunId);
+    if (previous && !previous.advancing && previous.definition.hash === definition.hash) {
+      previous.advancing = true;
+      previous.confirmedTerminal = false;
+      return previous;
+    }
+    for (const current of this.sessions) {
+      if (current.definition.workflow.id === definition.workflow.id || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
+      if (!current.advancing) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
+      if (requested.exclusive || current.resources.exclusive) throw new Error("Exclusive execution must finish before shared execution");
+      if (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b)))) throw new Error("Execution resource is occupied (workspace or Git repository)");
+    }
+    if (this.sessions.size >= 2) throw new Error("Concurrent execution limit reached (2)");
+    const session = new ExecutionAdmission(this, definition, requested, vault);
+    this.sessions.add(session);
+    return session;
+  }
+  finish(session) {
+    session.advancing = false;
+    if (!session.runId || session.confirmedTerminal) this.sessions.delete(session);
+  }
+};
+
 // installed-workflow-host.ts
-var fs18 = __toESM(require("fs"));
-var path16 = __toESM(require("path"));
+var fs19 = __toESM(require("fs"));
+var path18 = __toESM(require("path"));
 
 // workflow-definition.ts
 var import_crypto5 = require("crypto");
@@ -1208,28 +1571,28 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
   const payload = definitionPayload(workflow, tasks, settings);
   const digest = (0, import_crypto5.createHash)("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
-  const hash = digest.digest("hex");
-  return freeze({ ...payload, hash });
+  const hash2 = digest.digest("hex");
+  return freeze({ ...payload, hash: hash2 });
 }
 
 // code-runtime.ts
-var fs7 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
+var fs8 = __toESM(require("fs"));
+var path8 = __toESM(require("path"));
 var vm = __toESM(require("vm"));
 function executeCode(options) {
   const vaultBase = options.vaultBase;
   const defaultCwd = options.cwd;
   const resolveInVault = (p) => {
-    const root = fs7.realpathSync(vaultBase);
-    const resolved = path6.resolve(root, p || ".");
-    if (resolved !== root && !resolved.startsWith(root + path6.sep)) {
+    const root = fs8.realpathSync(vaultBase);
+    const resolved = path8.resolve(root, p || ".");
+    if (resolved !== root && !resolved.startsWith(root + path8.sep)) {
       throw new Error(`Path escapes vault: ${p}`);
     }
     let current = root;
-    for (const component of path6.relative(root, resolved).split(path6.sep).filter(Boolean)) {
-      current = path6.join(current, component);
+    for (const component of path8.relative(root, resolved).split(path8.sep).filter(Boolean)) {
+      current = path8.join(current, component);
       try {
-        if (fs7.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
+        if (fs8.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
       } catch (error) {
         if (error.code === "ENOENT") break;
         throw error;
@@ -1237,10 +1600,10 @@ function executeCode(options) {
     }
     return resolved;
   };
-  const readText = (p) => fs7.readFileSync(p, "utf8");
+  const readText = (p) => fs8.readFileSync(p, "utf8");
   const writeText = (p, content) => {
-    fs7.mkdirSync(path6.dirname(p), { recursive: true });
-    fs7.writeFileSync(p, String(content), "utf8");
+    fs8.mkdirSync(path8.dirname(p), { recursive: true });
+    fs8.writeFileSync(p, String(content), "utf8");
     return p;
   };
   const sandbox = {
@@ -1270,36 +1633,36 @@ function executeCode(options) {
       },
       append: (p, content) => {
         const full = resolveInVault(p);
-        fs7.mkdirSync(path6.dirname(full), { recursive: true });
-        fs7.appendFileSync(full, String(content), "utf8");
+        fs8.mkdirSync(path8.dirname(full), { recursive: true });
+        fs8.appendFileSync(full, String(content), "utf8");
         options.onVaultMutation?.({ path: full, operation: "append" });
         return full;
       },
-      exists: (p) => fs7.existsSync(resolveInVault(p)),
-      list: (p = ".") => fs7.readdirSync(resolveInVault(p))
+      exists: (p) => fs8.existsSync(resolveInVault(p)),
+      list: (p = ".") => fs8.readdirSync(resolveInVault(p))
     };
   }
   if (options.codeAllowFiles) {
     sandbox.files = {
       cwd: defaultCwd,
-      resolve: (p) => path6.isAbsolute(p) ? path6.resolve(p) : path6.resolve(defaultCwd, p || "."),
-      read: (p) => readText(path6.isAbsolute(p) ? path6.resolve(p) : path6.resolve(defaultCwd, p)),
-      write: (p, content) => writeText(path6.isAbsolute(p) ? path6.resolve(p) : path6.resolve(defaultCwd, p), content),
+      resolve: (p) => path8.isAbsolute(p) ? path8.resolve(p) : path8.resolve(defaultCwd, p || "."),
+      read: (p) => readText(path8.isAbsolute(p) ? path8.resolve(p) : path8.resolve(defaultCwd, p)),
+      write: (p, content) => writeText(path8.isAbsolute(p) ? path8.resolve(p) : path8.resolve(defaultCwd, p), content),
       append: (p, content) => {
-        const full = path6.isAbsolute(p) ? path6.resolve(p) : path6.resolve(defaultCwd, p);
-        fs7.mkdirSync(path6.dirname(full), { recursive: true });
-        fs7.appendFileSync(full, String(content), "utf8");
+        const full = path8.isAbsolute(p) ? path8.resolve(p) : path8.resolve(defaultCwd, p);
+        fs8.mkdirSync(path8.dirname(full), { recursive: true });
+        fs8.appendFileSync(full, String(content), "utf8");
         return full;
       },
-      exists: (p) => fs7.existsSync(path6.isAbsolute(p) ? path6.resolve(p) : path6.resolve(defaultCwd, p)),
-      list: (p = ".") => fs7.readdirSync(path6.isAbsolute(p) ? path6.resolve(p) : path6.resolve(defaultCwd, p))
+      exists: (p) => fs8.existsSync(path8.isAbsolute(p) ? path8.resolve(p) : path8.resolve(defaultCwd, p)),
+      list: (p = ".") => fs8.readdirSync(path8.isAbsolute(p) ? path8.resolve(p) : path8.resolve(defaultCwd, p))
     };
   }
   if (options.codeAllowTerminal) {
     const { execSync } = require("child_process");
     sandbox.terminal = {
       run: (command, options2 = {}) => execSync(String(command), {
-        cwd: options2.cwd ? path6.isAbsolute(options2.cwd) ? options2.cwd : path6.resolve(defaultCwd, options2.cwd) : defaultCwd,
+        cwd: options2.cwd ? path8.isAbsolute(options2.cwd) ? options2.cwd : path8.resolve(defaultCwd, options2.cwd) : defaultCwd,
         timeout: Math.min(Math.max(options2.timeoutMs || 3e4, 1e3), 6e5),
         encoding: "utf8"
       })
@@ -1394,11 +1757,11 @@ async function executeCodexTask(client, request) {
 }
 
 // codex-client.ts
-var import_child_process = require("child_process");
+var import_child_process3 = require("child_process");
 var import_string_decoder2 = require("string_decoder");
-var fs8 = __toESM(require("fs"));
+var fs9 = __toESM(require("fs"));
 var os = __toESM(require("os"));
-var path7 = __toESM(require("path"));
+var path9 = __toESM(require("path"));
 function codexResultOutput(messages, status) {
   const transcript = messages.map((item) => item.text).filter(Boolean).join("\n\n").trim();
   const finals = messages.filter((item) => item.completed && item.phase === "final_answer");
@@ -1446,12 +1809,12 @@ var JsonLineRpcPeer = class {
   }
   request(method, params = {}, timeoutMs = 3e4) {
     const id = this.nextId++;
-    return new Promise((resolve7, reject) => {
+    return new Promise((resolve8, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex RPC request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve7, reject, timer });
+      this.pending.set(id, { resolve: resolve8, reject, timer });
       this.writeLine(JSON.stringify({ id, method, params }) + "\n");
     });
   }
@@ -1474,26 +1837,26 @@ function resolveCodexBin(configured = "codex") {
   const candidates = [];
   if (os.platform() === "win32") {
     const localAppData = process.env.LOCALAPPDATA || "";
-    const desktopBinRoot = path7.join(localAppData, "OpenAI", "Codex", "bin");
+    const desktopBinRoot = path9.join(localAppData, "OpenAI", "Codex", "bin");
     try {
-      const versionDirs = fs8.readdirSync(desktopBinRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path7.join(desktopBinRoot, entry.name, "codex.exe")).filter((candidate) => fs8.existsSync(candidate)).sort((a, b) => fs8.statSync(b).mtimeMs - fs8.statSync(a).mtimeMs);
+      const versionDirs = fs9.readdirSync(desktopBinRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path9.join(desktopBinRoot, entry.name, "codex.exe")).filter((candidate) => fs9.existsSync(candidate)).sort((a, b) => fs9.statSync(b).mtimeMs - fs9.statSync(a).mtimeMs);
       candidates.push(...versionDirs);
     } catch {
     }
     candidates.push(
-      path7.join(localAppData, "OpenAI", "Codex", "codex.exe"),
-      path7.join(process.env.APPDATA || "", "npm", "codex.cmd")
+      path9.join(localAppData, "OpenAI", "Codex", "codex.exe"),
+      path9.join(process.env.APPDATA || "", "npm", "codex.cmd")
     );
   } else {
     const userHome = process.env.HOME || "";
     candidates.push(
-      path7.join(userHome, ".local", "bin", "codex"),
-      path7.join(userHome, ".npm-global", "bin", "codex"),
+      path9.join(userHome, ".local", "bin", "codex"),
+      path9.join(userHome, ".npm-global", "bin", "codex"),
       "/opt/homebrew/bin/codex",
       "/usr/local/bin/codex"
     );
   }
-  return candidates.find((candidate) => candidate && fs8.existsSync(candidate)) || configured || "codex";
+  return candidates.find((candidate) => candidate && fs9.existsSync(candidate)) || configured || "codex";
 }
 function buildCodexThreadUrl(threadId) {
   return `codex://threads/${encodeURIComponent(threadId)}`;
@@ -1514,8 +1877,8 @@ function openCodexUrl(url) {
     ],
     env: { ...process.env, AUTOOC_CODEX_URL: url }
   } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
-  return new Promise((resolve7, reject) => {
-    const child = (0, import_child_process.spawn)(launcher.bin, launcher.args, {
+  return new Promise((resolve8, reject) => {
+    const child = (0, import_child_process3.spawn)(launcher.bin, launcher.args, {
       detached: false,
       stdio: "ignore",
       windowsHide: true,
@@ -1528,7 +1891,7 @@ function openCodexUrl(url) {
     });
     child.once("close", (code) => {
       if (settled) return;
-      if (code === 0) resolve7();
+      if (code === 0) resolve8();
       else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code ?? "unknown"}`));
     });
   });
@@ -1553,7 +1916,7 @@ var CodexAppServerClient = class {
   }
   async initialize() {
     if (this.initialized) return;
-    this.child = (0, import_child_process.spawn)(this.bin, ["app-server"], {
+    this.child = (0, import_child_process3.spawn)(this.bin, ["app-server"], {
       cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true
@@ -1632,8 +1995,8 @@ var CodexAppServerClient = class {
     this.threadId = threadResponse?.thread?.id || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
     await this.callbacks.onThreadCreated?.({ threadId: this.threadId });
-    const completion = new Promise((resolve7, reject) => {
-      this.completionResolve = resolve7;
+    const completion = new Promise((resolve8, reject) => {
+      this.completionResolve = resolve8;
       this.completionReject = reject;
     });
     void completion.catch(() => {
@@ -1831,7 +2194,7 @@ var CodexAppServerClient = class {
 };
 
 // codex-workflow-adapter.ts
-var fs9 = __toESM(require("fs"));
+var fs10 = __toESM(require("fs"));
 function codexWorkflowAdapter(createClient, defaults = {}) {
   return {
     supports: (task) => task.taskKind === "codex" && (task.interactiveTerminal === void 0 || typeof task.interactiveTerminal === "boolean"),
@@ -1883,8 +2246,8 @@ function codexWorkflowAdapter(createClient, defaults = {}) {
 }
 function createCodexWorkflowAdapter(definition, vaultBase) {
   const directory = (task) => {
-    const cwd = fs9.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
-    if (!fs9.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
+    const cwd = fs10.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
+    if (!fs10.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
     return cwd;
   };
   const create = (task, callbacks) => {
@@ -1915,39 +2278,39 @@ function createCodexWorkflowAdapter(definition, vaultBase) {
 }
 
 // cli-workflow-adapters.ts
-var fs12 = __toESM(require("fs"));
-var path10 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
 
 // copilot-client.ts
-var import_child_process2 = require("child_process");
-var fs10 = __toESM(require("fs"));
+var import_child_process4 = require("child_process");
+var fs11 = __toESM(require("fs"));
 var os2 = __toESM(require("os"));
-var path8 = __toESM(require("path"));
+var path10 = __toESM(require("path"));
 function resolveCopilotBin(configured = "copilot") {
   const value = configured.trim() || "copilot";
   const nativeFromShim = (shim) => {
-    const npmRoot = path8.join(path8.dirname(shim), "node_modules", "@github");
+    const npmRoot = path10.join(path10.dirname(shim), "node_modules", "@github");
     const packageName = `copilot-${process.platform}-${process.arch}`;
     const executable = process.platform === "win32" ? "copilot.exe" : "copilot";
     return [
-      path8.join(npmRoot, "copilot", "node_modules", "@github", packageName, executable),
-      path8.join(npmRoot, packageName, executable)
-    ].find((candidate) => fs10.existsSync(candidate));
+      path10.join(npmRoot, "copilot", "node_modules", "@github", packageName, executable),
+      path10.join(npmRoot, packageName, executable)
+    ].find((candidate) => fs11.existsSync(candidate));
   };
   if (value !== "copilot") {
     return /\.(cmd|bat|ps1)$/i.test(value) ? nativeFromShim(value) || value : value;
   }
   const home = os2.homedir();
   const dirs = [
-    ...(process.env.PATH || "").split(path8.delimiter),
-    path8.join(home, ".local", "bin"),
-    path8.join(home, ".npm-global", "bin"),
-    ...process.platform === "win32" ? [path8.join(process.env.APPDATA || path8.join(home, "AppData", "Roaming"), "npm")] : ["/opt/homebrew/bin", "/usr/local/bin"]
+    ...(process.env.PATH || "").split(path10.delimiter),
+    path10.join(home, ".local", "bin"),
+    path10.join(home, ".npm-global", "bin"),
+    ...process.platform === "win32" ? [path10.join(process.env.APPDATA || path10.join(home, "AppData", "Roaming"), "npm")] : ["/opt/homebrew/bin", "/usr/local/bin"]
   ];
   for (const dir of dirs.filter(Boolean)) {
     for (const extension of process.platform === "win32" ? [".exe", ".cmd", ".ps1"] : [""]) {
-      const candidate = path8.join(dir.replace(/^"|"$/g, ""), `copilot${extension}`);
-      if (fs10.existsSync(candidate)) return nativeFromShim(candidate) || candidate;
+      const candidate = path10.join(dir.replace(/^"|"$/g, ""), `copilot${extension}`);
+      if (fs11.existsSync(candidate)) return nativeFromShim(candidate) || candidate;
     }
   }
   return value;
@@ -1976,7 +2339,7 @@ var CopilotCliClient = class {
     if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
       return Promise.reject(new Error("Select the native copilot.exe executable, or reinstall @github/copilot with optional dependencies enabled."));
     }
-    return new Promise((resolve7) => {
+    return new Promise((resolve8) => {
       let output = "";
       let error = "";
       let settled = false;
@@ -1989,26 +2352,26 @@ var CopilotCliClient = class {
         if (timer) clearTimeout(timer);
         if (promptDir) {
           try {
-            fs10.unlinkSync(path8.join(promptDir, "task.txt"));
-            fs10.rmdirSync(promptDir);
+            fs11.unlinkSync(path10.join(promptDir, "task.txt"));
+            fs11.rmdirSync(promptDir);
           } catch {
           }
         }
-        resolve7(result);
+        resolve8(result);
       };
       this.finish = finish;
       try {
         let args;
         if (prompt.length > 12e3) {
-          promptDir = fs10.mkdtempSync(path8.join(os2.tmpdir(), "autooc-copilot-"));
-          const promptFile = path8.join(promptDir, "task.txt");
-          fs10.writeFileSync(promptFile, prompt, { encoding: "utf8", mode: 384 });
+          promptDir = fs11.mkdtempSync(path10.join(os2.tmpdir(), "autooc-copilot-"));
+          const promptFile = path10.join(promptDir, "task.txt");
+          fs11.writeFileSync(promptFile, prompt, { encoding: "utf8", mode: 384 });
           args = buildCopilotArgs(`Read the UTF-8 file ${JSON.stringify(promptFile)} and carry out the complete task instructions it contains.`, options);
           args.push("--add-dir", promptDir);
         } else {
           args = buildCopilotArgs(prompt, options);
         }
-        this.child = (0, import_child_process2.spawn)(this.bin, args, {
+        this.child = (0, import_child_process4.spawn)(this.bin, args, {
           cwd: this.cwd,
           env: { ...process.env, ...options.env },
           stdio: "pipe",
@@ -2046,7 +2409,7 @@ var CopilotCliClient = class {
     const child = this.child;
     if (!child?.pid || child.exitCode !== null) return;
     if (process.platform === "win32") {
-      const killer = (0, import_child_process2.spawn)("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = (0, import_child_process4.spawn)("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       killer.on("error", () => {
         try {
           child.kill();
@@ -2073,11 +2436,11 @@ var CopilotCliClient = class {
 };
 
 // cli-launchers.ts
-var fs11 = __toESM(require("fs"));
-var path9 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
 var crypto = __toESM(require("crypto"));
-var import_child_process3 = require("child_process");
+var import_child_process5 = require("child_process");
 function resolveOpencodeBin(configured) {
   if (configured && configured !== "opencode") return configured;
   const candidates = [];
@@ -2164,7 +2527,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
     const envScript = buildPowerShellEnvLines(env).join("; ");
     const runCommand = args.length > 0 ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList` : `& ${psSingleQuoted(bin)}`;
     const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
-    const launcher = (0, import_child_process3.spawn)(
+    const launcher = (0, import_child_process5.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
       { detached: true, stdio: "ignore", windowsHide: false }
@@ -2177,7 +2540,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   const command = buildPosixLaunchCommand(bin, cwd, env, args);
   if (process.platform === "darwin") {
     const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
-    const launcher = (0, import_child_process3.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process5.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher.on?.("error", (error) => options.onError?.(error));
     launcher.on?.("spawn", () => options.onLaunched?.());
     launcher.unref();
@@ -2190,7 +2553,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
         "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)"
       );
     }
-    const launcher = (0, import_child_process3.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process5.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
     launcher.on?.("error", (error) => options.onError?.(error));
     launcher.on?.("spawn", () => options.onLaunched?.());
     launcher.unref();
@@ -2199,20 +2562,20 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
 }
 function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, options = {}) {
   const attempt = crypto.randomBytes(16).toString("hex");
-  const directory = fs11.mkdtempSync(path9.join(path9.resolve(cwd), ".autooc-interactive-"));
-  const promptFile = path9.join(directory, "prompt.txt");
-  const stateFile = path9.join(directory, "state.json");
-  const ignoreFile = path9.join(directory, ".gitignore");
+  const directory = fs12.mkdtempSync(path11.join(path11.resolve(cwd), ".autooc-interactive-"));
+  const promptFile = path11.join(directory, "prompt.txt");
+  const stateFile = path11.join(directory, "state.json");
+  const ignoreFile = path11.join(directory, ".gitignore");
   const cleanup = () => {
     for (const file of [promptFile, stateFile, ignoreFile]) {
       try {
-        fs11.unlinkSync(file);
+        fs12.unlinkSync(file);
       } catch (error) {
         if (error.code !== "ENOENT") console.warn("AutoOC: interactive cleanup pending", file);
       }
     }
     try {
-      fs11.rmdirSync(directory);
+      fs12.rmdirSync(directory);
     } catch {
     }
   };
@@ -2231,12 +2594,12 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     if (poll) clearInterval(poll);
   };
   try {
-    fs11.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
-    fs11.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
-    const instruction = `Read the full task prompt from ${path9.basename(directory)}/prompt.txt and follow it exactly.`;
+    fs12.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
+    fs12.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
+    const instruction = `Read the full task prompt from ${path11.basename(directory)}/prompt.txt and follow it exactly.`;
     const runner = [
       "$ErrorActionPreference = 'Stop'",
-      `Set-Location -LiteralPath ${psSingleQuoted(path9.resolve(cwd))}`,
+      `Set-Location -LiteralPath ${psSingleQuoted(path11.resolve(cwd))}`,
       "try {",
       `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
       `  $cliArgs = @('-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
@@ -2261,7 +2624,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
       "$session = $null; $confirmed = $false",
       `function Report($status, $ended) { @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
       "try {",
-      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path9.resolve(cwd))} -PassThru`,
+      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path11.resolve(cwd))} -PassThru`,
       "  while (-not $session.HasExited) {",
       "    if (-not $confirmed) {",
       "      $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name)",
@@ -2285,7 +2648,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     const readState = () => {
       let state;
       try {
-        state = JSON.parse(fs11.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, ""));
+        state = JSON.parse(fs12.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, ""));
       } catch {
         return;
       }
@@ -2300,7 +2663,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     };
     poll = setInterval(readState, 100);
     timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
-    const launcher = (0, import_child_process3.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
+    const launcher = (0, import_child_process5.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
       // A detached hidden PowerShell can exit without executing its command on
       // Windows. The observer does not need a new process group; unref below
       // releases the host after confirmation while its visible session runs.
@@ -2327,26 +2690,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
   }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
-  const fs24 = require("fs");
+  const fs26 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs24.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs26.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn4 } = require("child_process");
   const child = spawn4("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs24.unlinkSync(launcherFile);
+      fs26.unlinkSync(launcherFile);
     } catch {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs24.unlinkSync(psScriptFile);
+      fs26.unlinkSync(psScriptFile);
     } catch {
     }
   }, 6e5);
@@ -2354,12 +2717,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs24.unlinkSync(launcherFile);
+      fs26.unlinkSync(launcherFile);
     } catch {
     }
     if (removeScript) {
       try {
-        fs24.unlinkSync(psScriptFile);
+        fs26.unlinkSync(psScriptFile);
       } catch {
       }
     }
@@ -2381,7 +2744,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs24.existsSync(effectivePidFile) ? String(fs24.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs26.existsSync(effectivePidFile) ? String(fs26.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn4("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -2390,7 +2753,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs24.unlinkSync(effectivePidFile);
+      fs26.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -2411,18 +2774,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
   };
 }
 function launchHiddenSh(shScriptFile, pidFile) {
-  const fs24 = require("fs");
+  const fs26 = require("fs");
   const { spawn: spawn4 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs24.chmodSync(shScriptFile, 448);
+    fs26.chmodSync(shScriptFile, 448);
   } catch {
   }
   const child = spawn4("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs24.unlinkSync(shScriptFile);
+      fs26.unlinkSync(shScriptFile);
     } catch {
     }
   }, 6e5);
@@ -2430,7 +2793,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs24.unlinkSync(shScriptFile);
+        fs26.unlinkSync(shScriptFile);
       } catch {
       }
     }
@@ -2451,7 +2814,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs24.existsSync(effectivePidFile) ? String(fs24.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs26.existsSync(effectivePidFile) ? String(fs26.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -2466,7 +2829,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs24.unlinkSync(effectivePidFile);
+      fs26.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -2490,7 +2853,7 @@ function launchHidden(scriptFile, pidFile) {
   return isWindows() ? launchHiddenPS(scriptFile, pidFile) : launchHiddenSh(scriptFile, pidFile);
 }
 function writeUtf8BomFile(filePath, content) {
-  fs11.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
+  fs12.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
 }
 function psUtf8Prelude() {
   return [
@@ -2776,27 +3139,27 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const agent = task.agent || definition.settings.defaultAgent || "build";
     if (task.useRalphLoop) prompt = "/ralph-loop " + prompt;
     if (task.interactiveTerminal) {
-      if (path10.isAbsolute(bin) && !fs12.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
-      await new Promise((resolve7, reject) => {
-        const options = { onLaunched: resolve7, onError: reject, linuxTerminal: definition.settings.linuxTerminal };
+      if (path12.isAbsolute(bin) && !fs13.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
+      await new Promise((resolve8, reject) => {
+        const options = { onLaunched: resolve8, onError: reject, linuxTerminal: definition.settings.linuxTerminal };
         if (process.platform === "win32") openOpencodeCliLongPromptWindows(bin, taskCwd, {}, model, task.forceModel ? "" : agent, prompt, options);
         else openOpencodeCli(bin, taskCwd, {}, ["-m", model, ...task.forceModel ? [] : ["--agent", agent], "--prompt", prompt], options);
       });
       return { succeeded: true, output: "[opened interactive OpenCode CLI with preloaded prompt; interactive task result is not observed]" };
     }
-    const folder = fs12.mkdtempSync(path10.join(taskCwd, ".autooc-runtime-"));
-    const outFile = path10.join(folder, "stdout.txt"), errFile = path10.join(folder, "stderr.txt"), doneFile = path10.join(folder, "done.txt");
-    const pidFile = path10.join(folder, "process.pid"), promptFile = path10.join(folder, "instruction.txt"), full = path10.join(folder, "input.txt");
-    const scriptFile = path10.join(folder, "launch" + scriptExt());
-    fs12.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
-    fs12.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
+    const folder = fs13.mkdtempSync(path12.join(taskCwd, ".autooc-runtime-"));
+    const outFile = path12.join(folder, "stdout.txt"), errFile = path12.join(folder, "stderr.txt"), doneFile = path12.join(folder, "done.txt");
+    const pidFile = path12.join(folder, "process.pid"), promptFile = path12.join(folder, "instruction.txt"), full = path12.join(folder, "input.txt");
+    const scriptFile = path12.join(folder, "launch" + scriptExt());
+    fs13.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
+    fs13.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
     const script = buildOpenCodeScript({ pidFile, secretEnv: {}, safeCwd: taskCwd.replace(/'/g, "''"), gitCmds: "", bin, model, effectiveAgent: agent, effectiveTask: task, promptFile, outFile, errFile, doneFile, taskCwd });
     if (process.platform === "win32") writeUtf8BomFile(scriptFile, script);
-    else fs12.writeFileSync(scriptFile, script, { mode: 384 });
+    else fs13.writeFileSync(scriptFile, script, { mode: 384 });
     const handle = launchHidden(scriptFile, pidFile);
     let known = false;
     try {
-      const result = await new Promise((resolve7, reject) => {
+      const result = await new Promise((resolve8, reject) => {
         let ended = false;
         const finish = (error) => {
           if (ended) return;
@@ -2810,7 +3173,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
-        const read2 = (file) => fs12.existsSync(file) ? decodeCommandBuffer(fs12.readFileSync(file)) : "";
+        const read2 = (file) => fs13.existsSync(file) ? decodeCommandBuffer(fs13.readFileSync(file)) : "";
         let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
           try {
@@ -2818,7 +3181,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
               abort();
               return;
             }
-            const completed = fs12.existsSync(doneFile);
+            const completed = fs13.existsSync(doneFile);
             if (!completed && (!interaction?.onOutput || Date.now() < nextOutputAt)) return;
             const output = formatTaskOutput(read2(outFile), read2(errFile));
             if (output !== lastOutput) {
@@ -2827,11 +3190,11 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
             }
             nextOutputAt = Date.now() + 500;
             if (!completed) return;
-            const exit = fs12.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
+            const exit = fs13.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
             known = true;
             finish();
-            resolve7({ succeeded: exit === "0", output: output || "(no output)" });
+            resolve8({ succeeded: exit === "0", output: output || "(no output)" });
           } catch (error) {
             finish(error);
           }
@@ -2846,12 +3209,12 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
       if (known) {
         for (const file of [outFile, errFile, doneFile, pidFile, promptFile, full, scriptFile]) {
           try {
-            fs12.unlinkSync(file);
+            fs13.unlinkSync(file);
           } catch (error) {
             if (error.code !== "ENOENT") throw error;
           }
         }
-        fs12.rmdirSync(folder);
+        fs13.rmdirSync(folder);
       }
     }
   } };
@@ -2885,8 +3248,29 @@ function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations) {
   ]);
 }
 
+// retired-dependency.ts
+function autoOCDependencyError(item) {
+  if (item.requiresAutoOCSecrets === void 0 || item.requiresAutoOCSecrets === false) return;
+  const identity2 = typeof item.id === "string" ? item.id : "definition";
+  return typeof item.requiresAutoOCSecrets !== "boolean" ? `Invalid AutoOC secrets dependency declaration (${identity2}); requiresAutoOCSecrets must be boolean` : `AutoOC Secrets was retired (${identity2}); adapt this definition before execution`;
+}
+function assertNoRetiredDependency(item) {
+  const error = autoOCDependencyError(item);
+  if (error) throw new Error(error);
+}
+function assertWorkflowDependencies(workflow, tasks) {
+  assertNoRetiredDependency(workflow);
+  for (const step of workflow.steps || []) {
+    assertNoRetiredDependency(step);
+    if (step.stepKind === "task" || !step.stepKind && step.taskId) {
+      const task = tasks.find((item) => item.id === step.taskId);
+      if (task) assertNoRetiredDependency(task);
+    }
+  }
+}
+
 // code-workflow-host.ts
-var fs14 = __toESM(require("fs"));
+var fs15 = __toESM(require("fs"));
 
 // workflow-routing.ts
 var vm2 = __toESM(require("vm"));
@@ -3043,7 +3427,7 @@ function workflowDelay(value = 0, unit = "seconds") {
 }
 function waitForWorkflowDelay(milliseconds, signal) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return Promise.reject(new Error("Invalid workflow delay"));
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve8, reject) => {
     let timer;
     let remaining = milliseconds;
     const cleanup = () => {
@@ -3063,7 +3447,7 @@ function waitForWorkflowDelay(milliseconds, signal) {
         if (remaining > 0) schedule();
         else {
           cleanup();
-          resolve7();
+          resolve8();
         }
       }, chunk);
     };
@@ -3171,15 +3555,15 @@ async function reconcileWorkflowTask(journal, definition, read2, host) {
 }
 
 // workflow-branch.ts
-var path11 = __toESM(require("path"));
-var import_child_process4 = require("child_process");
+var path13 = __toESM(require("path"));
+var import_child_process6 = require("child_process");
 function validateBranchOptions(task) {
   if (task.branch !== void 0 && typeof task.branch !== "string") throw new Error("Branch must be a string");
   if (task.createBranch !== void 0 && typeof task.createBranch !== "boolean") throw new Error("createBranch must be boolean");
   if (task.createBranch && !task.branch?.trim()) throw new Error("Creating a branch requires its name");
   if (task.branch?.trim()) {
     try {
-      (0, import_child_process4.execFileSync)("git", ["check-ref-format", "--branch", task.branch], { stdio: "ignore", windowsHide: true });
+      (0, import_child_process6.execFileSync)("git", ["check-ref-format", "--branch", task.branch], { stdio: "ignore", windowsHide: true });
     } catch {
       throw new Error("Invalid Git branch name");
     }
@@ -3188,7 +3572,7 @@ function validateBranchOptions(task) {
 }
 function git(cwd, args) {
   try {
-    const output = (0, import_child_process4.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const output = (0, import_child_process6.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     return args.includes("-z") ? output : output.trim();
   } catch {
     throw new Error("Git branch operation failed; working tree preserved, no forced checkout or cleanup");
@@ -3198,7 +3582,7 @@ function branchRepository(cwd, vault) {
   const directory = physicalPath(git(physicalPath(cwd), ["rev-parse", "--show-toplevel"]));
   if (!isWithinPhysicalPath(vault, directory)) throw new Error("Git repository is outside the selected vault");
   const metadata = physicalPath(git(directory, ["rev-parse", "--absolute-git-dir"]));
-  const common = physicalPath(path11.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
+  const common = physicalPath(path13.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
   if (!isWithinPhysicalPath(vault, metadata) || !isWithinPhysicalPath(vault, common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
 }
@@ -3235,12 +3619,12 @@ function verifyWorkflowBranch(journal, vault) {
 }
 
 // workflow-approval.ts
-var fs13 = __toESM(require("fs"));
-var path12 = __toESM(require("path"));
+var fs14 = __toESM(require("fs"));
+var path14 = __toESM(require("path"));
 var import_crypto6 = require("crypto");
 function responseFile(directory, runId, token) {
   if (!/^[a-f0-9-]+$/.test(token)) throw new Error("Invalid approval identity");
-  return path12.join(directory, `${runId}-${token}.approval.json`);
+  return path14.join(directory, `${runId}-${token}.approval.json`);
 }
 function answerWorkflowApproval(directory, runId, token, approved) {
   if (typeof approved !== "boolean") throw new Error("Explicit approval decision required");
@@ -3253,7 +3637,7 @@ function answerWorkflowApproval(directory, runId, token, approved) {
   } catch {
     throw new Error("Approval owner is unavailable; reconcile execution");
   }
-  fs13.writeFileSync(responseFile(directory, runId, token), JSON.stringify({ runId, token, approved }), { encoding: "utf8", flag: "wx", mode: 384 });
+  fs14.writeFileSync(responseFile(directory, runId, token), JSON.stringify({ runId, token, approved }), { encoding: "utf8", flag: "wx", mode: 384 });
   return { runId, approval: token, decision: approved ? "approve" : "deny", recorded: true };
 }
 async function awaitWorkflowApproval(journal, directory, request, redact, signal, onCheckpoint) {
@@ -3262,19 +3646,19 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await onCheckpoint?.(journal.snapshot());
   const file = responseFile(directory, runId, token);
-  const approved = await new Promise((resolve7, reject) => {
+  const approved = await new Promise((resolve8, reject) => {
     const finish = (error, value) => {
       clearInterval(timer);
       signal?.removeEventListener("abort", abort);
-      error ? reject(error) : resolve7(value);
+      error ? reject(error) : resolve8(value);
     };
     const abort = () => finish(new Error("Approval interrupted; execution requires reconciliation"));
     const timer = setInterval(() => {
       try {
-        if (!fs13.existsSync(file)) return;
-        const stat = fs13.lstatSync(file);
+        if (!fs14.existsSync(file)) return;
+        const stat = fs14.lstatSync(file);
         if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid approval response file");
-        const response = JSON.parse(fs13.readFileSync(file, "utf8"));
+        const response = JSON.parse(fs14.readFileSync(file, "utf8"));
         if (response.runId !== runId || response.token !== token || typeof response.approved !== "boolean") throw new Error("Approval response identity mismatch");
         finish(void 0, response.approved);
       } catch {
@@ -3290,11 +3674,12 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
 }
 
 // code-workflow-host.ts
-var advancingLeases = /* @__PURE__ */ new WeakSet();
 function supportsSharedWorkflow(definition, tasks) {
+  assertWorkflowDependencies(definition.workflow, definition.tasks);
   return !definition.workflow.requiresAutoOCSecrets && !definition.tasks.some((task) => task.requiresAutoOCSecrets) && !definition.workflow.steps.some((step) => !["code", "delay", "task"].includes(step.stepKind || "task")) && definition.tasks.every((task) => !!tasks?.supports(task));
 }
 async function runCodeWorkflowHost(options) {
+  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
   if (options.reconcile && !options.resumeRunId) throw new Error("Reconciliation requires an existing run identity");
@@ -3306,16 +3691,35 @@ async function runCodeWorkflowHost(options) {
   const entry = findWorkflowEntry(steps);
   if (!entry) throw new Error("Workflow has no entry step");
   const lease = options.lease || acquireExecutionLease(options.runtimeDirectory);
-  lease.assertOwned();
-  if (!samePhysicalPath(options.runtimeDirectory, lease.directory)) throw new Error("Execution lease belongs to another runtime");
-  if (advancingLeases.has(lease)) throw new Error("Execution lease already has an advancing session");
-  advancingLeases.add(lease);
+  const ownsLease = !options.lease;
+  let ownedAdmission;
+  let failed = false;
+  let failure;
   try {
+    lease.assertOwned();
+    if (!samePhysicalPath(options.runtimeDirectory, lease.directory)) throw new Error("Execution lease belongs to another runtime");
+    const admission = options.admission || executionCoordinator(lease).admit(definition, options.vaultBase, options.resumeRunId);
+    if (!options.admission) ownedAdmission = admission;
+    admission.assertOwned(lease, definition);
+    if (!options.admission) {
+      const publish = options.onCheckpoint;
+      options = { ...options, onCheckpoint: async (checkpoint) => {
+        admission.bind(checkpoint);
+        await publish?.(checkpoint);
+        admission.confirm(checkpoint);
+      } };
+    }
     const resumed = options.resumeRunId === void 0 ? void 0 : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
     if (resumed?.snapshot().phase === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
+    if (resumed) admission.bind(resumed.snapshot());
     if (resumed && definition.workflow.handoffBranch && ["ready", "in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed, options.vaultBase);
+    }
+    if (resumed && ["completed", "failed"].includes(resumed.snapshot().phase)) {
+      const state = resumed.snapshot();
+      await options.onCheckpoint?.(state);
+      return state;
     }
     if (resumed?.snapshot().phase === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result) {
       if (!options.reconcile || !options.tasks?.reconcile) throw new Error("Interrupted execution requires reconciliation; cannot replay effects");
@@ -3337,18 +3741,24 @@ async function runCodeWorkflowHost(options) {
       await options.onCheckpoint?.(resumed.snapshot());
       return resumed.snapshot();
     }
-    for (const file of fs14.readdirSync(lease.directory)) {
-      if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
-      if (fs14.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
-      const prior = JSON.parse(fs14.readFileSync(lease.directory + "/" + file, "utf8"));
-      ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
-      if (prior.runId !== options.resumeRunId && !["completed", "failed", "abandoned"].includes(prior.phase)) {
-        throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
+    const journal = await catalogTransaction(lease.directory + "/journal-admission", async () => {
+      for (const file of fs15.readdirSync(lease.directory)) {
+        if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
+        if (fs15.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
+        const prior = JSON.parse(fs15.readFileSync(lease.directory + "/" + file, "utf8"));
+        ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
+        const resolved = prior.phase === "abandoned" || prior.disposition || ["completed", "failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
+        if (prior.runId !== options.resumeRunId && !admission.knows(prior.runId) && !resolved) {
+          throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
+        }
       }
-    }
-    const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
+      const journal2 = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
+      admission.bind(journal2.snapshot());
+      return journal2;
+    });
     return await advanceWorkflowSession(journal, definition, {
       async execute(step, input, outputs, signal) {
+        admission.assertOwned(lease, definition);
         if (definition.workflow.handoffBranch) verifyWorkflowBranch(journal, options.vaultBase);
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find((task2) => task2.id === step.taskId);
@@ -3408,9 +3818,29 @@ async function runCodeWorkflowHost(options) {
       },
       onCheckpoint: options.onCheckpoint
     }, { signal: options.signal, maxSteps: options.maxSteps });
+  } catch (error) {
+    failed = true;
+    failure = error;
+    throw error;
   } finally {
-    advancingLeases.delete(lease);
-    if (!options.lease) lease.release();
+    const cleanupErrors = [];
+    try {
+      ownedAdmission?.finish();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      if (ownsLease) lease.release();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (cleanupErrors.length) {
+      const errors = failed ? [failure, ...cleanupErrors] : cleanupErrors;
+      throw Object.assign(new Error(`Workflow resource cleanup failed: ${errors.map(String).join("; ")}`), {
+        cause: failed ? failure : cleanupErrors[0],
+        errors
+      });
+    }
   }
 }
 
@@ -3453,16 +3883,16 @@ function standaloneTaskWorkflow(taskId) {
 }
 
 // task-history.ts
-var fs15 = __toESM(require("fs"));
-var path13 = __toESM(require("path"));
+var fs16 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
 function regularDirectory2(directory) {
-  if (!fs15.existsSync(directory)) fs15.mkdirSync(directory);
-  const stat = fs15.lstatSync(directory);
+  if (!fs16.existsSync(directory)) fs16.mkdirSync(directory);
+  const stat = fs16.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Task history requires regular directories");
 }
 function persistTaskHistory(vault, workflow, checkpoint, settings) {
   if (settings.logsEnabled === false) return;
-  const root = fs15.realpathSync(vault);
+  const root = fs16.realpathSync(vault);
   const touched = /* @__PURE__ */ new Set();
   for (const [index, observed] of checkpoint.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
@@ -3470,12 +3900,12 @@ function persistTaskHistory(vault, workflow, checkpoint, settings) {
     if (!/^[a-zA-Z0-9_-]+$/.test(step.taskId)) throw new Error("Unsafe task history identity");
     let directory = root;
     for (const part of [".opencode", "logs", step.taskId]) {
-      directory = path13.join(directory, part);
+      directory = path15.join(directory, part);
       regularDirectory2(directory);
     }
     const date = new Date(observed.startedAt), pad = (n) => String(n).padStart(2, "0");
     const timestamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-    const file = path13.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
+    const file = path15.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
     const content = `Run: ${checkpoint.runId}
 Step: ${observed.stepId}
 Status: ${observed.status}
@@ -3484,135 +3914,144 @@ Finished: ${observed.finishedAt || "unknown"}
 
 ${observed.output || "(no output)"}`;
     try {
-      fs15.writeFileSync(file, content, { encoding: "utf8", flag: "wx" });
+      fs16.writeFileSync(file, content, { encoding: "utf8", flag: "wx" });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const stat = fs15.lstatSync(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || fs15.readFileSync(file, "utf8") !== content) throw new Error("Task history conflicts with durable output");
+      const stat = fs16.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || fs16.readFileSync(file, "utf8") !== content) throw new Error("Task history conflicts with durable output");
     }
     touched.add(directory);
   }
   for (const directory of touched) {
-    const files = fs15.readdirSync(directory).filter((name) => name.endsWith(".log") && name !== "latest.log").sort();
+    const files = fs16.readdirSync(directory).filter((name) => name.endsWith(".log") && name !== "latest.log").sort();
     const max = settings.maxLogsPerTask ?? 50, days = settings.logRetentionDays ?? 30;
     const retained = [];
     for (const name of files) {
-      const file = path13.join(directory, name), stat2 = fs15.lstatSync(file);
+      const file = path15.join(directory, name), stat2 = fs16.lstatSync(file);
       if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("Task history requires regular files");
       const match = name.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/);
       const date = match ? Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`) : NaN;
-      if (days > 0 && date < Date.now() - days * 864e5) fs15.unlinkSync(file);
+      if (days > 0 && date < Date.now() - days * 864e5) fs16.unlinkSync(file);
       else retained.push(name);
     }
-    while (max > 0 && retained.length > max) fs15.unlinkSync(path13.join(directory, retained.shift()));
-    const latest = path13.join(directory, "latest.log");
-    const stat = fs15.lstatSync(latest, { throwIfNoEntry: false });
+    while (max > 0 && retained.length > max) fs16.unlinkSync(path15.join(directory, retained.shift()));
+    const latest = path15.join(directory, "latest.log");
+    const stat = fs16.lstatSync(latest, { throwIfNoEntry: false });
     if (stat) {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Task history latest must be a regular file");
     }
-    if (retained.length) fs15.writeFileSync(latest, fs15.readFileSync(path13.join(directory, retained[retained.length - 1])));
+    if (retained.length) fs16.writeFileSync(latest, fs16.readFileSync(path15.join(directory, retained[retained.length - 1])));
   }
 }
 
 // workflow-catalog-progress.ts
 async function persistWorkflowProgress(options) {
-  const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
-  if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
-    throw new Error("Catalog progress does not match the durable checkpoint");
-  }
-  const writer = options.writer || new SettingsWriter();
-  const config = await writer.loadAsync(options.configurationFile);
-  if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
-    throw new Error("Invalid AutoOC catalog");
-  }
-  const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
-  if (virtual && (virtual.id !== durable.workflowId || config.workflows.some((workflow2) => workflow2.id === virtual.id))) throw new Error("Standalone task identity mismatch");
-  if (virtual && config.tasks.filter((task) => task.id === options.taskId).length !== 1) throw new Error("Missing or ambiguous task in catalog");
-  const matches = virtual ? [virtual] : config.workflows.filter((workflow2) => workflow2.id === durable.workflowId);
-  if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
-  let workflow = virtual ? { ...virtual, runtimeExecution: config.tasks.find((task) => task.id === options.taskId).runtimeExecution } : matches[0];
-  if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
-    const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
-    const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
-    validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
-    if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed", "abandoned"].includes(previous.phase)) {
-      throw new Error("Cannot replace an unfinished execution");
+  return catalogTransaction(options.configurationFile, async () => {
+    const durable2 = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
+    if (JSON.stringify(durable2) !== JSON.stringify(options.checkpoint)) {
+      throw new Error("Catalog progress does not match the durable checkpoint");
     }
-    workflow = { ...workflow };
-    delete workflow.runtimeExecution;
-  }
-  const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
-  if (preserveLegacy) {
-    validateProgressBinding(matches[0], durable, options.expectedRunId);
-    if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
-  }
-  const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
-  const observedTasks = /* @__PURE__ */ new Map();
-  for (const [stepIndex, observed] of durable.steps.entries()) {
-    const step = workflow.steps.find((item) => item.id === observed.stepId);
-    if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
-      observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
+    const writer = options.writer || new SettingsWriter();
+    if (options.baseline) {
+      const baseline = options.baseline();
+      if (baseline.textHash && baseline.textHash === baseline.valueHash) await writer.adoptConfirmed(options.configurationFile, baseline, () => true);
+      else await writer.assertUnchanged(options.configurationFile);
     }
-  }
-  const tasks = config.tasks.map((task) => {
-    const item = observedTasks.get(task.id);
-    if (!item) return task;
-    const previous = task.runtimeExecution;
-    if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
-    if (task.legacyExecution && previous?.runId === durable.runId) {
-      validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable, options.expectedRunId);
-      if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
-      return task;
+    const config = await writer.loadAsync(options.configurationFile);
+    if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
+      throw new Error("Invalid AutoOC catalog");
     }
-    if (previous && previous.runId !== durable.runId) {
-      if (item.observed.status !== "in_flight") return task;
-      const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
-      if (!["completed", "failed", "abandoned"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
-    }
-    return {
-      ...task,
-      legacyExecution: void 0,
-      status: item.observed.status === "in_flight" ? durable.phase === "abandoned" ? "abandoned" : "pending" : item.observed.status,
-      ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
-      output: item.observed.output || "",
-      ...item.observed.codexThreadId ? { lastCodexThreadId: item.observed.codexThreadId } : {},
-      ...item.observed.codexTurnId ? { lastCodexTurnId: item.observed.codexTurnId } : {},
-      pendingCodexApproval: durable.phase !== "abandoned" && item.observed.approval ? { ...item.observed.approval, requestId: item.observed.approval.token } : void 0,
-      runtimeExecution: {
-        runId: durable.runId,
-        workflowId: durable.workflowId,
-        definitionHash: durable.definitionHash,
-        stepId: item.stepId,
-        stepIndex: item.stepIndex,
-        revision: durable.revision,
-        finishedAt: item.observed.finishedAt,
-        phase: durable.phase,
-        abandonment: durable.abandonment,
-        requiresReconciliation: durable.phase !== "abandoned" && item.observed.status === "in_flight"
+    const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
+    if (virtual && (virtual.id !== durable2.workflowId || config.workflows.some((workflow2) => workflow2.id === virtual.id))) throw new Error("Standalone task identity mismatch");
+    if (virtual && config.tasks.filter((task) => task.id === options.taskId).length !== 1) throw new Error("Missing or ambiguous task in catalog");
+    const matches = virtual ? [virtual] : config.workflows.filter((workflow2) => workflow2.id === durable2.workflowId);
+    if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
+    let workflow = virtual ? { ...virtual, runtimeExecution: config.tasks.find((task) => task.id === options.taskId).runtimeExecution } : matches[0];
+    if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable2.runId !== options.replaceCompletedRunId) {
+      const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
+      const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
+      validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
+      if (!virtual && previous.workflowId !== durable2.workflowId || !["completed", "failed", "abandoned"].includes(previous.phase)) {
+        throw new Error("Cannot replace an unfinished execution");
       }
+      workflow = { ...workflow };
+      delete workflow.runtimeExecution;
+    }
+    const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable2.runId;
+    if (preserveLegacy) {
+      validateProgressBinding(matches[0], durable2, options.expectedRunId);
+      if (!["completed", "failed", "abandoned"].includes(durable2.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+    }
+    const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable2, options.expectedRunId), legacyExecution: void 0 };
+    const observedTasks = /* @__PURE__ */ new Map();
+    for (const [stepIndex, observed] of durable2.steps.entries()) {
+      const step = workflow.steps.find((item) => item.id === observed.stepId);
+      if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
+        observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
+      }
+    }
+    const tasks = config.tasks.map((task) => {
+      const item = observedTasks.get(task.id);
+      if (!item) return task;
+      const previous = task.runtimeExecution;
+      if (previous?.runId === durable2.runId && previous.revision > durable2.revision) throw new Error("Stale task progress");
+      if (task.legacyExecution && previous?.runId === durable2.runId) {
+        validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable2, options.expectedRunId);
+        if (!["completed", "failed", "abandoned"].includes(durable2.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+        return task;
+      }
+      if (previous && previous.runId !== durable2.runId) {
+        if (item.observed.status !== "in_flight") return task;
+        const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
+        if (!["completed", "failed", "abandoned"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
+      }
+      return {
+        ...task,
+        legacyExecution: void 0,
+        status: item.observed.status === "in_flight" ? durable2.phase === "abandoned" ? "abandoned" : "pending" : item.observed.status,
+        ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
+        output: item.observed.output || "",
+        ...item.observed.codexThreadId ? { lastCodexThreadId: item.observed.codexThreadId } : {},
+        ...item.observed.codexTurnId ? { lastCodexTurnId: item.observed.codexTurnId } : {},
+        pendingCodexApproval: durable2.phase !== "abandoned" && item.observed.approval ? { ...item.observed.approval, requestId: item.observed.approval.token } : void 0,
+        runtimeExecution: {
+          runId: durable2.runId,
+          workflowId: durable2.workflowId,
+          definitionHash: durable2.definitionHash,
+          stepId: item.stepId,
+          stepIndex: item.stepIndex,
+          revision: durable2.revision,
+          finishedAt: item.observed.finishedAt,
+          phase: durable2.phase,
+          abandonment: durable2.abandonment,
+          requiresReconciliation: durable2.phase !== "abandoned" && item.observed.status === "in_flight"
+        }
+      };
+    });
+    const next = { ...config, tasks, workflows: virtual ? config.workflows : config.workflows.map((workflow2) => workflow2 === matches[0] ? projected : workflow2) };
+    await writer.save(options.configurationFile, () => next);
+    if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable2, config);
+    const confirmed = {
+      catalog: next,
+      version: writer.confirmedVersion(options.configurationFile),
+      runId: durable2.runId,
+      workflowId: durable2.workflowId,
+      revision: durable2.revision
     };
+    await options.onCommitted?.(confirmed);
+    return confirmed;
   });
-  const next = { ...config, tasks, workflows: virtual ? config.workflows : config.workflows.map((workflow2) => workflow2 === matches[0] ? projected : workflow2) };
-  await writer.save(options.configurationFile, () => next);
-  if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
-  return {
-    catalog: next,
-    version: writer.confirmedVersion(options.configurationFile),
-    runId: durable.runId,
-    workflowId: durable.workflowId,
-    revision: durable.revision
-  };
 }
 
 // workflow-stop.ts
-var fs16 = __toESM(require("fs"));
-var path14 = __toESM(require("path"));
+var fs17 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
 var import_crypto7 = require("crypto");
 function readStopRequest(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path14.join(directory, runId + ".stop.json");
+  const file = path16.join(directory, runId + ".stop.json");
   try {
-    const stat = fs16.lstatSync(file);
+    const stat = fs17.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid stop request file");
   } catch (error) {
     if (error.code === "ENOENT") return;
@@ -3620,7 +4059,7 @@ function readStopRequest(directory, runId) {
   }
   let value;
   try {
-    value = JSON.parse(fs16.readFileSync(file, "utf8"));
+    value = JSON.parse(fs17.readFileSync(file, "utf8"));
   } catch {
     throw new Error("Invalid stop request");
   }
@@ -3628,36 +4067,36 @@ function readStopRequest(directory, runId) {
   return value.requestId;
 }
 async function requestWorkflowStop(directory, runId) {
-  const stat = fs16.lstatSync(directory);
+  const stat = fs17.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
   const state = readExecutionCheckpoint(directory, runId);
   if (["completed", "failed", "abandoned"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
   readStopRequest(directory, runId);
   const requestId = (0, import_crypto7.randomUUID)();
-  await atomicSettingsWrite(path14.join(directory, runId + ".stop.json"), { schemaVersion: 1, runId, requestId });
+  await atomicSettingsWrite(path16.join(directory, runId + ".stop.json"), { schemaVersion: 1, runId, requestId });
   return { runId, requestId, requested: true, phase: state.phase };
 }
 
 // workflow-preflight.ts
-var fs17 = __toESM(require("fs"));
-var path15 = __toESM(require("path"));
+var fs18 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
 function preflightInstalledWorkflow(definition, vault) {
+  assertWorkflowDependencies(definition.workflow, definition.tasks);
   const root = physicalPath(vault);
   const checkDirectory = (value) => {
     if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
     const configured = value || root;
-    if (!path15.isAbsolute(configured)) throw new Error("Working directory must be absolute");
+    if (!path17.isAbsolute(configured)) throw new Error("Working directory must be absolute");
     const directory = physicalPath(configured);
     if (!isWithinPhysicalPath(root, directory)) throw new Error("Working directory is outside the selected vault");
-    if (!fs17.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
+    if (!fs18.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
   };
   checkDirectory(definition.settings.workingDirectory);
   for (const item of [definition.workflow, ...definition.workflow.steps, ...definition.tasks]) {
-    if (item.requiresAutoOCSecrets !== void 0 && typeof item.requiresAutoOCSecrets !== "boolean") throw new Error("Invalid AutoOC secrets dependency declaration");
-    if (item.requiresAutoOCSecrets === true) throw new Error("AutoOC secret store is unavailable in the shared runtime; use the supported Obsidian path");
     if (item.workingDirectory !== void 0) checkDirectory(item.workingDirectory);
     if (item.interactiveTerminal !== void 0 && typeof item.interactiveTerminal !== "boolean") throw new Error("interactiveTerminal must be boolean");
     if (item.taskKind === "code" && item.interactiveTerminal === true) throw new Error("Code tasks cannot be interactive");
+    validateConcurrency(item);
     validateBranchOptions(item);
     if (item.branch?.trim() || definition.workflow.handoffBranch) branchRepository(item.workingDirectory || definition.settings.workingDirectory || root, root);
     if (definition.workflow.id.startsWith("@task:")) preflightTaskBranch(item, item.workingDirectory || definition.settings.workingDirectory || root, root);
@@ -3699,7 +4138,7 @@ Reply ONLY with YES or NO.`,
 // installed-workflow-host.ts
 var preparingInstallations = /* @__PURE__ */ new Set();
 async function runInstalledWorkflow(options) {
-  if (!path16.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
+  if (!path18.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
   const { vault, configurationFile, runtimeDirectory } = location;
@@ -3707,40 +4146,47 @@ async function runInstalledWorkflow(options) {
     options.lease.assertOwned();
     if (!samePhysicalPath(options.lease.directory, runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
   }
-  if (preparingInstallations.has(runtimeDirectory)) throw Object.assign(new Error("Installation already has an advancing session"), { code: "EEXIST" });
-  preparingInstallations.add(runtimeDirectory);
+  if (!options.lease && preparingInstallations.has(runtimeDirectory)) throw Object.assign(new Error("Installation already has an advancing session"), { code: "EEXIST" });
+  if (!options.lease) preparingInstallations.add(runtimeDirectory);
   let ownedLease;
+  let admission;
   try {
-    if (!options.lease && fs18.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
+    if (!options.lease && fs19.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
     const reader = options.catalogWriter || new SettingsWriter();
-    let config = await reader.loadAsync(configurationFile);
-    if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
-    if (config.tasks.some((task) => task.status === "running") || config.workflows.some((workflow) => workflow.status === "running")) {
-      throw new Error("Catalog has unresolved running activity; verify its owner before execution");
-    }
-    const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
-    if (virtual && config.workflows.some((workflow) => workflow.id === virtual.id)) throw new Error("Reserved task identity conflicts with a workflow");
-    const matches = virtual ? config.tasks.filter((task) => task.id === options.taskId) : config.workflows.filter((workflow) => workflow.id === options.workflowId);
-    if (matches.length !== 1) throw new Error("Missing or ambiguous workflow identity");
-    if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
-      throw new Error("Workflow has a bound execution; select that identity explicitly");
-    }
-    const definition = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
-    preflightInstalledWorkflow(definition, vault);
-    ensureInstalledWorkflowRuntime(location);
-    if (!options.lease && !ownedLease) ownedLease = acquireExecutionLease(runtimeDirectory);
-    await reader.assertUnchanged(configurationFile);
-    const replaceCompletedRunId = options.newExecution ? matches[0].runtimeExecution?.runId : void 0;
-    if (replaceCompletedRunId) {
-      const previous = readExecutionCheckpoint(runtimeDirectory, replaceCompletedRunId);
-      const binding = matches[0].runtimeExecution;
-      const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition.workflow.id;
-      validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId);
-      if (!["completed", "failed", "abandoned"].includes(previous.phase)) {
-        throw new Error("Cannot replace an unfinished execution");
+    const prepared = await catalogTransaction(configurationFile, async () => {
+      let config = await reader.loadAsync(configurationFile);
+      if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog");
+      const coordinator = options.lease ? executionCoordinator(options.lease) : void 0;
+      if ([...config.tasks, ...config.workflows].some((item) => item.status === "running" && !coordinator?.knows(item.runtimeExecution?.runId))) {
+        throw new Error("Catalog has unresolved running activity; verify its owner before execution");
       }
-    }
-    config = void 0;
+      const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
+      if (virtual && config.workflows.some((workflow) => workflow.id === virtual.id)) throw new Error("Reserved task identity conflicts with a workflow");
+      const matches = virtual ? config.tasks.filter((task) => task.id === options.taskId) : config.workflows.filter((workflow) => workflow.id === options.workflowId);
+      if (matches.length !== 1) throw new Error("Missing or ambiguous workflow identity");
+      if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
+        throw new Error("Workflow has a bound execution; select that identity explicitly");
+      }
+      const definition2 = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
+      preflightInstalledWorkflow(definition2, vault);
+      ensureInstalledWorkflowRuntime(location);
+      if (!options.lease && !ownedLease) ownedLease = acquireExecutionLease(runtimeDirectory);
+      await reader.assertUnchanged(configurationFile);
+      const replaceCompletedRunId2 = options.newExecution ? matches[0].runtimeExecution?.runId : void 0;
+      if (replaceCompletedRunId2) {
+        const previous = readExecutionCheckpoint(runtimeDirectory, replaceCompletedRunId2);
+        const binding = matches[0].runtimeExecution;
+        const previousId = virtual && !previous.workflowId.startsWith("@task:") ? binding.workflowId : definition2.workflow.id;
+        validateProgressBinding({ id: previousId, runtimeExecution: binding }, previous, replaceCompletedRunId2);
+        if (!["completed", "failed", "abandoned"].includes(previous.phase)) {
+          throw new Error("Cannot replace an unfinished execution");
+        }
+      }
+      admission = coordinator?.admit(definition2, vault, options.resumeRunId);
+      return { definition: definition2, replaceCompletedRunId: replaceCompletedRunId2 };
+    });
+    const { definition, replaceCompletedRunId } = prepared;
+    const presentation = executionPresentation(definition.workflow, options.taskId);
     let activeRunId = options.resumeRunId;
     const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
     const controller = new AbortController();
@@ -3765,6 +4211,7 @@ async function runInstalledWorkflow(options) {
         definition,
         runtimeDirectory,
         vaultBase: vault,
+        admission,
         resumeRunId: options.resumeRunId,
         reconcile: options.reconcile,
         maxSteps: options.maxSteps,
@@ -3776,30 +4223,46 @@ async function runInstalledWorkflow(options) {
         tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
         evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
         onCheckpoint: async (checkpoint) => {
+          admission?.bind(checkpoint);
           activeRunId = checkpoint.runId;
           checkStop();
-          const catalog = await persistWorkflowProgress({ configurationFile, runtimeDirectory, checkpoint, expectedRunId: checkpoint.runId, replaceCompletedRunId, taskId: options.taskId, vaultBase: vault, writer: reader });
-          await options.onCheckpoint?.(checkpoint, catalog);
+          const catalog = await persistWorkflowProgress({
+            configurationFile,
+            runtimeDirectory,
+            checkpoint,
+            expectedRunId: checkpoint.runId,
+            replaceCompletedRunId,
+            taskId: options.taskId,
+            vaultBase: vault,
+            writer: reader,
+            baseline: options.catalogVersion || (() => admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
+            onCommitted: async (catalog2) => {
+              if (admission) admission.coordinator.catalogVersion = catalog2.version;
+              await options.onCheckpoint?.(checkpoint, catalog2, { ...presentation });
+              admission?.confirm(checkpoint);
+            }
+          });
         }
       });
       if (stopError) throw stopError;
-      return result;
+      return options.includePresentation ? { ...result, ...presentation } : result;
     } finally {
       clearInterval(timer);
       options.signal?.removeEventListener("abort", abort);
     }
   } finally {
+    admission?.finish();
     try {
       ownedLease?.release();
     } finally {
-      preparingInstallations.delete(runtimeDirectory);
+      if (!options.lease) preparingInstallations.delete(runtimeDirectory);
     }
   }
 }
 
 // cli-plugin-requests.ts
-var fs19 = __toESM(require("fs"));
-var path17 = __toESM(require("path"));
+var fs20 = __toESM(require("fs"));
+var path19 = __toESM(require("path"));
 var import_crypto9 = require("crypto");
 var import_perf_hooks3 = require("perf_hooks");
 
@@ -3837,26 +4300,26 @@ function workflowEditHash(workflow) {
 }
 
 // cli-plugin-requests.ts
-function executionSummary(state) {
+function executionSummary(state, presentation = state) {
   const { runId, workflowId, phase, revision, nextStepId } = state;
-  return { runId, workflowId, phase, revision, nextStepId };
+  return { runId, workflowId, phase, revision, nextStepId, ...presentationFields(presentation) };
 }
 function regularDirectory3(directory) {
-  const stat = fs19.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs19.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
+  const stat = fs20.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs20.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
 }
 function read(file) {
-  const stat = fs19.lstatSync(file);
+  const stat = fs20.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) throw new Error("Unsafe CLI request file");
-  return JSON.parse(fs19.readFileSync(file, "utf8"));
+  return JSON.parse(fs20.readFileSync(file, "utf8"));
 }
 function write(file, value) {
-  const fd = fs19.openSync(file, "wx", 384);
+  const fd = fs20.openSync(file, "wx", 384);
   try {
-    fs19.writeFileSync(fd, JSON.stringify(value));
-    fs19.fsyncSync(fd);
+    fs20.writeFileSync(fd, JSON.stringify(value));
+    fs20.fsyncSync(fd);
   } finally {
-    fs19.closeSync(fd);
+    fs20.closeSync(fd);
   }
 }
 async function replace(file, value, check, asyncFlush = true) {
@@ -3867,36 +4330,36 @@ async function replace(file, value, check, asyncFlush = true) {
   const bytes = JSON.stringify(value);
   let owned;
   const sameTemporary = () => {
-    if (!owned || !fs19.existsSync(temp)) return false;
-    const current = fs19.lstatSync(temp);
+    if (!owned || !fs20.existsSync(temp)) return false;
+    const current = fs20.lstatSync(temp);
     return current.isFile() && !current.isSymbolicLink() && current.nlink === 1 && current.dev === owned.dev && current.ino === owned.ino;
   };
   try {
-    const fd = fs19.openSync(temp, "wx", 384);
+    const fd = fs20.openSync(temp, "wx", 384);
     try {
-      owned = fs19.fstatSync(fd);
-      fs19.writeFileSync(fd, bytes);
-      if (asyncFlush) await new Promise((resolve7, reject) => fs19.fsync(fd, (error) => error ? reject(error) : resolve7()));
-      else fs19.fsyncSync(fd);
+      owned = fs20.fstatSync(fd);
+      fs20.writeFileSync(fd, bytes);
+      if (asyncFlush) await new Promise((resolve8, reject) => fs20.fsync(fd, (error) => error ? reject(error) : resolve8()));
+      else fs20.fsyncSync(fd);
     } finally {
-      fs19.closeSync(fd);
+      fs20.closeSync(fd);
     }
     for (let attempt = 0; ; attempt++) {
       if (attempt > 0 && import_perf_hooks3.performance.now() >= deadline) throw lastError;
-      if (!sameTemporary() || fs19.readFileSync(temp, "utf8") !== bytes) throw new Error("CLI publication temporary identity changed");
+      if (!sameTemporary() || fs20.readFileSync(temp, "utf8") !== bytes) throw new Error("CLI publication temporary identity changed");
       check();
-      if (fs19.existsSync(file)) read(file);
+      if (fs20.existsSync(file)) read(file);
       try {
-        fs19.renameSync(temp, file);
+        fs20.renameSync(temp, file);
         return;
       } catch (error) {
         lastError = error;
         if (!["EPERM", "EACCES", "EBUSY"].includes(error.code || "") || attempt >= 12 || import_perf_hooks3.performance.now() >= deadline) throw error;
-        await new Promise((resolve7) => setTimeout(resolve7, Math.min(20 * (attempt + 1), 100)));
+        await new Promise((resolve8) => setTimeout(resolve8, Math.min(20 * (attempt + 1), 100)));
       }
     }
   } finally {
-    if (sameTemporary() && fs19.statSync(temp).size === Buffer.byteLength(bytes) && fs19.readFileSync(temp, "utf8") === bytes) fs19.unlinkSync(temp);
+    if (sameTemporary() && fs20.statSync(temp).size === Buffer.byteLength(bytes) && fs20.readFileSync(temp, "utf8") === bytes) fs20.unlinkSync(temp);
   }
 }
 function validCommand(value) {
@@ -3913,17 +4376,17 @@ async function requestPluginWorkflowEdit(runtime, command) {
   return result;
 }
 async function requestPluginCommand(runtime, command, signal, onProgress) {
-  if (!fs19.existsSync(path17.join(runtime, "execution.lock"))) return void 0;
-  const root = fs19.realpathSync(runtime);
+  if (!fs20.existsSync(path19.join(runtime, "execution.lock"))) return void 0;
+  const root = fs20.realpathSync(runtime);
   regularDirectory3(root);
-  const owner = readExecutionLeaseOwner(root), directory = path17.join(root, "cli-" + owner.token);
-  if (!fs19.existsSync(directory)) throw new Error("AutoOC execution is reserved; the owner does not support CLI requests. Inspect status before retrying");
+  const owner = readExecutionLeaseOwner(root), directory = path19.join(root, "cli-" + owner.token);
+  if (!fs20.existsSync(directory)) throw new Error("AutoOC execution is reserved; the owner does not support CLI requests. Inspect status before retrying");
   const waitDeadline = import_perf_hooks3.performance.now() + 24 * 60 * 60 * 1e3;
   const check = () => {
     regularDirectory3(directory);
     const current = readExecutionLeaseOwner(root);
     if (current.token !== owner.token || current.pid !== owner.pid) throw new Error("CLI request owner changed");
-    const host = read(path17.join(directory, "host"));
+    const host = read(path19.join(directory, "host"));
     if (host.protocol !== 1 || host.owner !== owner.token || host.pid !== owner.pid) throw new Error("Invalid CLI request host");
     if (command.command === "edit-workflow" && host.workflowEditing !== true) throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");
     if (host.heartbeatAt !== void 0) {
@@ -3935,15 +4398,16 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
   check();
   if (signal?.aborted) throw new Error("CLI request cancelled before submission");
   const id = (0, import_crypto9.randomUUID)(), expiresAt = Date.now() + 3e4;
-  const file = path17.join(directory, id + ".request"), resultFile = path17.join(directory, id + ".receipt");
+  const file = path19.join(directory, id + ".request"), resultFile = path19.join(directory, id + ".receipt");
   if (!validCommand(command)) throw new Error("Invalid CLI command");
   if (Buffer.byteLength(JSON.stringify(command), "utf8") > 6e4) throw new Error("Workflow edit payload exceeds 60KB; split the edit into smaller patches");
   await replace(file, { protocol: 1, owner: owner.token, id, expiresAt, ...command }, check, false);
+  let observedPresentation;
   let accepted = false, lastProgress = "", runId = "runId" in command ? command.runId : void 0;
   for (; ; ) {
     try {
       regularDirectory3(directory);
-      if (fs19.existsSync(resultFile)) {
+      if (fs20.existsSync(resultFile)) {
         const result = read(resultFile);
         if (result.protocol !== 1 || result.owner !== owner.token || result.id !== id) throw new Error("CLI receipt identity changed");
         if (!["accepted", "running", "completed", "rejected", "failed"].includes(result.status)) throw new Error("Invalid CLI receipt status");
@@ -3956,6 +4420,14 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
           if (result.status === "rejected" || result.status === "failed") throw new Error(result.error);
         }
         if (checkpoint && (typeof checkpoint.runId !== "string" || !/^[a-zA-Z0-9-]+$/.test(checkpoint.runId) || checkpoint.workflowId !== (command.taskId ? "@task:" + command.taskId : command.workflowId) || "runId" in command && command.runId && checkpoint.runId !== command.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision < 0 || !["ready", "in_flight", "completed", "failed", "abandoned"].includes(checkpoint.phase) || !(checkpoint.nextStepId === null || typeof checkpoint.nextStepId === "string"))) throw new Error("Invalid CLI receipt checkpoint");
+        if (checkpoint) {
+          if (runId && checkpoint.runId !== runId) throw new Error("CLI receipt run identity changed");
+          const metadata = presentationFields(checkpoint);
+          const serializedMetadata = JSON.stringify(metadata);
+          if (observedPresentation !== void 0 && serializedMetadata !== observedPresentation) throw new Error("CLI receipt presentation changed");
+          observedPresentation = serializedMetadata;
+          if (metadata.executionKind !== void 0 && metadata.executionKind !== (command.taskId ? "task" : "workflow")) throw new Error("CLI receipt execution kind mismatch");
+        }
         if (result.checkpoint) {
           runId = result.checkpoint.runId;
           const serialized = JSON.stringify(result.checkpoint);
@@ -3972,7 +4444,7 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
         accepted = true;
       }
       if (signal?.aborted) {
-        write(path17.join(directory, id + ".cancel"), { id });
+        write(path19.join(directory, id + ".cancel"), { id });
         throw new Error("CLI wait interrupted; cooperative cancellation requested");
       }
       check();
@@ -3982,22 +4454,22 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
       const reason = error instanceof Error && !error.code ? error.message : "CLI request host is unavailable";
       throw new Error(`${reason}. Request ${id}${runId ? `, run ${runId}` : ""}; inspect status and receipt before any retry`);
     }
-    await new Promise((resolve7) => setTimeout(resolve7, 100));
+    await new Promise((resolve8) => setTimeout(resolve8, 100));
   }
 }
 
-// release-maintenance.ts
+// settings-write-inspection.ts
 var fs22 = __toESM(require("fs"));
-var path20 = __toESM(require("path"));
-var import_crypto11 = require("crypto");
+var path21 = __toESM(require("path"));
+var import_crypto10 = require("crypto");
 
 // execution-idle.ts
-var fs20 = __toESM(require("fs"));
-var path18 = __toESM(require("path"));
+var fs21 = __toESM(require("fs"));
+var path20 = __toESM(require("path"));
 function assertIdleJournals(runtime) {
-  if (fs20.existsSync(path18.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  if (fs21.existsSync(path20.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
   const checkpoints = /* @__PURE__ */ new Map();
-  for (const name of fs20.readdirSync(runtime)) {
+  for (const name of fs21.readdirSync(runtime)) {
     if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
     if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
@@ -4050,28 +4522,337 @@ function assertIdleCatalog(settings, checkpoints) {
   }
 }
 function assertInstalledExecutionIdle(directory, memorySettings) {
-  const checkpoints = assertIdleJournals(path18.join(directory, "runtime"));
-  const file = path18.join(directory, "data.json");
-  if (fs20.existsSync(file + ".write-lock") || fs20.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+  const checkpoints = assertIdleJournals(path20.join(directory, "runtime"));
+  const file = path20.join(directory, "data.json");
+  if (fs21.existsSync(file + ".write-lock") || fs21.existsSync(file + ".write-intent") || fs21.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
     throw new Error("Unfinished configuration write requires reconciliation");
   }
   let stat;
   try {
-    stat = fs20.lstatSync(file);
+    stat = fs21.lstatSync(file);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   if (stat) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe execution configuration");
-    assertIdleCatalog(JSON.parse(fs20.readFileSync(file, "utf8")), checkpoints);
+    assertIdleCatalog(JSON.parse(fs21.readFileSync(file, "utf8")), checkpoints);
   }
   if (memorySettings !== void 0) assertIdleCatalog(memorySettings, checkpoints);
 }
 
+// settings-write-inspection.ts
+var hash = (text) => (0, import_crypto10.createHash)("sha256").update(text).digest("hex");
+var identity = (s) => `${s.dev}:${s.ino}:${s.birthtimeMs}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
+var present = (file) => {
+  try {
+    return fs22.lstatSync(file);
+  } catch (e) {
+    if (e.code === "ENOENT") return void 0;
+    throw e;
+  }
+};
+function regular(file) {
+  const stat = fs22.lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe settings evidence file");
+  return stat;
+}
+function stableBytes(file) {
+  const before = identity(regular(file)), fd = fs22.openSync(file, "r");
+  try {
+    if (identity(fs22.fstatSync(fd)) !== before) throw new Error("Settings evidence changed before reading");
+    const bytes = fs22.readFileSync(fd);
+    if (identity(fs22.fstatSync(fd)) !== before || identity(regular(file)) !== before) throw new Error("Settings evidence changed during reading");
+    return bytes;
+  } finally {
+    fs22.closeSync(fd);
+  }
+}
+function small(file) {
+  const before = regular(file);
+  if (before.size > 16384) throw new Error("Settings metadata exceeds size limit");
+  const fd = fs22.openSync(file, "r");
+  try {
+    if (identity(before) !== identity(fs22.fstatSync(fd))) throw new Error("Settings metadata changed");
+    const text = fs22.readFileSync(fd, "utf8");
+    if (identity(before) !== identity(regular(file))) throw new Error("Settings metadata changed");
+    return text;
+  } finally {
+    fs22.closeSync(fd);
+  }
+}
+async function record(root, name) {
+  const file = path21.join(root, name), stat = present(file);
+  if (!stat) return { name, identity: null, sha256: null };
+  if (stat.isDirectory() && !stat.isSymbolicLink()) return { name, identity: identity(stat), sha256: null };
+  const before = identity(regular(file)), handle = await fs22.promises.open(file, "r");
+  try {
+    if (identity(await handle.stat()) !== before) throw new Error("Settings evidence changed before reading");
+    const digest = (0, import_crypto10.createHash)("sha256"), buffer = Buffer.alloc(256 * 1024);
+    for (; ; ) {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+      if (!bytesRead) break;
+      digest.update(buffer.subarray(0, bytesRead));
+      await new Promise((resolve8) => setImmediate(resolve8));
+    }
+    if (before !== identity(regular(file)) || before !== identity(await handle.stat())) throw new Error("Settings evidence changed during hashing");
+    return { name, identity: before, sha256: digest.digest("hex") };
+  } finally {
+    await handle.close();
+  }
+}
+function runtimeNames(root, relative5 = "runtime") {
+  const directory = path21.join(root, relative5), stat = present(directory);
+  if (!stat) return [];
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe settings runtime directory");
+  const result = [];
+  for (const name of fs22.readdirSync(directory).sort()) {
+    if (relative5 === "runtime" && (name === "lease-recovery.lock" || name.startsWith("settings-write-explicit-"))) continue;
+    if (/secret|credential|^\.env(?:\.|$)/i.test(name)) throw new Error("Unexpected sensitive runtime evidence");
+    const next = relative5 + "/" + name, s = fs22.lstatSync(path21.join(root, next));
+    if (s.isSymbolicLink()) throw new Error("Linked runtime evidence");
+    if (s.isDirectory()) result.push(next, ...runtimeNames(root, next));
+    else result.push(next);
+    if (result.length > 1e4) throw new Error("Runtime evidence inventory exceeds limit");
+  }
+  return result;
+}
+function names(root) {
+  return ["data.json", "data.json.write-lock", "data.json.write-intent", ...fs22.readdirSync(root).filter((n) => n.startsWith("data.json.") && n.endsWith(".tmp")).sort(), ...runtimeNames(root)];
+}
+async function inspectSettingsWrite(vault, ownGuard = false) {
+  const location = resolveInstalledWorkflowLocation(vault), root = location.installationDirectory;
+  const directoryIdentity2 = settingsDirectoryIdentity(root), runtimeIdentity = present(location.runtimeDirectory) ? settingsDirectoryIdentity(location.runtimeDirectory) : null;
+  const blockingReasons = [], inventory = names(root), records = [];
+  if (inventory.includes("runtime/update-pending.json")) blockingReasons.push("UPDATE_PENDING");
+  if (inventory.some((n) => n.startsWith("runtime/") && (n.endsWith(".tmp") || n.endsWith(".write-lock")))) blockingReasons.push("RUNTIME_WRITE_PENDING");
+  for (const name of inventory) {
+    try {
+      records.push(await record(root, name));
+    } catch {
+      blockingReasons.push("UNSAFE_OR_UNSTABLE_EVIDENCE:" + name);
+    }
+  }
+  let lock = null;
+  try {
+    lock = parseSettingsWriteLock(small(location.configurationFile + ".write-lock"));
+  } catch {
+    blockingReasons.push(present(location.configurationFile + ".write-lock") ? "INCOMPLETE_LOCK_IDENTITY" : "NO_WRITE_LOCK");
+  }
+  let ownerState = "unknown";
+  if (lock) {
+    if ("legacy" in lock) blockingReasons.push("LEGACY_LOCK_WITHOUT_PROCESS_START");
+    else {
+      if (lock.directoryIdentity !== directoryIdentity2) blockingReasons.push("LOCK_INSTALLATION_MISMATCH");
+      if (!lock.processStart) blockingReasons.push("PROCESS_START_UNVERIFIABLE");
+      try {
+        process.kill(lock.pid, 0);
+        const current = await settingsProcessStart(lock.pid);
+        ownerState = current && current !== lock.processStart ? "pid_reused" : "active_or_unverifiable";
+        blockingReasons.push(current && current !== lock.processStart ? "PID_REUSED" : "WRITER_ACTIVE_OR_UNVERIFIABLE");
+      } catch (e) {
+        if (e.code === "ESRCH") ownerState = "absent";
+        else blockingReasons.push("WRITER_ABSENCE_UNVERIFIABLE");
+      }
+    }
+  }
+  let catalogIntegrity = false, checkpointCoherence = false;
+  try {
+    const text = await readSettingsTextAsync(location.configurationFile);
+    if (text === null) throw new Error();
+    const catalog = await parseCooperatively(text);
+    if (!Array.isArray(catalog?.tasks) || !Array.isArray(catalog?.workflows)) throw new Error();
+    catalogIntegrity = true;
+    try {
+      assertIdleCatalog(catalog, runtimeIdentity === null ? /* @__PURE__ */ new Map() : assertIdleJournals(location.runtimeDirectory));
+      checkpointCoherence = true;
+    } catch {
+      blockingReasons.push("CATALOG_CHECKPOINT_COHERENCE_UNPROVEN");
+    }
+  } catch {
+    blockingReasons.push("CATALOG_INVALID_OR_MISSING");
+  }
+  const ownerFile = path21.join(location.runtimeDirectory, "execution.lock", "owner.json");
+  if (present(path21.dirname(ownerFile))) {
+    if (!present(location.configurationFile + ".write-intent")) blockingReasons.push("EXECUTION_OWNER_BINDING_MISSING");
+    try {
+      const owner = JSON.parse(small(ownerFile));
+      if (!lock || "legacy" in lock || owner.pid !== lock.pid || !Number.isSafeInteger(owner.pid)) throw new Error();
+      let absent = false;
+      try {
+        process.kill(owner.pid, 0);
+      } catch (e) {
+        absent = e.code === "ESRCH";
+      }
+      if (!absent) throw new Error();
+    } catch {
+      blockingReasons.push("EXECUTION_OWNER_ACTIVE_OR_UNVERIFIABLE");
+    }
+  }
+  if (!runtimeIdentity) blockingReasons.push("RUNTIME_MISSING");
+  if (present(path21.join(location.runtimeDirectory, "lease-recovery.lock")) && !ownGuard) blockingReasons.push("RECOVERY_ALREADY_PENDING");
+  if (present(location.configurationFile + ".write-intent")) {
+    try {
+      const intent = JSON.parse(small(location.configurationFile + ".write-intent"));
+      const owner = JSON.parse(small(ownerFile));
+      if (intent.schemaVersion !== 1 || intent.token !== lock?.token || intent.directoryIdentity !== directoryIdentity2 || intent.runtimeIdentity !== runtimeIdentity || JSON.stringify(intent.owner) !== JSON.stringify({ schemaVersion: owner.schemaVersion, token: owner.token, pid: owner.pid, createdAt: owner.createdAt }) || owner.settingsWriteIntent?.token !== intent.token || owner.settingsWriteIntent?.sha256 !== hash(small(location.configurationFile + ".write-intent")) || !records.some((r) => r.name === "data.json" && (r.sha256 === intent.originalHash || r.sha256 === intent.preparedHash))) throw new Error();
+    } catch {
+      blockingReasons.push("INTENT_IDENTITY_OR_CATALOG_MISMATCH");
+    }
+  }
+  const temporaries = [];
+  for (const r of records.filter((r2) => !r2.name.includes("/") && r2.name.endsWith(".tmp"))) {
+    let integrity = "not_checked_size";
+    try {
+      const target = path21.join(root, r.name);
+      if (regular(target).size <= 16 * 1024 * 1024) {
+        integrity = "incomplete_or_invalid";
+        const text = await readSettingsTextAsync(target), value = text === null ? null : await parseCooperatively(text);
+        if (text !== null) integrity = "valid_json_not_catalog";
+        if (Array.isArray(value?.tasks) && Array.isArray(value?.workflows)) integrity = "valid_catalog_unpromoted";
+      }
+    } catch {
+      integrity = "incomplete_or_invalid";
+    }
+    temporaries.push({ name: r.name, sha256: r.sha256, integrity });
+  }
+  if (JSON.stringify(inventory) !== JSON.stringify(names(root)) || directoryIdentity2 !== settingsDirectoryIdentity(root) || runtimeIdentity !== (present(location.runtimeDirectory) ? settingsDirectoryIdentity(location.runtimeDirectory) : null)) blockingReasons.push("INSTALLATION_CHANGED");
+  for (const prior of records) {
+    try {
+      if (JSON.stringify(prior) !== JSON.stringify(await record(root, prior.name))) blockingReasons.push("EVIDENCE_CHANGED:" + prior.name);
+    } catch {
+      blockingReasons.push("EVIDENCE_CHANGED:" + prior.name);
+    }
+  }
+  const evidence = { schemaVersion: 1, vault: location.vault, installationDirectory: root, directoryIdentity: directoryIdentity2, runtimeIdentity, records, temporaries, lock, ownerState, catalogIntegrity, checkpointCoherence };
+  return { ...evidence, inspectionHash: hash(JSON.stringify(evidence)), recoverable: blockingReasons.length === 0, blockingReasons };
+}
+function readSettingsWriteDecision(file) {
+  if (!path21.isAbsolute(file)) throw new Error("Explicit absolute decision file required");
+  try {
+    return JSON.parse(small(file));
+  } catch {
+    throw new Error("Invalid settings recovery decision file");
+  }
+}
+function durable(file, text) {
+  const fd = fs22.openSync(file, "wx", 384);
+  try {
+    fs22.writeFileSync(fd, text);
+    fs22.fsyncSync(fd);
+  } finally {
+    fs22.closeSync(fd);
+  }
+}
+function syncDirectory(directory) {
+  if (process.platform === "win32") return;
+  const fd = fs22.openSync(directory, "r");
+  try {
+    fs22.fsyncSync(fd);
+  } finally {
+    fs22.closeSync(fd);
+  }
+}
+async function recoverSettingsWrite(vault, decision) {
+  if (!decision || decision.schemaVersion !== 1 || decision.action !== "recover-settings-write" || typeof decision.reason !== "string" || !decision.reason.trim() || decision.preserveCatalog !== true || decision.executionsResumed !== false || !/^([a-f0-9]{64})$/.test(decision.inspectionHash || "")) throw new Error("Invalid explicit settings recovery decision");
+  const initial = await inspectSettingsWrite(vault);
+  const matches = (i) => i.recoverable && i.inspectionHash === decision.inspectionHash && decision.vault === i.vault && decision.installationDirectory === i.installationDirectory && decision.token === i.lock?.token && i.lock && "transactionId" in i.lock && decision.transactionId === i.lock.transactionId;
+  if (!matches(initial)) throw new Error("Settings recovery decision is stale, mismatched or unsafe");
+  const location = resolveInstalledWorkflowLocation(vault), guard = path21.join(location.runtimeDirectory, "lease-recovery.lock");
+  fs22.mkdirSync(guard, { mode: 448 });
+  const guardIdentity = settingsDirectoryIdentity(guard);
+  let archive, committed = false, stage = "exclusion", failureReceiptWritten = false, backupVerified = false;
+  const moved = [];
+  try {
+    const current = await inspectSettingsWrite(vault, true);
+    if (!matches(current)) throw new Error("Settings recovery evidence changed under exclusion");
+    const verify = () => {
+      if (settingsDirectoryIdentity(guard) !== guardIdentity || settingsDirectoryIdentity(location.installationDirectory) !== current.directoryIdentity || settingsDirectoryIdentity(location.runtimeDirectory) !== current.runtimeIdentity) throw new Error("Settings recovery installation changed");
+      if (!current.lock || "legacy" in current.lock) throw new Error("Missing structured owner");
+      let absent = false;
+      try {
+        process.kill(current.lock.pid, 0);
+      } catch (e) {
+        absent = e.code === "ESRCH";
+      }
+      if (!absent) throw new Error("Settings writer is no longer verifiably absent");
+      const expectedNames = names(location.installationDirectory).filter((n) => !moved.includes(n));
+      const originalNames = current.records.map((r) => r.name).filter((n) => !moved.includes(n));
+      if (JSON.stringify(expectedNames) !== JSON.stringify(originalNames)) throw new Error("Settings recovery inventory changed");
+      for (const r of current.records.filter((r2) => !moved.includes(r2.name))) {
+        const target = path21.join(location.installationDirectory, r.name), s = present(target);
+        if (r.identity === null) {
+          if (s) throw new Error("Settings evidence appeared");
+          continue;
+        }
+        if (!s || s.isSymbolicLink() || identity(s) !== r.identity || (r.sha256 === null ? !s.isDirectory() : identity(regular(target)) !== r.identity || hash(stableBytes(target)) !== r.sha256)) throw new Error("Settings recovery evidence changed");
+      }
+    };
+    verify();
+    stage = "archive";
+    const targetArchive = path21.join(location.runtimeDirectory, "settings-write-explicit-" + (0, import_crypto10.randomUUID)());
+    fs22.mkdirSync(targetArchive, { mode: 448 });
+    archive = targetArchive;
+    syncDirectory(location.runtimeDirectory);
+    durable(path21.join(guard, "settings-recovery.json"), JSON.stringify({ schemaVersion: 1, inspectionHash: current.inspectionHash, archive: path21.basename(archive) }));
+    syncDirectory(guard);
+    stage = "backup";
+    const bytes = stableBytes(location.configurationFile), backup = path21.join(archive, "data.json.backup");
+    durable(backup, bytes);
+    if (hash(stableBytes(backup)) !== current.records.find((r) => r.name === "data.json")?.sha256) throw new Error("Settings recovery backup verification failed");
+    backupVerified = true;
+    syncDirectory(archive);
+    verify();
+    stage = "archive-evidence";
+    const artifacts = current.records.filter((r) => r.identity !== null && r.name !== "data.json" && !r.name.startsWith("runtime/"));
+    artifacts.sort((a, b) => Number(a.name === "data.json.write-lock") - Number(b.name === "data.json.write-lock"));
+    for (const r of artifacts) {
+      verify();
+      const target = path21.join(archive, r.name);
+      if (present(target)) throw new Error("Settings recovery destination already exists");
+      fs22.renameSync(path21.join(location.installationDirectory, r.name), target);
+      moved.push(r.name);
+      syncDirectory(archive);
+      syncDirectory(location.installationDirectory);
+      if (hash(stableBytes(target)) !== r.sha256) throw new Error("Settings recovery archive verification failed");
+    }
+    verify();
+    stage = "receipt";
+    durable(path21.join(archive, "receipt.json"), JSON.stringify({ schemaVersion: 1, inspectionHash: current.inspectionHash, backup: "data.json.backup", moved, executionsResumed: false, temporaryPromoted: false }));
+    syncDirectory(archive);
+    committed = true;
+    stage = "release-guard";
+    fs22.unlinkSync(path21.join(guard, "settings-recovery.json"));
+    syncDirectory(guard);
+    fs22.rmdirSync(guard);
+    syncDirectory(location.runtimeDirectory);
+    return { recovered: true, stage: "completed", archive, backup, moved, executionsResumed: false, temporaryPromoted: false, directorySync: process.platform === "win32" ? "not_supported" : "completed" };
+  } catch {
+    if (archive) {
+      try {
+        durable(path21.join(archive, "failure.json"), JSON.stringify({ stage, moved, committed, guardRetained: present(guard) !== void 0 }));
+        failureReceiptWritten = true;
+      } catch {
+      }
+    } else {
+      try {
+        if (settingsDirectoryIdentity(guard) === guardIdentity) fs22.rmdirSync(guard);
+      } catch {
+      }
+    }
+    const pending = initial.records.filter((r) => r.identity !== null && r.name !== "data.json" && !r.name.startsWith("runtime/") && !moved.includes(r.name)).map((r) => r.name);
+    return { recovered: false, error: "SETTINGS_RECOVERY_FAILED", stage, archive, backup: archive ? path21.join(archive, "data.json.backup") : void 0, backupVerified, moved, pending, committed, failureReceiptWritten, guardRetained: present(guard) !== void 0, executionsResumed: false, temporaryPromoted: false };
+  }
+}
+
+// release-maintenance.ts
+var fs24 = __toESM(require("fs"));
+var path23 = __toESM(require("path"));
+var import_crypto12 = require("crypto");
+
 // release-update.ts
-var fs21 = __toESM(require("fs"));
-var path19 = __toESM(require("path"));
-var import_crypto10 = require("crypto");
+var fs23 = __toESM(require("fs"));
+var path22 = __toESM(require("path"));
+var import_crypto11 = require("crypto");
 var RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"];
 var RELEASE_DESCRIPTOR = "release-integrity.json";
 function verifyRelease(files, expectedVersion) {
@@ -4080,7 +4861,7 @@ function verifyRelease(files, expectedVersion) {
     throw new Error("Incomplete or incompatible AutoOC release");
   }
   for (const file of RELEASE_FILES) {
-    if (!Buffer.isBuffer(files[file]) || (0, import_crypto10.createHash)("sha256").update(files[file]).digest("hex") !== descriptor.sha256[file]) {
+    if (!Buffer.isBuffer(files[file]) || (0, import_crypto11.createHash)("sha256").update(files[file]).digest("hex") !== descriptor.sha256[file]) {
       throw new Error(`Release integrity mismatch: ${file}`);
     }
   }
@@ -4091,122 +4872,122 @@ function regularPath(root, relative5, create = false) {
   let current = root;
   const parts = relative5.split("/");
   for (let i = 0; i < parts.length; i++) {
-    current = path19.join(current, parts[i]);
+    current = path22.join(current, parts[i]);
     let stat;
     try {
-      stat = fs21.lstatSync(current);
+      stat = fs23.lstatSync(current);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
       throw new Error(`Unsafe release destination: ${relative5}`);
     }
-    if (!stat && i < parts.length - 1 && create) fs21.mkdirSync(current);
+    if (!stat && i < parts.length - 1 && create) fs23.mkdirSync(current);
   }
   return current;
 }
 function installRelease(options) {
   const { files, version: version2, lease } = options;
   verifyRelease(files, version2);
-  const directory = fs21.realpathSync(options.directory);
-  if (fs21.lstatSync(options.directory).isSymbolicLink() || path19.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
+  const directory = fs23.realpathSync(options.directory);
+  if (fs23.lstatSync(options.directory).isSymbolicLink() || path22.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
   lease.assertOwned();
-  const marker = path19.join(lease.directory, "update-pending.json");
-  if (fs21.existsSync(marker)) throw new Error("Previous update requires recovery");
+  const marker = path22.join(lease.directory, "update-pending.json");
+  if (fs23.existsSync(marker)) throw new Error("Previous update requires recovery");
   assertIdleJournals(lease.directory);
-  const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
-  for (const name of names) regularPath(directory, name);
-  const backup = path19.join(lease.directory, `update-backup-${(0, import_crypto10.randomUUID)()}`);
-  fs21.mkdirSync(backup);
+  const names2 = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
+  for (const name of names2) regularPath(directory, name);
+  const backup = path22.join(lease.directory, `update-backup-${(0, import_crypto11.randomUUID)()}`);
+  fs23.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
-  for (const name of names) {
+  for (const name of names2) {
     const source = regularPath(directory, name);
-    const bytes = fs21.existsSync(source) ? fs21.readFileSync(source) : void 0;
+    const bytes = fs23.existsSync(source) ? fs23.readFileSync(source) : void 0;
     previous.set(name, bytes);
     if (bytes) {
-      const target = path19.join(backup, name);
-      fs21.mkdirSync(path19.dirname(target), { recursive: true });
-      fs21.writeFileSync(target, bytes, { flag: "wx" });
+      const target = path22.join(backup, name);
+      fs23.mkdirSync(path22.dirname(target), { recursive: true });
+      fs23.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
-  const record = { schemaVersion: 1, version: version2, backup: path19.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
-  fs21.writeFileSync(path19.join(backup, "recovery.json"), JSON.stringify(record));
-  const fd = fs21.openSync(marker, "wx");
+  const record2 = { schemaVersion: 1, version: version2, backup: path22.basename(backup), files: names2, absent: names2.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
+  fs23.writeFileSync(path22.join(backup, "recovery.json"), JSON.stringify(record2));
+  const fd = fs23.openSync(marker, "wx");
   try {
-    fs21.writeFileSync(fd, JSON.stringify(record));
-    fs21.fsyncSync(fd);
+    fs23.writeFileSync(fd, JSON.stringify(record2));
+    fs23.fsyncSync(fd);
   } finally {
-    fs21.closeSync(fd);
+    fs23.closeSync(fd);
   }
   const written = [];
   try {
-    for (const name of names) {
+    for (const name of names2) {
       lease.assertOwned();
       const target = regularPath(directory, name, true);
       written.push(name);
-      fs21.writeFileSync(target, files[name]);
+      fs23.writeFileSync(target, files[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs21.readFileSync(regularPath(directory, name))]));
+    const installed = Object.fromEntries(names2.map((name) => [name, fs23.readFileSync(regularPath(directory, name))]));
     verifyRelease(installed, version2);
-    fs21.unlinkSync(marker);
-    return { version: version2, backup, installed: names };
+    fs23.unlinkSync(marker);
+    return { version: version2, backup, installed: names2 };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath(directory, name);
       const bytes = previous.get(name);
-      if (bytes !== void 0) fs21.writeFileSync(target, bytes);
-      else if (fs21.existsSync(target)) fs21.unlinkSync(target);
+      if (bytes !== void 0) fs23.writeFileSync(target, bytes);
+      else if (fs23.existsSync(target)) fs23.unlinkSync(target);
     }
-    fs21.unlinkSync(marker);
+    fs23.unlinkSync(marker);
     throw error;
   }
 }
 
 // release-maintenance.ts
 function readDecisionFile(file) {
-  if (!path20.isAbsolute(file)) throw new Error("Explicit absolute decision file required");
-  const stat = fs22.lstatSync(file);
+  if (!path23.isAbsolute(file)) throw new Error("Explicit absolute decision file required");
+  const stat = fs24.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 1024 * 1024) throw new Error("Decision file must be a regular JSON file of at most 1MB");
   try {
-    return JSON.parse(fs22.readFileSync(file, "utf8"));
+    return JSON.parse(fs24.readFileSync(file, "utf8"));
   } catch {
     throw new Error("Invalid decision JSON");
   }
 }
 async function maintainRelease(options) {
-  const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
-  const regular = (file) => {
-    const stat = fs22.lstatSync(file);
+  const names2 = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
+  const regular2 = (file) => {
+    const stat = fs24.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe maintenance file");
-    return fs22.readFileSync(file);
+    return fs24.readFileSync(file);
   };
   const source = physicalPath(options.sourceDirectory), files = {};
-  for (const name of names) {
+  for (const name of names2) {
     let current = source;
     for (const part of name.split("/").slice(0, -1)) {
-      current = path20.join(current, part);
-      if (fs22.lstatSync(current).isSymbolicLink() || !fs22.statSync(current).isDirectory()) throw new Error("Unsafe package directory");
+      current = path23.join(current, part);
+      if (fs24.lstatSync(current).isSymbolicLink() || !fs24.statSync(current).isDirectory()) throw new Error("Unsafe package directory");
     }
-    files[name] = regular(path20.join(source, name));
+    files[name] = regular2(path23.join(source, name));
   }
   verifyRelease(files, options.version);
-  const location = resolveInstalledWorkflowLocation(options.vault), identity = dispositionLocation(location);
+  const location = resolveInstalledWorkflowLocation(options.vault), identity2 = dispositionLocation(location);
   if (source === location.installationDirectory) throw new Error("Run maintenance from a separate extracted package");
   let abandonmentEvidence;
   const assertContext = () => {
     const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault));
-    if (JSON.stringify(current) !== JSON.stringify(identity)) throw new Error("Maintenance installation identity changed");
-    if (fs22.existsSync(path20.join(location.runtimeDirectory, "update-pending.json"))) throw new Error("Incomplete update requires supported recovery");
-    if (fs22.existsSync(location.configurationFile + ".write-lock") || fs22.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs22.readdirSync(location.runtimeDirectory).some((n) => n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
-    const catalog = JSON.parse(regular(location.configurationFile).toString("utf8"));
+    if (JSON.stringify(current) !== JSON.stringify(identity2)) throw new Error("Maintenance installation identity changed");
+    if (fs24.existsSync(path23.join(location.runtimeDirectory, "update-pending.json"))) throw new Error("Incomplete update requires supported recovery");
+    if (fs24.existsSync(location.configurationFile + ".write-lock") || fs24.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs24.readdirSync(location.runtimeDirectory).some((n) => n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
+    const catalog = JSON.parse(regular2(location.configurationFile).toString("utf8"));
     if (["tasks", "workflows"].some((k) => !Array.isArray(catalog[k]) || catalog[k].some((e) => e.status === "running" || e.pendingCodexApproval))) throw new Error("Active catalog requires reconciliation");
-    const checkpoints = new Map(fs22.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).map((name) => {
+    const checkpoints = new Map(fs24.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).map((name) => {
       const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
       return [state.runId, state];
     }));
     const evidence = /* @__PURE__ */ new Map();
     for (const state of checkpoints.values()) if (state.abandonment) for (const name of [state.runId + ".json", state.abandonment.snapshot]) {
-      evidence.set(name, regular(path20.join(location.runtimeDirectory, name)));
+      evidence.set(name, regular2(path23.join(location.runtimeDirectory, name)));
     }
     if (abandonmentEvidence && (evidence.size !== abandonmentEvidence.size || [...evidence].some(([name, bytes]) => !abandonmentEvidence.get(name)?.equals(bytes)))) throw new Error("Abandonment evidence changed during maintenance");
     abandonmentEvidence ??= evidence;
@@ -4216,14 +4997,14 @@ async function maintainRelease(options) {
     })])), checkpoints);
   };
   assertContext();
-  if (fs22.existsSync(path20.join(location.runtimeDirectory, "execution.lock"))) throw new Error("Unload AutoOC normally; execution reservation is present");
-  const executions = fs22.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).sort().map((name) => {
+  if (fs24.existsSync(path23.join(location.runtimeDirectory, "execution.lock"))) throw new Error("Unload AutoOC normally; execution reservation is present");
+  const executions = fs24.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).sort().map((name) => {
     const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
     if (["ready", "in_flight"].includes(state.phase)) throw new Error("Unfinished execution requires reconciliation");
     return inspectTerminalExecution({ vault: location.vault, runId: state.runId });
   });
-  const installedVersion = JSON.parse(regular(path20.join(location.installationDirectory, "manifest.json")).toString("utf8")).version;
-  if (!options.decisions) return { mode: "inspect", version: options.version, installedVersion, ...identity, executions, activityVerified: false };
+  const installedVersion = JSON.parse(regular2(path23.join(location.installationDirectory, "manifest.json")).toString("utf8")).version;
+  if (!options.decisions) return { mode: "inspect", version: options.version, installedVersion, ...identity2, executions, activityVerified: false };
   if (!Array.isArray(options.decisions) || new Set(options.decisions.map((d) => d?.runId)).size !== options.decisions.length) throw new Error("Select distinct individual decisions");
   for (const d of options.decisions) {
     const observed = executions.find((e) => e.runId === d?.runId);
@@ -4234,40 +5015,40 @@ async function maintainRelease(options) {
   try {
     lease.assertOwned();
     assertContext();
-    backup = path20.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto11.randomUUID)());
-    fs22.mkdirSync(backup, { mode: 448 });
+    backup = path23.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto12.randomUUID)());
+    fs24.mkdirSync(backup, { mode: 448 });
     const hashes = {};
     const save = (relative5, bytes) => {
       lease.assertOwned();
-      const target = path20.join(backup, relative5);
-      fs22.mkdirSync(path20.dirname(target), { recursive: true, mode: 448 });
-      const fd = fs22.openSync(target, "wx", 384);
+      const target = path23.join(backup, relative5);
+      fs24.mkdirSync(path23.dirname(target), { recursive: true, mode: 448 });
+      const fd = fs24.openSync(target, "wx", 384);
       try {
-        fs22.writeFileSync(fd, bytes);
-        fs22.fsyncSync(fd);
+        fs24.writeFileSync(fd, bytes);
+        fs24.fsyncSync(fd);
       } finally {
-        fs22.closeSync(fd);
+        fs24.closeSync(fd);
       }
-      const digest = (b) => (0, import_crypto11.createHash)("sha256").update(b).digest("hex");
-      if (digest(regular(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
+      const digest = (b) => (0, import_crypto12.createHash)("sha256").update(b).digest("hex");
+      if (digest(regular2(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
       hashes[relative5] = digest(bytes);
     };
-    for (const name of names) save(name, regular(path20.join(location.installationDirectory, name)));
-    const catalog = regular(location.configurationFile);
+    for (const name of names2) save(name, regular2(path23.join(location.installationDirectory, name)));
+    const catalog = regular2(location.configurationFile);
     save("data.json", catalog);
-    const journals = fs22.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n) || /^(abandonment|disposition)-[a-zA-Z0-9-]+\.snapshot$/.test(n));
-    for (const name of journals) save("runtime/" + name, regular(path20.join(location.runtimeDirectory, name)));
-    save("backup-integrity.json", Buffer.from(JSON.stringify({ version: installedVersion, ...identity, sha256: hashes })));
+    const journals = fs24.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n) || /^(abandonment|disposition)-[a-zA-Z0-9-]+\.snapshot$/.test(n));
+    for (const name of journals) save("runtime/" + name, regular2(path23.join(location.runtimeDirectory, name)));
+    save("backup-integrity.json", Buffer.from(JSON.stringify({ version: installedVersion, ...identity2, sha256: hashes })));
     lease.assertOwned();
     assertContext();
-    if (!regular(location.configurationFile).equals(catalog)) throw new Error("Catalog changed before disposition");
+    if (!regular2(location.configurationFile).equals(catalog)) throw new Error("Catalog changed before disposition");
     for (const d of options.decisions) {
       const state = await disposeTerminalExecution({ ...d, lease });
       applied.push({ runId: state.runId, revision: state.revision, phase: state.phase, outcome: "unknown" });
     }
     lease.assertOwned();
     assertContext();
-    if (!regular(location.configurationFile).equals(catalog)) throw new Error("Catalog changed during maintenance");
+    if (!regular2(location.configurationFile).equals(catalog)) throw new Error("Catalog changed during maintenance");
     assertInstalledExecutionIdle(location.installationDirectory);
     const installed = installRelease({ directory: location.installationDirectory, version: options.version, files, lease });
     return { mode: "installed", ...installed, maintenanceBackup: backup, applied, loadedInObsidian: false, reloadRequired: true };
@@ -4296,15 +5077,23 @@ async function maintainRelease(options) {
 }
 
 // autooc-cli.ts
-var version = "1.6.9";
+var version = "1.7.0";
 async function main(args) {
   const [command, ...rest] = args;
+  if (command === "inspect-settings-write" || command === "recover-settings-write") {
+    const inspect = command === "inspect-settings-write";
+    if (rest.length !== (inspect ? 2 : 4) || rest[0] !== "--vault" || !path24.isAbsolute(rest[1] || "") || !inspect && (rest[2] !== "--decision" || !path24.isAbsolute(rest[3] || ""))) throw new Error("Use inspect-settings-write --vault <absolute path> or recover-settings-write --vault <absolute path> --decision <absolute JSON file>");
+    if (inspect) return { version, ...await inspectSettingsWrite(rest[1]) };
+    const result = await recoverSettingsWrite(rest[1], readSettingsWriteDecision(rest[3]));
+    if (!result.recovered) process.exitCode = 1;
+    return { version, ...result };
+  }
   if (command === "maintain-release") {
-    if (rest[0] !== "--vault" || !path21.isAbsolute(rest[1] || "") || !(rest.length === 3 && rest[2] === "--inspect" || rest.length === 4 && rest[2] === "--decisions")) throw new Error("Use maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file>");
+    if (rest[0] !== "--vault" || !path24.isAbsolute(rest[1] || "") || !(rest.length === 3 && rest[2] === "--inspect" || rest.length === 4 && rest[2] === "--decisions")) throw new Error("Use maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file>");
     return maintainRelease({ sourceDirectory: __dirname, vault: rest[1], version, decisions: rest[2] === "--decisions" ? readDecisionFile(rest[3]) : void 0 });
   }
   if (command === "inspect-terminal" || command === "dispose-terminal") {
-    if (rest.length !== 4 || rest[0] !== "--vault" || !path21.isAbsolute(rest[1]) || rest[2] !== (command === "inspect-terminal" ? "--run" : "--decision")) throw new Error("Use --vault <absolute path> and --run <id> or --decision <absolute JSON file>, in that order");
+    if (rest.length !== 4 || rest[0] !== "--vault" || !path24.isAbsolute(rest[1]) || rest[2] !== (command === "inspect-terminal" ? "--run" : "--decision")) throw new Error("Use --vault <absolute path> and --run <id> or --decision <absolute JSON file>, in that order");
     if (command === "inspect-terminal") return { version, ...inspectTerminalExecution({ vault: rest[1], runId: rest[3] }) };
     const decision = readDecisionFile(rest[3]);
     if (!decision || Array.isArray(decision) || decision.vault !== resolveInstalledWorkflowLocation(rest[1]).vault) throw new Error("Decision vault identity mismatch");
@@ -4313,26 +5102,26 @@ async function main(args) {
   }
   if (command === "export-workflow" || command === "edit-workflow") {
     const last = command === "export-workflow" ? "--out" : "--patch";
-    if (rest.length !== 6 || rest[0] !== "--vault" || rest[2] !== "--workflow" || rest[4] !== last || !path21.isAbsolute(rest[1]) || !path21.isAbsolute(rest[5])) throw new Error("Use --vault <absolute path> --workflow <id> " + last + " <absolute JSON file>, in that order");
+    if (rest.length !== 6 || rest[0] !== "--vault" || rest[2] !== "--workflow" || rest[4] !== last || !path24.isAbsolute(rest[1]) || !path24.isAbsolute(rest[5])) throw new Error("Use --vault <absolute path> --workflow <id> " + last + " <absolute JSON file>, in that order");
     const location2 = resolveInstalledWorkflowLocation(rest[1]);
     if (command === "export-workflow") {
       let catalog;
       try {
-        catalog = JSON.parse(fs23.readFileSync(location2.configurationFile, "utf8"));
+        catalog = JSON.parse(fs25.readFileSync(location2.configurationFile, "utf8"));
       } catch {
         throw new Error("Cannot read valid AutoOC configuration");
       }
       const workflows = catalog.workflows?.filter((w) => w.id === rest[3]);
       if (workflows?.length !== 1) throw new Error("Workflow identity is missing or ambiguous");
       const workflow = workflows[0];
-      fs23.writeFileSync(rest[5], JSON.stringify({ workflowId: workflow.id, expectedHash: workflowEditHash(workflow), definition: workflowEditDefinition(workflow) }, null, 2), { flag: "wx", mode: 384 });
+      fs25.writeFileSync(rest[5], JSON.stringify({ workflowId: workflow.id, expectedHash: workflowEditHash(workflow), definition: workflowEditDefinition(workflow) }, null, 2), { flag: "wx", mode: 384 });
       return { version, workflowId: workflow.id, expectedHash: workflowEditHash(workflow), exported: true };
     }
-    const stat = fs23.lstatSync(rest[5]);
+    const stat = fs25.lstatSync(rest[5]);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 6e4) throw new Error("Patch must be a regular JSON file of at most 60KB");
     let patch;
     try {
-      patch = JSON.parse(fs23.readFileSync(rest[5], "utf8"));
+      patch = JSON.parse(fs25.readFileSync(rest[5], "utf8"));
     } catch {
       throw new Error("Invalid workflow patch JSON");
     }
@@ -4349,27 +5138,27 @@ async function main(args) {
     return { version, runId: result.runId, workflowId: result.workflowId, phase: result.phase, revision: result.revision, abandonment: result.abandonment };
   }
   if (command === "approve" || command === "deny") {
-    if (rest.length !== 6 || rest[0] !== "--vault" || !path21.isAbsolute(rest[1]) || rest[2] !== "--run" || rest[4] !== "--approval") throw new Error("Decision requires --vault, --run and exact --approval token");
-    let directory = fs23.realpathSync(rest[1]);
+    if (rest.length !== 6 || rest[0] !== "--vault" || !path24.isAbsolute(rest[1]) || rest[2] !== "--run" || rest[4] !== "--approval") throw new Error("Decision requires --vault, --run and exact --approval token");
+    let directory = fs25.realpathSync(rest[1]);
     for (const part of [".obsidian", "plugins", "auto-oc", "runtime"]) {
-      directory = path21.join(directory, part);
-      const stat = fs23.lstatSync(directory);
+      directory = path24.join(directory, part);
+      const stat = fs25.lstatSync(directory);
       if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
     }
     return { version, ...answerWorkflowApproval(directory, rest[3], rest[5], command === "approve") };
   }
   if (command === "recover-lease") {
-    if (rest.length !== 4 || rest[0] !== "--vault" || !path21.isAbsolute(rest[1]) || rest[2] !== "--owner" || !rest[3]) throw new Error("Lease recovery requires explicit absolute vault and observed --owner identity");
-    let directory = fs23.realpathSync(rest[1]);
+    if (rest.length !== 4 || rest[0] !== "--vault" || !path24.isAbsolute(rest[1]) || rest[2] !== "--owner" || !rest[3]) throw new Error("Lease recovery requires explicit absolute vault and observed --owner identity");
+    let directory = fs25.realpathSync(rest[1]);
     for (const part of [".obsidian", "plugins", "auto-oc", "runtime"]) {
-      directory = path21.join(directory, part);
-      const stat = fs23.lstatSync(directory);
+      directory = path24.join(directory, part);
+      const stat = fs25.lstatSync(directory);
       if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
     }
     return { version, ...recoverExecutionLease(directory, rest[3]) };
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow"], taskSelection: true, pluginRequests: 1, workflowEditing: 1 };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file> from a separate extracted corrected package; decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground: true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow"], taskSelection: true, pluginRequests: 1, workflowEditing: 1 };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", settingsWriteRecovery: "inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--decisions absolute-JSON-file> from a separate extracted corrected package; decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground: true };
   if (["run", "resume", "reconcile", "stop"].includes(command)) {
     const values = /* @__PURE__ */ new Map();
     const target = rest.includes("--task") ? "--task" : "--workflow";
@@ -4381,16 +5170,16 @@ async function main(args) {
       values.set(key, value);
     }
     if (command === "stop") {
-      if (!path21.isAbsolute(values.get("--vault"))) throw new Error("Explicit absolute vault required");
-      let directory = fs23.realpathSync(values.get("--vault"));
+      if (!path24.isAbsolute(values.get("--vault"))) throw new Error("Explicit absolute vault required");
+      let directory = fs25.realpathSync(values.get("--vault"));
       for (const part of [".obsidian", "plugins", "auto-oc", "runtime"]) {
-        directory = path21.join(directory, part);
-        const stat = fs23.lstatSync(directory);
+        directory = path24.join(directory, part);
+        const stat = fs25.lstatSync(directory);
         if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
       }
       const state = readExecutionCheckpoint(directory, values.get("--run"));
-      const identity = target === "--task" ? standaloneTaskWorkflow(values.get(target)).id : values.get(target);
-      if (state.workflowId !== identity) throw new Error("Execution belongs to another workflow or task");
+      const identity2 = target === "--task" ? standaloneTaskWorkflow(values.get(target)).id : values.get(target);
+      if (state.workflowId !== identity2) throw new Error("Execution belongs to another workflow or task");
       return { version, experimental: true, ...await requestWorkflowStop(directory, state.runId) };
     }
     const controller = new AbortController();
@@ -4399,12 +5188,13 @@ async function main(args) {
     process.on("SIGTERM", abort);
     try {
       const location2 = resolveInstalledWorkflowLocation(values.get("--vault"));
+      const progress = (host, state) => process.stderr.write(JSON.stringify({ event: "progress", host, ...executionSummary(state) }) + "\n");
       const delegated = await requestPluginExecution(location2.runtimeDirectory, {
         command,
         workflowId: values.get("--workflow"),
         taskId: values.get("--task"),
         runId: values.get("--run")
-      }, controller.signal, (state) => process.stderr.write(JSON.stringify({ event: "progress", host: "obsidian", ...state }) + "\n"));
+      }, controller.signal, (state) => progress("obsidian", state));
       const result = delegated || await runInstalledWorkflow({
         vault: values.get("--vault"),
         workflowId: values.get("--workflow"),
@@ -4413,29 +5203,33 @@ async function main(args) {
         newExecution: command === "run",
         reconcile: command === "reconcile",
         signal: controller.signal,
-        redact: (text) => text
+        redact: (text) => text,
+        includePresentation: true,
+        onCheckpoint: async (checkpoint, _catalog, presentation) => {
+          progress("standalone", executionSummary(checkpoint, presentation));
+        }
       });
       if (controller.signal.aborted) process.exitCode = 130;
       else if (result.phase === "failed") process.exitCode = 1;
-      return { version, experimental: true, runId: result.runId, workflowId: result.workflowId, phase: result.phase, revision: result.revision, nextStepId: result.nextStepId };
+      return { version, experimental: true, ...executionSummary(result) };
     } finally {
       process.off("SIGINT", abort);
       process.off("SIGTERM", abort);
     }
   }
-  if (!["list", "status"].includes(command) || rest.length !== 2 || rest[0] !== "--vault" || !path21.isAbsolute(rest[1])) {
+  if (!["list", "status"].includes(command) || rest.length !== 2 || rest[0] !== "--vault" || !path24.isAbsolute(rest[1])) {
     throw new Error("Use help for supported commands; an explicit absolute --vault is required.");
   }
-  const vault = fs23.realpathSync(rest[1]);
+  const vault = fs25.realpathSync(rest[1]);
   let location = vault;
   for (const part of [".obsidian", "plugins", "auto-oc", "data.json"]) {
-    location = path21.join(location, part);
-    if (fs23.lstatSync(location).isSymbolicLink()) throw new Error("Linked installation paths are unsupported.");
+    location = path24.join(location, part);
+    if (fs25.lstatSync(location).isSymbolicLink()) throw new Error("Linked installation paths are unsupported.");
   }
-  if (!fs23.statSync(location).isFile()) throw new Error("Configuration is not a regular file.");
+  if (!fs25.statSync(location).isFile()) throw new Error("Configuration is not a regular file.");
   let config;
   try {
-    config = JSON.parse(fs23.readFileSync(location, "utf8"));
+    config = JSON.parse(fs25.readFileSync(location, "utf8"));
   } catch {
     throw new Error("Cannot read valid AutoOC configuration.");
   }
@@ -4448,20 +5242,20 @@ async function main(args) {
   });
   let runtime = {};
   if (command === "status") {
-    const directory = path21.join(path21.dirname(location), "runtime");
+    const directory = path24.join(path24.dirname(location), "runtime");
     const executions = [];
     let executionLockPresent = false;
     let executionOwner;
-    if (fs23.existsSync(directory)) {
-      if (fs23.lstatSync(directory).isSymbolicLink() || !fs23.statSync(directory).isDirectory()) throw new Error("Invalid runtime directory");
-      executionLockPresent = fs23.existsSync(path21.join(directory, "execution.lock"));
+    if (fs25.existsSync(directory)) {
+      if (fs25.lstatSync(directory).isSymbolicLink() || !fs25.statSync(directory).isDirectory()) throw new Error("Invalid runtime directory");
+      executionLockPresent = fs25.existsSync(path24.join(directory, "execution.lock"));
       if (executionLockPresent) {
         try {
           executionOwner = readExecutionLeaseOwner(directory);
         } catch {
         }
       }
-      for (const file of fs23.readdirSync(directory).sort()) {
+      for (const file of fs25.readdirSync(directory).sort()) {
         if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
         const state = readExecutionCheckpoint(directory, file.slice(0, -5));
         executions.push({

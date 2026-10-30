@@ -313,7 +313,7 @@ test("Copilot dispatch honors workflow prompt overrides and never falls through 
   assert.equal(task.prompt, "Review this project");
 });
 
-test("Copilot run uses configured model, cwd, timeout and secrets, then resets recurring tasks", async () => {
+test("Copilot run uses configured model, cwd and timeout without store injection, then resets recurring tasks", async () => {
   const task = createTask({ scheduleType: "daily", copilotAllowAllTools: true, workingDirectory: os.tmpdir() });
   const plugin = createPlugin([task]);
   let invocation, completion, disposed = false;
@@ -331,7 +331,7 @@ test("Copilot run uses configured model, cwd, timeout and secrets, then resets r
   assert.equal(invocation.options.model, "copilot-default");
   assert.equal(invocation.options.allowAllTools, true);
   assert.equal(invocation.options.timeoutMs, DEFAULT_SETTINGS.taskTimeoutSeconds * 1000);
-  assert.equal(invocation.options.env.AUTOOC_TEST_SECRET, "secret-fixture-value");
+  assert.equal(invocation.options.env.AUTOOC_TEST_SECRET, undefined);
   assert.equal(task.status, "pending");
   assert.equal(task.output, "Done [REDACTED]");
   assert.equal(completion.exitCode, 0);

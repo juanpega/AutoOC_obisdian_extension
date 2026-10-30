@@ -18,15 +18,43 @@ function fixture(t){
   t.after(async()=>{plugin.cliRequestHost?.close();if(plugin.cliRequestTimer!==undefined)clearInterval(plugin.cliRequestTimer);await plugin.cliRequestHost?.drain();plugin.releasePluginExecution(false);assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(vault).startsWith('autooc-coexist-'));fs.rmSync(vault,{recursive:true,force:true});});
   return {vault,directory,plugin};
 }
-function cli(vault,...args){return new Promise((resolve,reject)=>{
+function cli(vault,...args){return cliObserved(vault,undefined,...args);}
+function cliObserved(vault,onProgress,...args){return new Promise((resolve,reject)=>{
   const child=spawn(process.execPath,[path.join(root,'autooc-cli.cjs'),...args,'--vault',vault],{windowsHide:true});
   let stdout='',stderr='',timedOut=false;
   // Own only this synthetic child; a failed protocol must not stall the suite.
   const watchdog=setTimeout(()=>{timedOut=true;child.kill();},45000);
-  child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);
+  let pending='';
+  child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>{
+    stderr+=s;pending+=s;
+    while(pending.includes('\n')) {const end=pending.indexOf('\n'),line=pending.slice(0,end);pending=pending.slice(end+1);onProgress?.(JSON.parse(line));}
+  });
   child.on('error',error=>{clearTimeout(watchdog);reject(error);});
   child.on('exit',code=>{clearTimeout(watchdog);if(timedOut)reject(new Error(`Synthetic CLI watchdog expired after 45000ms; stdout=${stdout}; stderr=${stderr}`));else resolve({code,stdout,stderr});});
 });}
+
+test('real plugin host reports the selected workflow before its first step and keeps final identity',async t=>{
+  const {vault,directory,plugin}=fixture(t),name='Flujo "ñ"\n第二行';
+  fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({private:'PRIVATE_CONFIG',tasks:[],workflows:[{id:'named',name,steps:[
+    {id:'one',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once"); output="PRIVATE_RESULT";'}]}]}));
+  await plugin.loadSettings();
+  let release;const gate=new Promise(resolve=>release=resolve);t.after(()=>release());
+  const original=plugin.runSharedWorkflow.bind(plugin);
+  plugin.runSharedWorkflow=(id,run,reconcile,fresh,task,external)=>original(id,run,reconcile,fresh,task,{...external,progress:async(state,metadata)=>{
+    await external.progress(state,metadata);
+    if(state.phase==='ready' && state.steps.length===0)await gate;
+  }});
+  plugin.startCliRequests();
+  const timer=setInterval(()=>plugin.cliRequestHost.poll(),10);t.after(()=>clearInterval(timer));
+  let first,existsAtFirst;
+  const result=await cliObserved(vault,event=>{
+    if(!first){first=event;existsAtFirst=fs.existsSync(path.join(vault,'effects.txt'));release();}
+  },'run','--workflow','named');
+  assert.equal(result.code,0,result.stderr);assert.equal(existsAtFirst,false);assert.equal(first.phase,'ready');
+  const final=JSON.parse(result.stdout);assert.equal(first.host,'obsidian');assert.equal(first.workflowName,name);
+  assert.equal(final.workflowName,name);assert.equal(final.workflowId,'named');assert.equal(final.runId,first.runId);
+  assert.equal(final.executionKind,'workflow');assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_|vault\.append/);
+});
 
 test('a local save during an async reload rejects the late load and preserves the edit',async t=>{
   const {directory,plugin}=fixture(t);await plugin.loadSettings();
