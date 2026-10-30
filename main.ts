@@ -11,6 +11,14 @@ import { buildOpenCodeScript } from "./opencode-script";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease, hasCompleteInstalledReleaseAsync } from "./release-update";
 import { assertInstalledExecutionIdle, assertIdleCatalog, assertIdleJournals, waitForInstalledCatalog } from "./execution-idle";
 const PLUGIN_BUILD_VERSION: string = require("./manifest.json").version;
+// Survives CommonJS bundle reloads in the same Obsidian renderer. Only the
+// original stopped instance can relinquish its own reservation after rechecking
+// inactivity; a PID match alone never authorizes recovery.
+const stoppedLeaseOwners: Map<string, (runtime: string) => void> = (() => {
+  const key = Symbol.for('autooc.stoppedLeaseOwners.v1');
+  if (!(globalThis as any)[key]) (globalThis as any)[key] = new Map();
+  return (globalThis as any)[key];
+})();
 import {
   App,
   ItemView,
@@ -2075,6 +2083,16 @@ export default class AutoOCPlugin extends Plugin {
     // Retain this host on an uncertain drain so a later release cannot forget
     // its pending publication. No callback may write after lease release.
     if (closingRequestHost && !closingRequestHost.hasPendingWork && this.cliRequestHost === closingRequestHost) this.cliRequestHost = undefined;
+    if (this.pluginExecutionLease) {
+      const lease = this.pluginExecutionLease;
+      stoppedLeaseOwners.set(lease.token, runtime => {
+        if (!samePhysicalPath(lease.directory, runtime)) throw new Error('Previous AutoOC installation changed');
+        if (!this.lifecycleStopped || this.startupPending || this.sharedCompletions.size || this.pluginExecutionLease !== lease) throw new Error('Previous AutoOC instance is still stopping');
+        lease.assertOwned();
+        this.assertPluginCanRelease();
+        this.releasePluginExecution(false);
+      });
+    }
     await closingBridge;
   }
 
@@ -2143,6 +2161,8 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private registerRecoveryInterface(): void {
+    let sameProcessOwner = false;
+    try { sameProcessOwner = readExecutionLeaseOwner(this.selectedExecutionLocation(false).runtimeDirectory).pid === process.pid; } catch { /* Keep the original recovery diagnosis. */ }
     const open = async () => {
       const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
       const leaf = existing || this.app.workspace.getLeaf(true);
@@ -2150,7 +2170,7 @@ export default class AutoOCPlugin extends Plugin {
       await this.app.workspace.revealLeaf(leaf);
     };
     this.registerView(VIEW_TYPE, leaf => new AutoOCRecoveryView(leaf, this.startupError!,
-      () => this.retryLoadingAutoOC(), this.closedSessionRecovery(), this.startupWaitingForOwner));
+      () => this.retryLoadingAutoOC(), this.closedSessionRecovery(), this.startupWaitingForOwner, sameProcessOwner));
     this.addRibbonIcon("workflow", this.startupWaitingForOwner ? "AutoOC — waiting for execution" : "AutoOC — recovery required", () => { void open(); });
     this.addCommand({id: "open-auto-oc", name: "Open AutoOC recovery", callback: () => { void open(); }});
     new Notice(this.startupWaitingForOwner
@@ -2207,7 +2227,9 @@ export default class AutoOCPlugin extends Plugin {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
         const owner = readExecutionLeaseOwner(location.runtimeDirectory);
-        recoverExecutionLease(location.runtimeDirectory, owner.token, () => {
+        const relinquish = owner.pid === process.pid ? stoppedLeaseOwners.get(owner.token) : undefined;
+        if (relinquish) relinquish(location.runtimeDirectory);
+        else recoverExecutionLease(location.runtimeDirectory, owner.token, () => {
           try { assertInstalledExecutionIdle(location.installationDirectory); }
           catch (error) {
             try { this.assertClosedObservation(owner.token); }
@@ -2229,6 +2251,7 @@ export default class AutoOCPlugin extends Plugin {
     // kill()/dispose() requests do not prove external effects have stopped.
     if (unresolved || this.cliRequestHost?.hasPendingWork) return;
     this.pluginExecutionLease.release();
+    stoppedLeaseOwners.delete(this.pluginExecutionLease.token);
     this.pluginExecutionLease = undefined;
     this.pluginExecutionLocation = undefined;
   }
@@ -7943,7 +7966,7 @@ class ConfirmModal extends Modal {
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void, private waitingForOwner = false) { super(leaf); }
+  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void, private waitingForOwner = false, private sameProcessOwner = false) { super(leaf); }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC — recovery"; }
   getIcon() { return "workflow"; }
@@ -7962,6 +7985,8 @@ class AutoOCRecoveryView extends ItemView {
       ? "The active execution keeps its reservation. No task will be resumed or repeated when this panel loads."
       : this.recoverClosedSession
       ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
+      : this.sameProcessOwner
+      ? "This Obsidian window still holds a previous AutoOC reservation. Retrying cannot release it while its state is unconfirmed. Let any active task finish, then close and reopen this vault window. If recovery is offered after reopening, use Recover closed session and open AutoOC. Do not delete runtime files; unfinished runs must still be reviewed."
       : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
     if (this.recoverClosedSession) {
       const recover = this.contentEl.createEl('button', {text: 'Recover closed session and open AutoOC'});
