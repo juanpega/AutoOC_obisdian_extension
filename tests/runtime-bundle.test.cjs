@@ -5,6 +5,122 @@ const os=require('node:os');
 const path=require('node:path');
 const {spawnSync}=require('node:child_process');
 
+function publicHostFixture(t, instrument=false){
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-public-preparation-'));
+  const runtimeDirectory=path.join(root,'runtime');fs.mkdirSync(runtimeDirectory);
+  t.after(()=>{
+    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));
+    assert.match(path.basename(root),/^autooc-public-preparation-/);
+    fs.rmSync(root,{recursive:true,force:true});
+  });
+  let api=require('../autooc-runtime.cjs');
+  if(instrument){
+    const bundle={exports:{}};
+    require('node:vm').runInNewContext(fs.readFileSync(path.join(__dirname,'../autooc-runtime.cjs'),'utf8')+
+      '\nmodule.exports={...module.exports,executionCoordinator,ExecutionAdmission,acquireExecutionLease};',
+      {module:bundle,exports:bundle.exports,require,process,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval,clearInterval});
+    api=bundle.exports;
+  }
+  let effects=0;
+  const definition=(concurrency='exclusive',workingDirectory=root)=>api.prepareWorkflowDefinition(
+    {id:'preparation',concurrency,steps:[{id:'task',stepKind:'task',taskId:'task'}]},
+    [{id:'task',workingDirectory,prompt:'fixture'}],{});
+  const options={runtimeDirectory,vaultBase:root,redact:s=>s,tasks:{supports:()=>true,execute:async()=>{effects++;return {succeeded:true,output:'done'};}}};
+  return {api,root,runtimeDirectory,definition,options,effects:()=>effects,
+    run:(definitionValue=definition(),extra={})=>api.runCodeWorkflowHost({...options,definition:definitionValue,...extra})};
+}
+
+for(const scenario of ['invalid policy','missing directory'])test(`public host releases its lease after ${scenario} and permits a valid retry`,async t=>{
+  const f=publicHostFixture(t);
+  const invalid=scenario==='invalid policy'?f.definition('invalid'):f.definition('exclusive',path.join(f.root,'missing'));
+  await assert.rejects(f.run(invalid),scenario==='invalid policy'?/Invalid concurrency policy/:/ENOENT/);
+  assert.equal(f.effects(),0);assert.deepEqual(fs.readdirSync(f.runtimeDirectory),[]);
+  assert.equal((await f.run()).phase,'completed');assert.equal(f.effects(),1);
+  assert.equal(fs.existsSync(path.join(f.runtimeDirectory,'execution.lock')),false);
+});
+
+test('public host finishes its provisional admission after validation fails while retaining an external lease and another session',async t=>{
+  const f=publicHostFixture(t,true),lease=f.api.acquireExecutionLease(f.runtimeDirectory);
+  const coordinator=f.api.executionCoordinator(lease),definition=f.definition('independent');
+  const other=f.api.prepareWorkflowDefinition({id:'other',concurrency:'independent',steps:[{id:'code',stepKind:'code',code:'output="other";'}]},[],{});
+  const foreign=coordinator.admit(other,f.root),owner=fs.readFileSync(path.join(f.runtimeDirectory,'execution.lock/owner.json'));
+  const original=f.api.ExecutionAdmission.prototype.assertOwned;
+  f.api.ExecutionAdmission.prototype.assertOwned=function(...args){
+    original.apply(this,args);if(this.definition.workflow.id==='preparation')throw Error('post-admission validation fixture');
+  };
+  try {
+    await assert.rejects(f.run(definition,{lease}),/post-admission validation fixture/);
+    assert.equal(f.effects(),0);assert.deepEqual(fs.readdirSync(f.runtimeDirectory),['execution.lock']);
+    lease.assertOwned();assert.deepEqual(fs.readFileSync(path.join(f.runtimeDirectory,'execution.lock/owner.json')),owner);
+    foreign.assertOwned(lease,other);
+    f.api.ExecutionAdmission.prototype.assertOwned=original;
+    assert.equal((await f.run(definition,{lease})).phase,'completed');assert.equal(f.effects(),1);
+    foreign.assertOwned(lease,other);
+  } finally {f.api.ExecutionAdmission.prototype.assertOwned=original;foreign.finish();lease.release();}
+});
+
+test('public host leaves consumer admission and lease under consumer control on preparation failure',async t=>{
+  const f=publicHostFixture(t,true),lease=f.api.acquireExecutionLease(f.runtimeDirectory),definition=f.definition();
+  const admission=f.api.executionCoordinator(lease).admit(definition,f.root);
+  const owner=fs.readFileSync(path.join(f.runtimeDirectory,'execution.lock/owner.json'));
+  const original=admission.assertOwned;admission.assertOwned=()=>{throw Error('external validation fixture');};
+  try {
+    await assert.rejects(f.run(definition,{lease,admission}),/external validation fixture/);
+    assert.equal(admission.advancing,true);assert.equal(f.effects(),0);
+    assert.deepEqual(fs.readdirSync(f.runtimeDirectory),['execution.lock']);
+    assert.deepEqual(fs.readFileSync(path.join(f.runtimeDirectory,'execution.lock/owner.json')),owner);
+    admission.assertOwned=original;admission.assertOwned(lease,definition);
+    assert.equal((await f.run(definition,{lease,admission})).phase,'completed');
+    assert.equal(admission.advancing,true);lease.assertOwned();
+  } finally {admission.assertOwned=original;admission.finish();lease.release();}
+});
+
+test('public host attempts own lease release when admission finish fails and retains both diagnostics',async t=>{
+  const f=publicHostFixture(t,true),prototype=f.api.ExecutionAdmission.prototype;
+  const validate=prototype.assertOwned,finish=prototype.finish;
+  prototype.assertOwned=function(...args){validate.apply(this,args);throw Error('preparation fixture');};
+  prototype.finish=function(){finish.call(this);throw Error('finish fixture');};
+  try {
+    await assert.rejects(f.run(),error=>{
+      assert.match(error.message,/preparation fixture/);assert.match(error.message,/finish fixture/);
+      assert.match(error.cause.message,/preparation fixture/);assert.equal(error.errors.length,2);return true;
+    });
+    assert.equal(f.effects(),0);assert.deepEqual(fs.readdirSync(f.runtimeDirectory),[]);
+  } finally {prototype.assertOwned=validate;prototype.finish=finish;}
+  assert.equal((await f.run()).phase,'completed');
+});
+
+test('public host refuses to release a substituted lease owner and preserves the preparation error',async t=>{
+  const f=publicHostFixture(t,true),prototype=f.api.ExecutionAdmission.prototype,validate=prototype.assertOwned;
+  let replacement;
+  prototype.assertOwned=function(...args){
+    validate.apply(this,args);
+    const file=path.join(f.runtimeDirectory,'execution.lock/owner.json');
+    const owner=JSON.parse(fs.readFileSync(file));owner.token=require('node:crypto').randomUUID();
+    replacement=JSON.stringify(owner);fs.writeFileSync(file,replacement);throw Error('preparation fixture');
+  };
+  try {
+    await assert.rejects(f.run(),error=>{
+      assert.match(error.message,/preparation fixture/);assert.match(error.message,/ownership changed/);return true;
+    });
+    assert.equal(fs.readFileSync(path.join(f.runtimeDirectory,'execution.lock/owner.json'),'utf8'),replacement);
+    assert.equal(f.effects(),0);assert.deepEqual(fs.readdirSync(f.runtimeDirectory),['execution.lock']);
+  } finally {prototype.assertOwned=validate;}
+});
+
+test('public host preserves uncertain durable evidence and blocks a fresh call after releasing its own lease',async t=>{
+  const f=publicHostFixture(t);
+  const definition=f.api.prepareWorkflowDefinition({id:'uncertain',steps:[
+    {id:'effect',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once");output="done";',transitions:[{mode:'eval',toStepId:'last'}]},
+    {id:'last',stepKind:'code',code:'output="last";'}]},[],{});
+  await assert.rejects(f.run(definition,{evaluate:async()=>{throw Error('evaluation uncertain fixture');}}),/evaluation uncertain fixture/);
+  const files=fs.readdirSync(f.runtimeDirectory);assert.equal(files.length,1);assert.match(files[0],/\.json$/);
+  const journal=path.join(f.runtimeDirectory,files[0]),before=fs.readFileSync(journal);
+  await assert.rejects(f.run(),/continuation or reconciliation/);
+  assert.deepEqual(fs.readFileSync(journal),before);assert.deepEqual(fs.readdirSync(f.runtimeDirectory),files);
+  assert.equal(fs.readFileSync(path.join(f.root,'effects.txt'),'utf8'),'once');assert.equal(f.effects(),0);
+});
+
 function pluginClass(){
   const Module=require('node:module'), original=Module._load;
   let Plugin;

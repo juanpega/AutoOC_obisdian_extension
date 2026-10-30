@@ -7040,19 +7040,24 @@ async function runCodeWorkflowHost(options) {
   const entry = findWorkflowEntry(steps);
   if (!entry) throw new Error("Workflow has no entry step");
   const lease = options.lease || acquireExecutionLease(options.runtimeDirectory);
-  lease.assertOwned();
-  if (!samePhysicalPath(options.runtimeDirectory, lease.directory)) throw new Error("Execution lease belongs to another runtime");
-  const admission = options.admission || executionCoordinator(lease).admit(definition, options.vaultBase, options.resumeRunId);
-  admission.assertOwned(lease, definition);
-  if (!options.admission) {
-    const publish = options.onCheckpoint;
-    options = { ...options, onCheckpoint: async (checkpoint) => {
-      admission.bind(checkpoint);
-      await (publish == null ? void 0 : publish(checkpoint));
-      admission.confirm(checkpoint);
-    } };
-  }
+  const ownsLease = !options.lease;
+  let ownedAdmission;
+  let failed = false;
+  let failure;
   try {
+    lease.assertOwned();
+    if (!samePhysicalPath(options.runtimeDirectory, lease.directory)) throw new Error("Execution lease belongs to another runtime");
+    const admission = options.admission || executionCoordinator(lease).admit(definition, options.vaultBase, options.resumeRunId);
+    if (!options.admission) ownedAdmission = admission;
+    admission.assertOwned(lease, definition);
+    if (!options.admission) {
+      const publish = options.onCheckpoint;
+      options = { ...options, onCheckpoint: async (checkpoint) => {
+        admission.bind(checkpoint);
+        await (publish == null ? void 0 : publish(checkpoint));
+        admission.confirm(checkpoint);
+      } };
+    }
     const resumed = options.resumeRunId === void 0 ? void 0 : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
     if ((resumed == null ? void 0 : resumed.snapshot().phase) === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
@@ -7163,9 +7168,29 @@ async function runCodeWorkflowHost(options) {
       },
       onCheckpoint: options.onCheckpoint
     }, { signal: options.signal, maxSteps: options.maxSteps });
+  } catch (error) {
+    failed = true;
+    failure = error;
+    throw error;
   } finally {
-    if (!options.admission) admission.finish();
-    if (!options.lease) lease.release();
+    const cleanupErrors = [];
+    try {
+      ownedAdmission == null ? void 0 : ownedAdmission.finish();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      if (ownsLease) lease.release();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    if (cleanupErrors.length) {
+      const errors = failed ? [failure, ...cleanupErrors] : cleanupErrors;
+      throw Object.assign(new Error(`Workflow resource cleanup failed: ${errors.map(String).join("; ")}`), {
+        cause: failed ? failure : cleanupErrors[0],
+        errors
+      });
+    }
   }
 }
 
