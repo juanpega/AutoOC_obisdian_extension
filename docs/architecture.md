@@ -2,11 +2,25 @@
 
 ## High-Level Overview
 
+La creación asistida usa `ai-draft-modal.ts`, `ai-draft-runner.ts` y `ai-draft.ts`. La generación es una sesión de autoría separada del scheduler, las reservas y los journals de ejecución: trabaja en un directorio temporal del sistema, usa la autenticación de la CLI elegida, limita herramientas y se cancela al cerrar el formulario o descargar el plugin. El prompt integrado sigue disponible para copiarlo manualmente. La salida se valida y se proyecta mediante una lista explícita de campos, con nuevas identidades, programación manual y permisos de código inicialmente desactivados. El editor conserva las tareas nuevas fuera del catálogo y las publica junto con el workflow revisado en un único guardado. El creador asistido admite cadenas secuenciales editables; rechaza bifurcaciones en lugar de perderlas al guardar. La importación general conserva su contrato de grafos.
+
 La concurrencia se admite en `execution-coordinator.ts` dentro de un único host con una única reserva global. Antes de crear el journal se reservan definición, todas las tareas referenciadas, directorios físicos y repositorios Git comunes. Se admite un máximo de dos sesiones con política explícita `independent`; la ausencia de política equivale a `exclusive`. Code con capacidades amplias, modos interactivos y evaluación por modelo son exclusivos. Las rutas y metadatos se vuelven a verificar antes de efectos. No hay ramas paralelas dentro de un workflow ni escritores autónomos competidores.
 
 `catalog-transaction.ts` serializa carga, proyección, reemplazo atómico y publicación confirmada. Los guardados del plugin participan en esa misma secuencia y se registran sincrónicamente como pendientes para actualización y descarga. `SettingsWriter` mantiene sus fingerprints, locks e intenciones de recuperación. Cada sesión conserva su definición congelada, controlador, journal, revisión y salida; las publicaciones internas actualizan la base común, mientras los cambios externos o locales sin guardar causan conflicto explícito. Los errores posteriores al journal retienen la reserva de recursos y no permiten repetir el efecto.
 
-El plugin mantiene una colección de sesiones; la parada, aprobación y salida se buscan por identidad. El buzón CLI anuncia `concurrentExecutions: 2` y mantiene publicaciones y cancelaciones por requestId. La descarga bloquea la admisión, cancela y drena todas las sesiones y conserva la reserva global ante incertidumbre. El límite es compartido entre scheduler, Play y CLI delegada. Una instalación con propietario CLI externo conserva la vista de espera anterior, sin transferencia automática.
+El plugin mantiene una colección de sesiones; la parada, aprobación y salida se buscan por identidad. El buzón CLI anuncia `concurrentExecutions: 2` y mantiene publicaciones y cancelaciones por requestId. La descarga bloquea la admisión, cancela y drena todas las sesiones y conserva la reserva global ante incertidumbre. El límite es compartido entre scheduler, Play y CLI delegada. Una instalación con propietario CLI externo permite consultar el catálogo guardado, sin transferencia automática de ejecución.
+
+### Separación de consulta, ejecución y mantenimiento (1.7.2)
+
+`execution-files.ts` agrupa los auxiliares de OpenCode en `<workingDirectory>/.autooc/auxiliary/{interactive,runtime}-<id>`. Mantiene los prompts dentro del directorio de trabajo y conserva el CWD del motor. Solo este subdirectorio tiene reglas Git propias; no se cambia ningún catálogo o configuración de `.autooc`, ni el `.gitignore` del proyecto. Las rutas administradas rechazan enlaces y junctions.
+
+Un cierre confirmado o un fallo anterior al lanzamiento permite registrar `autooc-cleanup.json` y eliminar exclusivamente los nombres auxiliares conocidos. Al crear otra ejecución se reintentan recibos completos y válidos; el tiempo, un PID ausente o el nombre de una carpeta no autorizan la limpieza. Los archivos inesperados y los intentos inciertos permanecen. En Windows, el observador interactivo hace la limpieza final si el host ya terminó; el runner deja un recibo de cierre como alternativa si el observador desapareció. No se barren ni migran automáticamente las antiguas carpetas de la raíz.
+
+La admisión del motor puede fallar sin impedir registrar y abrir el panel. `panel-catalog.ts` lee una instantánea del archivo confirmado con lectura y análisis cooperativos. Publica únicamente identidades, nombres, estados y vínculos de ejecución; no adopta esa instantánea en `SettingsWriter`, proyecta journals, carga secretos, migra ni guarda datos. Si la lectura falla, la consulta lo indica y no ofrece un catálogo vacío como sustituto. En este modo no se registran edición, scheduler ni recepción CLI; se mantienen consulta, refresco, diagnóstico, reintento del motor y búsqueda de actualizaciones.
+
+`package-maintenance.ts` comprueba guardados incompletos y marcadores de actualización. El instalador mantiene la reserva exclusiva, la identidad física, la integridad de los siete archivos y la restauración ante errores. El host comprueba además sus procesos, sesiones, finalizaciones, ediciones, peticiones CLI y escrituras pendientes antes y después de descargar. Un estado histórico `running`, `in_flight` o cancelado no demuestra actividad real y no obliga a resolver el intento para sustituir los artefactos. La actualización nunca reanuda tareas ni acepta sus efectos desconocidos.
+
+`maintain-release --install` aplica esa operación desde un paquete separado y conserva los históricos. `--decisions` sigue disponible para decisiones administrativas expresas, independientes de la necesidad de actualizar. La recuperación, ejecución, reanudación y liberación ordinaria del motor conservan sus comprobaciones de continuidad y efectos pendientes. El panel de consulta no concede permisos de escritura ni de ejecución.
 
 La ubicación de la ejecución compartida se valida en `installed-workflow-location.ts`. `runInstalledWorkflow` acepta `installationDirectory` opcional (absoluto o relativo al vault); si se omite, usa `.obsidian/plugins/auto-oc`. Una selección explícita inválida falla sin alternativa. El resolvedor comprueba contención, componentes de directorio, catálogo y runtime sin crear archivos; solo el inicio de ejecución crea el runtime. Se rechazan enlaces simbólicos y junctions en los componentes de instalación.
 
@@ -18,7 +32,6 @@ The system has three main runtime surfaces:
 
 - The Obsidian sidebar view (`AutoOCView`) for dashboard, tasks, workflows, logs, imports, exports, and controls.
 - The plugin controller (`AutoOCPlugin`) that owns settings, scheduling, task execution, workflow execution, updates, and integrations.
-- The Visual Builder (`util/ui_workflow_builder/index.html`) embedded as generated HTML in an iframe modal for visual workflow editing.
 
 Obsidian conserva la configuración de tareas y workflows. Secrets se ha retirado: el archivo histórico queda separado y no se borra, reescribe, migra ni exporta.
 
@@ -26,7 +39,7 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 
 ## Main Components
 
-- `AutoOCPlugin` in `main.ts`: the central plugin class. It loads and migrates settings, registers Obsidian commands and views, schedules due checks, launches tasks, runs workflows, manages Visual Builder synchronization, installs Ralph Loop / `autooc-mcp`, checks for updates, and saves state.
+- `AutoOCPlugin` in `main.ts`: the central plugin class. It loads and migrates settings, registers Obsidian commands and views, schedules due checks, launches tasks, runs workflows, installs Ralph Loop / `autooc-mcp`, checks for updates, and saves state.
 - `AutoOCView` in `main.ts`: the Obsidian `ItemView` used for the user interface. It renders dashboard, tasks, workflows, secrets, logs, and action buttons. It delegates mutations and execution to `AutoOCPlugin`.
 - Task model: `ScheduledTask` describes either an OpenCode task or a reusable JavaScript code task. It includes prompt/code, model, agent, schedule, status, output, working directory, branch options, and optional terminal/file/vault permissions for code tasks.
 - Workflow model: `Workflow` contains `WorkflowStep` nodes. Steps can be `task`, `delay`, or `code`. Step transitions can be `default`, `force`, `eval`, or `conditional`, which makes workflows DAG-like rather than strictly linear.
@@ -34,8 +47,6 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 - Task runner: `runTask()` launches OpenCode tasks or delegates to `runCodeTask()` for local JavaScript code tasks. Non-interactive OpenCode output is collected through temporary files.
 - Code execution sandbox: code tasks and code workflow steps use Node `vm.runInContext()`. Optional APIs expose vault-local file operations, broader filesystem operations, and terminal execution when the task/step explicitly enables them.
 - `LegacyOutputRedaction` en `legacy-output-redaction.ts`: componente interno de solo lectura para enmascarar valores históricos conocidos. No expone gestión, PIN, valores ni variables de entorno.
-- Visual Builder modal: `VisualBuilderModal` embeds the generated Visual Builder HTML through `iframe.srcdoc`, sends current tasks/workflows via `postMessage`, receives edited state back, and smart-merges it into plugin settings while preserving runtime status/output fields.
-- Standalone Visual Builder: `util/ui_workflow_builder/index.html` is a self-contained HTML/CSS/JS workflow editor. `scripts/inline-visual-builder.mjs` embeds it into `visualBuilderHtml.generated.ts` before build/dev.
 - Herramientas de construcción y distribución: `esbuild.config.mjs` construye `main.js`, `autooc-cli.cjs` y `autooc-runtime.cjs`; `scripts/release-artifacts.mjs` genera y verifica la integridad de los siete artefactos. `scripts/package-release.mjs` crea el ZIP multiplataforma mediante `npm run pack:release`. `deploy.mjs` instala el paquete en una bóveda autorizada; no es un comando de consulta.
 - Library files: `library/index.json` and sibling JSON files provide importable sample/task workflow packages fetched from the repository URL configured in settings.
 
@@ -52,14 +63,10 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 ├─ esbuild.config.mjs              # Bundle configuration
 ├─ deploy.mjs                      # Local vault deployment helper
 ├─ scripts/
-│  ├─ inline-visual-builder.mjs     # Incrusta el Visual Builder en TypeScript
 │  ├─ release-artifacts.mjs         # Integridad y copia de los siete artefactos
 │  ├─ package-release.mjs           # Empaquetado ZIP multiplataforma
 │  ├─ measure-catalog-responsiveness.cjs    # Diagnóstico sintético del catálogo
 │  └─ measure-historical-responsiveness.cjs # Diagnóstico sintético de históricos
-├─ util/ui_workflow_builder/
-│  └─ index.html                   # Standalone Visual Builder app
-├─ visualBuilderHtml.generated.ts  # Generated embedded Visual Builder source
 ├─ library/                        # Importable task/workflow library metadata and examples
 ├─ release/                        # Built release zip artifacts
 └─ docs/                           # Project documentation
@@ -77,7 +84,7 @@ The project does not currently use a `src/` directory. Most runtime code lives i
 6. If the task is a code task, `runCodeTask()` executes JavaScript in a `vm` sandbox and updates the task state from the returned output variable.
 7. A user or scheduler starts a workflow with `runWorkflow()`.
 8. The workflow runner finds an entry step, tracks per-step runtime output in an in-memory `workflowRuntime` map, executes each step by kind, then resolves the next step using transitions.
-9. UI views and Visual Builder modals are refreshed or synchronized after mutations so both editing surfaces reflect the same settings model.
+9. UI views are refreshed after mutations to reflect the settings model.
 
 ## Data Flow
 
@@ -149,7 +156,6 @@ El archivo histórico `secrets.vault.json` permanece en la instalación seleccio
 
 Build configuration is separate:
 
-- `package.json` scripts run the Visual Builder inlining step before dev/build.
 - `esbuild.config.mjs` genera el bundle CommonJS de Obsidian manteniendo externos Obsidian/Electron/CodeMirror y los módulos de Node; también genera CLI/runtime para Node 18 y el descriptor de integridad del paquete completo.
 - `tsconfig.json` enables strict null checks, ESNext modules for TypeScript input, ES6/DOM libs, and bundler module resolution.
 
@@ -157,22 +163,20 @@ Los dos scripts `measure-*-responsiveness.cjs` son herramientas manuales complem
 
 ## Extension Points
 
-- Add or change task fields by updating `ScheduledTask`, classic UI modals/views, Visual Builder payload handling, export/import, and migrations in `loadSettings()`.
-- Add or change workflow fields by updating `Workflow`, `WorkflowStep`, Visual Builder templates/property panels, import/export schema, and migration logic.
-- Add workflow step behavior by extending `StepKind` and dispatch logic in `runWorkflowStep()`, then adding corresponding Visual Builder support.
-- Add transition behavior by extending `TransitionMode` and `resolveNextStep()`, then adding Visual Builder edge editing support.
+- Add or change task fields by updating `ScheduledTask`, classic UI modals/views, export/import, and migrations in `loadSettings()`.
+- Add or change workflow fields by updating `Workflow`, `WorkflowStep`, import/export schema, and migration logic.
+- Add workflow step behavior by extending `StepKind` and dispatch logic in `runWorkflowStep()`.
+- Add transition behavior by extending `TransitionMode` and `resolveNextStep()`.
 - Add library content by adding JSON packages under `library/` and registering them in `library/index.json`.
 - Add new settings by extending `AutoOCSettings`, `DEFAULT_SETTINGS`, `AutoOCSettingTab`, and any relevant migration/default handling.
 - Add OpenCode integrations through the existing process-launch path, but preserve argument separation before `--` so prompt text is not parsed as CLI flags.
 - No restaurar gestión ni inyección de credenciales mediante el generador MCP heredado.
 
-Important: the README states that new features must be implemented in both the classic list UI and the Visual Builder. Treat the data model as the source of truth and keep JSON import/export round-trips compatible.
+El editor WorkFlows es la superficie de edición. El Visual Builder se ha retirado; conservar compatibilidad del modelo y de los ciclos de importación/exportación JSON.
 
 ## Important Technical Decisions
 
 - Most code is in `main.ts`. This keeps the plugin compact but makes impact analysis important because UI, data model, execution, settings, and integrations are tightly coupled.
-- Visual Builder is developed as standalone HTML, then embedded into the plugin at build time via `visualBuilderHtml.generated.ts`. This avoids runtime `file://` path issues and keeps the builder usable in a normal browser.
-- Visual Builder communication uses `postMessage` between the iframe and plugin modal. The plugin smart-merges Visual Builder state to avoid wiping runtime status, last run data, output logs, and classic-only fields.
 - Non-interactive OpenCode execution is detached through PowerShell/VBScript on Windows and uses temp-file polling. This avoids Electron job-object termination and console window flashes, but it makes cleanup and polling behavior sensitive.
 - OpenCode CLI arguments are built as arrays and prompt text is placed after `--` to avoid prompt content being interpreted as CLI options.
 - Workflows are DAG-capable. The entry step is inferred from missing incoming transitions, with visual `position.x` used as a tie-breaker.
@@ -182,15 +186,13 @@ Important: the README states that new features must be implemented in both the c
 
 ## Sensitive or Risky Areas
 
-- `main.ts` is large and cross-cutting. Small model changes can affect scheduling, UI rendering, Visual Builder, export/import, migrations, and execution.
-- Workflow schema changes are risky. Update classic UI, Visual Builder, import/export schema/version, and `loadSettings()` migrations together.
-- Visual Builder state merging is risky because it must preserve runtime state while accepting external iframe edits.
+- `main.ts` is large and cross-cutting. Small model changes can affect scheduling, UI rendering, export/import, migrations, and execution.
+- Workflow schema changes are risky. Update classic UI, import/export schema/version, and `loadSettings()` migrations together.
 - Process launch code is risky because it handles shell quoting, temporary files, paths with spaces, branch commands, environment variables, and detached execution.
 - Secret handling is sensitive. Do not log decrypted values, persist decrypted values, weaken redaction, or assume the UI PIN is the encryption key.
 - Code task/step permissions are sensitive. `codeAllowFiles` and `codeAllowTerminal` intentionally allow broader access than vault-only APIs.
 - Conditional and AI-evaluated workflow transitions can change control flow based on user code or model output. Changes should preserve failure behavior and timeouts.
 - Update logic writes plugin files in the vault. Validate remote URLs, failure handling, and reload behavior carefully.
-- `visualBuilderHtml.generated.ts` is generated. Edit `util/ui_workflow_builder/index.html`, then regenerate with the build/prebuild script.
 - `main.js` is generated output for Obsidian. Source changes should be made in `main.ts` unless intentionally updating release artifacts.
 - Automated tests use Node's built-in test runner; run `npm test` (`node --test`) before release. For risky changes, add the smallest executable check and perform relevant manual Obsidian/OpenCode verification.
 
@@ -199,12 +201,8 @@ Important: the README states that new features must be implemented in both the c
 ```mermaid
 flowchart TD
     User[User in Obsidian] --> View[AutoOCView sidebar]
-    User --> VBModal[VisualBuilderModal]
 
     View --> Plugin[AutoOCPlugin]
-    VBModal --> Iframe[Visual Builder iframe]
-    Iframe <-->|postMessage load/apply/meta| VBModal
-    VBModal --> Plugin
 
     Plugin --> Settings[Obsidian plugin settings\nAutoOCSettings]
     Plugin --> Scheduler[Due-check scheduler]
@@ -232,9 +230,6 @@ flowchart TD
     Plugin --> Library[Remote/local library JSON]
     Plugin --> Updates[GitHub raw update files]
 
-    Build[Build scripts] --> Inline[inline-visual-builder.mjs]
-    Inline --> Generated[visualBuilderHtml.generated.ts]
-    Generated --> Bundle[main.js bundle]
-    Build --> Bundle
+    Build[Build scripts] --> Bundle[main.js bundle]
     Bundle --> Obsidian[Obsidian plugin loader]
 ```
