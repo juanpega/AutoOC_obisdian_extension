@@ -396,12 +396,16 @@ test('Tasks lists inline code even without catalog tasks, without modifying work
   assert.ok(all.some(el => el.textContent === 'Workflow code steps'));
   assert.ok(all.some(el => el.textContent === 'Inspect files'));
   assert.ok(all.some(el => el.textContent === 'pending')); // A completed workflow may skip branches.
-  assert.ok(all.some(el => el.textContent === 'Workflow w · Step 1 · Automation'));
+  assert.ok(all.some(el => el.textContent === '{ } Code · Workflow w · Step 1'));
+  assert.ok(all.some(el => el.textContent === '🗂 Automation'));
   assert.equal(all.filter(el => el.attrs['data-auto-oc-code-step-id']).length, 1);
   assert.equal(all.filter(el => el.tag === 'pre').length, 0);
   const code = all.find(el => el.tag === 'details' && el.children[0].textContent === 'View code');
   code.open = true; code.ontoggle();
-  assert.equal(code.children[1].textContent, w.steps[0].code);
+  // Highlighting splits text into spans; this small DOM double does not
+  // aggregate descendant textContent as a browser does.
+  assert.equal(code.children[1].all().map(el => el.textContent).join(''), w.steps[0].code);
+  assert.ok(code.children[1].all().every(el => ['pre', 'code', 'span'].includes(el.tag)));
   assert.equal(JSON.stringify(h.plugin.settings), before); assert.equal(h.writes(), 0);
   assert.equal(h.button(h.root, 'Select visible').disabled, true);
   assert.equal(h.button(h.root, 'Delete selected').disabled, true);

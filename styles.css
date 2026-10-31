@@ -1689,7 +1689,7 @@
   padding: 2px 0;
 }
 
-.auto-oc-workflow-task-detail {
+.auto-oc-workflow-task-detail:not(.auto-oc-card) {
   background: var(--background-primary);
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
@@ -1911,14 +1911,8 @@
   opacity: 0.65;
 }
 .auto-oc-availability-toggle { font-size: var(--font-smallest); }
-.auto-oc-card[data-auto-oc-code-step-id] > .auto-oc-card-summary {
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.auto-oc-card[data-auto-oc-code-step-id] .auto-oc-card-quick-actions {
-  flex-shrink: 0;
-  flex-wrap: wrap;
-}
+.auto-oc-card-preview { margin-top: 6px; font-size: 0.77rem; color: var(--text-muted); }
+.auto-oc-card-preview > summary { cursor: pointer; }
 .auto-oc-code-history-entry {
   display: block;
   width: 100%;
@@ -1928,3 +1922,39 @@
   margin-top: 6px;
   padding: 8px;
 }
+
+/* Shared JavaScript colors in previews and editors, following Obsidian's theme. */
+.auto-oc-code-surface .tok-comment { color: var(--code-comment, var(--text-muted)); }
+.auto-oc-code-surface .tok-keyword { color: var(--code-keyword, var(--color-purple)); }
+.auto-oc-code-surface .tok-string, .auto-oc-code-surface .tok-string2 { color: var(--code-string, var(--color-green)); }
+.auto-oc-code-surface .tok-number, .auto-oc-code-surface .tok-bool, .auto-oc-code-surface .tok-atom { color: var(--code-value, var(--color-orange)); }
+.auto-oc-code-surface .tok-function { color: var(--code-function, var(--color-blue)); }
+.auto-oc-code-surface .tok-propertyName { color: var(--code-property, var(--color-cyan)); }
+.auto-oc-code-surface .tok-operator { color: var(--code-operator, var(--text-normal)); }
+.auto-oc-code-surface .tok-punctuation { color: var(--code-punctuation, var(--text-muted)); }
+.auto-oc-modal .setting-item:has(.auto-oc-code-workbench) { grid-template-columns: 1fr; gap: 8px; }
+.auto-oc-code-surface.auto-oc-code-preview { background: var(--code-background, var(--background-secondary)); }
+.auto-oc-code-workbench { width: 100%; min-width: 0; text-align: left; border: 1px solid var(--background-modifier-border); border-radius: 6px; overflow: hidden; background: var(--background-primary); }
+.auto-oc-code-workbench .cm-editor { font-size: 13px; }
+.auto-oc-code-workbench .cm-scroller { height: 300px; max-height: 60vh; overflow: auto; font-family: var(--font-monospace); line-height: 1.55; }
+.auto-oc-code-workbench .cm-content { padding: 8px 0; }
+.auto-oc-code-workbench .cm-gutters { background: var(--background-secondary); color: var(--text-muted); border-color: var(--background-modifier-border); }
+.auto-oc-code-workbench .cm-activeLine, .auto-oc-code-workbench .cm-activeLineGutter { background: var(--background-modifier-hover); }
+.auto-oc-code-workbench .cm-cursor { border-left-color: var(--text-normal); }
+.auto-oc-code-workbench .cm-selectionBackground { background: var(--text-selection) !important; }
+.auto-oc-code-workbench .cm-matchingBracket { background: var(--text-selection); outline: 1px solid var(--interactive-accent); }
+.auto-oc-code-workbench .cm-panels { background: var(--background-secondary); color: var(--text-normal); }
+.auto-oc-code-workbench .cm-search { padding: 8px; white-space: normal; }
+.auto-oc-code-workbench .cm-search input[type="checkbox"] { width: auto !important; min-width: 0; }
+.auto-oc-code-workbench .cm-search .cm-textfield { width: min(100%, 240px) !important; min-width: 0; }
+.auto-oc-code-workbench .cm-search label { display: inline-flex; align-items: center; gap: 4px; }
+.auto-oc-code-workbench .cm-button { background: var(--interactive-normal) !important; color: var(--text-normal) !important; border: 1px solid var(--background-modifier-border); border-radius: 4px; }
+.auto-oc-code-workbench .cm-searchMatch { background: var(--text-highlight-bg); }
+.auto-oc-code-workbench .cm-searchMatch-selected { outline: 1px solid var(--interactive-accent); }
+.auto-oc-code-workbench .cm-foldPlaceholder { background: var(--background-secondary); color: var(--text-muted); border-color: var(--background-modifier-border); }
+.auto-oc-code-toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 8px; border-bottom: 1px solid var(--background-modifier-border); }
+.auto-oc-code-toolbar span { margin-right: auto; font-size: 12px; color: var(--text-muted); }
+.auto-oc-code-toolbar button { font-size: 12px; }
+.auto-oc-code-toolbar button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
+.auto-oc-code-help { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
+textarea.auto-oc-code-editor[hidden] { display: none !important; }

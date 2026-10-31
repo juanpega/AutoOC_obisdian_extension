@@ -45,6 +45,8 @@ Los elementos desactivados se muestran en gris con **Disabled**. Conservan confi
 
 ## What It Does
 
+Desde 1.7.5, las tareas y los pasos Code muestran JavaScript con colores de sintaxis. El editor incluye números de línea, plegado, parejas de llaves, búsqueda y deshacer. **Indent code** ajusta la sangría del borrador; **Wrap lines** adapta las líneas al ancho disponible. Tab y Shift+Tab cambian la sangría, Ctrl/Cmd+F busca y Ctrl/Cmd+Z deshace. Los cambios solo se conservan al guardar el formulario. Ver o editar código no lo ejecuta.
+
 - Create OpenCode tasks with manual, one-time, daily, weekly, monthly, or interval schedules.
 - Run tasks manually, monitor their status and output, keep logs, configure timeouts, and stop running work.
 - Load available OpenCode models and agents, open configured interactive CLIs from the shared CLI selector, and run a diagnostic from Obsidian.

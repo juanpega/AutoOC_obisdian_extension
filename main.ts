@@ -1,3 +1,4 @@
+import { setupCodeTextarea, renderCodePreview } from "./code-editor";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import type { InteractiveCliProvider } from "./interactive-cli";
@@ -89,42 +90,6 @@ import { performance as monotonicClock } from "perf_hooks";
 import type { PersistedWorkflowCatalog } from "./workflow-catalog-progress";
 import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
 import { resolveOpencodeBin, psSingleQuoted, commandPreviewArg, shSingleQuoted, buildPowerShellEnvLines, SAFE_CLI_PROMPT_LENGTH, isWindows, scriptExt, buildShEnvLines, buildPosixLaunchCommand, appleScriptQuoted, LINUX_TERMINAL_CANDIDATES, commandExists, resolveLinuxTerminal, CliLaunchOptions, openOpencodeCli, openOpencodeCliLongPromptWindows, ProcessHandle, HiddenProcessHandle, launchHiddenPS, launchHiddenSh, launchHidden, writeUtf8BomFile, psUtf8Prelude } from "./cli-launchers";
-
-function setupCodeTextarea(textarea: HTMLTextAreaElement): void {
-  textarea.addClass("auto-oc-code-editor");
-  textarea.spellcheck = false;
-  textarea.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key !== "Tab") return;
-    e.preventDefault();
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    textarea.value = textarea.value.slice(0, start) + "  " + textarea.value.slice(end);
-    textarea.selectionStart = textarea.selectionEnd = start + 2;
-    textarea.dispatchEvent(new Event("input"));
-  });
-}
-
-function renderCodePreview(parent: HTMLElement, code: string, maxChars = 600): void {
-  const pre = parent.createEl("pre", { cls: "auto-oc-code-preview" });
-  const codeEl = pre.createEl("code");
-  const src = (code || "// empty code").slice(0, maxChars);
-  const pattern = /(\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b(?:const|let|var|return|if|else|for|while|await|async|function|new|try|catch|throw|true|false|null|undefined)\b|\b\d+(?:\.\d+)?\b)/g;
-  let last = 0;
-  for (const match of src.matchAll(pattern)) {
-    const text = match[0];
-    const index = match.index ?? 0;
-    if (index > last) codeEl.appendChild(document.createTextNode(src.slice(last, index)));
-    const span = codeEl.createSpan();
-    span.setText(text);
-    if (text.startsWith("//") || text.startsWith("/*")) span.addClass("auto-oc-code-token-comment");
-    else if (text.startsWith("'") || text.startsWith('"') || text.startsWith("`")) span.addClass("auto-oc-code-token-string");
-    else if (/^\d/.test(text)) span.addClass("auto-oc-code-token-number");
-    else span.addClass("auto-oc-code-token-keyword");
-    last = index + text.length;
-  }
-  if (last < src.length) codeEl.appendChild(document.createTextNode(src.slice(last)));
-  if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
-}
 
 const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
@@ -7115,11 +7080,11 @@ class AutoOCView extends ItemView {
       summary.createEl("span", { text: workflow.disabled ? "Workflow disabled" : "Disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
     }
     summary.createEl("span", { text: entry.name, cls: "auto-oc-task-name" });
-    summary.createEl("span", { text: "Code · Workflow step", cls: "auto-oc-task-engine auto-oc-task-engine-code" });
+    summary.createEl("span", { text: "Code", cls: "auto-oc-task-engine auto-oc-task-engine-code" });
     summary.createEl("span", { text: state.status, cls: `auto-oc-badge auto-oc-badge-${state.status}` });
     const controls = summary.createDiv("auto-oc-card-quick-actions");
-    const action = (text:string, label:string, callback:()=>unknown, cls="") => {
-      const button = controls.createEl("button", {text, cls});
+    const action = (text:string, label:string, callback:()=>unknown, cls="", target:HTMLElement=controls) => {
+      const button = target.createEl("button", {text, cls});
       button.title = label; button.setAttr("aria-label", label);
       button.onclick = async event => {
         event.stopPropagation(); button.disabled = true;
@@ -7152,9 +7117,11 @@ class AutoOCView extends ItemView {
     };
     summary.onclick = toggle;
     summary.onkeydown = event => { if (event.target === summary && ["Enter", " "].includes(event.key)) { event.preventDefault(); toggle(); } };
-    details.createEl("p", { text: `${workflow.name} · Step ${stepIndex + 1} · ${entry.area}`, cls: "auto-oc-card-meta" });
-    details.createEl("p", {text:"Run executes only this step with empty input and outputs. Earlier and later steps are not executed."});
-    if (state.lastRun) details.createEl("p", {text:`Last run: ${formatDateTime(state.lastRun)}`});
+    const meta = details.createDiv("auto-oc-card-meta");
+    meta.createEl("span", {text:`🗂 ${entry.area}`});
+    meta.createEl("span", {text:`{ } Code · ${workflow.name} · Step ${stepIndex + 1}`});
+    meta.createEl("span", {text:"▶ Runs only this step, with empty input and outputs."});
+    if (state.lastRun) meta.createEl("span", {text:`⏱ Last: ${formatDateTime(state.lastRun)}`});
     const binding = step.codeExecution?.runtimeExecution;
     if (binding && !state.stop && binding.phase !== "abandoned" && (binding.requiresReconciliation ||
         !["completed","failed"].includes(binding.phase) || binding.terminalUncertainty && !binding.disposition)) {
@@ -7162,8 +7129,8 @@ class AutoOCView extends ItemView {
       const resolve = details.createEl("button", {text:"Review interrupted attempt"});
       resolve.onclick = async () => { try { await this.plugin.resolveCodeStepAttempt(workflow.id, step.id); } catch(error) { new Notice(this.plugin.redactSecrets(String(error))); } };
     }
-    const addPreview = (label: string, text: string) => {
-      const preview = details.createEl("details");
+    const addPreview = (label: string, text: string, code = false) => {
+      const preview = details.createEl("details", {cls:"auto-oc-card-preview"});
       preview.createEl("summary", { text: label });
       let populated = false;
       preview.ontoggle = () => {
@@ -7171,16 +7138,26 @@ class AutoOCView extends ItemView {
         populated = true;
         // Keep large historical outputs out of the initial list DOM. Use text,
         // never HTML, and direct the user to the workflow for the full content.
-        preview.createEl("pre", { text: text.slice(0, 12000), cls: "auto-oc-inline-code-source" });
+        if (code) renderCodePreview(preview, text, 12000);
+        else preview.createEl("pre", { text: text.slice(0, 12000), cls: "auto-oc-inline-code-source" });
         if (text.length > 12000) preview.createEl("p", { text: "Preview limited to 12,000 characters. Open the workflow to view the full content." });
       };
     };
-    addPreview("View code", step.code || "// Empty code step");
+    addPreview("View code", step.code || "// Empty code step", true);
     addPreview("View output", state.output || "No output recorded for this step.");
-    const edit = details.createEl("button", {text:"Edit Code", cls:"auto-oc-btn-edit"});
+    const actions = details.createDiv("auto-oc-card-actions");
+    const detailRun = action("▶ Run", "Run only this code step (empty input and outputs)",
+      () => this.plugin.runCodeStepOnly(workflow.id, step.id), "auto-oc-btn-run", actions);
+    detailRun.disabled = run.disabled;
+    if (state.stop) action("⏹ Stop", "Stop this step and its current execution",
+      () => this.plugin.stopCodeStep(workflow.id, step.id, state.stop!), "auto-oc-btn-stop", actions);
+    action(state.stop ? "📡 Live Log" : "📄 Log", state.stop ? "Live log" : "Log", () => new CodeStepLogModal(this.app, entry.name,
+      () => this.plugin.codeStepState(workflow.id, step.id)).open(), "auto-oc-btn-output", actions);
+    action("📜 History", "History", () => this.plugin.openCodeStepHistory(workflow.id, step.id), "auto-oc-btn-history", actions);
+    const edit = actions.createEl("button", {text:"Edit Code", cls:"auto-oc-btn-edit"});
     edit.disabled = this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
     edit.onclick = () => new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
-    const open = details.createEl("button", { text: "Open workflow" });
+    const open = actions.createEl("button", { text: "Open workflow" });
     open.onclick = () => this.openWorkflowCodeEntry(workflow.id, step.id);
   }
 
@@ -8305,7 +8282,7 @@ class CreateTaskModal extends Modal {
         .addTextArea((ta) => {
           ta.setValue(initialCode).onChange((v) => (this.draft.code = v));
           ta.inputEl.addClass("auto-oc-modal-textarea");
-          setupCodeTextarea(ta.inputEl);
+          setupCodeTextarea(ta.inputEl, this.app);
           ta.inputEl.rows = 12;
           ta.inputEl.style.width = "100%";
         });
@@ -8907,9 +8884,9 @@ class EditWorkflowStepModal extends Modal {
         .setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.")
         .addTextArea((text) => {
           text.inputEl.addClass("auto-oc-modal-textarea");
-          setupCodeTextarea(text.inputEl);
           text.inputEl.rows = 12;
           text.setValue(initialCode).onChange((v) => (this.draft.code = v));
+          setupCodeTextarea(text.inputEl, this.app);
         });
 
       new Setting(contentEl)
@@ -9522,9 +9499,9 @@ class CreateWorkflowModal extends Modal {
           .setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.")
           .addTextArea((text) => {
             text.inputEl.addClass("auto-oc-modal-textarea");
-            setupCodeTextarea(text.inputEl);
             text.inputEl.rows = 6;
             text.setValue(initialCode).onChange((v) => (step.code = v));
+            setupCodeTextarea(text.inputEl, this.app);
           });
         new Setting(stepEl)
           .setName("Variables")
