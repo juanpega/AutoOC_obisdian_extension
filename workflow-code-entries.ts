@@ -1,4 +1,5 @@
-/** Read-only projections: inline code stays owned by its workflow. */
+import { codeStepDisplay } from "./workflow-code-step";
+/** Inline code stays owned by its workflow. */
 export interface CodeStepSource {
   id: string;
   stepKind: string;
@@ -30,7 +31,7 @@ export function workflowCodeEntries<W extends CodeWorkflowSource>(workflows: W[]
     name: step.name?.trim() || `Code step ${stepIndex + 1}`,
     area: step.area?.trim() || workflow.area?.trim() || "No area",
     // Workflow completion does not imply that every branch ran.
-    status: step.status || "pending",
+    status: codeStepDisplay(step).status,
   }] : []));
 }
 

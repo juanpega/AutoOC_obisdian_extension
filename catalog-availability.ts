@@ -5,9 +5,10 @@ export function taskDisabledReason(task: Activatable | undefined): string | unde
   return task?.disabled === true ? `Task "${task.name || task.id}" is disabled. Enable it before running.` : undefined;
 }
 
-export function workflowDisabledReason(workflow: Activatable & { steps?: Array<{ stepKind?: string; taskId?: string }> }, tasks: Activatable[]): string | undefined {
+export function workflowDisabledReason(workflow: Activatable & { steps?: Array<Activatable & { stepKind?: string; taskId?: string }> }, tasks: Activatable[]): string | undefined {
   if (workflow.disabled === true) return `Workflow "${workflow.name || workflow.id}" is disabled. Enable it before running.`;
   for (const step of workflow.steps || []) {
+    if (step.disabled === true) return `Step "${step.name || step.id}" is disabled. Enable it before running.`;
     if (step.stepKind && step.stepKind !== "task") continue;
     const reason = taskDisabledReason(tasks.find(task => task.id === step.taskId));
     if (reason) return reason;

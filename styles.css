@@ -1911,3 +1911,20 @@
   opacity: 0.65;
 }
 .auto-oc-availability-toggle { font-size: var(--font-smallest); }
+.auto-oc-card[data-auto-oc-code-step-id] > .auto-oc-card-summary {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.auto-oc-card[data-auto-oc-code-step-id] .auto-oc-card-quick-actions {
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.auto-oc-code-history-entry {
+  display: block;
+  width: 100%;
+  height: auto;
+  white-space: normal;
+  text-align: left;
+  margin-top: 6px;
+  padding: 8px;
+}

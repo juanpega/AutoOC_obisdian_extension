@@ -6,7 +6,7 @@ import { setImmediate } from "timers";
 import { performance } from "perf_hooks";
 
 // Availability gates new execution, but must not invalidate historical checkpoints.
-const runtimeFields = new Set(["disabled", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
+const runtimeFields = new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 
 function withoutRuntime(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));
@@ -45,7 +45,11 @@ function definitionPayload(workflow: {id:string;steps:RoutingStep[]}, tasks: Arr
 // Retain availability for execution guards while keeping historical hashes stable.
 function withAvailability(payload: any, workflow: { id: string; disabled?: boolean }, tasks: Array<{ id: string; disabled?: boolean }>) {
   return {...payload,
-    workflow: {...payload.workflow, ...(workflow.disabled !== undefined ? {disabled: workflow.disabled} : {})},
+    workflow: {...payload.workflow, ...(workflow.disabled !== undefined ? {disabled: workflow.disabled} : {}),
+      steps: payload.workflow.steps.map((step: any) => {
+        const source = (workflow as any).steps.find((item: any) => item.id === step.id);
+        return {...step, ...(source?.disabled !== undefined ? {disabled: source.disabled} : {})};
+      })},
     tasks: payload.tasks.map((task: any) => {
       const source = tasks.find(item => item.id === task.id);
       return {...task, ...(source?.disabled !== undefined ? {disabled: source.disabled} : {})};

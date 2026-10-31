@@ -75,6 +75,8 @@ import { prepareWorkflowDefinition } from "./workflow-definition";
 import { supportsSharedWorkflow, type WorkflowTaskOutput } from "./code-workflow-host";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, recoverWorkflowProgressAsync, validateProgressBinding } from "./workflow-progress";
+import { selectCodeStep, projectCodeStepRun, codeStepDisplay, readCodeStepCheckpoint } from "./workflow-code-step";
+import { CodeStepLogModal, CodeStepHistoryModal } from "./workflow-code-modals";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { abandonInstalledExecution, inspectTerminalExecution, disposeTerminalExecution } from "./execution-abandonment";
@@ -490,6 +492,8 @@ interface WorkflowTransition {
 }
 
 interface WorkflowStep {
+  disabled?: boolean;
+  codeExecution?: {runtimeExecution: any; status: string; output: string; lastRun: string};
   requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
@@ -759,6 +763,7 @@ function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin):
 }
 
 interface ExportWorkflowStep {
+  disabled?: boolean;
   requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
@@ -1109,6 +1114,7 @@ function toExportWorkflow(
     handoffOutput: workflow.handoffOutput,
     steps: workflow.steps.map((step) => ({
       id: step.id,
+      disabled: step.disabled,
       requiresAutoOCSecrets: step.requiresAutoOCSecrets,
       stepKind: step.stepKind || "task",
       name: step.name,
@@ -2370,20 +2376,21 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, stepId?:string) {
     const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
     if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
     const pending = this.withDefinitionStart(kind, id,
-      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release));
+      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release, stepId));
     this.sharedCompletions.add(pending);
     try { return (await pending)!; }
     finally { this.sharedCompletions.delete(pending); }
   }
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void, stepId?:string) {
     if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
-    const selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
+    let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
+    if (stepId && selected) selected = selectCodeStep(selected, stepId);
     if (selected) {
       assertWorkflowDependencies(selected, this.settings.tasks);
       if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks);
@@ -2411,7 +2418,7 @@ export default class AutoOCPlugin extends Plugin {
       expectedSettings = captureJsonStructure(this.settings);
       this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
-        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
+        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,stepId,resumeRunId,reconcile,newExecution,
         lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
@@ -2473,6 +2480,76 @@ export default class AutoOCPlugin extends Plugin {
 
   ownsExecution(workflowId:string,runId:string):boolean {return this.ownsSharedRun(workflowId,runId);}
 
+  codeStepState(workflowId:string, stepId:string) {
+    const workflow = this.settings.workflows.find(item => item.id === workflowId);
+    const step = workflow?.steps.find(item => item.id === stepId && item.stepKind === "code");
+    if (!workflow || !step) throw new Error("Code step no longer exists. Refresh the panel.");
+    const execution = this.sharedExecution(workflowId), checkpoint = execution?.checkpoint;
+    const active = checkpoint?.phase === "in_flight" && checkpoint.nextStepId === stepId && this.ownsSharedRun(workflowId, checkpoint.runId);
+    const live = active && execution?.liveOutput?.stepId === stepId ? execution.liveOutput.output : undefined;
+    return {workflow, step, ...codeStepDisplay(step), ...(active ? {status:"running"} : {}),
+      log: live ?? codeStepDisplay(step).output,
+      stop: active ? {runId:checkpoint!.runId, stepIndex:checkpoint!.steps.length-1} : undefined};
+  }
+
+  openCodeStepHistory(workflowId:string, stepId:string) {
+    const {step} = this.codeStepState(workflowId, stepId);
+    new CodeStepHistoryModal(this.app, this.selectedExecutionLocation().runtimeDirectory, workflowId, stepId, step.name || "Code step",
+      (title, output) => new TextPreviewModal(this.app, title, output).open()).open();
+  }
+
+  async runCodeStepOnly(workflowId:string, stepId:string) {
+    this.codeStepState(workflowId, stepId);
+    return this.runSharedWorkflow(workflowId, undefined, false, true, undefined, undefined, stepId);
+  }
+
+  async stopCodeStep(workflowId:string, stepId:string, observed:{runId:string;stepIndex:number}) {
+    const state = this.codeStepState(workflowId, stepId);
+    if (!state.stop || state.stop.runId !== observed.runId || state.stop.stepIndex !== observed.stepIndex) {
+      throw new Error("Step execution changed; refresh before stopping.");
+    }
+    this.sharedExecution(workflowId, undefined, observed.runId)!.controller.abort();
+    new Notice("Stop requested. Commands already started may still have effects.");
+  }
+
+  async setCodeStepDisabled(workflowId:string, stepId:string, disabled:boolean) {
+    const save = async (transaction?:CatalogTransaction) => {
+      this.assertLifecycleOpen();
+      if (this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.definitionStarts.size) throw new Error("Wait for active work or saving to finish.");
+      const {step} = this.codeStepState(workflowId, stepId);
+      if (this.getDefinitionStartState("workflow", workflowId) !== "available") throw new Error("Wait for the workflow to finish or resolve its interrupted attempt.");
+      this.bulkCatalogMutationInProgress = true;
+      const previous = step.disabled;
+      try { step.disabled = disabled; await this.saveSettings(false, undefined, transaction); }
+      catch(error) { step.disabled = previous; throw error; }
+      finally { this.bulkCatalogMutationInProgress = false; }
+    };
+    if ((this.app.vault.adapter as any).basePath) await this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile, save));
+    else await save();
+    this.refreshOpenViews();
+  }
+
+  async resolveCodeStepAttempt(workflowId:string, stepId:string) {
+    const location = this.selectedExecutionLocation();
+    const {workflow} = this.codeStepState(workflowId, stepId);
+    const observed = readCodeStepCheckpoint(location.runtimeDirectory, workflow, stepId);
+    if (!observed) return;
+    if (["completed", "failed"].includes(observed.phase)) return this.confirmTerminalDisposition(workflowId, observed.runId);
+    if (observed.phase === "abandoned") return;
+    const modal = new ConfirmModal(this.app, "Close interrupted step attempt?",
+      "This keeps the history and records any effects as unknown. It does not repeat the step or undo changes. Verify that external commands have stopped, then enter your reason.", true);
+    if (!await modal.openAndWait()) return;
+    this.assertLifecycleOpen();
+    if (!this.pluginExecutionLease || this.sharedWorkflowExecution || this.definitionStarts.size || this.runningProcesses.size || this.legacyAttempts.size || this.updateInProgress) throw new Error("Wait for active work to finish.");
+    const reservation = {workflowId, runId:observed.runId, controller:new AbortController()};
+    this.sharedWorkflowExecution = reservation;
+    try {
+      await this.saveSettings(false);
+      await abandonInstalledExecution({vault:location.vault, installationDirectory:location.installationDirectory, workflowId, runId:observed.runId,
+        revision:observed.revision, reason:modal.reason, acknowledgedUnknownEffects:true, lease:this.pluginExecutionLease});
+    } finally { if (this.sharedWorkflowExecution === reservation) this.sharedWorkflowExecution = undefined; await this.loadSettings(); this.refreshOpenViews(); }
+  }
+
   private ownsSharedRun(workflowId:string, runId:string):boolean {
     if (!this.sharedExecution(workflowId,undefined,runId) || !this.pluginExecutionLease) return false;
     try { this.pluginExecutionLease.assertOwned(); return true; } catch { return false; }
@@ -2498,6 +2575,10 @@ export default class AutoOCPlugin extends Plugin {
     if (!item) return "blocked";
     if (kind === "task" ? this.isTaskActive(item as ScheduledTask) : this.isWorkflowExecuting(id)) return "active";
     const binding = (item as any).runtimeExecution;
+    if (kind === "workflow" && (item as Workflow).steps.some(step => {
+      const run = step.codeExecution?.runtimeExecution;
+      return run && run.phase !== "abandoned" && (run.requiresReconciliation || !["completed","failed"].includes(run.phase) || run.terminalUncertainty && !run.disposition);
+    })) return "blocked";
     if ((item as ScheduledTask).legacyExecution?.stopState || kind === "workflow" && this.hasUncertainLegacyTask(id) || binding && (binding.requiresReconciliation ||
         !["completed", "failed", "abandoned"].includes(binding.phase) || binding.phase !== "abandoned" && binding.terminalUncertainty && !binding.disposition)) return "blocked";
     return "available";
@@ -3082,7 +3163,7 @@ export default class AutoOCPlugin extends Plugin {
     });
     // Bound executions are recovered read-only before legacy migrations can
     // change their definition or turn an unobserved run into a failure.
-    if (nextSettings.workflows?.some(wf => (wf as any).runtimeExecution) || nextSettings.tasks?.some(task=>(task as any).runtimeExecution)) {
+    if (nextSettings.workflows?.some(wf => (wf as any).runtimeExecution || wf.steps.some(step => step.codeExecution)) || nextSettings.tasks?.some(task=>(task as any).runtimeExecution)) {
       const runtime = (location || this.selectedExecutionLocation()).runtimeDirectory;
       const observations = new Map<string, Awaited<ReturnType<typeof observeCheckpoint>>>();
       validateRecovery = () => { for (const observed of observations.values()) observed.assertCurrent(); };
@@ -3108,6 +3189,14 @@ export default class AutoOCPlugin extends Plugin {
         })());
       }
       nextSettings.workflows = recovered;
+      for (const wf of recovered) {
+        for (const step of wf.steps) {
+          if (!step.codeExecution) continue;
+          const checkpoint = await checkpointFor(step.codeExecution.runtimeExecution.runId);
+          step.codeExecution = projectCodeStepRun(wf, step.id, nextSettings.tasks, nextSettings, checkpoint,
+            this.ownsSharedRun(wf.id, checkpoint.runId), true).codeExecution;
+        }
+      }
       const recoveredTasks: ScheduledTask[] = [];
       for (const task of nextSettings.tasks) {
         recoveredTasks.push(await (async () => {
@@ -4800,6 +4889,7 @@ export default class AutoOCPlugin extends Plugin {
       name: `${workflow.name} (copy)`,
       steps: workflow.steps.map((step) => ({
         ...step,
+        codeExecution: undefined,
         transitions: step.transitions?.map((transition) => ({ ...transition })),
         position: step.position ? { ...step.position } : undefined,
         status: "pending",
@@ -4949,6 +5039,7 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     for(const item of [...(data.tasks || []),...(data.workflows || [])]) { validateConcurrency(item); validateDisabled(item); }
+    for (const workflow of data.workflows || []) for (const step of workflow.steps || []) validateDisabled(step);
     const exportIdToTaskId = new Map<string, string>();
     let tasksImported = 0;
 
@@ -5024,6 +5115,7 @@ export default class AutoOCPlugin extends Plugin {
         const hasImportedTransitions = Object.prototype.hasOwnProperty.call(s, "transitions");
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
+          disabled: s.disabled,
           stepKind,
           requiresAutoOCSecrets: s.requiresAutoOCSecrets,
           name: (s as any).name,
@@ -5592,6 +5684,7 @@ class AutoOCView extends ItemView {
   private taskSource: "all" | "catalog" | "workflow-code" = "all";
   private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
+  private expandedCodeSteps: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
   // Accumulated drift per task, in physical px relative to the map's own
@@ -6099,20 +6192,6 @@ class AutoOCView extends ItemView {
       cls: "auto-oc-tab-btn",
     });
     btnWorkflows.onclick = () => { this.currentTab = "workflows"; this.render(); };
-
-    const btnPrompt = navRow.createEl("button", {
-      text: "📝 WF Builder Prompt",
-      cls: "auto-oc-tab-btn",
-    });
-    btnPrompt.title = "Copy this prompt to create your workflow";
-    btnPrompt.onclick = async () => {
-      try {
-        await copyTextToClipboard(AUTOOC_WORKFLOW_PROMPT);
-        new Notice("AutoOC: workflow creation prompt copied to clipboard.");
-      } catch (err) {
-        new Notice(`AutoOC: could not copy prompt — ${String(err)}`);
-      }
-    };
 
     const btnCli = navRow.createEl("button", {
       text: "💻 CLI",
@@ -6910,9 +6989,9 @@ class AutoOCView extends ItemView {
 
       // ── Stats bar ──
       const stats = root.createDiv("auto-oc-stats");
-      const running = tasks.filter((t) => t.status === "running").length;
-      const completed = tasks.filter((t) => t.status === "completed").length;
-      const failed = tasks.filter((t) => t.status === "failed").length;
+      const running = [...tasks, ...codeEntries].filter((t) => t.status === "running").length;
+      const completed = [...tasks, ...codeEntries].filter((t) => t.status === "completed").length;
+      const failed = [...tasks, ...codeEntries].filter((t) => t.status === "failed").length;
       stats.createEl("span", { text: `${tasks.length} tasks` });
       if (codeEntries.length) stats.createEl("span", { text: `${codeEntries.length} workflow code steps` });
       if (running > 0) stats.createEl("span", { text: `🟡 ${running} running`, cls: "auto-oc-stat-running" });
@@ -6952,7 +7031,7 @@ class AutoOCView extends ItemView {
       if (filteredCodeEntries.length) {
         root.createEl("h3", { text: "Workflow code steps" });
         root.createEl("p", {
-          text: "These steps belong to their workflows. Open the workflow to edit or remove a step. Bulk selection applies to catalog tasks.",
+          text: "Run, stop, disable and inspect each code step here. Run executes only that step with empty input and outputs. Bulk selection applies to catalog tasks.",
           cls: "setting-item-description",
         });
         const stepList = root.createDiv("auto-oc-list");
@@ -7022,21 +7101,67 @@ class AutoOCView extends ItemView {
 
   private renderWorkflowCodeEntry(parent: HTMLElement, entry: WorkflowCodeEntry<Workflow>) {
     const { workflow, step, stepIndex } = entry;
-    const card = parent.createDiv(`auto-oc-card auto-oc-status-${entry.status}`);
+    const state = this.plugin.codeStepState(workflow.id, step.id);
+    const card = parent.createDiv(`auto-oc-card auto-oc-status-${state.status}`);
     // Keep workflow/step identities separate: step IDs may repeat in other workflows.
     card.setAttr("data-auto-oc-code-workflow-id", workflow.id);
     card.setAttr("data-auto-oc-code-step-id", step.id);
+    card.addClass("auto-oc-workflow-task-detail");
+    card.setAttr("data-auto-oc-owner-workflow-id", workflow.id);
+    card.setAttr("data-auto-oc-step-id", step.id);
     const summary = card.createDiv("auto-oc-card-summary");
-    if (workflow.disabled) {
+    if (workflow.disabled || step.disabled) {
       card.addClass("auto-oc-disabled");
-      summary.createEl("span", { text: "Workflow disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
+      summary.createEl("span", { text: workflow.disabled ? "Workflow disabled" : "Disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
     }
     summary.createEl("span", { text: entry.name, cls: "auto-oc-task-name" });
     summary.createEl("span", { text: "Code · Workflow step", cls: "auto-oc-task-engine auto-oc-task-engine-code" });
-    summary.createEl("span", { text: entry.status, cls: `auto-oc-badge auto-oc-badge-${entry.status}` });
+    summary.createEl("span", { text: state.status, cls: `auto-oc-badge auto-oc-badge-${state.status}` });
+    const controls = summary.createDiv("auto-oc-card-quick-actions");
+    const action = (text:string, label:string, callback:()=>unknown, cls="") => {
+      const button = controls.createEl("button", {text, cls});
+      button.title = label; button.setAttr("aria-label", label);
+      button.onclick = async event => {
+        event.stopPropagation(); button.disabled = true;
+        try { await callback(); }
+        catch(error) { new Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12000); }
+        finally { if (button.isConnected) button.disabled = false; }
+      };
+      return button;
+    };
+    const availability = action(step.disabled ? "Enable" : "Disable", step.disabled ? "Enable this code step" : "Disable this code step without deleting it",
+      () => this.plugin.setCodeStepDisabled(workflow.id, step.id, !step.disabled), "auto-oc-availability-toggle");
+    availability.disabled = this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
+    const run = action("▶", "Run only this code step (empty input and outputs)",
+      () => this.plugin.runCodeStepOnly(workflow.id, step.id), "auto-oc-btn-run");
+    run.disabled = !!workflow.disabled || !!step.disabled || this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
+    if (state.stop) action("⏹", "Stop this step and its current execution",
+      () => this.plugin.stopCodeStep(workflow.id, step.id, state.stop!), "auto-oc-btn-stop");
+    action("📄", state.stop ? "Live log" : "Log", () => new CodeStepLogModal(this.app, entry.name,
+      () => this.plugin.codeStepState(workflow.id, step.id)).open(), "auto-oc-btn-output");
+    action("📜", "History", () => this.plugin.openCodeStepHistory(workflow.id, step.id), "auto-oc-btn-history");
     const details = card.createDiv("auto-oc-card-details");
-    details.style.display = "block";
+    const key = JSON.stringify([workflow.id, step.id]);
+    details.style.display = this.expandedCodeSteps.has(key) ? "block" : "none";
+    summary.setAttr("tabindex", "0");
+    summary.setAttr("aria-expanded", String(this.expandedCodeSteps.has(key)));
+    const toggle = () => {
+      if (this.expandedCodeSteps.has(key)) this.expandedCodeSteps.delete(key); else this.expandedCodeSteps.add(key);
+      details.style.display = this.expandedCodeSteps.has(key) ? "block" : "none";
+      summary.setAttr("aria-expanded", String(this.expandedCodeSteps.has(key)));
+    };
+    summary.onclick = toggle;
+    summary.onkeydown = event => { if (event.target === summary && ["Enter", " "].includes(event.key)) { event.preventDefault(); toggle(); } };
     details.createEl("p", { text: `${workflow.name} · Step ${stepIndex + 1} · ${entry.area}`, cls: "auto-oc-card-meta" });
+    details.createEl("p", {text:"Run executes only this step with empty input and outputs. Earlier and later steps are not executed."});
+    if (state.lastRun) details.createEl("p", {text:`Last run: ${formatDateTime(state.lastRun)}`});
+    const binding = step.codeExecution?.runtimeExecution;
+    if (binding && !state.stop && binding.phase !== "abandoned" && (binding.requiresReconciliation ||
+        !["completed","failed"].includes(binding.phase) || binding.terminalUncertainty && !binding.disposition)) {
+      details.createEl("p", {text:"This step has an interrupted attempt or unconfirmed effects. Review its log and history before closing the attempt."});
+      const resolve = details.createEl("button", {text:"Review interrupted attempt"});
+      resolve.onclick = async () => { try { await this.plugin.resolveCodeStepAttempt(workflow.id, step.id); } catch(error) { new Notice(this.plugin.redactSecrets(String(error))); } };
+    }
     const addPreview = (label: string, text: string) => {
       const preview = details.createEl("details");
       preview.createEl("summary", { text: label });
@@ -7051,7 +7176,10 @@ class AutoOCView extends ItemView {
       };
     };
     addPreview("View code", step.code || "// Empty code step");
-    addPreview("View output", step.output || "No output recorded for this step.");
+    addPreview("View output", state.output || "No output recorded for this step.");
+    const edit = details.createEl("button", {text:"Edit Code", cls:"auto-oc-btn-edit"});
+    edit.disabled = this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
+    edit.onclick = () => new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
     const open = details.createEl("button", { text: "Open workflow" });
     open.onclick = () => this.openWorkflowCodeEntry(workflow.id, step.id);
   }
@@ -7067,6 +7195,7 @@ class AutoOCView extends ItemView {
     this.filterText = workflow.name.toLowerCase();
     this.filterArea = this.filterStatus = "all";
     this.expandedWorkflows.add(workflowId);
+    this.expandedCodeSteps.add(JSON.stringify([workflowId, stepId]));
     this.render();
     // Match identities without interpolating user-controlled IDs into selectors.
     const steps = this.containerEl?.querySelectorAll<HTMLElement>(".auto-oc-workflow-task-detail");
@@ -7611,6 +7740,10 @@ class AutoOCView extends ItemView {
     };
     for (let i = 0; i < workflow.steps.length; i++) {
       const step = workflow.steps[i];
+      if (step.stepKind === "code") {
+        this.renderWorkflowCodeEntry(stepsDiv, {workflow, step, stepIndex:i, name:stepLabel(step), area:step.area?.trim() || workflow.area?.trim() || "No area", status:codeStepDisplay(step).status});
+        continue;
+      }
       const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
       const stepName = stepLabel(step);
       const stepItem = stepsDiv.createDiv("auto-oc-workflow-task-detail");
@@ -7664,28 +7797,7 @@ class AutoOCView extends ItemView {
       }
 
       if (!task) {
-        if (step.stepKind === "code") {
-          const codePreview = stepItem.createDiv("auto-oc-code-preview-wrap");
-          renderCodePreview(codePreview, step.code || "// empty code step", 500);
-          const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
-          const btnCodeLog = stepActions.createEl("button", {
-            text: "📄 Log",
-            cls: "auto-oc-btn-output",
-          });
-          btnCodeLog.disabled = !step.output;
-          btnCodeLog.onclick = (e) => {
-            e.stopPropagation();
-            new TextPreviewModal(this.app, `Code step ${i + 1} output`, step.output || "").open();
-          };
-          const btnEditCode = stepActions.createEl("button", {
-            text: "✏️ Edit Code",
-            cls: "auto-oc-btn-edit",
-          });
-          btnEditCode.onclick = (e) => {
-            e.stopPropagation();
-            new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
-          };
-        } else if (step.stepKind === "delay") {
+        if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
           stepMeta.createSpan({ text: `Pauses for ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}` });
           const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");

@@ -26,7 +26,9 @@ Si la respuesta es inválida, hay un problema de autenticación o se agota el ti
 
 ## Selección múltiple
 
-**Tasks** también muestra **Workflow code steps**: el código guardado directamente dentro de los workflows, con nombre, origen, área y estado del paso. La búsqueda encuentra su código y el nombre del workflow; **Open workflow** abre y localiza el paso original para editarlo. Las vistas de código y salida se cargan al desplegarlas y limitan la vista previa a 12.000 caracteres. Estos pasos conservan sus identidades y se gestionan desde su workflow; no se convierten en tareas independientes ni se incluyen en las acciones múltiples de tareas.
+**Tasks** también muestra **Workflow code steps**: el código guardado directamente dentro de los workflows, con nombre, origen, área y estado del paso. Sus tarjetas se pueden colapsar y ofrecen **Run**, **Stop**, **Enable/Disable**, **Log**, **History** y **Edit Code**, también dentro de **WorkFlows**. **Run** ejecuta únicamente ese paso, con entrada y resultados previos vacíos; conserva el último resultado del workflow completo. **Stop** interrumpe el código y detiene la continuación de esa ejecución; no deshace efectos ni certifica que hayan terminado los comandos externos ya iniciados. Los intentos interrumpidos se pueden revisar desde **Review interrupted attempt**.
+
+El código se ejecuta en un proceso separado para que Obsidian y Stop sigan respondiendo. Requiere **Node.js 18 o posterior**, disponible en PATH o en una ubicación habitual de instalación; si falta, AutoOC lo indica sin ejecutar el paso. No deja scripts temporales en la bóveda. Desactivar un paso conserva código, resultados e historial y bloquea el workflow que lo necesita, igual que una tarea desactivada. **History** muestra los intentos del paso, tanto individuales como dentro del workflow. **Open workflow** abre el original para editarlo. Las vistas previas de código y salida se cargan al desplegarlas y se limitan a 12.000 caracteres. Los pasos conservan sus identidades; no se duplican como tareas de catálogo ni se incluyen en sus acciones múltiples.
 
 El filtro **Task source** permite mostrar **All items**, **Catalog tasks** o solo **Workflow code steps**.
 
@@ -119,7 +121,7 @@ If a task reports **Access denied by policy settings**, check your [Copilot acco
 
 ## Edición de workflows
 
-Crea y edita workflows desde **WorkFlows**. El WF Visual Builder se ha retirado; los workflows existentes, sus pasos y transiciones, historial e importación/exportación JSON se conservan. **WF Builder Prompt** sigue disponible para preparar definiciones con ayuda de un agente.
+Crea y edita workflows desde **WorkFlows**. El WF Visual Builder se ha retirado; los workflows existentes, sus pasos y transiciones, historial e importación/exportación JSON se conservan. **Create with AI**, dentro de **New Task** y **New Workflow**, utiliza el prompt integrado para generar un borrador a partir de tu objetivo; ya no hay un botón separado **WF Builder Prompt**.
 
 ## Ralph Loop
 
