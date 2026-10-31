@@ -31,7 +31,11 @@ function harness(selectionMode = true) {
   class Stub {}
   const obsidian = { Plugin: Stub, ItemView: Stub, PluginSettingTab: Stub, Setting,
     Notice: class { constructor(message) { notices.push(message); } },
-    Modal: class { constructor(app) { this.app = app; this.contentEl = new Element(); } open() { opened.push(this); this.onOpen(); } close() { this.onClose(); } },
+    Modal: class { constructor(app) { this.app = app; this.contentEl = new Element(); } open() {
+      // Obsidian captures the editor's DOM selection before calling onOpen.
+      this.selection = { anchorNode: null, rangeCount: 0 };
+      opened.push(this); this.onOpen();
+    } close() { this.onClose(); } },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') +
     '\nmodule.exports.bulkTest = {AutoOCView, BulkCatalogModal, ExportModal, captureBulkSelection, bulkSelectionIssues, applyBulkCatalogAction, workflowCodeEntries, matchesWorkflowCodeEntry, isTaskDue, isWorkflowDue, toExportTask, toExportWorkflow, prepareWorkflowDefinitionAsync};',
@@ -125,6 +129,27 @@ test('availability dialogs show consequences, offer no area input, and apply onl
   h.button(h.root, 'Select visible').onclick(); h.button(h.root, 'Enable selected').onclick(); const enable = h.opened.at(-1);
   assert.ok(enable.contentEl.all().some(el => /next scheduler check/.test(el.textContent)));
   await h.button(enable.contentEl, 'Enable 1 items').onclick(); assert.equal(h.plugin.settings.tasks[0].disabled, false);
+});
+
+test('workflow group confirmation survives native Modal selection, cancels safely and keeps reusable tasks enabled', async () => {
+  const h = harness();
+  h.plugin.settings.tasks = [task('shared')];
+  h.plugin.settings.workflows = [workflow('a', ['shared']), workflow('b', ['shared']), workflow('untouched')];
+  const selected = capture(h, [], ['a', 'b']);
+  const before = JSON.stringify(h.plugin.settings);
+  const open = () => {
+    const modal = new h.BulkCatalogModal(h.plugin.app, h.plugin, selected, {type:'availability', disabled:true}, () => {});
+    modal.open();
+    assert.equal(modal.contentEl.all().filter(el => el.tag === 'li').length, 2);
+    assert.equal(h.button(modal.contentEl, 'Disable 2 items').disabled, false);
+    return modal;
+  };
+  h.button(open().contentEl, 'Cancel').onclick();
+  assert.equal(JSON.stringify(h.plugin.settings), before); assert.equal(h.writes(), 0);
+  await h.button(open().contentEl, 'Disable 2 items').onclick();
+  assert.equal(h.writes(), 1);
+  assert.deepEqual(h.plugin.settings.workflows.map(w => w.disabled), [true, true, undefined]);
+  assert.deepEqual(h.plugin.settings.tasks, [task('shared')]);
 });
 
 test('individual availability button changes only its item and does not expand the card', async () => {

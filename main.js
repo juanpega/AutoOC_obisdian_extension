@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.6",
+      version: "1.7.7",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -3830,10 +3830,11 @@ async function applyBulkCatalogAction(catalog, selection, action, state, save) {
 // catalog-bulk-modal.ts
 var import_obsidian2 = require("obsidian");
 var BulkCatalogModal = class extends import_obsidian2.Modal {
-  constructor(app, host, selection, action, onSaved) {
+  // Modal.open() owns `selection` for restoring the editor's DOM selection.
+  constructor(app, host, selectedItems, action, onSaved) {
     super(app);
     this.host = host;
-    this.selection = selection;
+    this.selectedItems = selectedItems;
     this.action = action;
     this.onSaved = onSaved;
     this.saving = false;
@@ -3848,7 +3849,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
     root.createEl("h3", { text: availability ? `${disabling ? "Disable" : "Enable"} selected items?` : deleting ? "Delete selected items?" : "Change area for selected items" });
     root.createEl("p", { text: deleting ? "Only the items listed below will be deleted, including their saved output and history in the catalog. Other tasks are kept when deleting a workflow. Execution records on disk are retained. This cannot be undone. Export a copy first if you want to keep these definitions." : availability ? disabling ? "Keeps these items, their schedules, output and history. Disabled items cannot run manually or on a schedule. Workflows that use a disabled task cannot start until it is enabled again. Disabling a workflow does not disable its reusable tasks." : "Allows these items to run again. Their saved schedules become active immediately and may start work on the next scheduler check." : "Updates the area of every item listed below. Workflow steps and unselected tasks keep their own areas." });
     const review = root.createEl("ul", { cls: "auto-oc-bulk-review" });
-    for (const item of this.selection) review.createEl("li", { text: `${item.kind === "task" ? "Task" : "Workflow"}: ${item.name}` });
+    for (const item of this.selectedItems) review.createEl("li", { text: `${item.kind === "task" ? "Task" : "Workflow"}: ${item.name}` });
     let area = this.action.type === "area" ? this.action.area : "";
     if (this.action.type === "area") {
       let input;
@@ -3868,14 +3869,14 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
         input.value = area;
       };
     }
-    const issues = bulkSelectionIssues(this.host.settings, this.selection, this.action, (kind, id) => this.host.getDefinitionStartState(kind, id));
+    const issues = bulkSelectionIssues(this.host.settings, this.selectedItems, this.action, (kind, id) => this.host.getDefinitionStartState(kind, id));
     const feedback = root.createDiv("auto-oc-bulk-feedback");
     feedback.setAttr("role", "alert");
     for (const issue of issues) feedback.createEl("p", { text: issue });
     new import_obsidian2.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
       if (!this.saving) this.close();
     })).addButton((button) => {
-      button.setButtonText(availability ? `${disabling ? "Disable" : "Enable"} ${this.selection.length} items` : deleting ? `Delete ${this.selection.length} items` : "Apply area").setDisabled(issues.length > 0);
+      button.setButtonText(availability ? `${disabling ? "Disable" : "Enable"} ${this.selectedItems.length} items` : deleting ? `Delete ${this.selectedItems.length} items` : "Apply area").setDisabled(issues.length > 0);
       if (deleting) button.setWarning();
       else button.setCta();
       button.onClick(async () => {
@@ -3883,7 +3884,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
         this.saving = true;
         button.setDisabled(true);
         try {
-          await this.host.applyBulkSelection(this.selection, this.action.type === "area" ? { type: "area", area } : this.action);
+          await this.host.applyBulkSelection(this.selectedItems, this.action.type === "area" ? { type: "area", area } : this.action);
         } catch (error) {
           feedback.empty();
           feedback.createEl("p", { text: `No bulk changes were confirmed. ${error instanceof Error ? error.message : String(error)}` });
@@ -3893,7 +3894,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
         }
         this.saving = false;
         this.close();
-        new import_obsidian2.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selection.length} items.` : deleting ? `Deleted ${this.selection.length} items.` : `Updated the area of ${this.selection.length} items.`);
+        new import_obsidian2.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
         this.onSaved();
       });
     });
