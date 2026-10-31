@@ -434,22 +434,24 @@ function isWithinPhysicalPath(root, location) {
 
 // catalog-transaction.ts
 var path2 = __toESM(require("path"));
-var import_async_hooks = require("async_hooks");
 var tails = /* @__PURE__ */ new Map();
-var context = new import_async_hooks.AsyncLocalStorage();
-function catalogTransaction(file, operation) {
+var owners = /* @__PURE__ */ new WeakMap();
+function catalogTransaction(file, operation, transaction) {
   const key = path2.join(physicalPath(path2.dirname(file)), path2.basename(file));
-  const current = context.getStore();
-  if (current?.key === key && current.active) return operation();
-  const result = (tails.get(key) || Promise.resolve()).then(() => {
+  if (transaction) {
+    const current = owners.get(transaction);
+    if (!current?.active || current.key !== key) return Promise.reject(new Error("Invalid or expired catalog transaction"));
+    return operation(transaction);
+  }
+  const result = (tails.get(key) || Promise.resolve()).then(async () => {
     const state = { key, active: true };
-    return context.run(state, async () => {
-      try {
-        return await operation();
-      } finally {
-        state.active = false;
-      }
-    });
+    const owner = Object.freeze({});
+    owners.set(owner, state);
+    try {
+      return await operation(owner);
+    } finally {
+      state.active = false;
+    }
   });
   const tail = result.then(() => {
   }, () => {
@@ -2362,7 +2364,7 @@ ${observed.output || "(no output)"}`;
 
 // workflow-catalog-progress.ts
 async function persistWorkflowProgress(options) {
-  return catalogTransaction(options.configurationFile, async () => {
+  return catalogTransaction(options.configurationFile, async (transaction) => {
     const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
     if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
       throw new Error("Catalog progress does not match the durable checkpoint");
@@ -2454,7 +2456,7 @@ async function persistWorkflowProgress(options) {
       workflowId: durable.workflowId,
       revision: durable.revision
     };
-    await options.onCommitted?.(confirmed);
+    await options.onCommitted?.(confirmed, transaction);
     return confirmed;
   });
 }
@@ -4444,9 +4446,9 @@ async function runInstalledWorkflow(options) {
             vaultBase: vault,
             writer: reader,
             baseline: options.catalogVersion || (() => admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
-            onCommitted: async (catalog2) => {
+            onCommitted: async (catalog2, transaction) => {
               if (admission) admission.coordinator.catalogVersion = catalog2.version;
-              await options.onCheckpoint?.(checkpoint, catalog2, { ...presentation });
+              await options.onCheckpoint?.(checkpoint, catalog2, { ...presentation }, transaction);
               admission?.confirm(checkpoint);
             }
           });

@@ -57,6 +57,29 @@ const task = (id, area = 'Research') => ({ id, name: `Task ${id}`, prompt: 'Synt
 const workflow = (id, tasks = []) => ({ id, name: `Workflow ${id}`, status: 'pending', area: 'Research', steps: tasks.map(taskId => ({ id: `step-${taskId}`, stepKind: 'task', taskId })) });
 const capture = (h, tasks = [], workflows = []) => h.captureBulkSelection(h.plugin.settings, new Set(tasks), new Set(workflows));
 
+test('real bulk save joins its explicit transaction and serializes unrelated settings saves', async () => {
+  const h = harness(); h.plugin.settings.tasks = [task('a')];
+  h.plugin.app.vault.adapter.basePath = __dirname;
+  h.plugin.selectedExecutionLocation = () => ({ configurationFile: path.join(__dirname, 'synthetic-catalog.json') });
+  h.plugin.saveSettings = Object.getPrototypeOf(h.plugin).saveSettings;
+  let release, entered;
+  const started = new Promise(resolve => { entered = resolve; });
+  const pending = new Promise(resolve => { release = resolve; });
+  const events = [];
+  h.plugin.saveSettingsWithinTransaction = async (_, validate) => {
+    validate?.(); events.push('save'); entered(); await pending; validate?.(); events.push('saved');
+  };
+  const bulk = h.plugin.applyBulkSelection(capture(h, ['a']), { type: 'availability', disabled: true });
+  await started;
+  const other = h.plugin.saveSettings();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(events, ['save']);
+  release(); await Promise.all([bulk, other]);
+  assert.deepEqual(events, ['save', 'saved', 'save', 'saved']);
+  assert.equal(h.plugin.settings.tasks[0].disabled, true);
+  assert.equal(h.plugin.bulkCatalogMutationInProgress, false);
+});
+
 test('selection starts collapsed, opens across tabs, and hiding clears invisible selections', () => {
   const h = harness(false); h.plugin.settings.tasks = [task('a')]; h.plugin.settings.workflows = [workflow('w')];
   h.view.render();

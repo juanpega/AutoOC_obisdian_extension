@@ -9,7 +9,7 @@ import { AiDraftModal } from "./ai-draft-modal";
 import { generateDraftText } from "./ai-draft-runner";
 import { saveGeneratedDefinition, type DraftKind, type GeneratedDraft } from "./ai-draft";
 import { executionStatusHelp, ExecutionStatusHelpModal, type ExecutionHelpSnapshot } from "./execution-status-help";
-import { catalogTransaction } from "./catalog-transaction";
+import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
 import { LegacyOutputRedaction } from "./legacy-output-redaction";
@@ -1566,14 +1566,14 @@ export default class AutoOCPlugin extends Plugin {
   private bulkCatalogMutationInProgress = false;
 
   async applyBulkSelection(selection: BulkSelection[], action: BulkAction): Promise<void> {
-    const save = async () => {
+    const save = async (transaction?:CatalogTransaction) => {
       this.assertLifecycleOpen();
       if (this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress) throw new Error("Catalog maintenance is in progress. Try again shortly.");
       this.bulkCatalogMutationInProgress = true;
       try {
         await applyBulkCatalogAction(this.settings, selection, action,
           (kind, id) => this.getDefinitionStartState(kind, id, true),
-          validate => this.saveSettings(false, validate));
+          validate => this.saveSettings(false, validate, transaction));
       } finally { this.bulkCatalogMutationInProgress = false; }
     };
     const basePath = (this.app.vault.adapter as any).basePath;
@@ -1588,9 +1588,9 @@ export default class AutoOCPlugin extends Plugin {
 
   async saveGeneratedDefinitionDraft(tasks: ScheduledTask[], workflow?: Workflow): Promise<void> {
     this.assertLifecycleOpen();
-    const save = async () => {
+    const save = async (transaction?:CatalogTransaction) => {
       this.assertLifecycleOpen();
-      await saveGeneratedDefinition(this.settings, tasks, workflow, () => this.saveSettings());
+      await saveGeneratedDefinition(this.settings, tasks, workflow, () => this.saveSettings(true, undefined, transaction));
     };
     const basePath = (this.app.vault.adapter as any).basePath;
     if (!basePath) return save();
@@ -2422,7 +2422,7 @@ export default class AutoOCPlugin extends Plugin {
               event.runId !== execution.runId || event.workflowId !== workflowId) return;
           execution.liveOutput = event;
         },
-        onCheckpoint:async (checkpoint,catalog,presentation)=>{
+        onCheckpoint:async (checkpoint,catalog,presentation,transaction)=>{
           if(this.lifecycleStopped) {
             if(catalog)await this.settingsWriter.adoptConfirmed(location.configurationFile,catalog.version,()=>true);
             return;
@@ -2437,8 +2437,8 @@ export default class AutoOCPlugin extends Plugin {
           }
           execution.runId = checkpoint.runId;
           execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
-          if (catalog) await this.loadSettingsSnapshot(catalog);
-          else await this.loadSettings();
+          if (catalog) await this.loadSettingsSnapshot(catalog,transaction);
+          else await this.loadSettings(transaction);
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
           this.sharedSettingsBaseline = expectedSettings;
@@ -2457,9 +2457,9 @@ export default class AutoOCPlugin extends Plugin {
       // overwrite a local edit or mask the original execution/storage error.
       if (stillOwned && !this.lifecycleStopped && expectedSettings && matchesJsonStructure(this.settings,this.sharedSettingsBaseline || expectedSettings)) {
         try {
-          await catalogTransaction(location.configurationFile,async()=>{
-            if(lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog);
-            else await this.loadSettings();
+          await catalogTransaction(location.configurationFile,async transaction=>{
+            if(lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog,transaction);
+            else await this.loadSettings(transaction);
             this.sharedSettingsBaseline=captureJsonStructure(this.settings);
             this.refreshOpenViews();
           });
@@ -3009,14 +3009,14 @@ export default class AutoOCPlugin extends Plugin {
     for (const callback of this.workflowUpdatedCallbacks) callback(workflow);
   }
 
-  async loadSettings() { return this.loadSettingsSnapshot(); }
+  async loadSettings(transaction?:CatalogTransaction) { return this.loadSettingsSnapshot(undefined,transaction); }
 
-  private async loadSettingsSnapshot(confirmed?: PersistedWorkflowCatalog) {
+  private async loadSettingsSnapshot(confirmed?: PersistedWorkflowCatalog, transaction?:CatalogTransaction) {
     this.assertLifecycleOpen();
     const revision = ++this.settingsLoadRevision;
     this.settingsPublicationState = "loading";
     let observed = false;
-    try { return await this.prepareSettingsSnapshot(revision,confirmed,()=>{observed=true;}); }
+    try { return await this.prepareSettingsSnapshot(revision,confirmed,()=>{observed=true;},transaction); }
     finally {
       if (revision === this.settingsLoadRevision && this.settingsPublicationState === "loading") {
         this.settingsPublicationState = !observed && this.hasWritableCatalogVersion() ? "ready" : "conflict";
@@ -3033,7 +3033,7 @@ export default class AutoOCPlugin extends Plugin {
     } catch { return false; }
   }
 
-  private async prepareSettingsSnapshot(revision:number, confirmed?: PersistedWorkflowCatalog, observed:()=>void=()=>{}) {
+  private async prepareSettingsSnapshot(revision:number, confirmed?: PersistedWorkflowCatalog, observed:()=>void=()=>{}, transaction?:CatalogTransaction) {
     const priorSettings = this.settings && captureJsonStructure(this.settings);
     const lease = this.pluginExecutionLease;
     let ownedAtEntry = false;
@@ -3253,7 +3253,7 @@ export default class AutoOCPlugin extends Plugin {
     }
     await publish();
     if (changed) {
-      await this.saveSettings(false);
+      await this.saveSettings(false,undefined,transaction);
     }
   }
 
@@ -3356,13 +3356,13 @@ export default class AutoOCPlugin extends Plugin {
     return { changed, configPath, mcpPath };
   }
 
-  async saveSettings(refreshView = true, validate?:()=>void) {
+  async saveSettings(refreshView = true, validate?:()=>void, transaction?:CatalogTransaction) {
     this.assertLifecycleOpen();
     const basePath=(this.app.vault.adapter as any).basePath;
     if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate);
     return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile,async()=>{
       await this.saveSettingsWithinTransaction(refreshView,validate);
-    }));
+    },transaction));
   }
 
   private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void) {

@@ -35,7 +35,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.2",
+      version: "1.7.3",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -2504,22 +2504,24 @@ function isWithinPhysicalPath(root, location) {
 
 // catalog-transaction.ts
 var path9 = __toESM(require("path"));
-var import_async_hooks = require("async_hooks");
 var tails = /* @__PURE__ */ new Map();
-var context = new import_async_hooks.AsyncLocalStorage();
-function catalogTransaction(file, operation) {
+var owners = /* @__PURE__ */ new WeakMap();
+function catalogTransaction(file, operation, transaction) {
   const key = path9.join(physicalPath(path9.dirname(file)), path9.basename(file));
-  const current = context.getStore();
-  if ((current == null ? void 0 : current.key) === key && current.active) return operation();
-  const result = (tails.get(key) || Promise.resolve()).then(() => {
+  if (transaction) {
+    const current = owners.get(transaction);
+    if (!(current == null ? void 0 : current.active) || current.key !== key) return Promise.reject(new Error("Invalid or expired catalog transaction"));
+    return operation(transaction);
+  }
+  const result = (tails.get(key) || Promise.resolve()).then(async () => {
     const state = { key, active: true };
-    return context.run(state, async () => {
-      try {
-        return await operation();
-      } finally {
-        state.active = false;
-      }
-    });
+    const owner = Object.freeze({});
+    owners.set(owner, state);
+    try {
+      return await operation(owner);
+    } finally {
+      state.active = false;
+    }
   });
   const tail = result.then(() => {
   }, () => {
@@ -6575,7 +6577,7 @@ ${observed.output || "(no output)"}`;
 
 // workflow-catalog-progress.ts
 async function persistWorkflowProgress(options) {
-  return catalogTransaction(options.configurationFile, async () => {
+  return catalogTransaction(options.configurationFile, async (transaction) => {
     var _a, _b, _c;
     const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
     if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
@@ -6668,7 +6670,7 @@ async function persistWorkflowProgress(options) {
       workflowId: durable.workflowId,
       revision: durable.revision
     };
-    await ((_c = options.onCommitted) == null ? void 0 : _c.call(options, confirmed));
+    await ((_c = options.onCommitted) == null ? void 0 : _c.call(options, confirmed, transaction));
     return confirmed;
   });
 }
@@ -6932,10 +6934,10 @@ async function runInstalledWorkflow(options) {
             vaultBase: vault,
             writer: reader,
             baseline: options.catalogVersion || (() => (admission == null ? void 0 : admission.coordinator.catalogVersion) || reader.confirmedVersion(configurationFile)),
-            onCommitted: async (catalog2) => {
+            onCommitted: async (catalog2, transaction) => {
               var _a2;
               if (admission) admission.coordinator.catalogVersion = catalog2.version;
-              await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, checkpoint, catalog2, { ...presentation }));
+              await ((_a2 = options.onCheckpoint) == null ? void 0 : _a2.call(options, checkpoint, catalog2, { ...presentation }, transaction));
               admission == null ? void 0 : admission.confirm(checkpoint);
             }
           });
@@ -8188,7 +8190,7 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
     this.codeTaskRuns = /* @__PURE__ */ new Map();
   }
   async applyBulkSelection(selection, action) {
-    const save = async () => {
+    const save = async (transaction) => {
       this.assertLifecycleOpen();
       if (this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress) throw new Error("Catalog maintenance is in progress. Try again shortly.");
       this.bulkCatalogMutationInProgress = true;
@@ -8198,7 +8200,7 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
           selection,
           action,
           (kind, id) => this.getDefinitionStartState(kind, id, true),
-          (validate) => this.saveSettings(false, validate)
+          (validate) => this.saveSettings(false, validate, transaction)
         );
       } finally {
         this.bulkCatalogMutationInProgress = false;
@@ -8215,9 +8217,9 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
   }
   async saveGeneratedDefinitionDraft(tasks, workflow) {
     this.assertLifecycleOpen();
-    const save = async () => {
+    const save = async (transaction) => {
       this.assertLifecycleOpen();
-      await saveGeneratedDefinition(this.settings, tasks, workflow, () => this.saveSettings());
+      await saveGeneratedDefinition(this.settings, tasks, workflow, () => this.saveSettings(true, void 0, transaction));
     };
     const basePath = this.app.vault.adapter.basePath;
     if (!basePath) return save();
@@ -9031,7 +9033,7 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
           if (this.lifecycleStopped || this.sharedWorkflowExecutions.get(workflowId) !== execution || execution.controller.signal.aborted || event.runId !== execution.runId || event.workflowId !== workflowId) return;
           execution.liveOutput = event;
         },
-        onCheckpoint: async (checkpoint, catalog, presentation) => {
+        onCheckpoint: async (checkpoint, catalog, presentation, transaction) => {
           if (this.lifecycleStopped) {
             if (catalog) await this.settingsWriter.adoptConfirmed(location.configurationFile, catalog.version, () => true);
             return;
@@ -9046,8 +9048,8 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
           }
           execution.runId = checkpoint.runId;
           execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
-          if (catalog) await this.loadSettingsSnapshot(catalog);
-          else await this.loadSettings();
+          if (catalog) await this.loadSettingsSnapshot(catalog, transaction);
+          else await this.loadSettings(transaction);
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
           this.sharedSettingsBaseline = expectedSettings;
@@ -9066,9 +9068,9 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
       if (stillOwned) this.sharedWorkflowExecutions.delete(workflowId);
       if (stillOwned && !this.lifecycleStopped && expectedSettings && matchesJsonStructure(this.settings, this.sharedSettingsBaseline || expectedSettings)) {
         try {
-          await catalogTransaction(location.configurationFile, async () => {
-            if (lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog);
-            else await this.loadSettings();
+          await catalogTransaction(location.configurationFile, async (transaction) => {
+            if (lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog, transaction);
+            else await this.loadSettings(transaction);
             this.sharedSettingsBaseline = captureJsonStructure(this.settings);
             this.refreshOpenViews();
           });
@@ -9586,10 +9588,10 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
   emitWorkflowUpdated(workflow) {
     for (const callback of this.workflowUpdatedCallbacks) callback(workflow);
   }
-  async loadSettings() {
-    return this.loadSettingsSnapshot();
+  async loadSettings(transaction) {
+    return this.loadSettingsSnapshot(void 0, transaction);
   }
-  async loadSettingsSnapshot(confirmed) {
+  async loadSettingsSnapshot(confirmed, transaction) {
     this.assertLifecycleOpen();
     const revision = ++this.settingsLoadRevision;
     this.settingsPublicationState = "loading";
@@ -9597,7 +9599,7 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
     try {
       return await this.prepareSettingsSnapshot(revision, confirmed, () => {
         observed = true;
-      });
+      }, transaction);
     } finally {
       if (revision === this.settingsLoadRevision && this.settingsPublicationState === "loading") {
         this.settingsPublicationState = !observed && this.hasWritableCatalogVersion() ? "ready" : "conflict";
@@ -9615,7 +9617,7 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
     }
   }
   async prepareSettingsSnapshot(revision, confirmed, observed = () => {
-  }) {
+  }, transaction) {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     const priorSettings = this.settings && captureJsonStructure(this.settings);
     const lease = this.pluginExecutionLease;
@@ -9857,7 +9859,7 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
     }
     await publish();
     if (changed) {
-      await this.saveSettings(false);
+      await this.saveSettings(false, void 0, transaction);
     }
   }
   isRalphLoopEnabled() {
@@ -9950,13 +9952,13 @@ var AutoOCPlugin = class extends import_obsidian5.Plugin {
     }
     return { changed, configPath, mcpPath };
   }
-  async saveSettings(refreshView = true, validate) {
+  async saveSettings(refreshView = true, validate, transaction) {
     this.assertLifecycleOpen();
     const basePath = this.app.vault.adapter.basePath;
     if (!basePath) return this.saveSettingsWithinTransaction(refreshView, validate);
     return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile, async () => {
       await this.saveSettingsWithinTransaction(refreshView, validate);
-    }));
+    }, transaction));
   }
   async saveSettingsWithinTransaction(refreshView = true, validate) {
     var _a;
@@ -11285,17 +11287,17 @@ ${current.output}`;
     }
     const wf = this.settings.workflows.find((w) => w.id === id);
     if (!wf) return;
-    const context2 = (_a = this.workflowRuntime) == null ? void 0 : _a.get(id);
-    if (!context2) return;
+    const context = (_a = this.workflowRuntime) == null ? void 0 : _a.get(id);
+    if (!context) return;
     const startToken = (_b = this.definitionStarts) == null ? void 0 : _b.get(`workflow:${id}`);
     const execution = wf.legacyExecution;
     const stepIndex = wf.currentStep, step = wf.steps[stepIndex];
     const attempt = (step == null ? void 0 : step.taskId) ? (_c = this.legacyAttempts) == null ? void 0 : _c.get(step.taskId) : void 0;
-    const owned = !!attempt && ((_d = attempt.owner) == null ? void 0 : _d.context) === context2 && attempt.identity.workflowId === id && attempt.identity.stepId === (step == null ? void 0 : step.id) && attempt.identity.stepIndex === stepIndex;
+    const owned = !!attempt && ((_d = attempt.owner) == null ? void 0 : _d.context) === context && attempt.identity.workflowId === id && attempt.identity.stepId === (step == null ? void 0 : step.id) && attempt.identity.stepIndex === stepIndex;
     wf.status = "failed";
     (_e = this.workflowDelayControllers.get(id)) == null ? void 0 : _e.abort();
     if (owned) await this.killTask(attempt.identity.taskId, { ...attempt.identity });
-    else if (((_f = this.workflowRuntime) == null ? void 0 : _f.get(id)) === context2) this.workflowRuntime.delete(id);
+    else if (((_f = this.workflowRuntime) == null ? void 0 : _f.get(id)) === context) this.workflowRuntime.delete(id);
     if ((_g = this.workflowRuntime) == null ? void 0 : _g.has(id)) return;
     await this.saveSettings();
     if (wf.legacyExecution !== execution || ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id))) return;
@@ -11715,8 +11717,8 @@ ${current.output}`;
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     wf.legacyExecution = { token: require("crypto").randomUUID() };
     this.workflowRuntime = this.workflowRuntime || /* @__PURE__ */ new Map();
-    const context2 = { stepOutputs: /* @__PURE__ */ new Map(), stepIndex: 0 };
-    this.workflowRuntime.set(wf.id, context2);
+    const context = { stepOutputs: /* @__PURE__ */ new Map(), stepIndex: 0 };
+    this.workflowRuntime.set(wf.id, context);
     wf.status = "running";
     wf.currentStep = 0;
     wf.lastRun = (/* @__PURE__ */ new Date()).toISOString();
@@ -11726,7 +11728,7 @@ ${current.output}`;
       step.lastRun = "";
     });
     await this.saveSettings();
-    if (this.workflowRuntime.get(wf.id) !== context2 || wf.status !== "running") return;
+    if (this.workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     releaseStart == null ? void 0 : releaseStart();
     this.refreshStartControls();
     new import_obsidian5.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
@@ -11734,7 +11736,7 @@ ${current.output}`;
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
-      if (this.workflowRuntime.get(wf.id) !== context2) return;
+      if (this.workflowRuntime.get(wf.id) !== context) return;
       new import_obsidian5.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
@@ -11821,12 +11823,12 @@ Reply ONLY with YES or NO.`, model, cwd);
       await this.saveSettings();
       return;
     }
-    const context2 = (_a = this.workflowRuntime) == null ? void 0 : _a.get(wf.id);
+    const context = (_a = this.workflowRuntime) == null ? void 0 : _a.get(wf.id);
     step.status = "running";
     step.lastRun = (/* @__PURE__ */ new Date()).toISOString();
     step.output = "";
     await this.saveSettings();
-    if (!context2 || ((_b = this.workflowRuntime) == null ? void 0 : _b.get(wf.id)) !== context2 || wf.status !== "running") return;
+    if (!context || ((_b = this.workflowRuntime) == null ? void 0 : _b.get(wf.id)) !== context || wf.status !== "running") return;
     const rt = this.workflowRuntime.get(wf.id);
     if (rt) rt.stepIndex = stepIndex;
     if (step.stepKind === "delay") {

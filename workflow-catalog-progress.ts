@@ -1,4 +1,4 @@
-import { catalogTransaction } from "./catalog-transaction";
+import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { projectWorkflowProgress, validateProgressBinding } from "./workflow-progress";
@@ -26,9 +26,9 @@ export async function persistWorkflowProgress(options: {
   vaultBase?: string;
   writer?: SettingsWriter;
   baseline?: ()=>ObservedVersion;
-  onCommitted?: (catalog:PersistedWorkflowCatalog)=>Promise<void>;
+  onCommitted?: (catalog:PersistedWorkflowCatalog, transaction:CatalogTransaction)=>Promise<void>;
 }): Promise<PersistedWorkflowCatalog> {
-  return catalogTransaction(options.configurationFile,async()=>{
+  return catalogTransaction(options.configurationFile,async transaction=>{
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
@@ -104,7 +104,7 @@ export async function persistWorkflowProgress(options: {
   if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
   const confirmed={catalog:next,version:writer.confirmedVersion(options.configurationFile),
     runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};
-  await options.onCommitted?.(confirmed);
+  await options.onCommitted?.(confirmed,transaction);
   return confirmed;
   });
 }

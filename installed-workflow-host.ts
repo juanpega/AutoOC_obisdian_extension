@@ -1,6 +1,6 @@
 import { assertWorkflowEnabled } from "./catalog-availability";
 import {executionPresentation, type ExecutionPresentation} from "./execution-presentation";
-import { catalogTransaction } from "./catalog-transaction";
+import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
@@ -36,7 +36,7 @@ export async function runInstalledWorkflow(options: {
   maxSteps?: number;
   redact: (output:string) => string;
   lease?: ExecutionLease;
-  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog, presentation?:ExecutionPresentation)=>Promise<void>;
+  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog, presentation?:ExecutionPresentation, transaction?:CatalogTransaction)=>Promise<void>;
   onTaskOutput?: (event:WorkflowTaskOutput)=>void;
   vaultMutations?: VaultMutationBatchFactory;
   catalogWriter?: SettingsWriter;
@@ -134,7 +134,7 @@ export async function runInstalledWorkflow(options: {
       activeRunId=checkpoint.runId;
       checkStop();
       const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
-        onCommitted:async catalog=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation});admission?.confirm(checkpoint);}});
+        onCommitted:async (catalog,transaction)=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation},transaction);admission?.confirm(checkpoint);}});
     },
   });
   if(stopError) throw stopError;
