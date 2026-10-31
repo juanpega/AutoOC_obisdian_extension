@@ -46,15 +46,25 @@ cinco fallos sean anteriores al cambio. La suite general no está aprobada.
 
 ## Instalación local
 
-El paquete instalado en `C:\Dev\AutoOC` anuncia 1.7.2, pero sus hashes no
-corresponden a este candidato. La actualización solicitada no se ha realizado:
-la ventana permanece en «Cargando bóveda…» y conserva una reserva y un guardado
-de configuración pertenecientes a un proceso de Obsidian vivo. Se revisaron
-119 ejecuciones históricas sin fases no terminales; esto no convierte el
-guardado pendiente en recuperable.
+El primer intento quedó bloqueado por una ventana en «Cargando bóveda…» con
+un guardado abierto; el usuario detuvo entonces el control con Escape. Tras
+cerrar Obsidian, autorizó expresamente reparar los restos e instalar.
 
-El usuario detuvo el control de la ventana con Escape. No se sustituyeron
-artefactos, no se alteró el catálogo y no se retiraron bloqueos. Para instalar
-hay que conseguir primero la descarga normal del plugin y comprobar que
-terminó el guardado; después, usar el mantenimiento oficial con copia y
-verificación de integridad, y comprobar la carga real por separado.
+La inspección confirmó la ausencia de los dos procesos implicados, la
+integridad del catálogo y la coherencia de checkpoints. El guardado carecía de
+fecha de inicio del proceso y había un temporal de conexión anterior, por lo
+que la recuperación automática no era aplicable. Se creó una copia verificada,
+se recuperó la reserva exacta mediante la CLI y se archivaron únicamente los
+dos restos autorizados. No se promovieron temporales ni se reanudaron tareas.
+
+El 31/10/2026 a las 19:00 UTC, `maintain-release --install` terminó correctamente
+en `C:\Dev\AutoOC`. Se verificaron los siete archivos instalados frente al
+candidato y su descriptor de integridad. La CLI instalada anuncia 1.7.2.
+El catálogo y los 119 journals conservan sus hashes: 36 tareas y 42 workflows.
+No quedan reserva de ejecución, bloqueo de guardado ni marcador de actualización
+pendiente. Los respaldos y recibos se conservan dentro de la configuración
+privada de esa bóveda.
+
+Esta comprobación acredita instalación en disco, no carga en la GUI. Obsidian
+permanece cerrado para que el usuario abra la bóveda y revise el candidato.
+Los seis fallos generales de QA descritos arriba siguen pendientes.
