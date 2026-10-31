@@ -6,8 +6,9 @@ export function createWorkflowEvaluator(definition:PreparedWorkflow,vault:string
   const adapter=createOpenCodeWorkflowAdapter(definition,vault);
   return async(transition,_target,input)=>{
     const instruction=transition.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
-    const result=await adapter.execute({taskKind:"opencode",model:definition.settings.defaultModel || "opencode/default",
-      agent:definition.settings.defaultAgent,workingDirectory:definition.settings.workingDirectory || vault},
+    const v2=definition.settings.defaultAiEngine==='opencode2';
+    const result=await adapter.execute({taskKind:v2?'opencode2':'opencode',model:v2?definition.settings.defaultOpencode2Model:definition.settings.defaultModel || "opencode/default",
+      agent:v2?definition.settings.defaultOpencode2Agent:definition.settings.defaultAgent,workingDirectory:definition.settings.workingDirectory || vault},
       `${instruction}\n\nPrevious step output:\n---\n${input}\n---\n\nReply ONLY with YES or NO.`,signal);
     if(!result.succeeded)throw new Error("Transition model evaluation failed; execution requires reconciliation");
     return result.output;

@@ -1,6 +1,6 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),Module=require('node:module'),vm=require('node:vm');
+const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),Module=require('node:module');
 const {transformSync}=require('esbuild');
 const root=path.resolve(__dirname,'..');
 const notices=[];
@@ -11,8 +11,8 @@ mod.require=name=>name==='obsidian'?{
   Plugin:class{},Notice:class{constructor(value){notices.push(value);}},ItemView:class{},PluginSettingTab:class{},
   Modal:class{constructor(app){this.app=app;}},Setting:class{},
 }:original(name);
-mod._compile(fs.readFileSync(file,'utf8')+'\nmodule.exports.internals={LegacyOutputRedaction,VisualBuilderModal,CreateTaskModal,CreateWorkflowModal,toExportTask,toExportWorkflow};',file);
-const Plugin=mod.exports.default,{LegacyOutputRedaction,VisualBuilderModal,CreateTaskModal,CreateWorkflowModal,toExportTask,toExportWorkflow}=mod.exports.internals;
+mod._compile(fs.readFileSync(file,'utf8')+'\nmodule.exports.internals={LegacyOutputRedaction,CreateTaskModal,CreateWorkflowModal,toExportTask,toExportWorkflow};',file);
+const Plugin=mod.exports.default,{LegacyOutputRedaction,CreateTaskModal,CreateWorkflowModal,toExportTask,toExportWorkflow}=mod.exports.internals;
 function sourceModule(name){
   const filename=path.join(root,name),m=new Module(filename,module);m.filename=filename;m.paths=Module._nodeModulePaths(root);
   m._compile(transformSync(fs.readFileSync(filename,'utf8'),{loader:'ts',format:'cjs'}).code,filename);return m.exports;
@@ -80,7 +80,7 @@ test('synthetic historical masking is read only, handles overlaps and sanitizes 
   const absent=path.join(dir,'absent.json');unavailable.load(absent,null);assert.equal(fs.existsSync(absent),false);
 });
 
-test('import/export, classic drafts and builder merge preserve dependency including malformed metadata',async()=>{
+test('import/export, classic drafts preserve dependency including malformed metadata',async()=>{
   for(const value of [true,false,undefined,'true',null]){
     const p=plugin();const portable={autoOCExport:{schemaVersion:'1.6.0'},tasks:[{...task('code',value),exportId:'t'}],workflows:[{exportId:'w',name:'old',requiresAutoOCSecrets:value,steps:[{id:'s',stepKind:'task',taskExportId:'t',requiresAutoOCSecrets:value}]}]};
     await p.importFromData(portable);const t=p.settings.tasks[0],w=p.settings.workflows[0];
@@ -88,24 +88,9 @@ test('import/export, classic drafts and builder merge preserve dependency includ
     assert.equal(exportedT.requiresAutoOCSecrets,value);assert.equal(exportedW.requiresAutoOCSecrets,value);assert.equal(exportedW.steps[0].requiresAutoOCSecrets,value);
     assert.equal(new CreateTaskModal(p.app,p,t).draft.requiresAutoOCSecrets,value);
     assert.equal(new CreateWorkflowModal(p.app,p,w).draft.requiresAutoOCSecrets,value);
-    const builder=new VisualBuilderModal(p.app,p);const state=JSON.parse(JSON.stringify(p.settings));
-    delete state.tasks[0].requiresAutoOCSecrets;delete state.workflows[0].requiresAutoOCSecrets;delete state.workflows[0].steps[0].requiresAutoOCSecrets;
-    await builder.applyExternalState(state);
-    assert.equal(p.settings.tasks[0].requiresAutoOCSecrets,value);assert.equal(p.settings.workflows[0].requiresAutoOCSecrets,value);assert.equal(p.settings.workflows[0].steps[0].requiresAutoOCSecrets,value);
     const reloaded=plugin();await reloaded.importFromData({autoOCExport:{schemaVersion:'1.6.0'},tasks:[exportedT],workflows:[exportedW]});
     assert.equal(reloaded.settings.workflows[0].requiresAutoOCSecrets,value);
   }
-});
-
-test('Visual Builder serializes step dependency and visibly warns without a management toggle',()=>{
-  const html=fs.readFileSync(path.join(root,'util/ui_workflow_builder/index.html'),'utf8'),script=html.match(/<script>([\s\S]*?)<\/script>/)[1];
-  const messages=[],context=vm.createContext({document:{querySelector:()=>({innerHTML:'',classList:{add(){}}}),querySelectorAll:()=>[]},window:{parent:{postMessage:x=>messages.push(x)}},setTimeout:()=>0,clearTimeout(){},confirm:()=>true});
-  vm.runInContext(script.replace(/  init\(\);\s*$/,''),context);
-  vm.runInContext('inExtension=true;state.tasks=[{id:"t",requiresAutoOCSecrets:true}];state.workflows=[{id:"w",requiresAutoOCSecrets:true,steps:[{id:"s",stepKind:"task",taskId:"t",requiresAutoOCSecrets:true}]}];applyToExtension(true);',context);
-  assert.equal(messages[0].state.workflows[0].steps[0].requiresAutoOCSecrets,true);
-  assert.match(vm.runInContext('retiredDependencyWarning(state.tasks[0])',context),/retired/);
-  const portable=vm.runInContext('buildStandaloneExport()',context);
-  assert.equal(portable.workflows[0].requiresAutoOCSecrets,true);assert.equal(portable.workflows[0].steps[0].requiresAutoOCSecrets,true);
 });
 
 test('scheduling reports incompatible definitions and still considers compatible work',async()=>{

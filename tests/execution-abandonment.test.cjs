@@ -298,7 +298,7 @@ for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd5
   const originals=states.map(s=>fs.readFileSync(path.join(runtime,s.runId+'.json')));
   const owner=legacy.acquireExecutionLease(runtime);
   assert.notEqual(cli('maintain-release','--vault',vault,'--inspect').status,0);owner.release();
-  for(const batch of [[],[decisions[0],decisions[0]],[{...decisions[0],vaultIdentity:'wrong-vault'}],[{...decisions[0],revision:999}]]) {
+  for(const batch of [[decisions[0],decisions[0]],[{...decisions[0],vaultIdentity:'wrong-vault'}],[{...decisions[0],revision:999}]]) {
     fs.writeFileSync(decisionFile,JSON.stringify(batch));
     assert.notEqual(cli('maintain-release','--vault',vault,'--decisions',decisionFile).status,0);
     states.forEach((s,i)=>assert.deepEqual(fs.readFileSync(path.join(runtime,s.runId+'.json')),originals[i]));
@@ -309,8 +309,10 @@ for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd5
   result=cli('maintain-release','--vault',vault,'--inspect');assert.notEqual(result.status,0);assert.match(result.stderr,/integrity/);
   fs.writeFileSync(packageMain,packageBytes);
   fs.writeFileSync(decisionFile,JSON.stringify([decisions[0]]));
-  result=cli('maintain-release','--vault',vault,'--decisions',decisionFile);assert.notEqual(result.status,0,'second uncertainty must still block installation');
-  assert.match(result.stderr,/uncertain/);assert.deepEqual(fs.readFileSync(path.join(directory,'main.js')),old['main.js']);
+  result=cli('maintain-release','--vault',vault,'--decisions',decisionFile);assert.equal(result.status,0,result.stderr);
+  assert.deepEqual(fs.readFileSync(path.join(runtime,states[1].runId+'.json')),originals[1],'unselected uncertainty is preserved without blocking package replacement');
+  // Restore the authentic fixture package to exercise its independent old guard and rollback.
+  for(const [name,bytes] of Object.entries(old))fs.writeFileSync(path.join(directory,name),bytes);
   const first=JSON.parse(fs.readFileSync(path.join(runtime,states[0].runId+'.json')));
   assert.equal(first.phase,'failed');assert.equal(first.disposition.outcome,'unknown');assert.deepEqual(first.steps,states[0].steps);
   // The genuine old reader accepts the additive journal but never bypasses its

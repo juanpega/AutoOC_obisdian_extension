@@ -30,6 +30,28 @@ function release() {
   files[RELEASE_DESCRIPTOR]=Buffer.from(JSON.stringify({schemaVersion:1,version:'1.6.0',sha256:Object.fromEntries(RELEASE_FILES.map(name=>[name,crypto.createHash('sha256').update(files[name]).digest('hex')]))}));
   return files;
 }
+test('release ZIP preserves a verified manifest with noncanonical whitespace and CRLF',t=>{
+  const {root}=fixture(t),repo=path.resolve(__dirname,'..'),source=path.join(root,'source'),out=path.join(root,'zip'),extracted=path.join(root,'extracted');
+  const names=[...RELEASE_FILES,RELEASE_DESCRIPTOR];
+  for(const name of [...names,'package.json','scripts/package-release.mjs','scripts/release-artifacts.mjs']){
+    const target=path.join(source,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(repo,name),target);
+  }
+  const manifest=path.join(source,'manifest.json'),value=JSON.parse(fs.readFileSync(manifest));
+  fs.writeFileSync(manifest,JSON.stringify(value,null,4).replace(/\n/g,'\r\n')+'\r\n');
+  const descriptor=JSON.parse(fs.readFileSync(path.join(source,RELEASE_DESCRIPTOR)));
+  descriptor.sha256['manifest.json']=crypto.createHash('sha256').update(fs.readFileSync(manifest)).digest('hex');
+  fs.writeFileSync(path.join(source,RELEASE_DESCRIPTOR),JSON.stringify(descriptor));
+  const packaged=spawnSync(process.execPath,[path.join(source,'scripts/package-release.mjs'),'--out',out],{encoding:'utf8',timeout:60000,windowsHide:true});
+  assert.equal(packaged.status,0,packaged.stderr);
+  const zip=path.join(out,'auto-oc-'+value.version+'.zip');
+  const unpacked=process.platform==='win32'
+    ?spawnSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${zip.replace(/'/g,"''")}' -DestinationPath '${extracted.replace(/'/g,"''")}'`],{encoding:'utf8',timeout:30000,windowsHide:true})
+    :spawnSync('unzip',['-q',zip,'-d',extracted],{encoding:'utf8',timeout:30000});
+  assert.equal(unpacked.status,0,unpacked.stderr);
+  const files=Object.fromEntries(names.map(name=>[name,fs.readFileSync(path.join(extracted,name))]));
+  verifyRelease(files,value.version);
+  for(const name of names)assert.deepEqual(files[name],fs.readFileSync(path.join(source,name)),name);
+});
 test('update installs whole verified release and preserves catalog, journals and backup',t=>{
   const {directory,runtime}=fixture(t),files=release();
   fs.writeFileSync(path.join(directory,'main.js'),'old bundle');fs.writeFileSync(path.join(directory,'data.json'),'user catalog');
@@ -96,13 +118,14 @@ test('write failure rolls back artifacts; failed rollback leaves execution block
     }
   }
 });
-test('unfinished run and linked artifact directory prevent update',t=>{
+test('unfinished history survives package update while linked artifacts remain prohibited',t=>{
   const {root,directory,runtime}=fixture(t),lease=acquireExecutionLease(runtime),files=release();
   const state={schemaVersion:1,runId:'bb',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'ready',nextStepId:'step',steps:[]};
   fs.writeFileSync(path.join(runtime,'bb.json'),JSON.stringify(state));
   try {
-    assert.throws(()=>installRelease({directory,version:'1.6.0',files,lease}),/Unfinished execution/);
-    fs.unlinkSync(path.join(runtime,'bb.json'));
+    installRelease({directory,version:'1.6.0',files,lease});
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtime,'bb.json'))),state);
+    fs.rmSync(path.join(directory,'skills'),{recursive:true});
     const outside=path.join(root,'outside');fs.mkdirSync(outside);
     fs.symlinkSync(outside,path.join(directory,'skills'),process.platform==='win32'?'junction':'dir');
     assert.throws(()=>installRelease({directory,version:'1.6.0',files,lease}),/Unsafe release destination/);
@@ -122,6 +145,31 @@ test('actual deployment installs runtime and skill, preserves configuration, exc
   assert.ok(fs.existsSync(path.join(directory,'skills/autooc-runtime/SKILL.md')));
   const names=[...RELEASE_FILES,RELEASE_DESCRIPTOR];
   verifyRelease(Object.fromEntries(names.map(name=>[name,fs.readFileSync(path.join(directory,name))])),JSON.parse(fs.readFileSync(path.join(directory,'manifest.json'))).version);
+});
+
+for(const phase of ['ready','in_flight','failed'])test('CLI package-only install preserves unresolved '+phase+' without any decision',t=>{
+  const {root,directory,runtime}=fixture(t),source=path.resolve(__dirname,'..');
+  for(const name of [...RELEASE_FILES,RELEASE_DESCRIPTOR]){
+    const dest=path.join(directory,name);fs.mkdirSync(path.dirname(dest),{recursive:true});fs.copyFileSync(path.join(source,name),dest);
+  }
+  const journal={schemaVersion:1,runId:'pending',workflowId:'w',definitionHash:'a'.repeat(64),revision:4,phase,nextStepId:phase==='failed'?null:'s',steps:phase==='ready'?[]:[{stepId:'s',status:phase==='failed'?'failed':'in_flight',...(phase==='failed'?{output:'unknown',result:{succeeded:false,cancelled:true,output:'unknown'}}:{})}]};
+  const file=path.join(runtime,'pending.json');fs.writeFileSync(file,JSON.stringify(journal));
+  const config=path.join(directory,'data.json');fs.writeFileSync(config,JSON.stringify({tasks:[],workflows:[{id:'w',status:'running',pendingCodexApproval:{id:'historical'},runtimeExecution:{runId:'pending',phase,revision:4,definitionHash:journal.definitionHash}}]}));
+  const original=fs.readFileSync(file),catalog=fs.readFileSync(config);
+  const install=()=>spawnSync(process.execPath,[path.join(source,'autooc-cli.cjs'),'maintain-release','--vault',root,'--install'],{encoding:'utf8',timeout:30000,windowsHide:true});
+  const owner=acquireExecutionLease(runtime);try{assert.notEqual(install().status,0);}finally{owner.release();}
+  const result=install();assert.equal(result.status,0,result.stderr);
+  const receipt=JSON.parse(result.stdout);assert.equal(receipt.mode,'installed');assert.deepEqual(receipt.applied,[]);
+  assert.deepEqual(fs.readFileSync(file),original);assert.deepEqual(fs.readFileSync(config),catalog);
+  assert.deepEqual(fs.readFileSync(path.join(receipt.maintenanceBackup,'runtime/pending.json')),original);
+  assert.ok(!fs.readdirSync(runtime).some(name=>name.startsWith('disposition-')));
+});
+
+for(const name of ['data.json.write-lock','data.json.write-intent','data.json.1.x.tmp','runtime/run.write-lock','runtime/run.tmp'])test('package replacement preserves and rejects an unfinished write: '+name,t=>{
+  const {directory,runtime}=fixture(t),lease=acquireExecutionLease(runtime),pending=path.join(directory,name);
+  fs.writeFileSync(pending,'preserve evidence');
+  try{assert.throws(()=>installRelease({directory,version:'1.6.0',files:release(),lease}),/Unfinished write/);assert.equal(fs.readFileSync(pending,'utf8'),'preserve evidence');assert.equal(fs.existsSync(path.join(directory,'main.js')),false);}
+  finally{lease.release();}
 });
 
 test('new updater repairs an incomplete package, blocks launches and invokes real unload before reload',async t=>{

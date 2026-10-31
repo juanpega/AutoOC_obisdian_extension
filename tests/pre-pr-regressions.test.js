@@ -52,7 +52,6 @@ const AutoOCPlugin = require("../main.js").default;
 Module._load = originalLoad;
 const mainSource = fs.readFileSync(require.resolve("../main.js"), "utf8");
 const mainTypeScriptSource = fs.readFileSync(require.resolve("../main.ts"), "utf8");
-const visualBuilderSource = fs.readFileSync(path.resolve(__dirname, "..", "util", "ui_workflow_builder", "index.html"), "utf8");
 const isWindows = process.platform === "win32";
 const psSingleQuotedSource = mainSource.match(/function psSingleQuoted\([^)]*\) \{[\s\S]*?\n\}/)?.[0];
 const psSingleQuoted = new Function(`${psSingleQuotedSource}; return psSingleQuoted;`)();
@@ -412,7 +411,7 @@ test("workflow prompt documents the canonical export contract", () => {
   const prompt = mainTypeScriptSource.match(/const AUTOOC_WORKFLOW_PROMPT = `([\s\S]*?)`;/)?.[1];
 
   assert.ok(prompt, "AUTOOC_WORKFLOW_PROMPT should exist in main.ts");
-  assert.match(prompt, /"pluginVersion": "1\.5\.11"/);
+  assert.match(prompt, /"pluginVersion": "1\.7\.2"/);
   assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", "1\.5\.0", or "1\.6\.0"/);
   assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
   assert.match(prompt, /Every task must include it, including taskKind "code"/);
@@ -422,7 +421,7 @@ test("workflow prompt documents the canonical export contract", () => {
   assert.match(prompt, /workflow may mix all three engines/);
   assert.match(prompt, /forceModel: true forces the selected model and does not apply the agent/);
   assert.match(prompt, /transitions array is the recommended canonical form/);
-  assert.match(prompt, /MCP validator validates transitions when provided/);
+  assert.match(prompt, /importer validates transitions when provided/);
   assert.doesNotMatch(prompt, /required for MCP workflow payloads/);
   assert.match(prompt, /single transition object only for legacy compatibility/);
   assert.match(prompt, /missing, it is treated as legacy compatibility/);
@@ -433,8 +432,6 @@ test("workflow prompt documents the canonical export contract", () => {
 test("task editors expose interactive OpenCode and ChatGPT modes without losing Automatic Codex selection", () => {
   assert.match(mainTypeScriptSource, /addOption\("codex-app", "ChatGPT \/ Codex task"\)/);
   assert.match(mainTypeScriptSource, /this\.draft\.model \?\? this\.plugin\.settings\.defaultCodexModel/);
-  assert.match(visualBuilderSource, /value="opencode-cli"/);
-  assert.match(visualBuilderSource, /value="codex-app"/);
 });
 
 test("Codex tasks round-trip through schema 1.5 without exporting runtime thread ids", async () => {

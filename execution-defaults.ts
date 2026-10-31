@@ -1,3 +1,4 @@
+import { OPENCODE2_DEFAULTS } from "./opencode-profile";
 // One set of effective execution defaults for the plugin and Node host.
 export const EXECUTION_DEFAULTS = Object.freeze({
   opencodePath: "opencode",
@@ -16,7 +17,11 @@ export const EXECUTION_DEFAULTS = Object.freeze({
   linuxTerminal: "",
 });
 
-export function effectiveExecutionSettings(settings:Record<string,any>):Record<string,any> {
-  return Object.fromEntries(Object.entries(EXECUTION_DEFAULTS).map(([key,value]) =>
+export function effectiveExecutionSettings(settings:Record<string,any>, includeOpenCode2 = false):Record<string,any> {
+  const effective = Object.fromEntries(Object.entries(EXECUTION_DEFAULTS).map(([key,value]) =>
     [key, settings[key] === undefined ? value : settings[key]]));
+  // New harness settings must not alter the fingerprints of existing v1 runs.
+  if (includeOpenCode2) Object.assign(effective, Object.fromEntries(Object.entries(OPENCODE2_DEFAULTS)
+    .map(([key,value]) => [key,settings[key] === undefined ? value : settings[key]])));
+  return effective;
 }

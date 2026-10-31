@@ -1,3 +1,4 @@
+import { assertWorkflowEnabled } from "./catalog-availability";
 import { catalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { assertWorkflowDependencies } from "./retired-dependency";
@@ -63,6 +64,7 @@ export async function runCodeWorkflowHost(options: {
   admission?: ExecutionAdmission;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
+  if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks);
   assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");

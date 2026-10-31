@@ -10,7 +10,7 @@ function load(file, overrides = {}, globals = {}) {
   const source = ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
   }).outputText;
-  vm.runInNewContext(source, { exports, require: name => overrides[name] || require(name), process, Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, ...globals });
+  vm.runInNewContext(source, { exports, require: name => overrides[name] || (name.startsWith('./') ? load(name.slice(2)+'.ts', overrides, globals) : require(name)), process, Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, ...globals });
   return exports;
 }
 
@@ -22,18 +22,21 @@ test('Code handoff preserves report-like headings and every byte above 50 KB', (
 });
 
 function launcherHarness() {
-  const files = new Map(), timers = [], intervals = [], children = [], calls = [];
+  const files = new Map(), directories = new Set(), timers = [], intervals = [], children = [], calls = [];
   let serial = 0;
   const fakeFs = {
-    mkdtempSync(prefix) { return prefix + (++serial); },
+    mkdirSync(dir) { if(directories.has(dir))throw Object.assign(Error('EEXIST'),{code:'EEXIST'});directories.add(dir); },
+    mkdtempSync(prefix) { const dir=prefix+String(++serial).padStart(6,'0');directories.add(dir);return dir; },
+    lstatSync(file) { if(!directories.has(file)&&!files.has(file))throw Object.assign(Error('ENOENT'),{code:'ENOENT'});return {isDirectory:()=>directories.has(file),isFile:()=>files.has(file),isSymbolicLink:()=>false}; },
+    readdirSync(dir) {return [...new Set([...directories,...files.keys()].filter(file=>path.dirname(file)===dir).map(file=>path.basename(file)))];},
     writeFileSync(file, data, options) {
-      if (options?.flag === 'wx' && files.has(file)) throw Error('EEXIST');
+      if (options?.flag === 'wx' && files.has(file)) throw Object.assign(Error('EEXIST'),{code:'EEXIST'});
       files.set(file, String(data));
     },
     existsSync(file) { return files.has(file); },
     readFileSync(file) { if (!files.has(file)) throw Error('ENOENT'); return files.get(file); },
     unlinkSync(file) { files.delete(file); },
-    rmdirSync() {},
+    rmdirSync(dir) {if(this.readdirSync(dir).length)throw Error('ENOTEMPTY');directories.delete(dir);},
   };
   const spawn = (...args) => {
     calls.push(args);
@@ -46,6 +49,7 @@ function launcherHarness() {
     setInterval(fn, ms) { const timer = { fn, ms, referenced: true, unref() { this.referenced = false; } }; intervals.push(timer); return timer; }, clearInterval() {},
   };
   const overrides = { fs: fakeFs, child_process: { spawn } };
+  overrides['./execution-files'] = load('execution-files.ts', overrides, globals);
   const launch = load('cli-launchers.ts', overrides, globals).openOpencodeCliLongPromptWindows;
   const signal = (index, state) => {
     const observer = Buffer.from(calls[index][1].at(-1), 'base64').toString('utf16le');
@@ -80,7 +84,7 @@ test('only matching confirmation settles once; prompt survives until owning sess
   assert.equal(h.intervals[0].referenced, false, 'interactive session must not keep the standalone host alive after settlement');
   assert.ok([...h.files.keys()].some(f => f.endsWith('prompt.txt')));
   h.signal(0, { status: 'ended', confirmed: true, ended: true });
-  assert.equal(h.files.size, 0);
+  assert.ok([...h.files.keys()].every(file=>file.endsWith(path.join('auxiliary','.gitignore'))));
   assert.deepEqual(results, ['ok']);
 });
 
@@ -93,7 +97,7 @@ test('timeout preserves input, rejects late success, and still cleans after sess
   assert.equal(results.length, 1);
   assert.ok([...h.files.values()].includes('payload'));
   h.signal(0, { status: 'ended', confirmed: true, ended: true });
-  assert.equal(h.files.size, 0);
+  assert.ok([...h.files.keys()].every(file=>file.endsWith(path.join('auxiliary','.gitignore'))));
 });
 
 test('initial errors and missing executable cannot yield a successful launch', () => {
@@ -139,7 +143,7 @@ function pluginHarness(payload) {
   const bundleModule = { exports };
   class Stub {}
   const obsidian = { Plugin: Stub, Notice: Stub, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8'), {
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.setVersionCheck = fn => { assertOpenCode2 = fn; };', {
     exports, module: bundleModule, require: name => name === 'obsidian' ? obsidian : h.overrides[name] || require(name),
     process: { ...process, platform: 'win32' }, Buffer, console, ...h.globals,
   });
@@ -156,9 +160,36 @@ function pluginHarness(payload) {
   plugin.saveSettings = async () => {};
   plugin.getSecretsEnv = () => ({}); plugin.getEffectiveAgent = () => 'plan';
   plugin.isTaskActive = t => t.status === 'running';
-  return { ...h, plugin, task, workflow };
+  return { ...h, plugin, task, workflow, setVersionCheck: bundleModule.exports.setVersionCheck };
 }
 const drain = () => new Promise(resolve => setImmediate(resolve));
+
+test('legacy OpenCode 2 launch uses the executable and defaults checked before asynchronous version detection',async()=>{
+  const h=pluginHarness('fixture'),p=h.plugin;
+  Object.assign(h.task,{taskKind:'opencode2',model:'',agent:''});
+  Object.assign(p.settings,{opencode2Path:'C:/verified/opencode.exe',defaultOpencode2Model:'provider/verified',defaultOpencode2Agent:'verified-agent'});
+  let finish,checked;
+  h.setVersionCheck(bin=>{checked=bin;return new Promise(resolve=>finish=resolve);});
+  const pending=p.runTask(h.task,async()=>{});await drain();
+  assert.equal(checked,'C:/verified/opencode.exe');assert.equal(h.calls.length,0);
+  Object.assign(p.settings,{opencode2Path:'C:/unverified/opencode.exe',defaultOpencode2Model:'provider/unverified',defaultOpencode2Agent:'unverified-agent'});
+  finish();await pending;assert.equal(h.calls.length,1);
+  const observer=Buffer.from(h.calls[0][1].at(-1),'base64').toString('utf16le');
+  const scripts=Buffer.from(observer.match(/'-EncodedCommand', '([A-Za-z0-9+/=]+)'/)[1],'base64').toString('utf16le');
+  assert.match(scripts,/C:\/verified\/opencode.exe/);assert.match(scripts,/provider\/verified/);assert.match(scripts,/verified-agent/);
+  assert.doesNotMatch(scripts,/unverified/);assert.match(scripts,/'mini', '--standalone'/);
+  h.signal(0,{status:'started',confirmed:true});await drain();assert.equal(h.task.status,'completed');
+});
+
+test('deleting or disabling a task during the OpenCode 2 version check prevents a legacy launch',async()=>{
+  for(const mode of ['delete','disable']) {
+    const h=pluginHarness('fixture'),p=h.plugin;h.task.taskKind='opencode2';p.settings.opencode2Path='C:/verified/opencode.exe';
+    let finish;h.setVersionCheck(()=>new Promise(resolve=>finish=resolve));
+    const pending=p.runTask(h.task,async()=>{});await drain();
+    if(mode==='delete')p.settings.tasks=[];else h.task.disabled=true;
+    finish();await assert.rejects(pending,/changed while checking the CLI version/);assert.equal(h.calls.length,0);
+  }
+});
 
 // C5: complete the real shared host before reusing its task, retaining the journal.
 for (const entry of ['card', 'workflow']) for (const standalone of [false, true]) for (const logsEnabled of [false, true]) {
@@ -791,7 +822,12 @@ test('workflow GUI buttons report rejected preflight without effects; CLI still 
     visit(ast); assert.equal(handlers.length, 2);
     let stopped = 0;
     for (const handler of handlers) {
-      const click = vm.runInNewContext('(function () { return ' + handler + '; })', { workflow: plugin.settings.workflows[0], import_obsidian: { Notice } }).call({ plugin });
+      // esbuild may number this import when another module also uses Obsidian.
+      // Bind the actual Notice namespace used by each extracted handler.
+      const noticeNamespaces = Object.fromEntries([...handler.matchAll(/\b([A-Za-z_$][\w$]*)\.Notice\b/g)]
+        .map(([, name]) => [name, { Notice }]));
+      assert.ok(Object.keys(noticeNamespaces).length, 'handler reports errors through Obsidian Notice');
+      const click = vm.runInNewContext('(function () { return ' + handler + '; })', { workflow: plugin.settings.workflows[0], ...noticeNamespaces }).call({ plugin });
       await click({ stopPropagation() { stopped++; } });
       assert.match(notices.at(-1), /Working directory is unavailable/);
       assert.equal(fs.readFileSync(file, 'utf8'), before, 'no binding, status or history changes');
@@ -1309,4 +1345,35 @@ test('a workflow containing its uncertain stopped legacy task cannot restart fro
   for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,true);
   await assert.rejects(p.runWorkflow({...h.workflow}), /outcome is unconfirmed/);
   assert.equal(launches,0); assert.equal(h.workflow.status,'failed');
+});
+
+for (const mode of ['ended', 'active', 'host alive', 'foreign file', 'redirected']) test(`Windows observer auxiliary cleanup: ${mode}`, {skip:process.platform !== 'win32'}, () => {
+  const os=require('node:os'),cp=require('node:child_process');
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-observer-cleanup-'));
+  try {
+    const h=launcherHarness();h.launch('fixture',root,{},'fixture/model','plan','private fixture');
+    const observer=Buffer.from(h.calls[0][1].at(-1),'base64').toString('utf16le');
+    const finalizer=observer.slice(observer.lastIndexOf('} finally {')+'} finally {'.length,observer.lastIndexOf('}'));
+    const checkDirectory=observer.split('\n').find(line=>line.startsWith('function Test-AutoOCAuxiliary'));
+    for(const [file,content] of h.files){
+      assert.ok(!path.relative(root,file).startsWith('..'));
+      fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,content);
+    }
+    const prompt=[...h.files.keys()].find(file=>file.endsWith('prompt.txt')),directory=path.dirname(prompt);
+    fs.writeFileSync(path.join(directory,'state.json'),'fixture');
+    if(mode==='foreign file')fs.writeFileSync(path.join(directory,'keep.md'),'preserve');
+    if(mode==='redirected'){
+      const target=path.join(root,'moved');fs.renameSync(directory,target);fs.symlinkSync(target,directory,'junction');
+    }
+    const script=`${checkDirectory}\n$session = @{HasExited = ${mode==='active'?'$false':'$true'}}; function Get-Process { param($Id) ${mode==='host alive'?'return @{Id=$Id}':'return $null'} };\n${finalizer}`;
+    const result=cp.spawnSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true});
+    assert.equal(result.status,0,result.stdout+result.stderr);
+    if(mode==='ended')assert.equal(fs.existsSync(directory),false);
+    else if(mode==='foreign file'){
+      assert.equal(fs.readFileSync(path.join(directory,'keep.md'),'utf8'),'preserve');
+      assert.equal(fs.existsSync(prompt),false);
+      assert.equal(JSON.parse(fs.readFileSync(path.join(directory,'autooc-cleanup.json'),'utf8').replace(/^\uFEFF/,'')).completed,true);
+    }else assert.equal(fs.readFileSync(prompt,'utf8'),'private fixture');
+    assert.equal(fs.readFileSync(path.join(root,'.autooc','auxiliary','.gitignore'),'utf8'),'*\n');
+  }finally{assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));fs.rmSync(root,{recursive:true,force:true});}
 });

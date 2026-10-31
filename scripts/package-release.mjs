@@ -1,7 +1,6 @@
 // package-release.mjs — cross-platform release packaging (Windows, macOS, Linux)
 //
-// Creates release/auto-oc-<version>.zip containing manifest.json (with the
-// release version injected), main.js and styles.css.
+// Creates release/auto-oc-<version>.zip with the seven verified release files.
 //
 // Usage:
 //   node scripts/package-release.mjs              # version from package.json
@@ -40,7 +39,6 @@ const builtVersion=JSON.parse(execFileSync(process.execPath,[path.join(root,"aut
 if (version !== manifest.version || version !== builtVersion || version !== pkg.version) {
   throw new Error("Release version must match package.json, manifest.json and the built CLI. Update versions and rebuild before packaging.");
 }
-manifest.version = version;
 
 const buildDir = fs.mkdtempSync(path.join(os.tmpdir(), "autooc-release-"));
 const zipName = `auto-oc-${version}.zip`;
@@ -48,7 +46,9 @@ const zipPath = path.join(outDir, zipName);
 
 try {
   copyReleaseArtifacts(root,buildDir);
-  fs.writeFileSync(path.join(buildDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
+  // Preserve exact bytes, including manifest whitespace/line endings. Rewriting
+  // a verified file here invalidates the distributed integrity descriptor.
+  validateReleaseArtifacts(buildDir);
 
   if (process.platform === "win32") {
     execFileSync(

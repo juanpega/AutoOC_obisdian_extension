@@ -5,7 +5,8 @@ import {resolveInstalledWorkflowLocation} from './installed-workflow-location';
 import {acquireExecutionLease} from './execution-lease';
 import {inspectTerminalExecution,disposeTerminalExecution} from './execution-abandonment';
 import {readExecutionCheckpoint,dispositionLocation} from './execution-journal';
-import {assertInstalledExecutionIdle,assertIdleCatalog} from './execution-idle';
+import {assertIdleCatalog} from './execution-idle';
+import {assertPackageMaintenanceSafe} from './package-maintenance';
 import {verifyRelease,installRelease,RELEASE_FILES,RELEASE_DESCRIPTOR} from './release-update';
 import {physicalPath} from './path-identity';
 
@@ -42,11 +43,9 @@ export async function maintainRelease(options:{sourceDirectory:string;vault:stri
   const assertContext=()=>{
     const current=dispositionLocation(resolveInstalledWorkflowLocation(options.vault));
     if(JSON.stringify(current)!==JSON.stringify(identity))throw new Error('Maintenance installation identity changed');
-    if(fs.existsSync(path.join(location.runtimeDirectory,'update-pending.json')))throw new Error('Incomplete update requires supported recovery');
-    if(fs.existsSync(location.configurationFile+'.write-lock') || fs.readdirSync(location.installationDirectory).some(n=>n.startsWith('data.json.') && n.endsWith('.tmp')) ||
-      fs.readdirSync(location.runtimeDirectory).some(n=>n.endsWith('.tmp') || n.endsWith('.write-lock')))throw new Error('Unfinished write requires reconciliation');
+    assertPackageMaintenanceSafe(location.installationDirectory);
     const catalog=JSON.parse(regular(location.configurationFile).toString('utf8'));
-    if(['tasks','workflows'].some(k=>!Array.isArray(catalog[k]) || catalog[k].some((e:any)=>e.status==='running' || e.pendingCodexApproval)))throw new Error('Active catalog requires reconciliation');
+    if(['tasks','workflows'].some(k=>!Array.isArray(catalog[k])))throw new Error('Invalid maintenance catalog');
     // Prove existing abandonments BEFORE applying any new decisions or backing
     // up/installing. Repeat under the lease and immediately before installation.
     const checkpoints=new Map(fs.readdirSync(location.runtimeDirectory).filter(n=>/^[a-zA-Z0-9-]+\.json$/.test(n)).map(name=>{
@@ -67,7 +66,7 @@ export async function maintainRelease(options:{sourceDirectory:string;vault:stri
   if(fs.existsSync(path.join(location.runtimeDirectory,'execution.lock')))throw new Error('Unload AutoOC normally; execution reservation is present');
   const executions=fs.readdirSync(location.runtimeDirectory).filter(n=>/^[a-zA-Z0-9-]+\.json$/.test(n)).sort().map(name=>{
     const state=readExecutionCheckpoint(location.runtimeDirectory,name.slice(0,-5));
-    if(['ready','in_flight'].includes(state.phase))throw new Error('Unfinished execution requires reconciliation');
+    if(['ready','in_flight'].includes(state.phase))return {runId:state.runId,workflowId:state.workflowId,phase:state.phase,revision:state.revision,causes:[],disposition:undefined,requiresReconciliation:true};
     return inspectTerminalExecution({vault:location.vault,runId:state.runId});
   });
   const installedVersion=JSON.parse(regular(path.join(location.installationDirectory,'manifest.json')).toString('utf8')).version;
@@ -109,7 +108,7 @@ export async function maintainRelease(options:{sourceDirectory:string;vault:stri
     }
     lease.assertOwned();assertContext();
     if(!regular(location.configurationFile).equals(catalog))throw new Error('Catalog changed during maintenance');
-    assertInstalledExecutionIdle(location.installationDirectory);
+    assertPackageMaintenanceSafe(location.installationDirectory);
     const installed=installRelease({directory:location.installationDirectory,version:options.version,files,lease});
     return {mode:'installed',...installed,maintenanceBackup:backup,applied,loadedInObsidian:false,reloadRequired:true};
   } catch(error) {

@@ -1,3 +1,4 @@
+import { assertWorkflowEnabled } from "./catalog-availability";
 import {executionPresentation, type ExecutionPresentation} from "./execution-presentation";
 import { catalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
@@ -77,6 +78,7 @@ export async function runInstalledWorkflow(options: {
   if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
     throw new Error("Workflow has a bound execution; select that identity explicitly");
   }
+  if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks);
   const definition = prepareWorkflowDefinition(virtual || matches[0],config.tasks,config);
   preflightInstalledWorkflow(definition,vault);
   ensureInstalledWorkflowRuntime(location);

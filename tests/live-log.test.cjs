@@ -12,7 +12,7 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
   const configFile=path.join(installation,'data.json');
   fs.writeFileSync(configFile,JSON.stringify({logsEnabled:true,tasks:[{id:'t',name:'Stream task',taskKind:'opencode',model:'fixture/model',prompt:'stream',status:'pending'}],
     workflows:[{id:'w',name:'Stream workflow',steps:[{id:'a',stepKind:'task',taskId:'t'}]}]}));
-  const rendered=[],children=[];let folder,job,p,modal,receiver,settled=false;
+  const rendered=[],children=[];let folder,job,p,modal,receiver,settled=false,closing=false;
   class Stub{}
   const obsidian={Plugin:Stub,Notice:Stub,Modal:class{constructor(app){this.app=app;}},ItemView:Stub,PluginSettingTab:Stub,Setting:Stub,
     MarkdownRenderer:{render(_app,text){rendered.push(text);}}};
@@ -22,6 +22,9 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
   });
   bundle.exports.setLauncher(script=>{
     folder=path.dirname(script);
+    // A slow deferred start can reach the launcher after until() has already
+    // failed. Its fixture must still finish so finally can report that failure.
+    if(closing)fs.writeFileSync(path.join(folder,'finish-test'),'');
     const child=spawn(process.execPath,['-e',`const fs=require('fs'),path=require('path');const dir=process.argv[1];fs.writeFileSync(path.join(dir,'stdout.txt'),'Primera salida TOKEN_PRIVADO');fs.writeFileSync(path.join(dir,'stderr.txt'),'Primera traza');const timer=setInterval(()=>{if(fs.existsSync(path.join(dir,'finish-test'))){clearInterval(timer);fs.unlinkSync(path.join(dir,'finish-test'));fs.appendFileSync(path.join(dir,'stdout.txt'),'\\nResultado final');fs.writeFileSync(path.join(dir,'done.txt'),'0');}},20);`,folder],{windowsHide:true,stdio:'ignore'});
     children.push(child);
     return {onError(fn){child.once('error',fn);},kill(){child.kill();},cleanup(){}};
@@ -53,6 +56,7 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
     assert.equal(p.settings.tasks[0].status,'completed');assert.match(rendered.at(-1),/Resultado final/);
     assert.ok(!rendered.at(-1).includes('TOKEN_PRIVADO'));assert.match(JSON.parse(fs.readFileSync(configFile)).tasks[0].output,/Resultado final/);
   }finally{
+    closing=true;
     if(folder&&fs.existsSync(folder)&&!settled)fs.writeFileSync(path.join(folder,'finish-test'),'');
     if(job)await job.catch(()=>{});
     clearInterval(receiver);p?.cliRequestHost?.close();p?.releasePluginExecution(false);
