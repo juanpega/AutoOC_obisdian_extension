@@ -2,6 +2,7 @@
 
 ## [1.7.13] - Candidato
 
+- Preparación de distribución: manifiesto y descriptor coherentes con los bytes LF de Git. La generación del descriptor rechaza artefactos CRLF para evitar una actualización desde GitHub con hashes incompatibles. El empaquetador conserva los bytes de paquetes ya verificados. Regresión contra blobs reales de Git con normalización Windows.
 - El Dashboard consulta el control de la ejecución exacta antes de mostrar `Needs attention`. Una tarea, workflow o paso Code en curso y controlado por el plugin conserva su indicación normal aunque el registro durable incluya marcas de recuperación. Aprobaciones, paradas no confirmadas, fallos y ejecuciones sin control confirmado mantienen sus avisos.
 
 ## [1.7.12] - Candidato

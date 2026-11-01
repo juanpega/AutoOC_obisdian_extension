@@ -22,7 +22,9 @@ Verify the extracted ZIP against the descriptor and execute a full workflow from
 
 Prepare the release notes and PR description, review the selected paths and complete the installed preparation workflow. Push the reviewed work branch only when authorized. PR creation, merge, tags, GitHub release publication and project rollout remain separate human decisions. Preparing the branch does not publish an update.
 
-The in-app updater reads the configured remote branch (main by default). It can offer the new version only after the release artifacts reach that branch. Keep all seven artifacts together; copying only the three legacy plugin files cannot install the standalone component.
+The in-app updater reads the manifest and artifacts from the repository's `main` branch. It can offer the new version only after the release artifacts reach that branch. Keep all seven artifacts together; copying only the three legacy plugin files cannot install the standalone component.
+
+Antes del merge, comprobar los hashes sobre los blobs preparados en Git o una extracción de `git archive`, además del ZIP local. `.gitattributes` normaliza estos archivos a LF; desde esta preparación de 1.7.13, el generador del descriptor rechaza CRLF para evitar diferencias entre los bytes locales y los descargados desde GitHub. El empaquetador conserva los bytes de un paquete previamente verificado, incluidos formatos históricos, sin normalizarlos después de calcular los hashes. No recalcular el descriptor contra archivos distintos de los que se publicarán. La prueba `tests/release-artifacts.test.cjs` verifica este contrato con Git real y `core.autocrlf=true`.
 
 ## Update an existing vault
 

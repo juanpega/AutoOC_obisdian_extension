@@ -3,7 +3,7 @@
   "version": "1.7.13",
   "sha256": {
     "main.js": "818f1e619150143821a1c93152c52d8271c6c599a62be82f9421287e87f663cb",
-    "manifest.json": "a676214def59628f59711015cf291bc34379870da9fdad4f36b146a5d242c2e2",
+    "manifest.json": "cf9a8d66000fda6af2de7bb6c07406f67290b56952bc06f78cb4f57b891447af",
     "styles.css": "a91139ff227a34be1a77f6fbbb4f76f6a8792ee9a8161cdc1790f9cb7be337cb",
     "autooc-cli.cjs": "fa04017be6d9815753cc54e1244b56e583d69f7dbe62610c85c53b8b73d6b721",
     "autooc-runtime.cjs": "ec02bf83a1fe89d8636308c53a317b2a5fffde02179bc638e9f000d6edc07ad8",

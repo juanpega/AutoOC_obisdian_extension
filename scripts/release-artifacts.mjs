@@ -8,10 +8,20 @@ export const releaseArtifacts = Object.freeze([
   "release-integrity.json",
 ]);
 
+function canonicalArtifact(root, file) {
+  const bytes = fs.readFileSync(path.join(root, file));
+  // These UTF-8 release files are normalized to LF by .gitattributes. Hashing
+  // CRLF here would produce a valid local ZIP but an invalid GitHub download.
+  if (bytes.includes(Buffer.from("\r\n"))) {
+    throw new Error(`Release artifact must use LF line endings before hashing: ${file}`);
+  }
+  return bytes;
+}
+
 export function writeReleaseIntegrity(root) {
   const version = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8")).version;
   const sha256 = Object.fromEntries(releaseArtifacts.filter(file => file !== "release-integrity.json").map(file =>
-    [file, createHash("sha256").update(fs.readFileSync(path.join(root, file))).digest("hex")]));
+    [file, createHash("sha256").update(canonicalArtifact(root, file)).digest("hex")]));
   fs.writeFileSync(path.join(root, "release-integrity.json"), JSON.stringify({ schemaVersion: 1, version, sha256 }, null, 2) + "\n");
 }
 

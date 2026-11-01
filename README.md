@@ -6,6 +6,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Automatización y agentes:** [referencia completa de la CLI: comandos, parámetros y ejemplos](#referencia-completa-de-la-cli-autooc).
 
+**Seguimiento de desarrollo:** [expediente 1.7.13: cambios, flujos, contratos, límites y preparación de entrega](docs/autoOC/04_Desarrollo/entrega-1.7.13-20261101/README.md).
+
 ## Dashboard por áreas
 
 Desde 1.7.12, **Dashboard** organiza los workflows y tareas por su campo **Area**, con un grupo **No area** para los elementos sin asignar. Para reorganizarlos, cambia su área desde el editor o las acciones de selección. Las posiciones del mapa anterior se conservan en la configuración.
