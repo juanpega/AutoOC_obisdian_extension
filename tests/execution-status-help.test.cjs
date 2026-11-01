@@ -17,7 +17,7 @@ function harness() {
   const obsidian={Plugin:Stub,ItemView:Stub,PluginSettingTab:Stub,Setting:Stub,Notice:class {constructor(text){notices.push(text);}},
     Modal:class {constructor(){this.contentEl=new Element();} open(){opened.push(this);this.onOpen();} close(){this.onClose();}}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8')+
-    '\nmodule.exports.helpTest={AutoOCView,executionStatusHelp,ExecutionStatusHelpModal};',
+    '\nmodule.exports.helpTest={AutoOCView,executionStatusHelp,ExecutionStatusHelpModal,ConfirmModal,ExecutionJournal,acquireExecutionLease,resolveInstalledWorkflowLocation};',
     {module:mod,exports:mod.exports,require:id=>id==='obsidian'?obsidian:require(id),process,Buffer,console,
       setTimeout,clearTimeout,setInterval,clearInterval,AbortController,
       navigator:{clipboard:{async writeText(value){copies.push(value);}}}});
@@ -28,7 +28,7 @@ function harness() {
   const render=(item,kind)=>{plugin.settings[kind==='task'?'tasks':'workflows']=[item];const root=new Element();view.renderExecutionStatus(root,item,kind);return root;};
   view.expandedTasks=new Set();view.renderSelectionCheckbox=()=>{};view.renderAvailabilityButton=()=>{};
   const renderCard=item=>{plugin.settings.tasks=[item];const root=new Element();view.renderTaskCard(root,item);return root;};
-  return {view,plugin,render,renderCard,opened,copies,notices,help:executionStatusHelp};
+  return {view,plugin,render,renderCard,opened,copies,notices,help:executionStatusHelp,internals:mod.exports.helpTest,Plugin:mod.exports.default};
 }
 const base={name:'Synthetic',status:'completed',runId:'run-old',phase:'completed',owned:false};
 test('finished history needs no live owner; incomplete and uncertain attempts still need guidance',()=>{
@@ -213,4 +213,78 @@ test('blocked-run help stays bound to the observed attempt after the catalog cha
     assert.equal(h.view.destination,undefined);
     if(action==='Refresh information')assert.ok(modal.contentEl.all().some(el=>el.textContent.includes('no longer available')));
   }
+});
+
+async function historicalFixture(t,phase='ready') {
+  const os=require('node:os'),h=harness();
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-old-review-')));
+  const directory=path.join(vault,'.obsidian/plugins/auto-oc'),runtime=path.join(directory,'runtime');
+  fs.mkdirSync(runtime,{recursive:true});
+  const lease=h.internals.acquireExecutionLease(runtime);
+  t.after(()=>{lease.release();assert.equal(path.dirname(vault),fs.realpathSync.native(os.tmpdir()));assert.ok(path.basename(vault).startsWith('autooc-old-review-'));fs.rmSync(vault,{recursive:true,force:true});});
+  const old=await h.internals.ExecutionJournal.create(lease,'@task:old','a'.repeat(64),'task');
+  if(phase==='in_flight')await old.begin('task');
+  const newer=await h.internals.ExecutionJournal.create(lease,'@task:old','b'.repeat(64),'task');
+  await newer.abandon(0,'Previous human decision',true);
+  const oldTask={id:'old',name:'Current item',disabled:true,status:'abandoned',prompt:'PRIVATE_PROMPT',output:'PRIVATE_OUTPUT',runtimeExecution:{...newer.snapshot(),workflowId:'@task:old'}};
+  const clicked={id:'clicked',name:'New task',status:'pending',taskKind:'opencode',scheduleType:'manual'};
+  h.plugin.settings={tasks:[oldTask,clicked],workflows:[]};
+  const file=path.join(directory,'data.json');fs.writeFileSync(file,JSON.stringify(h.plugin.settings));
+  const location=h.internals.resolveInstalledWorkflowLocation(vault);
+  Object.setPrototypeOf(h.plugin,h.Plugin.prototype);
+  Object.assign(h.plugin,{app:{workspace:{getLeavesOfType:()=>[]}},selectedExecutionLocation:()=>location,pluginExecutionLease:lease,
+    settingsWriter:{hasPendingWrites:false},runningProcesses:new Map(),runningCodexClients:new Map(),workflowDelayControllers:new Map(),legacyAttempts:new Map()});
+  const before=fs.readFileSync(file),state=old.snapshot(),oldFile=path.join(runtime,state.runId+'.json');
+  const newerFile=path.join(runtime,newer.snapshot().runId+'.json'),newerBytes=fs.readFileSync(newerFile);
+  return {...h,old,oldTask,clicked,state,file,oldFile,newerFile,newerBytes,before,runtime};
+}
+
+for(const phase of ['ready','in_flight'])test(`older ${phase} attempt opens from blocked Run and closes only after confirmation`,async t=>{
+  const h=await historicalFixture(t,phase);let confirmations=0,confirm=false;
+  h.internals.ConfirmModal.prototype.openAndWait=async function(){confirmations++;this.reason='Original terminal has ended; keep unknown outcome';return confirm;};
+  h.view.showTaskStartFailure(h.clicked,new Error(`Previous execution requires continuation or reconciliation (run ${h.state.runId}, workflow @task:old, step task). No new task was started.`));
+  assert.equal(h.opened.length,1);const modal=h.opened[0];
+  assert.ok(modal.contentEl.all().some(e=>e.textContent==='Review an older attempt'));
+  assert.equal(confirmations,0);assert.deepEqual(fs.readFileSync(h.file),h.before);
+  await modal.contentEl.all().find(e=>e.textContent==='Copy diagnostics').onclick();
+  assert.doesNotMatch(h.copies[0],/PRIVATE_|Current item/);assert.equal(JSON.parse(h.copies[0]).runId,h.state.runId);
+  const close=modal.contentEl.all().find(e=>e.textContent==='Close this old attempt…');
+  await close.onclick();assert.equal(confirmations,1);assert.equal(JSON.parse(fs.readFileSync(h.oldFile)).phase,phase);
+  confirm=true;await close.onclick();
+  const result=JSON.parse(fs.readFileSync(h.oldFile));
+  assert.equal(result.phase,'abandoned');assert.equal(result.abandonment.outcome,'unknown');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(h.runtime,result.abandonment.snapshot))),JSON.parse(JSON.stringify(h.state)));
+  assert.deepEqual(fs.readFileSync(h.file),h.before);assert.deepEqual(fs.readFileSync(h.newerFile),h.newerBytes);
+  assert.equal(h.oldTask.disabled,true);assert.equal(h.oldTask.runtimeExecution.runId,JSON.parse(h.newerBytes).runId);
+  assert.ok(h.notices.some(s=>s.includes('Nothing was started')));
+});
+
+for(const change of ['revision','binding','active','write','lease','update'])test(`historical confirmation rejects changed ${change} and preserves evidence`,async t=>{
+  const h=await historicalFixture(t),before=fs.readFileSync(h.oldFile);
+  h.plugin.openHistoricalExecutionRecovery('@task:old',h.state.runId);
+  let expected=before;
+  h.internals.ConfirmModal.prototype.openAndWait=async function(){
+    this.reason='Human decision';
+    if(change==='revision'){await h.old.begin('task');expected=fs.readFileSync(h.oldFile);}
+    if(change==='binding'){const d=JSON.parse(fs.readFileSync(h.file));d.tasks[0].runtimeExecution.runId=h.state.runId;fs.writeFileSync(h.file,JSON.stringify(d));}
+    if(change==='active')h.plugin.runningProcesses.set('other',{});
+    if(change==='write')fs.writeFileSync(h.file+'.write-intent','pending');
+    if(change==='lease')h.plugin.pluginExecutionLease=undefined;
+    if(change==='update')h.plugin.updateInProgress=true;
+    return true;
+  };
+  await h.opened[0].contentEl.all().find(e=>e.textContent==='Close this old attempt…').onclick();
+  assert.deepEqual(fs.readFileSync(h.oldFile),expected);assert.deepEqual(fs.readFileSync(h.newerFile),h.newerBytes);
+  assert.ok(!h.notices.some(s=>s.includes('Old attempt closed')));assert.ok(h.notices.length>0);
+});
+
+test('older attempts list reaches review without starting any task',async t=>{
+  const h=await historicalFixture(t),before=fs.readFileSync(h.oldFile);
+  h.plugin.runTask=()=>{throw Error('must not start work');};
+  await h.plugin.openHistoricalAttemptsReview();
+  const list=h.opened[0];
+  assert.equal(list.contentEl.all().filter(e=>e.textContent==='Review this attempt').length,1);
+  list.contentEl.all().find(e=>e.textContent==='Review this attempt').onclick();
+  assert.ok(h.opened[1].contentEl.all().some(e=>e.textContent==='Review an older attempt'));
+  assert.deepEqual(fs.readFileSync(h.oldFile),before);assert.deepEqual(fs.readFileSync(h.file),h.before);
 });

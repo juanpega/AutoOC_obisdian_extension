@@ -11,7 +11,7 @@ import { BulkCatalogModal } from "./catalog-bulk-modal";
 import { AiDraftModal } from "./ai-draft-modal";
 import { generateDraftText } from "./ai-draft-runner";
 import { saveGeneratedDefinition, type DraftKind, type GeneratedDraft } from "./ai-draft";
-import { executionStatusHelp, ExecutionStatusHelpModal, type ExecutionHelpSnapshot } from "./execution-status-help";
+import { executionStatusHelp, ExecutionStatusHelpModal, HistoricalAttemptsModal, type ExecutionHelpSnapshot } from "./execution-status-help";
 import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
@@ -83,6 +83,7 @@ import { CodeStepLogModal, CodeStepHistoryModal } from "./workflow-code-modals";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { abandonInstalledExecution, inspectTerminalExecution, disposeTerminalExecution } from "./execution-abandonment";
+import { inspectHistoricalAttempt, closeHistoricalAttempt, assertUnboundHistoricalAttempt, catalogReferencesRun } from "./historical-execution-recovery";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { observeCheckpoint } from "./checkpoint-observation";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
@@ -1925,6 +1926,12 @@ export default class AutoOCPlugin extends Plugin {
         callback: () => this.activateView(),
       });
 
+
+      this.addCommand({
+        id: "review-older-attempts",
+        name: "Review older attempts",
+        callback: () => {void this.openHistoricalAttemptsReview().catch(error=>new Notice(this.redactSecrets(String(error))));},
+      });
 
       this.addCommand({
         id: "create-task",
@@ -3789,6 +3796,69 @@ export default class AutoOCPlugin extends Plugin {
       if(this.sharedWorkflowExecution===reservation)this.sharedWorkflowExecution=undefined;
       await this.loadSettings();this.refreshOpenViews();
     }
+  }
+
+  async openHistoricalAttemptsReview():Promise<void> {
+    this.assertLifecycleOpen();
+    const {runtime,names}=this.journalNames();
+    const rows:Array<{name:string;runId:string;workflowId:string;phase:string}>=[];
+    for(const file of names) {
+      const {checkpoint}=await observeCheckpoint(runtime,file.slice(0,-5));
+      this.assertLifecycleOpen();
+      if(!['ready','in_flight'].includes(checkpoint.phase) || catalogReferencesRun(this.settings,checkpoint.runId))continue;
+      const task=this.settings.tasks.find(t=>standaloneTaskWorkflow(t.id).id===checkpoint.workflowId);
+      const workflow=this.settings.workflows.find(w=>w.id===checkpoint.workflowId);
+      rows.push({name:task?.name || workflow?.name || checkpoint.workflowId,runId:checkpoint.runId,workflowId:checkpoint.workflowId,phase:checkpoint.phase});
+    }
+    new HistoricalAttemptsModal(this.app,rows,(workflowId,runId)=>{
+      try {this.openHistoricalExecutionRecovery(workflowId,runId);}
+      catch(error){new Notice(this.redactSecrets(String(error)));}
+    }).open();
+  }
+
+  openHistoricalExecutionRecovery(workflowId:string,runId:string):void {
+    this.assertLifecycleOpen();
+    const location=this.selectedExecutionLocation();
+    const observed=inspectHistoricalAttempt(location,workflowId,runId,this.settings);
+    const task=this.settings.tasks.find(t=>standaloneTaskWorkflow(t.id).id===workflowId);
+    const workflow=this.settings.workflows.find(w=>w.id===workflowId);
+    const snapshot=():ExecutionHelpSnapshot|undefined=>{
+      try {
+        this.assertLifecycleOpen();
+        const current=inspectHistoricalAttempt(this.selectedExecutionLocation(),workflowId,runId,this.settings);
+        if(JSON.stringify(current)!==JSON.stringify(observed))return undefined;
+        return {name:`Older attempt: ${task?.name || workflow?.name || workflowId}`,status:'pending',runId,phase:observed.phase,owned:false};
+      } catch {return undefined;}
+    };
+    new ExecutionStatusHelpModal(this.app,snapshot,()=>{},this.manifest.version,true,{workflowId,revision:observed.revision,
+      closeAttempt:async()=>{
+        try {
+          const modal=new ConfirmModal(this.app,'Close this old attempt?',
+            `Attempt: ${runId}. Revision: ${observed.revision}. Confirm only after checking that its original external process has ended. The outcome remains UNKNOWN. This preserves the current task or workflow and all history. It does not stop processes, undo effects or start another run. Enter why you are closing this attempt.`,true);
+          if(!await modal.openAndWait())return false;
+          const assertIdle=()=>{
+            this.assertLifecycleOpen();this.pluginExecutionLease?.assertOwned();this.selectedExecutionLocation();
+            if(!this.pluginExecutionLease || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress ||
+              this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size ||
+              this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || this.cliRequestHost?.hasPendingWork) throw new Error('An execution, save or update is active; wait before closing this attempt');
+            assertUnboundHistoricalAttempt(this.settings,runId);
+          };
+          assertIdle();
+          const reservation={workflowId,runId,controller:new AbortController()};
+          this.sharedWorkflowExecution=reservation;
+          try {
+            await closeHistoricalAttempt(observed,this.pluginExecutionLease!,modal.reason,true,()=>{
+              this.assertLifecycleOpen();this.selectedExecutionLocation();
+              if(this.sharedWorkflowExecution!==reservation || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.settingsWriter.hasPendingWrites) throw new Error('Recovery ownership changed; review again');
+              assertUnboundHistoricalAttempt(this.settings,runId);
+            },()=>this.beginExecutionEffects());
+          } finally {
+            if(this.sharedWorkflowExecution===reservation)this.sharedWorkflowExecution=undefined;
+            this.refreshOpenViews();
+          }
+          return true;
+        } catch(error) {throw new Error(this.redactSecrets(String(error)));}
+      }}).open();
   }
 
   async confirmAbandonTaskExecution(taskId:string):Promise<void> {
@@ -6675,6 +6745,8 @@ class AutoOCView extends ItemView {
         new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
         return;
       }
+      try {this.plugin.openHistoricalExecutionRecovery(workflowId,runId);return;}
+      catch { /* Missing, changed or currently bound journals keep the original diagnostic. */ }
     }
     const unfinished = !!binding?.requiresReconciliation && detail ===
       `Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`;
@@ -10718,6 +10790,15 @@ class AutoOCSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
+
+    new Setting(containerEl).setName('Review older attempts')
+      .setDesc('Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.')
+      .addButton(button=>button.setButtonText('Review').onClick(async()=>{
+        button.setDisabled(true);
+        try {await this.plugin.openHistoricalAttemptsReview();}
+        catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
+        finally {button.setDisabled(false);}
+      }));
 
     addDashboardBubbleSizeSetting(containerEl, {
       getDiameter: () => this.plugin.getDashboardBubbleDiameter(),

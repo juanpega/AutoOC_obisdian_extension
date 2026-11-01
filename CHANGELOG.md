@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.15] - Candidato
+
+- Añade `Review older attempts` en los ajustes de AutoOC y en la paleta de comandos, para revisar intentos pendientes que ya no están vinculados a la tarea o workflow actual.
+- `Close this old attempt…` solicita confirmación y motivo, verifica de nuevo identidad, revisión e inactividad y utiliza el abandono oficial. Conserva el catálogo actual, su estado desactivado, los resultados y los intentos posteriores; no ejecuta trabajo nuevo.
+- Un rechazo de Run por un intento antiguo validado también abre esta revisión. Los journals ausentes, modificados o no válidos no se redirigen a otra ejecución.
+
 ## [1.7.14] - Candidato
 
 - Cuando Run queda bloqueado por un intento anterior identificado, abre ayuda contextual y permite llegar directamente a los controles de la tarea o workflow que bloquea, aunque sea otro elemento. La consulta no inicia, reanuda, cierra ni modifica ejecuciones.

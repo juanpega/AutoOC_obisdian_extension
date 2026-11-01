@@ -2,6 +2,10 @@
 
 ## Entrega actual
 
+[Candidato 1.7.15: recuperar intentos antiguos desde la interfaz](recuperacion-historica-1.7.15/README.md).
+
+## Preparación anterior
+
 [Candidato 1.7.14: salida guiada ante un intento anterior que bloquea Run](recuperacion-guiada-1.7.14/README.md).
 
 ## Entrega anterior

@@ -295,6 +295,8 @@ The **1.7.14 development candidate** opens **Review the previous run** automatic
 
 Cards that need attention offer **What can I do?**. The help explains the recorded state and opens that item's details and options; if a task belongs to the current workflow attempt, it opens that workflow. A normally running or successfully completed attempt does not require an attention warning.
 
+The **1.7.15 development candidate** also handles an older unfinished attempt that is no longer linked to the current task or workflow. Open **Settings → AutoOC → Review older attempts → Review**, or search for **AutoOC: Review older attempts** in Obsidian's command palette. Select **Review this attempt**, check the original terminal and its effects, and choose **Close this old attempt…** only after the original process has ended. The separate confirmation requires your reason and records the outcome as unknown. Current tasks/workflows, disabled state, results and newer attempts are kept unchanged. Nothing starts automatically; return to your intended task and choose Run when ready. A matching blocked task Run also opens this review directly. Closing is rejected if the attempt has changed, is now linked to a current item, or work, writes or an update are active.
+
 - **Last run completed**: no owner recovery is needed; its record and history remain available.
 - **Needs review** or **Activity not confirmed**: review the log and check the original process before continuing or repeating work. Lack of local control does not prove that the process has ended.
 - **Closed with unknown outcome**: preserves the earlier decision and unknown effects; it does not mean success.

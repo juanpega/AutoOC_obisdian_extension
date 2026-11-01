@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.14",
+      version: "1.7.15",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -2223,25 +2223,28 @@ function executionStatusHelp(s) {
   };
 }
 var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
-  constructor(app, snapshot, showDetails, version, startBlocked = false) {
+  constructor(app, snapshot, showDetails, version, startBlocked = false, historical) {
     super(app);
     this.snapshot = snapshot;
     this.showDetails = showDetails;
     this.version = version;
     this.startBlocked = startBlocked;
+    this.historical = historical;
   }
   onOpen() {
+    var _a, _b;
     const root = this.contentEl;
     root.empty();
     root.addClass("auto-oc-execution-help");
     const current = this.snapshot();
-    root.createEl("h3", { text: this.startBlocked ? "Review the previous run" : "Execution help" });
+    root.createEl("h3", { text: this.historical ? "Review an older attempt" : this.startBlocked ? "Review the previous run" : "Execution help" });
     if (!current) {
       root.createEl("p", { text: "This item or recorded attempt is no longer available. Close this help window and check the panel again." });
       return;
     }
     const help = executionStatusHelp(current);
     root.createEl("p", { text: current.name });
+    if (this.historical) root.createEl("p", { text: "This older attempt is still unfinished, although the task or workflow now has a different recorded attempt or has been removed. Closing it keeps the current items, disabled state, results and history unchanged. It does not stop a process, undo effects or start new work. Check the original terminal and its effects first." });
     if (this.startBlocked) root.createEl("p", {
       text: "No new task was started. AutoOC has a previous attempt to review before starting again. Your task definition and history are preserved."
     });
@@ -2250,9 +2253,24 @@ var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
     root.createEl("p", { text: help.explanation });
     root.createEl("h4", { text: "What you can do" });
     root.createEl("p", { text: help.next });
-    root.createEl("p", { text: "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
+    root.createEl("p", { text: this.historical ? "Opening this review changes nothing. Closing the old attempt requires a separate confirmation and records its outcome as unknown." : "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
     const actions = root.createDiv("auto-oc-card-actions");
-    actions.createEl("button", { text: this.startBlocked ? "Open recovery controls" : current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
+    if (this.historical) {
+      const close = actions.createEl("button", { text: "Close this old attempt\u2026" });
+      close.onclick = async () => {
+        close.disabled = true;
+        try {
+          if (await this.historical.closeAttempt()) {
+            this.close();
+            new import_obsidian.Notice("Old attempt closed. Nothing was started. Return to your task and choose Run when ready.");
+          }
+        } catch (error) {
+          new import_obsidian.Notice(String(error));
+        } finally {
+          close.disabled = false;
+        }
+      };
+    } else actions.createEl("button", { text: this.startBlocked ? "Open recovery controls" : current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
       this.close();
       this.showDetails();
     };
@@ -2264,6 +2282,8 @@ var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
       status: current.status,
       phase: current.phase,
       runId: current.runId,
+      workflowId: (_a = this.historical) == null ? void 0 : _a.workflowId,
+      revision: (_b = this.historical) == null ? void 0 : _b.revision,
       localControl: current.owned,
       requiresReview: !!current.requiresReconciliation,
       uncertainOutcome: !!current.terminalUncertainty,
@@ -2280,6 +2300,32 @@ var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
         new import_obsidian.Notice("Could not copy. You can select the diagnostics text instead.");
       }
     };
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var HistoricalAttemptsModal = class extends import_obsidian.Modal {
+  constructor(app, rows, review) {
+    super(app);
+    this.rows = rows;
+    this.review = review;
+  }
+  onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.createEl("h3", { text: "Review older attempts" });
+    root.createEl("p", { text: "These unfinished attempts are no longer linked to the current task or workflow. Review one at a time. Opening this list does not run or close anything." });
+    if (!this.rows.length) root.createEl("p", { text: "No older unfinished attempts found. Attempts linked to current items have recovery controls on their own cards." });
+    for (const row of this.rows) {
+      const item = root.createDiv("auto-oc-card");
+      item.createEl("p", { text: row.name });
+      item.createEl("p", { text: `${row.phase} \xB7 ${row.runId}` });
+      item.createEl("button", { text: "Review this attempt" }).onclick = () => {
+        this.close();
+        this.review(row.workflowId, row.runId);
+      };
+    }
   }
   onClose() {
     this.contentEl.empty();
@@ -3249,26 +3295,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs32.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs33.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn6 } = require("child_process");
   const child = spawn6("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs32.unlinkSync(launcherFile);
+      fs33.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs32.unlinkSync(psScriptFile);
+      fs33.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3276,12 +3322,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs32.unlinkSync(launcherFile);
+      fs33.unlinkSync(launcherFile);
     } catch (e) {
     }
     if (removeScript) {
       try {
-        fs32.unlinkSync(psScriptFile);
+        fs33.unlinkSync(psScriptFile);
       } catch (e) {
       }
     }
@@ -3303,7 +3349,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs32.existsSync(effectivePidFile) ? String(fs32.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs33.existsSync(effectivePidFile) ? String(fs33.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn6("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -3312,7 +3358,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs32.unlinkSync(effectivePidFile);
+      fs33.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -3334,18 +3380,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
 }
 function launchHiddenSh(shScriptFile, pidFile) {
   var _a;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const { spawn: spawn6 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs32.chmodSync(shScriptFile, 448);
+    fs33.chmodSync(shScriptFile, 448);
   } catch (e) {
   }
   const child = spawn6("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs32.unlinkSync(shScriptFile);
+      fs33.unlinkSync(shScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3353,7 +3399,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs32.unlinkSync(shScriptFile);
+        fs33.unlinkSync(shScriptFile);
       } catch (e) {
       }
     }
@@ -3374,7 +3420,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs32.existsSync(effectivePidFile) ? String(fs32.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs33.existsSync(effectivePidFile) ? String(fs33.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -3389,7 +3435,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs32.unlinkSync(effectivePidFile);
+      fs33.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -6829,7 +6875,7 @@ async function readPanelCatalog(file) {
 // main.ts
 var import_obsidian8 = require("obsidian");
 var os7 = __toESM(require("os"));
-var fs31 = __toESM(require("fs"));
+var fs32 = __toESM(require("fs"));
 var path29 = __toESM(require("path"));
 var crypto2 = __toESM(require("crypto"));
 
@@ -6900,13 +6946,13 @@ async function executeCodexTask(client, request) {
 // code-runtime.ts
 function executeCode(options) {
   var _a;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const path30 = require("path");
   const vm2 = require("vm");
   const vaultBase = options.vaultBase;
   const defaultCwd = options.cwd;
   const resolveInVault = (p) => {
-    const root = fs32.realpathSync(vaultBase);
+    const root = fs33.realpathSync(vaultBase);
     const resolved = path30.resolve(root, p || ".");
     if (resolved !== root && !resolved.startsWith(root + path30.sep)) {
       throw new Error(`Path escapes vault: ${p}`);
@@ -6915,7 +6961,7 @@ function executeCode(options) {
     for (const component of path30.relative(root, resolved).split(path30.sep).filter(Boolean)) {
       current = path30.join(current, component);
       try {
-        if (fs32.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
+        if (fs33.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
       } catch (error) {
         if (error.code === "ENOENT") break;
         throw error;
@@ -6923,10 +6969,10 @@ function executeCode(options) {
     }
     return resolved;
   };
-  const readText = (p) => fs32.readFileSync(p, "utf8");
+  const readText = (p) => fs33.readFileSync(p, "utf8");
   const writeText = (p, content) => {
-    fs32.mkdirSync(path30.dirname(p), { recursive: true });
-    fs32.writeFileSync(p, String(content), "utf8");
+    fs33.mkdirSync(path30.dirname(p), { recursive: true });
+    fs33.writeFileSync(p, String(content), "utf8");
     return p;
   };
   const sandbox = {
@@ -6958,13 +7004,13 @@ function executeCode(options) {
       append: (p, content) => {
         var _a2;
         const full = resolveInVault(p);
-        fs32.mkdirSync(path30.dirname(full), { recursive: true });
-        fs32.appendFileSync(full, String(content), "utf8");
+        fs33.mkdirSync(path30.dirname(full), { recursive: true });
+        fs33.appendFileSync(full, String(content), "utf8");
         (_a2 = options.onVaultMutation) == null ? void 0 : _a2.call(options, { path: full, operation: "append" });
         return full;
       },
-      exists: (p) => fs32.existsSync(resolveInVault(p)),
-      list: (p = ".") => fs32.readdirSync(resolveInVault(p))
+      exists: (p) => fs33.existsSync(resolveInVault(p)),
+      list: (p = ".") => fs33.readdirSync(resolveInVault(p))
     };
   }
   if (options.codeAllowFiles) {
@@ -6975,12 +7021,12 @@ function executeCode(options) {
       write: (p, content) => writeText(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p), content),
       append: (p, content) => {
         const full = path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p);
-        fs32.mkdirSync(path30.dirname(full), { recursive: true });
-        fs32.appendFileSync(full, String(content), "utf8");
+        fs33.mkdirSync(path30.dirname(full), { recursive: true });
+        fs33.appendFileSync(full, String(content), "utf8");
         return full;
       },
-      exists: (p) => fs32.existsSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p)),
-      list: (p = ".") => fs32.readdirSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p))
+      exists: (p) => fs33.existsSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p)),
+      list: (p = ".") => fs33.readdirSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p))
     };
   }
   if (options.codeAllowTerminal) {
@@ -7012,7 +7058,7 @@ function executeCode(options) {
 }
 function codeNodeExecutable() {
   if (!process.versions.electron) return process.execPath;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const path30 = require("path");
   const directories = (process.env.PATH || process.env.Path || "").split(path30.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path30.isAbsolute(directory));
   if (process.platform === "win32") {
@@ -7023,8 +7069,8 @@ function codeNodeExecutable() {
   for (const directory of directories) {
     const file = path30.join(directory, process.platform === "win32" ? "node.exe" : "node");
     try {
-      if (fs32.statSync(file).isFile()) {
-        fs32.accessSync(file, fs32.constants.X_OK);
+      if (fs33.statSync(file).isFile()) {
+        fs33.accessSync(file, fs33.constants.X_OK);
         return file;
       }
     } catch (e) {
@@ -8661,12 +8707,73 @@ async function abandonInstalledExecution(options) {
   }
 }
 
+// historical-execution-recovery.ts
+var fs30 = __toESM(require("fs"));
+var import_crypto14 = require("crypto");
+function catalogEntries(catalog) {
+  if (!Array.isArray(catalog.tasks) || !Array.isArray(catalog.workflows)) throw new Error("Catalog is unavailable; review cannot continue");
+  return [...catalog.tasks, ...catalog.workflows, ...catalog.workflows.flatMap((w) => (w.steps || []).map((s) => s.codeExecution).filter(Boolean))];
+}
+function catalogReferencesRun(catalog, runId) {
+  return catalogEntries(catalog).some((entry) => {
+    var _a;
+    return ((_a = entry.runtimeExecution) == null ? void 0 : _a.runId) === runId;
+  });
+}
+function assertUnboundHistoricalAttempt(catalog, runId) {
+  const entries = catalogEntries(catalog);
+  if (catalogReferencesRun(catalog, runId)) throw new Error("This attempt is linked to a current item; use its recovery controls");
+  if (entries.some((entry) => {
+    var _a;
+    return entry.status === "running" || entry.pendingCodexApproval || ((_a = entry.legacyExecution) == null ? void 0 : _a.stopState);
+  })) throw new Error("An execution may still be active; review it before closing this attempt");
+}
+function inspectHistoricalAttempt(location, workflowId, runId, catalog) {
+  assertUnboundHistoricalAttempt(catalog, runId);
+  const state = readExecutionCheckpoint(location.runtimeDirectory, runId);
+  if (state.workflowId !== workflowId || !["ready", "in_flight"].includes(state.phase)) throw new Error("This unfinished attempt is no longer available; review again");
+  return {
+    ...dispositionLocation(location),
+    workflowId,
+    runId,
+    revision: state.revision,
+    definitionHash: state.definitionHash,
+    phase: state.phase,
+    stepCount: state.steps.length,
+    checkpointHash: (0, import_crypto14.createHash)("sha256").update(JSON.stringify(state)).digest("hex")
+  };
+}
+async function closeHistoricalAttempt(observed, lease, reason, acknowledgedUnknownEffects, assertHostIdle, beforeEffects) {
+  const location = resolveInstalledWorkflowLocation(observed.vault, observed.installationDirectory);
+  return catalogTransaction(location.configurationFile, async () => {
+    assertHostIdle();
+    lease.assertOwned();
+    if (fs30.existsSync(location.configurationFile + ".write-lock") || fs30.existsSync(location.configurationFile + ".write-intent") || fs30.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs30.readdirSync(location.runtimeDirectory).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("A write or update is pending; wait before reviewing this attempt");
+    const catalog = JSON.parse(fs30.readFileSync(location.configurationFile, "utf8"));
+    const current = inspectHistoricalAttempt(location, observed.workflowId, observed.runId, catalog);
+    if (JSON.stringify(current) !== JSON.stringify(observed)) throw new Error("The recorded attempt changed; open its review again");
+    if (acknowledgedUnknownEffects !== true || typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("Confirm the unknown outcome and enter a reason of 1\u20131000 characters");
+    assertHostIdle();
+    beforeEffects();
+    return abandonInstalledExecution({
+      vault: location.vault,
+      installationDirectory: location.installationDirectory,
+      lease,
+      runId: observed.runId,
+      workflowId: observed.workflowId,
+      revision: observed.revision,
+      reason,
+      acknowledgedUnknownEffects
+    });
+  });
+}
+
 // checkpoint-observation.ts
 var path28 = __toESM(require("path"));
-var fs30 = __toESM(require("fs"));
+var fs31 = __toESM(require("fs"));
 async function observeCheckpoint(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path28.join(directory, runId + ".json"), stat = fs30.lstatSync(file), text = await readSettingsTextAsync(file);
+  const file = path28.join(directory, runId + ".json"), stat = fs31.lstatSync(file), text = await readSettingsTextAsync(file);
   if (text === null) throw new Error("Execution checkpoint is absent");
   let checkpoint;
   try {
@@ -8678,7 +8785,7 @@ async function observeCheckpoint(directory, runId) {
   if (checkpoint.runId !== runId) throw new Error("Execution identity changed");
   const hash = await hashTextCooperatively(text);
   const assertCurrent = () => {
-    const current = fs30.lstatSync(file);
+    const current = fs31.lstatSync(file);
     if (!current.isFile() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error("Execution checkpoint changed during observation");
   };
   assertCurrent();
@@ -9392,7 +9499,7 @@ function getUvCandidates() {
 function resolveUvBin() {
   for (const candidate of getUvCandidates()) {
     try {
-      if (fs31.existsSync(candidate)) return candidate;
+      if (fs32.existsSync(candidate)) return candidate;
     } catch (e) {
     }
   }
@@ -9563,15 +9670,15 @@ function saveLogToFile(vaultBasePath, taskId, output) {
   if (!output || !output.trim()) return null;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    fs31.mkdirSync(logDir, { recursive: true });
+    fs32.mkdirSync(logDir, { recursive: true });
   } catch (e) {
   }
   const timestamp = formatTimestampForLog();
   const logFile = path29.join(logDir, `${timestamp}.log`);
   try {
-    fs31.writeFileSync(logFile, output, "utf8");
+    fs32.writeFileSync(logFile, output, "utf8");
     const latestFile = path29.join(logDir, "latest.log");
-    fs31.writeFileSync(latestFile, output, "utf8");
+    fs32.writeFileSync(latestFile, output, "utf8");
     return logFile;
   } catch (e) {
     return null;
@@ -9580,8 +9687,8 @@ function saveLogToFile(vaultBasePath, taskId, output) {
 function getLogHistory(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return [];
-    const files2 = fs31.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    if (!fs32.existsSync(logDir)) return [];
+    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
     return files2.map((f) => ({
       file: path29.join(logDir, f),
       timestamp: formatLogFilenameTimestamp(f)
@@ -9592,7 +9699,7 @@ function getLogHistory(vaultBasePath, taskId) {
 }
 function readLogFile(filePath) {
   try {
-    return formatLogContent(fs31.readFileSync(filePath, "utf8"));
+    return formatLogContent(fs32.readFileSync(filePath, "utf8"));
   } catch (e) {
     return "(error reading log file)";
   }
@@ -9601,13 +9708,13 @@ function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
   if (maxLogs <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return;
-    const files2 = fs31.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    if (!fs32.existsSync(logDir)) return;
+    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
     while (files2.length > maxLogs) {
       const oldFile = files2.shift();
       if (oldFile) {
         try {
-          fs31.unlinkSync(path29.join(logDir, oldFile));
+          fs32.unlinkSync(path29.join(logDir, oldFile));
         } catch (e) {
         }
       }
@@ -9619,9 +9726,9 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
   if (retentionDays <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return;
+    if (!fs32.existsSync(logDir)) return;
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
-    const files2 = fs31.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
     for (const f of files2) {
       const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
       if (match) {
@@ -9629,7 +9736,7 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
         const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
         if (fileDate.getTime() < cutoff) {
           try {
-            fs31.unlinkSync(path29.join(logDir, f));
+            fs32.unlinkSync(path29.join(logDir, f));
           } catch (e) {
           }
         }
@@ -9641,16 +9748,16 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
 function clearTaskLogs(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return;
-    const files2 = fs31.readdirSync(logDir);
+    if (!fs32.existsSync(logDir)) return;
+    const files2 = fs32.readdirSync(logDir);
     for (const f of files2) {
       try {
-        fs31.unlinkSync(path29.join(logDir, f));
+        fs32.unlinkSync(path29.join(logDir, f));
       } catch (e) {
       }
     }
     try {
-      fs31.rmdirSync(logDir);
+      fs32.rmdirSync(logDir);
     } catch (e) {
     }
   } catch (e) {
@@ -9659,13 +9766,13 @@ function clearTaskLogs(vaultBasePath, taskId) {
 function clearAllLogs(vaultBasePath) {
   const logsDir = path29.join(vaultBasePath, ".opencode", "logs");
   try {
-    if (!fs31.existsSync(logsDir)) return;
-    const dirs = fs31.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs32.existsSync(logsDir)) return;
+    const dirs = fs32.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of dirs) {
       clearTaskLogs(vaultBasePath, dir);
     }
     try {
-      fs31.rmdirSync(logsDir);
+      fs32.rmdirSync(logsDir);
     } catch (e) {
     }
   } catch (e) {
@@ -9673,7 +9780,7 @@ function clearAllLogs(vaultBasePath) {
 }
 function deleteSingleLogFile(filePath) {
   try {
-    fs31.unlinkSync(filePath);
+    fs32.unlinkSync(filePath);
   } catch (e) {
   }
 }
@@ -9936,14 +10043,14 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     const { runtime, names } = this.journalNames();
     return JSON.stringify(names.map((name) => {
       readExecutionCheckpoint(runtime, name.slice(0, -5));
-      return [name, fs31.readFileSync(path29.join(runtime, name), "utf8")];
+      return [name, fs32.readFileSync(path29.join(runtime, name), "utf8")];
     }));
   }
   journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs31.existsSync(path29.join(directory, "data.json.write-lock")) || fs31.existsSync(path29.join(directory, "data.json.write-intent")) || fs31.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
-    const names = fs31.readdirSync(runtime).sort();
+    if (fs32.existsSync(path29.join(directory, "data.json.write-lock")) || fs32.existsSync(path29.join(directory, "data.json.write-intent")) || fs32.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
+    const names = fs32.readdirSync(runtime).sort();
     if (names.some((name) => name === "update-pending.json" || name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished runtime write or update");
     return { runtime, names: names.filter((name) => /^[a-zA-Z0-9-]+\.json$/.test(name)) };
   }
@@ -9981,7 +10088,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       if (this.executionAttempted || this.observedJournalSnapshot === void 0 || this.startupPending || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) throw error;
       if (this.journalSnapshot() !== this.observedJournalSnapshot) throw error;
       const file = this.selectedExecutionLocation().configurationFile;
-      for (const settings of [this.settings, JSON.parse(fs31.readFileSync(file, "utf8"))]) {
+      for (const settings of [this.settings, JSON.parse(fs32.readFileSync(file, "utf8"))]) {
         if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw error;
         assertIdleCatalog({
           tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10000,18 +10107,18 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     this.assertLifecycleOpen();
     lease.assertOwned();
     const file = this.observationProofPath(lease.token);
-    const fd = fs31.openSync(file, "wx", 384);
+    const fd = fs32.openSync(file, "wx", 384);
     try {
-      const identity = fs31.fstatSync(fd);
+      const identity = fs32.fstatSync(fd);
       const bytes = JSON.stringify({ schemaVersion: 1, token: lease.token, journalHash });
-      fs31.writeFileSync(fd, bytes);
-      await new Promise((resolve9, reject) => fs31.fsync(fd, (error) => error ? reject(error) : resolve9()));
+      fs32.writeFileSync(fd, bytes);
+      await new Promise((resolve9, reject) => fs32.fsync(fd, (error) => error ? reject(error) : resolve9()));
       lease.assertOwned();
       this.assertLifecycleOpen();
-      const current = fs31.lstatSync(file);
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs31.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
+      const current = fs32.lstatSync(file);
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs32.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
     } finally {
-      fs31.closeSync(fd);
+      fs32.closeSync(fd);
     }
     this.observationProof = file;
   }
@@ -10021,7 +10128,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     if (this.observationProof) {
       this.pluginExecutionLease.assertOwned();
       const file = this.observationProof;
-      if (fs31.existsSync(file)) fs31.unlinkSync(file);
+      if (fs32.existsSync(file)) fs32.unlinkSync(file);
       this.observationProof = void 0;
     }
     this.executionAttempted = true;
@@ -10029,11 +10136,11 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   assertClosedObservation(token) {
     const location = this.selectedExecutionLocation(false);
     if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package changed");
-    const file = this.observationProofPath(token), stat = fs31.lstatSync(file);
+    const file = this.observationProofPath(token), stat = fs32.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Invalid observation proof");
-    const proof = JSON.parse(fs31.readFileSync(file, "utf8"));
+    const proof = JSON.parse(fs32.readFileSync(file, "utf8"));
     if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require("crypto").createHash("sha256").update(this.journalSnapshot()).digest("hex")) throw new Error("Observed execution state changed");
-    const settings = JSON.parse(fs31.readFileSync(location.configurationFile, "utf8"));
+    const settings = JSON.parse(fs32.readFileSync(location.configurationFile, "utf8"));
     if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error("Execution requires reconciliation");
     assertIdleCatalog({
       tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10043,24 +10150,24 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   async completeInstalledRelease() {
     const location = this.selectedExecutionLocation();
     const manifestFile = path29.join(location.installationDirectory, "manifest.json");
-    const manifestStat = fs31.lstatSync(manifestFile);
+    const manifestStat = fs32.lstatSync(manifestFile);
     if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1) throw new Error("Unsafe installed plugin manifest");
-    const startingManifest = await fs31.promises.readFile(manifestFile);
+    const startingManifest = await fs32.promises.readFile(manifestFile);
     const installedManifest = JSON.parse(startingManifest.toString("utf8"));
     if (installedManifest.id !== "auto-oc" || installedManifest.id !== this.manifest.id || installedManifest.version !== PLUGIN_BUILD_VERSION) {
       throw new Error("Installed plugin manifest identity or version differs from the bundle");
     }
     const mainFile = path29.join(location.installationDirectory, "main.js");
-    const stat = fs31.lstatSync(mainFile);
+    const stat = fs32.lstatSync(mainFile);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe installed plugin bundle");
-    const startingBundle = await fs31.promises.readFile(mainFile);
+    const startingBundle = await fs32.promises.readFile(mainFile);
     const completePackage = await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION);
     const assertCatalog = await waitForInstalledCatalog(location.installationDirectory, () => {
       this.assertLifecycleOpen();
       this.selectedExecutionLocation();
       for (const [file, bytes] of [[manifestFile, startingManifest], [mainFile, startingBundle]]) {
-        const current = fs31.lstatSync(file);
-        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs31.readFileSync(file).equals(bytes)) {
+        const current = fs32.lstatSync(file);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs32.readFileSync(file).equals(bytes)) {
           throw new Error("Installed plugin identity changed during startup");
         }
       }
@@ -10076,10 +10183,10 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     try {
       const files2 = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, PLUGIN_BUILD_VERSION);
       this.assertLifecycleOpen();
-      if (!files2["main.js"].equals(startingBundle) || !fs31.readFileSync(mainFile).equals(startingBundle)) {
+      if (!files2["main.js"].equals(startingBundle) || !fs32.readFileSync(mainFile).equals(startingBundle)) {
         throw new Error("Bootstrap revision differs from the starting plugin; retry with a coherent release");
       }
-      if (!files2["manifest.json"].equals(startingManifest) || !fs31.readFileSync(manifestFile).equals(startingManifest)) {
+      if (!files2["manifest.json"].equals(startingManifest) || !fs32.readFileSync(manifestFile).equals(startingManifest)) {
         throw new Error("Bootstrap manifest differs from the starting installation");
       }
       this.assertExecutionIdle();
@@ -10089,7 +10196,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       Object.assign(this.manifest, installedManifest);
       return assertCatalog;
     } finally {
-      this.updateInProgress = fs31.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"));
+      this.updateInProgress = fs32.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"));
     }
   }
   async onload() {
@@ -10099,7 +10206,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     try {
       try {
         const location = this.selectedExecutionLocation(false);
-        if (fs31.existsSync(location.configurationFile + ".write-intent")) {
+        if (fs32.existsSync(location.configurationFile + ".write-intent")) {
           if (!await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Interrupted settings recovery requires a complete verified package");
           this.settingsRecoveryPromise = recoverInterruptedSettingsWrite(location.installationDirectory, () => this.assertLifecycleOpen());
           try {
@@ -10144,6 +10251,13 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
         id: "open-auto-oc",
         name: "Open AutoOC Task Scheduler",
         callback: () => this.activateView()
+      });
+      this.addCommand({
+        id: "review-older-attempts",
+        name: "Review older attempts",
+        callback: () => {
+          void this.openHistoricalAttemptsReview().catch((error) => new import_obsidian8.Notice(this.redactSecrets(String(error))));
+        }
       });
       this.addCommand({
         id: "create-task",
@@ -10362,7 +10476,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
             return;
           }
           try {
-            fs31.lstatSync(path29.join(current.runtimeDirectory, "execution.lock"));
+            fs32.lstatSync(path29.join(current.runtimeDirectory, "execution.lock"));
             absentSince = void 0;
             return;
           } catch (error) {
@@ -10441,7 +10555,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   closedSessionRecovery() {
     try {
       const location = this.selectedExecutionLocation(false);
-      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs31.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"))) return;
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs32.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"))) return;
       assertPackageMaintenanceSafe(location.installationDirectory);
       const owner = readExecutionLeaseOwner(location.runtimeDirectory);
       try {
@@ -10452,7 +10566,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       }
       return () => {
         const current = this.selectedExecutionLocation(false);
-        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs31.existsSync(path29.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs32.existsSync(path29.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
         assertPackageMaintenanceSafe(current.installationDirectory);
         recoverExecutionLease(current.runtimeDirectory, owner.token);
       };
@@ -11606,9 +11720,9 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   }
   isRalphLoopEnabled() {
     const configPath = getOpencodeConfigPath();
-    if (!fs31.existsSync(configPath)) return false;
+    if (!fs32.existsSync(configPath)) return false;
     try {
-      const raw = fs31.readFileSync(configPath, "utf8");
+      const raw = fs32.readFileSync(configPath, "utf8");
       const data = JSON.parse(raw);
       return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
     } catch (e) {
@@ -11618,13 +11732,13 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   async ensureRalphLoopPluginEnabled() {
     const configPath = getOpencodeConfigPath();
     const configDir = path29.dirname(configPath);
-    if (!fs31.existsSync(configDir)) {
-      fs31.mkdirSync(configDir, { recursive: true });
+    if (!fs32.existsSync(configDir)) {
+      fs32.mkdirSync(configDir, { recursive: true });
     }
     let data = {};
-    if (fs31.existsSync(configPath)) {
+    if (fs32.existsSync(configPath)) {
       try {
-        const raw = fs31.readFileSync(configPath, "utf8");
+        const raw = fs32.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -11636,7 +11750,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     }
     plugins.push("opencode-ralph-loop");
     data.plugin = plugins;
-    fs31.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+    fs32.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     return { changed: true, configPath };
   }
@@ -11661,21 +11775,21 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   }
   ensureAutoOcMcpServerFile() {
     const { mcpPath } = this.getAutoOcMcpPaths();
-    fs31.mkdirSync(path29.dirname(mcpPath), { recursive: true });
-    fs31.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    fs32.mkdirSync(path29.dirname(mcpPath), { recursive: true });
+    fs32.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
     return mcpPath;
   }
   async ensureAutoOcMcpEnabled() {
     const configPath = getOpencodeConfigPath();
     const configDir = path29.dirname(configPath);
-    if (!fs31.existsSync(configDir)) {
-      fs31.mkdirSync(configDir, { recursive: true });
+    if (!fs32.existsSync(configDir)) {
+      fs32.mkdirSync(configDir, { recursive: true });
     }
     const mcpPath = this.ensureAutoOcMcpServerFile();
     let data = {};
-    if (fs31.existsSync(configPath)) {
+    if (fs32.existsSync(configPath)) {
       try {
-        const raw = fs31.readFileSync(configPath, "utf8");
+        const raw = fs32.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -11689,7 +11803,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       mcp["autooc-mcp"] = nextBlock;
       data.mcp = mcp;
       if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-      fs31.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+      fs32.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     }
     return { changed, configPath, mcpPath };
@@ -11822,7 +11936,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     } catch (error) {
       new import_obsidian8.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
     } finally {
-      this.updateInProgress = !!this.pluginExecutionLease && fs31.existsSync(path29.join(this.pluginExecutionLease.directory, "update-pending.json"));
+      this.updateInProgress = !!this.pluginExecutionLease && fs32.existsSync(path29.join(this.pluginExecutionLease.directory, "update-pending.json"));
       if (maintenanceLease && this.pluginExecutionLease && !this.updateInProgress) {
         try {
           this.releasePluginExecution(false);
@@ -11870,7 +11984,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       return { output: this.redactSecrets(result.output), exitCode: result.succeeded ? 0 : -1 };
     }
     return new Promise((resolve9) => {
-      const fs32 = require("fs");
+      const fs33 = require("fs");
       const path30 = require("path");
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -11885,15 +11999,15 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       const cleanup = (removeScript = true) => {
         hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
         try {
-          fs32.unlinkSync(scriptFile);
+          fs33.unlinkSync(scriptFile);
         } catch (e) {
         }
         try {
-          fs32.unlinkSync(outFile);
+          fs33.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs32.unlinkSync(pidFile);
+          fs33.unlinkSync(pidFile);
         } catch (e) {
         }
       };
@@ -11950,7 +12064,7 @@ DONE:%s
       }
       const scriptFile = path30.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
       if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-      else fs32.writeFileSync(scriptFile, launchScript, "utf8");
+      else fs33.writeFileSync(scriptFile, launchScript, "utf8");
       hiddenProc = launchHidden(scriptFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -11963,10 +12077,10 @@ DONE:%s
           resolve9({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
-        if (!fs32.existsSync(outFile)) return;
+        if (!fs33.existsSync(outFile)) return;
         settled = true;
         clearInterval(poll);
-        const raw = fs32.readFileSync(outFile, "utf8");
+        const raw = fs33.readFileSync(outFile, "utf8");
         cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
@@ -12063,6 +12177,84 @@ DONE:%s
       await this.loadSettings();
       this.refreshOpenViews();
     }
+  }
+  async openHistoricalAttemptsReview() {
+    this.assertLifecycleOpen();
+    const { runtime, names } = this.journalNames();
+    const rows = [];
+    for (const file of names) {
+      const { checkpoint } = await observeCheckpoint(runtime, file.slice(0, -5));
+      this.assertLifecycleOpen();
+      if (!["ready", "in_flight"].includes(checkpoint.phase) || catalogReferencesRun(this.settings, checkpoint.runId)) continue;
+      const task = this.settings.tasks.find((t) => standaloneTaskWorkflow(t.id).id === checkpoint.workflowId);
+      const workflow = this.settings.workflows.find((w) => w.id === checkpoint.workflowId);
+      rows.push({ name: (task == null ? void 0 : task.name) || (workflow == null ? void 0 : workflow.name) || checkpoint.workflowId, runId: checkpoint.runId, workflowId: checkpoint.workflowId, phase: checkpoint.phase });
+    }
+    new HistoricalAttemptsModal(this.app, rows, (workflowId, runId) => {
+      try {
+        this.openHistoricalExecutionRecovery(workflowId, runId);
+      } catch (error) {
+        new import_obsidian8.Notice(this.redactSecrets(String(error)));
+      }
+    }).open();
+  }
+  openHistoricalExecutionRecovery(workflowId, runId) {
+    this.assertLifecycleOpen();
+    const location = this.selectedExecutionLocation();
+    const observed = inspectHistoricalAttempt(location, workflowId, runId, this.settings);
+    const task = this.settings.tasks.find((t) => standaloneTaskWorkflow(t.id).id === workflowId);
+    const workflow = this.settings.workflows.find((w) => w.id === workflowId);
+    const snapshot = () => {
+      try {
+        this.assertLifecycleOpen();
+        const current = inspectHistoricalAttempt(this.selectedExecutionLocation(), workflowId, runId, this.settings);
+        if (JSON.stringify(current) !== JSON.stringify(observed)) return void 0;
+        return { name: `Older attempt: ${(task == null ? void 0 : task.name) || (workflow == null ? void 0 : workflow.name) || workflowId}`, status: "pending", runId, phase: observed.phase, owned: false };
+      } catch (e) {
+        return void 0;
+      }
+    };
+    new ExecutionStatusHelpModal(this.app, snapshot, () => {
+    }, this.manifest.version, true, {
+      workflowId,
+      revision: observed.revision,
+      closeAttempt: async () => {
+        try {
+          const modal = new ConfirmModal(
+            this.app,
+            "Close this old attempt?",
+            `Attempt: ${runId}. Revision: ${observed.revision}. Confirm only after checking that its original external process has ended. The outcome remains UNKNOWN. This preserves the current task or workflow and all history. It does not stop processes, undo effects or start another run. Enter why you are closing this attempt.`,
+            true
+          );
+          if (!await modal.openAndWait()) return false;
+          const assertIdle = () => {
+            var _a, _b;
+            this.assertLifecycleOpen();
+            (_a = this.pluginExecutionLease) == null ? void 0 : _a.assertOwned();
+            this.selectedExecutionLocation();
+            if (!this.pluginExecutionLease || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_b = this.cliRequestHost) == null ? void 0 : _b.hasPendingWork)) throw new Error("An execution, save or update is active; wait before closing this attempt");
+            assertUnboundHistoricalAttempt(this.settings, runId);
+          };
+          assertIdle();
+          const reservation = { workflowId, runId, controller: new AbortController() };
+          this.sharedWorkflowExecution = reservation;
+          try {
+            await closeHistoricalAttempt(observed, this.pluginExecutionLease, modal.reason, true, () => {
+              this.assertLifecycleOpen();
+              this.selectedExecutionLocation();
+              if (this.sharedWorkflowExecution !== reservation || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.settingsWriter.hasPendingWrites) throw new Error("Recovery ownership changed; review again");
+              assertUnboundHistoricalAttempt(this.settings, runId);
+            }, () => this.beginExecutionEffects());
+          } finally {
+            if (this.sharedWorkflowExecution === reservation) this.sharedWorkflowExecution = void 0;
+            this.refreshOpenViews();
+          }
+          return true;
+        } catch (error) {
+          throw new Error(this.redactSecrets(String(error)));
+        }
+      }
+    }).open();
   }
   async confirmAbandonTaskExecution(taskId) {
     var _a;
@@ -12323,47 +12515,47 @@ DONE:%s
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
     const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
-    const fs32 = require("fs");
+    const fs33 = require("fs");
     try {
-      fs32.unlinkSync(outFile);
+      fs33.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(errFile);
+      fs33.unlinkSync(errFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(doneFile);
+      fs33.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(pidFile);
+      fs33.unlinkSync(pidFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(promptFile);
+      fs33.unlinkSync(promptFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(fullPromptFile);
+      fs33.unlinkSync(fullPromptFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(tmpFullPromptFile);
+      fs33.unlinkSync(tmpFullPromptFile);
     } catch (e) {
     }
     if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
       try {
-        fs32.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs33.writeFileSync(fullPromptFile, prompt, "utf8");
       } catch (e) {
         fullPromptFile = tmpFullPromptFile;
-        fs32.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs33.writeFileSync(fullPromptFile, prompt, "utf8");
       }
       const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
       const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
-      fs32.writeFileSync(promptFile, shortPrompt, "utf8");
+      fs33.writeFileSync(promptFile, shortPrompt, "utf8");
     } else {
-      fs32.writeFileSync(promptFile, preparedPrompt, "utf8");
+      fs33.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
@@ -12391,7 +12583,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const launchScript = buildOpenCodeScript({ pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd, major: effectiveTask.taskKind === "opencode2" ? 2 : 1 });
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-    else fs32.writeFileSync(scriptFile, launchScript, "utf8");
+    else fs33.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
     try {
       hiddenProc = launchHidden(scriptFile, pidFile);
@@ -12413,31 +12605,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
       try {
-        fs32.unlinkSync(promptFile);
+        fs33.unlinkSync(promptFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(fullPromptFile);
+        fs33.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(tmpFullPromptFile);
+        fs33.unlinkSync(tmpFullPromptFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(outFile);
+        fs33.unlinkSync(outFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(errFile);
+        fs33.unlinkSync(errFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(doneFile);
+        fs33.unlinkSync(doneFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(pidFile);
+        fs33.unlinkSync(pidFile);
       } catch (e) {
       }
     };
@@ -12523,9 +12715,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         new import_obsidian8.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
-      if (!fs32.existsSync(doneFile)) {
-        const stdout2 = fs32.existsSync(outFile) ? decodeCommandBuffer(fs32.readFileSync(outFile)) : "";
-        const stderr2 = fs32.existsSync(errFile) ? decodeCommandBuffer(fs32.readFileSync(errFile)) : "";
+      if (!fs33.existsSync(doneFile)) {
+        const stdout2 = fs33.existsSync(outFile) ? decodeCommandBuffer(fs33.readFileSync(outFile)) : "";
+        const stderr2 = fs33.existsSync(errFile) ? decodeCommandBuffer(fs33.readFileSync(errFile)) : "";
         const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
         if (normalized2) {
           t.output = `${normalized2}
@@ -12542,9 +12734,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      const stdout = fs32.existsSync(outFile) ? decodeCommandBuffer(fs32.readFileSync(outFile)) : "";
-      const stderr = fs32.existsSync(errFile) ? decodeCommandBuffer(fs32.readFileSync(errFile)) : "";
-      const exitCodeRaw = fs32.readFileSync(doneFile, "utf8").trim();
+      const stdout = fs33.existsSync(outFile) ? decodeCommandBuffer(fs33.readFileSync(outFile)) : "";
+      const stderr = fs33.existsSync(errFile) ? decodeCommandBuffer(fs33.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs33.readFileSync(doneFile, "utf8").trim();
       cleanupTempFiles();
       if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
@@ -13226,7 +13418,7 @@ ${current.output}`;
         title: "Export AutoOC tasks and workflows"
       });
       if (result.canceled || !result.filePath) return;
-      fs31.writeFileSync(result.filePath, json, "utf8");
+      fs32.writeFileSync(result.filePath, json, "utf8");
       new import_obsidian8.Notice(
         `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
       );
@@ -13253,7 +13445,7 @@ ${current.output}`;
     };
   }
   async importFromFile(filePath) {
-    const raw = fs31.readFileSync(filePath, "utf8");
+    const raw = fs32.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
     return this.importFromData(data);
   }
@@ -14861,6 +15053,11 @@ var AutoOCView = class extends import_obsidian8.ItemView {
         const { snapshot, showDetails } = this.executionHelpContext(target, workflow ? "workflow" : "task", { runId, workflowId });
         new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
         return;
+      }
+      try {
+        this.plugin.openHistoricalExecutionRecovery(workflowId, runId);
+        return;
+      } catch (e) {
       }
     }
     const unfinished = !!(binding == null ? void 0 : binding.requiresReconciliation) && detail === `Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`;
@@ -17635,7 +17832,7 @@ var ImportModal = class extends import_obsidian8.Modal {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
-      const raw = fs31.readFileSync(this.filePath, "utf8");
+      const raw = fs32.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
       const result = this.validateExport(data);
@@ -18290,10 +18487,10 @@ var DiagnosticModal = class extends import_obsidian8.Modal {
       (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
     }
     this.hiddenProc = null;
-    const fs32 = require("fs");
+    const fs33 = require("fs");
     for (const file of this.tempFiles) {
       try {
-        fs32.unlinkSync(file);
+        fs33.unlinkSync(file);
       } catch (e) {
       }
     }
@@ -18320,17 +18517,17 @@ var DiagnosticModal = class extends import_obsidian8.Modal {
           new import_obsidian8.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
-        const fs32 = require("fs");
+        const fs33 = require("fs");
         const path30 = require("path");
         const osTmp = require("os").tmpdir();
         const outFile = path30.join(osTmp, "autooc-diag.txt");
         const pidFile = path30.join(osTmp, "autooc-diag.pid");
         try {
-          fs32.unlinkSync(outFile);
+          fs33.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs32.unlinkSync(pidFile);
+          fs33.unlinkSync(pidFile);
         } catch (e) {
         }
         let launchScript;
@@ -18380,7 +18577,7 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
         }
         const scriptFile = path30.join(osTmp, `autooc-diag${scriptExt()}`);
         if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-        else fs32.writeFileSync(scriptFile, launchScript, "utf8");
+        else fs33.writeFileSync(scriptFile, launchScript, "utf8");
         this.tempFiles = [outFile, pidFile, scriptFile];
         if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}
 
@@ -18393,13 +18590,13 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
             if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
             return;
           }
-          if (!fs32.existsSync(outFile)) {
+          if (!fs33.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           if (this.pollHandle) clearInterval(this.pollHandle);
           this.pollHandle = null;
-          const raw = fs32.readFileSync(outFile, "utf8");
+          const raw = fs33.readFileSync(outFile, "utf8");
           this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -18431,6 +18628,16 @@ var AutoOCSettingTab = class extends import_obsidian8.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
+    new import_obsidian8.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
+      button.setDisabled(true);
+      try {
+        await this.plugin.openHistoricalAttemptsReview();
+      } catch (error) {
+        new import_obsidian8.Notice(this.plugin.redactSecrets(String(error)));
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
     addDashboardBubbleSizeSetting(containerEl, {
       getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
       saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
