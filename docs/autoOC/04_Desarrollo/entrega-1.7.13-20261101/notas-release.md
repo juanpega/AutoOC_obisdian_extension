@@ -1,6 +1,6 @@
 # AutoOC 1.7.13
 
-Notas preparadas; publicación pendiente. Reúne las mejoras desarrolladas desde la versión publicada 1.7.1.
+Reúne las mejoras desarrolladas desde la versión publicada 1.7.1. El usuario publicará el ZIP; el estado de integración en `main` se consulta en el [PR #51](https://github.com/juanpega/AutoOC_obisdian_extension/pull/51).
 
 ## Cambios principales
 
@@ -20,4 +20,4 @@ Cuando esta versión esté en `main`, usar **Check updates** desde AutoOC. El ZI
 
 OpenCode 2 requiere una CLI v2 y autenticación propias. Claude se incorpora como lanzador interactivo, no como motor de tareas programadas. Las preferencias de tamaño son locales al dispositivo/bóveda. La generación crea un borrador; siempre se revisan sus permisos antes de guardarlo.
 
-ZIP candidato: `auto-oc-1.7.13.zip`, SHA-256 `68df1fc7383a7f7cd3b67fc0e0329509441a6d14b73dd830627f3099080ce7af`. Completar la CI y la decisión de publicación según [preparación de entrega](preparacion-entrega.md); estas notas no certifican una release publicada.
+ZIP verificado: `auto-oc-1.7.13.zip`, SHA-256 `68df1fc7383a7f7cd3b67fc0e0329509441a6d14b73dd830627f3099080ce7af`. CI correcta en Windows, Linux y macOS; [resultados y límites de validación](cierre-validacion.md). Estas notas y los artefactos de CI no certifican por sí solos una GitHub Release publicada.

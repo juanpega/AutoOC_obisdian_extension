@@ -25,8 +25,8 @@ La repetición documental `4f044a3` volvió a fallar en macOS: una carrera al es
 - [x] Verificar ZIP corregido extraído y sus siete artefactos, y conservar SHA-256.
 - [x] Commit documental/de preparación y revisión de staging exclusivamente seleccionado; siete artefactos del índice coinciden byte a byte con el paquete verificado.
 - [x] Push y PR revisable en borrador.
-- [ ] Comprobar CI de Windows, Linux y macOS del commit correspondiente.
-- [ ] Resolver cualquier fallo o revisión pendiente antes de decidir merge/publicación.
+- [x] Comprobar CI de Windows, Linux y macOS: candidato `b28e423`, run `41306677176`, build, suite y paquete correctos.
+- [x] Corregir el arnés y revisar los resultados pendientes; conservar los fallos locales y sus límites en [cierre de validación](cierre-validacion.md).
 
 El resultado anterior de 897 pruebas locales no sustituye la suite de entrega: existían cambios de biblioteca/pruebas sin commit y el manifiesto no tenía los mismos bytes en Git. El primer archivo Git queda como prueba negativa; el paquete corregido es el candidato para publicar.
 
@@ -35,7 +35,7 @@ ZIP local: `release/auto-oc-1.7.13.zip`. SHA-256: `68df1fc7383a7f7cd3b67fc0e0329
 ## Publicación y actualización
 
 1. Merge del PR revisado a `main`. Los siete artefactos y el descriptor deben llegar juntos. Confirmar versión remota 1.7.13 y comprobar sus hashes descargados.
-2. Crear el tag `v1.7.13` sobre el commit publicado y una GitHub Release con las [notas preparadas](notas-release.md) y el ZIP verificado. No recrear un tag existente ni sobrescribir una release histórica.
+2. El usuario creará la GitHub Release y subirá el ZIP verificado con las [notas preparadas](notas-release.md), seleccionando `v1.7.13` sobre el commit publicado. No recrear un tag existente ni sobrescribir una release histórica.
 3. Probar **Check updates** desde la otra bóveda elegida por el usuario, registrar versión de origen/destino, carga real y conservación de catálogo/historial. La aplicación consulta `main`; publicar solo un ZIP/tag no cambia el resultado de ese botón.
 4. Registrar el resultado de esa prueba antes de extender la actualización a otros proyectos. No se presume autorización para modificar todas las bóvedas.
 
