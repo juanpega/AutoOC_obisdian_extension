@@ -22,7 +22,8 @@ function harness(overrides = {}) {
     setValue(value) { this.inputEl.value = value; return this; }
     setButtonText(value) { this.buttonEl.textContent = value; return this; }
     setDisabled(value) { this.buttonEl.disabled = value; return this; }
-    setCta() { return this; } setPlaceholder() { return this; } addOption() { return this; } addOptions() { return this; } setTooltip() { return this; }
+    addOption(value, label) { const option=this.selectEl.createEl('option',{text:label});option.value=value;return this; }
+    setCta() { return this; } setPlaceholder() { return this; } addOptions() { return this; } setTooltip() { return this; }
     onChange(callback) { this.inputEl.change = callback; return this; }
     onClick(callback) { this.buttonEl.onclick = callback; return this; }
   }
@@ -41,7 +42,7 @@ function harness(overrides = {}) {
     Modal: class { constructor(app) { this.app = app; this.contentEl = new Element(); } open() { opened.push(this); this.onOpen(); } close() { this.onClose(); } },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') +
-    '\nmodule.exports.draftTest = {AiDraftModal, CreateTaskModal, CreateWorkflowModal, buildDraftPrompt, parseGeneratedDraft, saveGeneratedDefinition, generateDraftText, toExportTask};',
+    '\nmodule.exports.draftTest = {AiDraftModal, CreateTaskModal, CreateWorkflowModal, buildDraftPrompt, parseGeneratedDraft, saveGeneratedDefinition, generateDraftText, toExportTask, AUTOOC_WORKFLOW_PROMPT, openAiDraft: AutoOCPlugin.prototype.openAiDraft};',
     { module, exports: module.exports, require: id => id === 'obsidian' ? obsidian : overrides[id] || require(id),
       process: overrides.process || process, Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
       window: { setTimeout, clearTimeout }, document: { createTextNode: text => new Element({ text }) } });
@@ -176,6 +177,76 @@ test('generation cancellation rejects late results and invalid output keeps the 
   assert.equal(h.button(modal, 'Review in editor').disabled, false);
   modal.contentEl.all().find(el => el.tag === 'textarea').change('Changed objective');
   assert.equal(h.button(modal, 'Review in editor').disabled, true);
+});
+
+test('both creators select a model per engine and pass it to generation and editable tasks', async () => {
+  for (const kind of ['task','workflow']) for (const engine of ['opencode','opencode2','codex','copilot']) {
+    const h=harness();let received,reviewed,finish;
+    const data=kind==='task'?packageOf():workflowPackage();data.tasks[0].taskKind=engine;
+    const modal=new h.AiDraftModal({}, {kind,guide:h.AUTOOC_WORKFLOW_PROMPT,version:'1.7.11',engine,objective:'Prepare a summary',
+      defaults:()=>defaults, models:()=>[{value:'fixture/selected',label:'Selected model'}],
+      generate:(_prompt,selectedEngine,model)=>{received={engine:selectedEngine,model};return new Promise(resolve=>finish=resolve)},useDraft:draft=>reviewed=draft});
+    modal.open();
+    const picker=modal.contentEl.all().find(el=>el.name==='Model').children.find(el=>el.tag==='select');
+    assert.ok(picker.children.some(el=>el.value==='fixture/selected'&&el.textContent==='Selected model'));
+    picker.value='fixture/selected';picker.change(picker.value);
+    const pending=h.button(modal,'Generate draft').onclick();assert.equal(picker.disabled,true);
+    finish(JSON.stringify(data));await pending;
+    assert.deepEqual(received,{engine,model:'fixture/selected'});assert.equal(picker.disabled,false);
+    h.button(modal,'Review in editor').onclick();
+    assert.equal(reviewed.tasks[0].model,'fixture/selected');assert.equal(reviewed.tasks[0].taskKind,engine);
+  }
+});
+
+test('model choices stay separate by engine, preserve custom IDs and invalidate an old preview', async () => {
+  const h=harness();let received;
+  const modal=new h.AiDraftModal({}, {kind:'task',guide:h.AUTOOC_WORKFLOW_PROMPT,version:'1.7.11',engine:'codex',objective:'Keep this objective',
+    defaults:()=>({...defaults,codexModel:'not-in-list',opencode2Model:'v2/default'}),
+    models:engine=>[{value:engine+'/listed',label:'Listed'},{value:engine+'/listed',label:'Listed'}],
+    generate:async(_p,engine,model)=>{received={engine,model};return JSON.stringify(packageOf([{...task(),taskKind:engine}]))},useDraft:()=>{}});
+  modal.open();
+  const setting=name=>modal.contentEl.all().find(el=>el.name===name);
+  const picker=setting('Model').children.find(el=>el.tag==='select');
+  const engines=setting('AI engine').children.find(el=>el.tag==='select');
+  const custom=setting('Other model').children.find(el=>el.tag==='input');
+  assert.equal(picker.value,'not-in-list');assert.ok(picker.children.some(el=>el.value==='not-in-list'));
+  assert.equal(picker.children.filter(el=>el.value==='codex/listed').length,1);
+  const other=picker.children.find(el=>el.textContent==='Other model…');picker.change(other.value);
+  assert.equal(setting('Other model').hidden,false);custom.change('  custom/model  ');
+  engines.change('opencode2');assert.equal(picker.value,'v2/default');
+  assert.equal(setting('Other model').hidden,true);assert.ok(!picker.children.some(el=>el.value==='codex/listed'));
+  picker.change('');engines.change('codex');assert.equal(picker.value,'custom/model');
+  engines.change('opencode2');assert.equal(picker.value,'');engines.change('codex');
+  await h.button(modal,'Generate draft').onclick();assert.deepEqual(received,{engine:'codex',model:'custom/model'});
+  assert.equal(h.button(modal,'Review in editor').disabled,false);
+  picker.change('codex/listed');assert.equal(h.button(modal,'Review in editor').disabled,true);
+  assert.equal(modal.contentEl.all().find(el=>el.tag==='textarea').value,'Keep this objective');
+});
+
+test('plugin supplies task editor model lists without mixing OpenCode versions or querying providers', () => {
+  const h=harness();
+  h.plugin.availableModels=[{value:'v1/listed',label:'OpenCode model'}];
+  h.plugin.availableCodexModels=[{value:'codex/listed',label:'Codex model'}];
+  h.plugin.settings.tasks=[{taskKind:'opencode2',model:'v2/used'},{taskKind:'copilot',model:'copilot-used'},{model:'v1/legacy'}];
+  const modal=h.openAiDraft.call(h.plugin,'task','Synthetic objective',()=>{});
+  assert.deepEqual(Array.from(modal.options.models('opencode'),m=>m.value),['v1/listed','v1/legacy']);
+  assert.deepEqual(Array.from(modal.options.models('codex'),m=>m.value),['codex/listed']);
+  assert.deepEqual(Array.from(modal.options.models('opencode2'),m=>m.value),['v2/used']);
+  assert.deepEqual(Array.from(modal.options.models('copilot'),m=>m.value),['copilot-used']);
+  assert.equal(h.writes(),0);modal.close();
+});
+
+test('the actual shipped creator prompt contains a valid example for each engine and editor', () => {
+  const h=harness();
+  for(const kind of ['task','workflow']) for(const engine of ['opencode','opencode2','codex','copilot']) {
+    const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,'1.7.11');
+    assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
+    assert.match(prompt,/Do not include model IDs in the JSON/);
+    const example=prompt.split('CREATOR EXAMPLE (replace its content with the requested objective):\n')[1].split('\n\nThe following JSON string')[0];
+    assert.equal(JSON.parse(example).autoOCExport.pluginVersion,'1.7.11');
+    const draft=h.parseGeneratedDraft(example,kind,defaults);
+    assert.equal(draft.tasks[0].taskKind,engine);assert.equal(!!draft.workflow,kind==='workflow');
+  }
 });
 
 test('OpenCode draft runner sends the exact prompt on stdin with denied tools in an isolated temporary directory', async () => {

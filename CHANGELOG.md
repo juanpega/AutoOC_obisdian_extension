@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.11] - Candidato
+
+- Los creadores de tareas y workflows con IA ofrecen un selector de modelos por motor, con las listas ya cargadas y los modelos usados en tareas. Conservan la elección al cambiar de motor y admiten un identificador personalizado o la selección automática de la CLI. El modelo elegido se usa en la generación y en las tareas propuestas con ese motor.
+- El prompt final de cada creador incluye un ejemplo JSON compatible con su editor, en lugar del ejemplo general con ramificaciones. Se comprueban los ejemplos reales para los cuatro motores y ambos creadores.
+
 ## [1.7.10] - Candidato
 
 - CLI: `list` y `status` muestran desactivación propia, bloqueo por dependencias y pasos Code. `--workflow ID --step ID` permite ejecutar, continuar, reconciliar o detener un paso Code aislado como en la interfaz, conservando el resultado del workflow completo. La delegación exige un propietario compatible y valida la identidad del paso; los rechazos por desactivación ofrecen un diagnóstico legible.

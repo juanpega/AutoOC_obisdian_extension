@@ -1574,6 +1574,11 @@ export default class AutoOCPlugin extends Plugin {
     const modal = new AiDraftModal(this.app, {
       kind, guide: AUTOOC_WORKFLOW_PROMPT, version: this.manifest.version,
       engine: this.settings.defaultAiEngine, objective,
+      models: engine => [
+        ...(engine === "codex" ? this.availableCodexModels : engine === "opencode" ? this.availableModels : []),
+        ...this.settings.tasks.filter(task => (task.taskKind || "opencode") === engine && task.model?.trim())
+          .map(task => ({ value: task.model, label: task.model })),
+      ],
       defaults: () => ({ engine: this.settings.defaultAiEngine, model: this.getEffectiveDefaultModel(), opencode2Model: this.settings.defaultOpencode2Model, opencode2Agent: this.settings.defaultOpencode2Agent,
         codexModel: this.getEffectiveCodexModel(), copilotModel: this.settings.defaultCopilotModel,
         agent: this.getEffectiveAgent(), reasoningEffort: this.settings.defaultCodexReasoningEffort }),
