@@ -6,6 +6,8 @@ Preparación directa solicitada por el usuario el 2026-11-01. `origin/main` obse
 
 Descripción del PR y notas de release preparadas en este expediente. No se considera la entrega publicada por haberlas escrito. Los gates SDLC históricos de `09_Preparacion_PR` corresponden a otra rama; esta revisión es directa por petición humana y no se atribuye a esos workflows.
 
+Actualización de preparación: commit `d274f67` subido y [PR #51](https://github.com/juanpega/AutoOC_obisdian_extension/pull/51) abierto en **borrador**. GitHub confirma que no hay conflicto de merge. La [CI inicial](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41300136412) está en ejecución; no se considera aprobada. La decisión de merge y la publicación permanecen pendientes.
+
 ## Antes del merge
 
 - [x] Contrastar conversación, diff completo y contratos de los módulos cambiados.
@@ -15,8 +17,9 @@ Descripción del PR y notas de release preparadas en este expediente. No se cons
 - [x] Build y regresión focal del empaquetado; hashes del árbol Git corregido.
 - [x] Completar y registrar la suite sobre ese árbol exacto: 896 correctas, 3 fallos y 3 omisiones; los casos fallidos pasan en revalidación focal posterior. No es una pasada completa verde.
 - [x] Verificar ZIP corregido extraído y sus siete artefactos, y conservar SHA-256.
-- [ ] Commit documental/de preparación y revisión de staging exclusivamente seleccionado.
-- [ ] Push y PR revisable; comprobar CI de Windows, Linux y macOS del commit correspondiente.
+- [x] Commit documental/de preparación y revisión de staging exclusivamente seleccionado; siete artefactos del índice coinciden byte a byte con el paquete verificado.
+- [x] Push y PR revisable en borrador.
+- [ ] Comprobar CI de Windows, Linux y macOS del commit correspondiente.
 - [ ] Resolver cualquier fallo o revisión pendiente antes de decidir merge/publicación.
 
 El resultado anterior de 897 pruebas locales no sustituye la suite de entrega: existían cambios de biblioteca/pruebas sin commit y el manifiesto no tenía los mismos bytes en Git. El primer archivo Git queda como prueba negativa; el paquete corregido es el candidato para publicar.

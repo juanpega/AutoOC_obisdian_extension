@@ -2,6 +2,8 @@
 
 Fecha de revisión: 2026-11-01. Rama: `codex/separate-panel-runtime-1-7-2`.
 
+En Windows la ruta se ve como `Docs/autoOC/04_Desarrollo`; Git conserva la raíz histórica `docs/` en minúsculas. Los enlaces publicados usan esa capitalización.
+
 ## Objetivo y alcance
 
 Permitir consultar y actualizar AutoOC sin que un histórico interrumpido bloquee toda la interfaz, y facilitar la creación, organización y ejecución de tareas y workflows. El usuario pidió desarrollo directo sin ciclo SDLC, instalación continua de candidatos en `C:/Dev/AutoOC` y ahora documentación y preparación para merge/publicación.
