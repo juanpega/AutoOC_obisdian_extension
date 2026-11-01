@@ -45,4 +45,19 @@ La matriz ejecutó `npm run build`, `npm test` y `npm run pack:release` sobre la
 
 Quedan pendientes la decisión de merge/publicación y la prueba real del actualizador desde otra bóveda después de publicar. El PR permanece en borrador. Esta actualización posterior del expediente solo cambia documentación; el código validado corresponde al commit citado.
 
+## Repetición sobre la documentación final
+
+La [CI 41303109512](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41303109512) de `4f044a3`, cuyo código es idéntico al anterior, volvió a pasar en Windows y Linux pero falló en macOS (867 correctas, 2 fallidas, 19 omitidas). No se sustituye este resultado por el verde anterior ni se considera listo ese HEAD.
+
+- Live Log observó una salida stdout válida antes de que llegara stderr. Son escrituras independientes; ahora la espera exige que ambas salidas aparezcan antes de terminar la ejecución. Se mantienen la redacción, la actualización del log y la comprobación de que la tarea continúa activa.
+- La recuperación histórica registró un intervalo máximo de 100,355 ms frente al límite de 100 ms. La prueba es sensible al tiempo de CPU disponible; este resultado no demuestra por sí solo si la demora viene del producto o de la planificación del host. Las pruebas de ciclo de vida se ejecutan ahora en un proceso separado, después del grupo concurrente, para evitar la competencia creada por otras suites. Se conservan el límite de 100 ms, el tamaño del catálogo sintético y todos los casos; no se añaden reintentos automáticos.
+
+`npm test` y `npm run test:settings-recovery` siguen incluyendo `tests/plugin-lifecycle.test.cjs` mediante `npm run test:lifecycle`. La suite completa produce dos resúmenes TAP; deben sumarse para comparar la cobertura total. El siguiente gate exige otra matriz completa con esta organización y la espera corregida de Live Log.
+
+La prueba corregida de Live Log pasa localmente: 5 casos correctos, sin fallos ni omisiones, en 32,9 s. El ensayo aislado de ciclo de vida conserva dos incumplimientos temporales locales: recuperación histórica 115,560 ms y observación de journals 102,958 ms. Separar las suites no acredita la eliminación de la variabilidad; no se modifica el límite ni se presenta este ensayo como aprobado. Sigue pendiente diagnosticar y estabilizar esta comprobación de respuesta antes de recomendar merge. Evidencia: `.tmp-pr51-streams.log` y `.tmp-pr51-lifecycle-isolated.log`.
+
+Resultado completo de ese ensayo: **148 casos, 144 correctos, 4 fallidos, sin omisiones ni cancelaciones**, 286,3 s. Además de las dos mediciones anteriores, fallan dos fixtures de guardados históricos 1.6.1 con cinco escrituras en cola (pace 65 y pace 0, gap 0): no se observó el temporal antes del límite de 2 s. El caso de dos escrituras en cola y el de escritor legítimo por encima de 2 s sí pasan. No se ha aislado todavía la causa de estos dos timeouts; los límites permanecen intactos. Esta revisión no autoriza llamar aprobada a la validación local ni desbloquear una instalación real a partir de esos fixtures.
+
+Se ha comparado programáticamente la lista de archivos de `test` y `test:settings-recovery` con la anterior, incorporando `test:lifecycle`: se mantienen exactamente los mismos archivos. La separación organiza la medición; no elimina pruebas ni acredita por sí sola una corrección funcional.
+
 Evidencia local privada: `.tmp-pr51-ci-focused.log` y `.tmp-pr51-ci-affected.txt`. Los logs de CI son los del enlace anterior; no se incorporan volcados de entornos o datos privados al expediente.

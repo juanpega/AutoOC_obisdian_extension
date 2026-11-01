@@ -12,6 +12,8 @@ Revisión posterior: la CI de `f023b1b` terminó con fallos en las tres platafor
 
 Revalidación de `2301daa`: [CI 41302679868](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41302679868) correcta en Windows, Linux y macOS, incluidos build, suite completa, empaquetado y subida de artefactos CI. Windows: 899 correctas, 3 omitidas; Linux/macOS: 869 correctas y 19 omitidas cada uno; ningún fallo. El gate técnico queda superado para ese código. Merge, publicación y prueba real del actualizador siguen pendientes.
 
+La repetición documental `4f044a3` volvió a fallar en macOS: una carrera al esperar dos streams y una medición de respuesta de 100,355 ms. Se corrige la espera y se separa la suite temporal de las pruebas concurrentes, conservando límites y cobertura. [Detalle](revision-pr51.md). Este hallazgo exige revalidar el nuevo HEAD; el verde anterior no cierra la revisión.
+
 ## Antes del merge
 
 - [x] Contrastar conversación, diff completo y contratos de los módulos cambiados.

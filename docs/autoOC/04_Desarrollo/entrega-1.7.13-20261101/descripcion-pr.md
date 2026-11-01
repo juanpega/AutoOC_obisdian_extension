@@ -16,6 +16,8 @@ El [expediente de entrega](README.md) contiene trazabilidad, diagramas, contrato
 
 ## Validación y límites
 
+**Revisión todavía abierta.** La repetición de CI sobre `4f044a3` pasó en Windows y Linux, pero macOS reprodujo una carrera en la prueba de streams y un intervalo de 100,355 ms frente al máximo de 100 ms. La espera de ambos streams está corregida (5/5 locales). Las pruebas temporales se han separado de las demás suites, conservando casos y límites; el ensayo aislado local terminó con 144 correctas y 4 fallos: dos límites de respuesta y dos timeouts al observar guardados históricos en cola. Sus causas siguen pendientes de diagnóstico. El detalle y los resultados posteriores están en el [informe de revisión](revision-pr51.md) y en las [comprobaciones del PR](https://github.com/juanpega/AutoOC_obisdian_extension/pull/51/checks). No usar el verde anterior como aprobación del HEAD actual.
+
 [CI multiplataforma](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41302679868) correcta para `2301daa`: Windows, 899 pruebas correctas y 3 omitidas; Linux y macOS, 869 correctas y 19 omitidas cada uno. Cero fallos o cancelaciones. Build, suite completa, empaquetado y subida del ZIP de CI correctos en los tres sistemas. Las omisiones corresponden a pruebas de otra plataforma y al binario opcional de OpenCode 2.
 
 El ZIP final se ha extraído, verificado y ejecutado en una bóveda sintética, incluida continuación sin repetir efectos. La GUI de 1.7.13 se comprobó en Obsidian/Windows; las correcciones posteriores de distribución y del arnés no modifican los bundles funcionales. Se conserva la [evidencia de candidatos anteriores](limites-y-validacion.md) y el [diagnóstico de CI](revision-pr51.md), sin reescribir sus fallos.

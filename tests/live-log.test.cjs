@@ -46,7 +46,9 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
     await until(()=>folder&&fs.existsSync(path.join(folder,'stdout.txt')),'fixture must produce output while task is running');
     const before=fs.readFileSync(configFile),runtime=path.join(installation,'runtime');
     const journal=fs.readdirSync(runtime).find(name=>/^[a-f0-9-]+\.json$/.test(name));const checkpoint=fs.readFileSync(path.join(runtime,journal));
-    await until(()=>{modal.refresh();return rendered.some(text=>text.includes('Primera salida'));},'Live Log must render output before OpenCode exits');
+    // stdout and stderr are independent writes. A valid first snapshot can
+    // contain only stdout; wait for both streams without completing the task.
+    await until(()=>{modal.refresh();return rendered.at(-1)?.includes('Primera salida')&&rendered.at(-1)?.includes('Primera traza');},'Live Log must render both streams before OpenCode exits');
     assert.equal(settled,false);assert.equal(p.settings.tasks[0].status,'running');
     assert.match(rendered.at(-1),/Primera traza/);assert.match(rendered.at(-1),/\[REDACTED\]/);assert.ok(!rendered.at(-1).includes('TOKEN_PRIVADO'));
     // Unchanged output is not redrawn; streaming never writes the full catalog or journal.
