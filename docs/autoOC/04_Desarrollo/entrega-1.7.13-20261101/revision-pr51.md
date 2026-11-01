@@ -60,4 +60,6 @@ Resultado completo de ese ensayo: **148 casos, 144 correctos, 4 fallidos, sin om
 
 Se ha comparado programáticamente la lista de archivos de `test` y `test:settings-recovery` con la anterior, incorporando `test:lifecycle`: se mantienen exactamente los mismos archivos. La separación organiza la medición; no elimina pruebas ni acredita por sí sola una corrección funcional.
 
+Continuación autorizada por el usuario: [cierre de validación](cierre-validacion.md). Incluye perfil del arnés, regresión con demora controlada y evidencia del candidato final. Los resultados anteriores se conservan como históricos.
+
 Evidencia local privada: `.tmp-pr51-ci-focused.log` y `.tmp-pr51-ci-affected.txt`. Los logs de CI son los del enlace anterior; no se incorporan volcados de entornos o datos privados al expediente.

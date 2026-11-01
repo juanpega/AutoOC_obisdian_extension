@@ -21,6 +21,7 @@ Punto de partida revisado: `538b5235258d430868acaeb2c2ed3a52451244da`: 16 commit
 - [Descripción preparada para el PR](descripcion-pr.md).
 - [Notas preparadas para la release](notas-release.md).
 - [Revisión del PR #51 y correcciones de CI](revision-pr51.md).
+- [Cierre de validación y diagnóstico de los plazos locales](cierre-validacion.md).
 
 ## Trazabilidad de la conversación
 

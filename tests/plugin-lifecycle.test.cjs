@@ -7,14 +7,25 @@ const root=path.resolve(__dirname,'..');
 const names=['main.js','manifest.json','styles.css','autooc-cli.cjs','autooc-runtime.cjs','skills/autooc-runtime/SKILL.md','release-integrity.json'];
 function loadPlugin(file=path.join(root,'main.js')) {
   const original=Module._load;
+  const resolved=require.resolve(file);
   try {
     Module._load=function(name,...args){
       if(name==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{}};
       return original.call(this,name,...args);
     };
-    delete require.cache[require.resolve(file)];
-    return require(file).default;
-  }finally{Module._load=original;}
+    delete require.cache[resolved];
+    return require(resolved).default;
+  }finally{
+    Module._load=original;
+    // Each fixture copies the bundle to a unique vault. Retaining every module
+    // also retains the entire bundled editor/runtime after the fixture ends.
+    const loaded=require.cache[resolved];
+    delete require.cache[resolved];
+    if(loaded?.parent){
+      const index=loaded.parent.children.indexOf(loaded);
+      if(index!==-1)loaded.parent.children.splice(index,1);
+    }
+  }
 }
 function fixture(t) {
   const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-lifecycle-'));
@@ -512,7 +523,7 @@ test('single SettingsWriter completes lock, temporary file and atomic rename dur
   assert.equal(JSON.parse(fs.readFileSync(file)).nextWrite,true);await successor.onunload();
 });
 
-for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`historical 1.6.1 Dashboard drains ${writes} queued saves, pace ${pace}, gap ${gap}`,async t=>{
+for(const [writes,pace,gap,readDelay=0] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50],[5,0,0,2300]]) test(`historical 1.6.1 Dashboard drains ${writes} queued saves, pace ${pace}, gap ${gap}, read delay ${readDelay}`,{timeout:20000},async t=>{
   timers(t);const {create,directory}=fixture(t),successor=create(),file=path.join(directory,'data.json');
   const legacy=require('./fixtures/legacy-settings-1.6.1.cjs');
   const outgoing={...legacy.plugin,settingsWriter:new legacy.SettingsWriter(),app:successor.app,manifest:{id:'auto-oc'},
@@ -534,10 +545,13 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
   });
   const waitForObservation=async from=>{
     const key=temporaryKey(from);if(observedTemporaries.has(key))return;
-    const controller=new AbortController();
+    // This is a handover fixture, not a second startup deadline. The product
+    // already bounds the whole observed queue at 10s, tested below. Surface a
+    // failed/finished startup immediately instead of racing it against 2s of
+    // arbitrary fixture wall time while the observer performs legitimate I/O.
     try{await Promise.race([new Promise(resolve=>temporaryWaiters.set(key,resolve)),
-      delay(2000,undefined,{signal:controller.signal}).then(()=>{throw Error('Catalog observer did not inspect the queued temporary before commit');})]);}
-    finally{controller.abort();temporaryWaiters.delete(key);}
+      loading.then(error=>{throw error||new Error(successor.startupError||'Startup ended before observing the queued temporary');})]);}
+    finally{temporaryWaiters.delete(key);}
   };
   const firstRename=new Promise(resolve=>entered=resolve),allowFirst=new Promise(resolve=>finish=resolve);
   fs.promises.rename=async function(from,to){
@@ -556,6 +570,14 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
     return originalMkdir.call(this,target,...args);
   };
   t.after(()=>{fs.promises.rename=originalRename;fs.promises.mkdir=originalMkdir;});
+  let delayedRead=false;
+  const readFile=fs.promises.readFile;
+  t.mock.method(fs.promises,'readFile',async function(target,...args){
+    if(readDelay&&!delayedRead&&path.basename(String(target))==='main.js'&&fs.realpathSync.native(path.dirname(String(target)))===physicalDirectory){
+      delayedRead=true;await delay(readDelay);
+    }
+    return readFile.call(this,target,...args);
+  });
   const jobs=Array.from({length:writes-1},()=>view.persistDashboardPositions());jobs.push(view.onClose());
   await firstRename;
   successor.loadSettings=async()=>{successor.settings=successor.settingsWriter.load(file);};
@@ -563,10 +585,14 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
   // commit blocked until the successor actually observes the outgoing queue.
   const watching=startupWatching(t,directory);
   const loading=successor.onload().then(()=>null,error=>error);
-  await Promise.race([watching,loading]);await delay(60);finish();await Promise.all(jobs);
+  // Slow package verification precedes the observer's startup budget. The
+  // first rename still waits for its exact temporary to be observed.
+  if(readDelay)finish();
+  await Promise.race([watching,loading]);await delay(60);if(!readDelay)finish();await Promise.all(jobs);
   const error=await loading;
   try {
     assert.equal(error,null);assert.equal(successor.ready,true);assert.equal(tokens.size,writes);assert.equal(observedTemporaries.size,writes);
+    assert.equal(delayedRead,readDelay>0);
     assert.deepEqual(successor.settings.dashboardPositions,{history:{x:11,y:22}});
     assert.equal(fs.existsSync(file+'.write-lock'),false);
     await successor.settingsWriter.save(file,()=>({...successor.settings,successorSaved:true}));
