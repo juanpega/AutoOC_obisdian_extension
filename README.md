@@ -14,6 +14,8 @@ Cada elemento tiene una burbuja y un nombre visible: doble anillo para workflows
 
 La búsqueda incluye nombres de pasos y áreas. **Needs attention** filtra incidencias registradas; **Show disabled** muestra los desactivados en gris. Cada área se puede plegar, y **Collapse areas / Expand areas** actúan sobre todos los grupos. Selección, búsqueda y colapsos se conservan durante la sesión del panel. El tamaño exacto de las burbujas de tareas y pasos sigue disponible en Settings (10–80 px).
 
+Desde 1.7.13, una ejecución controlada por esta instancia muestra **Running** sin convertir las marcas internas de recuperación en avisos. Se verifica la identidad de ese intento; tener Obsidian abierto no basta. Los avisos de aprobación pendiente, parada no confirmada, fallo o control no confirmado se conservan.
+
 Los contadores separan elementos principales y pasos en ejecución. Muestran estado registrado, no una verificación independiente de actividad del proceso. El panel se actualiza con los eventos existentes, mantiene las posiciones de lectura y limita inicialmente los pasos visibles a 40, ampliables con **Show more steps**. No añade consultas periódicas ni movimiento continuo; solo una señal breve cuando cambia un estado, respetando la preferencia de movimiento reducido.
 
 ## Abrir una CLI interactiva

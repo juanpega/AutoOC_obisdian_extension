@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.7.13] - Candidato
+
+- El Dashboard consulta el control de la ejecución exacta antes de mostrar `Needs attention`. Una tarea, workflow o paso Code en curso y controlado por el plugin conserva su indicación normal aunque el registro durable incluya marcas de recuperación. Aprobaciones, paradas no confirmadas, fallos y ejecuciones sin control confirmado mantienen sus avisos.
+
 ## [1.7.12] - Candidato
 
 - Dashboard por áreas: grupos plegables con nombres visibles, burbujas distintas para workflows, tareas y Code, búsqueda de pasos, filtro de atención y opción de mostrar los desactivados.

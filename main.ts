@@ -6352,7 +6352,8 @@ class AutoOCView extends ItemView {
       } else new Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
     this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
-      items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows),
+      items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows,
+        (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)),
       diameter: () => this.plugin.getDashboardBubbleDiameter(), open,
       log: item => showLog(item, false), history: item => showLog(item, true),
     });

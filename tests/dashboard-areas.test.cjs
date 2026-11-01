@@ -24,6 +24,44 @@ const task=(id,extra={})=>({id,name:`Task ${id}`,area:'Engineering',status:'pend
 const flow=(id,steps,extra={})=>({id,name:`Flow ${id}`,area:'Engineering',status:'completed',currentStep:0,steps,...extra});
 const code=(id,extra={})=>({id,stepKind:'code',name:`Code ${id}`,status:'pending',...extra});
 
+test('owned runs are Running despite durable recovery flags; approvals, stops and lost ownership still need attention',()=>{
+  const h=harness(),root=new h.Element(),state=h.createAreaDashboardState();
+  const binding={workflowId:'@task:a',runId:'live',phase:'in_flight',requiresReconciliation:true};
+  const tasks=[task('a',{status:'running',runtimeExecution:binding})];
+  let owner=true;const checks=[];
+  const project=()=>h.dashboardItems(tasks,[],(w,r)=>{checks.push([w,r]);return owner&&w==='@task:a'&&r==='live'});
+  const dashboard=new h.AreaDashboard(root,state,{items:project,diameter:()=>32,open(){},log(){},history(){}});
+  assert.equal(root.all().find(el=>el.classes.has('auto-oc-area-node')).attrs['aria-label'],'Task a, task, Running');
+  assert.ok(!root.all().some(el=>el.textContent==='Review the recorded result and execution controls before continuing.'));
+  state.attentionOnly=true;assert.equal(h.dashboardVisibleItems(project(),state).length,0);
+  owner=false;dashboard.update();assert.equal(h.dashboardVisibleItems(project(),state).length,1);
+  assert.ok(root.all().some(el=>el.textContent==='Review the recorded result and execution controls before continuing.'));
+  owner=true;tasks[0].pendingCodexApproval={requestId:'approval'};assert.equal(project()[0].attention,true);
+  delete tasks[0].pendingCodexApproval;tasks[0].legacyExecution={stopState:'unconfirmed'};assert.equal(project()[0].attention,true);
+  delete tasks[0].legacyExecution;tasks[0].runtimeExecution={...binding,runId:'previous'};assert.equal(project()[0].attention,true);
+  tasks[0].runtimeExecution={...binding};tasks[0].status='failed';assert.equal(project()[0].attention,true);
+  assert.ok(checks.every(([w])=>w==='@task:a'));assert.equal(binding.requiresReconciliation,true);
+});
+
+test('workflow and isolated Code use exact run ownership without changing historical results',()=>{
+  const h=harness(),wf=flow('w',[code('s',{codeExecution:{status:'running',lastRun:'2026-11-01',runtimeExecution:{runId:'solo',phase:'in_flight',requiresReconciliation:true}}})],
+    {status:'running',runtimeExecution:{runId:'full',phase:'in_flight',requiresReconciliation:true}});
+  const before=JSON.stringify(wf),calls=[];
+  let item=h.dashboardItems([], [wf],(w,r)=>{calls.push([w,r]);return w==='w'&&['solo','full'].includes(r)})[0];
+  assert.equal(item.attention,false);assert.equal(item.children[0].attention,false);
+  assert.deepEqual(calls,[['w','solo'],['w','full']]);assert.equal(JSON.stringify(wf),before);
+  item=h.dashboardItems([], [wf],(w,r)=>r==='full')[0];assert.equal(item.attention,true);assert.equal(item.children[0].attention,true);
+});
+
+test('real Dashboard adapter forwards the installed host ownership check for a running task',()=>{
+  const h=harness(),root=new h.Element(),seen=[];
+  const plugin={settings:{tasks:[task('a',{status:'running',runtimeExecution:{workflowId:'@task:a',runId:'live',phase:'in_flight',requiresReconciliation:true}})],workflows:[]},
+    getDashboardBubbleDiameter:()=>32,ownsExecution:(w,r)=>{seen.push([w,r]);return true}};
+  new h.AutoOCView({},plugin).renderDashboard(root);
+  assert.deepEqual(seen,[['@task:a','live']]);
+  assert.equal(root.all().find(el=>el.classes.has('auto-oc-area-node')).attrs['aria-label'],'Task a, task, Running');
+});
+
 test('area model preserves identities and branch state, separates disabled dependencies and isolated Code results',()=>{
   const h=harness(), tasks=[task('a',{disabled:true}),task('standalone',{taskKind:'code',area:' '})];
   const wf=flow('w',[{id:'ref',stepKind:'task',taskId:'a'},code('new',{status:'failed',lastRun:'2026-01-01',codeExecution:{status:'completed',lastRun:'2026-02-01',output:'private'}}),code('unvisited')]);

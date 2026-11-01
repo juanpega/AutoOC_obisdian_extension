@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.12",
+      version: "1.7.13",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -762,7 +762,7 @@ __export(main_exports, {
 module.exports = __toCommonJS(main_exports);
 
 // dashboard-areas.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 
 // catalog-availability.ts
 function taskDisabledReason(task) {
@@ -2163,6 +2163,124 @@ function readCodeStepCheckpoint(runtime, workflow, stepId) {
   return checkpoint;
 }
 
+// execution-status-help.ts
+var import_obsidian = require("obsidian");
+function executionStatusHelp(s) {
+  if (s.waitingApproval) return {
+    label: "Waiting for your approval",
+    attention: true,
+    explanation: "The engine is waiting for your decision on a specific action.",
+    next: "Open the details, review the request, and choose approve or reject. You do not need to run the task again."
+  };
+  if (s.stopUnconfirmed) return {
+    label: "Stop not confirmed",
+    attention: true,
+    explanation: "A stop was requested, but the work has not been confirmed as finished.",
+    next: "Read the log and check the original window or process before starting another run."
+  };
+  if (s.owned) return {
+    label: "Run controlled by this window",
+    attention: false,
+    explanation: "This window controls this run. A completed task may belong to a workflow that is still progressing.",
+    next: "You can read the log. To stop the work, use the task or workflow stop control."
+  };
+  if (s.requiresReconciliation || s.terminalUncertainty && !s.disposition) return {
+    label: "Needs review",
+    attention: true,
+    explanation: "The outcome or completion of recorded work could not be confirmed. A completed label on the card does not resolve that uncertainty.",
+    next: "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning."
+  };
+  if (s.phase === "ready" || s.phase === "in_flight" || s.status === "running") return {
+    label: "Activity not confirmed",
+    attention: true,
+    explanation: "A pending or ongoing run is not controlled by this window. It may still be running elsewhere or may have been interrupted; the available information does not distinguish between these cases.",
+    next: "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing."
+  };
+  if (s.disposition || s.phase === "abandoned") return {
+    label: "Closed with unknown outcome",
+    attention: false,
+    explanation: "This run was closed with its effects still uncertain. It has not been marked as successful.",
+    next: "The history is preserved. Review the previous effects before deciding whether to start another run."
+  };
+  if (s.phase === "failed" || s.status === "failed") return {
+    label: "Last run failed",
+    attention: true,
+    explanation: "The saved run ended with an error. Having no window controlling it is not another failure.",
+    next: "Read the log to find the cause and address it before deciding whether to start a new run."
+  };
+  if (s.phase === "completed") return {
+    label: "Last run completed",
+    attention: false,
+    explanation: "The saved run has finished. It no longer needs a window to control it.",
+    next: "You do not need to unlock or recover this run. You can read its log or history. Running it again would start new work."
+  };
+  return {
+    label: "Run information",
+    attention: false,
+    explanation: "The available information does not confirm the state of this run.",
+    next: "Read the log and history. If you need support, copy the diagnostics from this window; do not delete files to unlock the run."
+  };
+}
+var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
+  constructor(app, snapshot, showDetails, version) {
+    super(app);
+    this.snapshot = snapshot;
+    this.showDetails = showDetails;
+    this.version = version;
+  }
+  onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.addClass("auto-oc-execution-help");
+    const current = this.snapshot();
+    root.createEl("h3", { text: "Execution help" });
+    if (!current) {
+      root.createEl("p", { text: "This item is no longer available. Close this help window and check the panel again." });
+      return;
+    }
+    const help = executionStatusHelp(current);
+    root.createEl("p", { text: current.name });
+    if (current.workflowName) root.createEl("p", { text: `Workflow run: ${current.workflowName}` });
+    root.createEl("h4", { text: help.label });
+    root.createEl("p", { text: help.explanation });
+    root.createEl("h4", { text: "What you can do" });
+    root.createEl("p", { text: help.next });
+    root.createEl("p", { text: "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
+    const actions = root.createDiv("auto-oc-card-actions");
+    actions.createEl("button", { text: current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
+      this.close();
+      this.showDetails();
+    };
+    actions.createEl("button", { text: "Refresh information" }).onclick = () => this.onOpen();
+    const technical = root.createEl("details");
+    technical.createEl("summary", { text: "Support details" });
+    const diagnostic = JSON.stringify({
+      version: this.version,
+      status: current.status,
+      phase: current.phase,
+      runId: current.runId,
+      localControl: current.owned,
+      requiresReview: !!current.requiresReconciliation,
+      uncertainOutcome: !!current.terminalUncertainty,
+      dispositionRecorded: !!current.disposition,
+      waitingApproval: !!current.waitingApproval,
+      stopUnconfirmed: !!current.stopUnconfirmed
+    }, null, 2);
+    technical.createEl("pre", { text: diagnostic });
+    technical.createEl("button", { text: "Copy diagnostics" }).onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(diagnostic);
+        new import_obsidian.Notice("Diagnostics copied.");
+      } catch (e) {
+        new import_obsidian.Notice("Could not copy. You can select the diagnostics text instead.");
+      }
+    };
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+
 // dashboard-areas.ts
 var createAreaDashboardState = () => ({
   query: "",
@@ -2170,13 +2288,34 @@ var createAreaDashboardState = () => ({
   attentionOnly: false,
   collapsed: /* @__PURE__ */ new Set()
 });
-var needsAttention = (item) => {
+var needsAttention = (item, owned) => {
   var _a, _b;
-  return item.status === "failed" || item.status === "abandoned" || !!item.pendingCodexApproval || !!((_a = item.runtimeExecution) == null ? void 0 : _a.requiresReconciliation) || !!(((_b = item.runtimeExecution) == null ? void 0 : _b.terminalUncertainty) && !item.runtimeExecution.disposition);
+  if (item.status === "failed" || item.status === "abandoned") return true;
+  const binding = item.runtimeExecution;
+  if (!binding) return !!item.pendingCodexApproval || !!((_a = item.legacyExecution) == null ? void 0 : _a.stopState);
+  return executionStatusHelp({
+    name: item.name || "",
+    status: item.status || "pending",
+    owned,
+    phase: binding.phase,
+    runId: binding.runId,
+    requiresReconciliation: binding.requiresReconciliation,
+    terminalUncertainty: binding.terminalUncertainty,
+    disposition: !!binding.disposition,
+    waitingApproval: !!item.pendingCodexApproval,
+    stopUnconfirmed: !!((_b = item.legacyExecution) == null ? void 0 : _b.stopState)
+  }).attention;
 };
 var areaName = (area) => (area == null ? void 0 : area.trim()) || "No area";
-function dashboardItems(tasks, workflows) {
+function dashboardItems(tasks, workflows, ownsExecution = () => false) {
   const byId = new Map(tasks.map((task) => [task.id, task]));
+  const ownership = /* @__PURE__ */ new Map();
+  const owned = (binding, workflowId = binding == null ? void 0 : binding.workflowId) => {
+    if (!(binding == null ? void 0 : binding.runId) || !workflowId) return false;
+    const key = JSON.stringify([workflowId, binding.runId]);
+    if (!ownership.has(key)) ownership.set(key, ownsExecution(workflowId, binding.runId));
+    return ownership.get(key);
+  };
   const taskItems = tasks.map((task) => ({
     key: JSON.stringify(["task", task.id]),
     id: task.id,
@@ -2186,7 +2325,7 @@ function dashboardItems(tasks, workflows) {
     area: areaName(task.area),
     status: task.status || "pending",
     disabled: !!task.disabled,
-    attention: needsAttention(task),
+    attention: needsAttention(task, owned(task.runtimeExecution)),
     detail: task.taskKind === "code" ? "Code \xB7 JavaScript" : task.taskKind || "opencode",
     lastRun: task.lastRun
   }));
@@ -2196,6 +2335,7 @@ function dashboardItems(tasks, workflows) {
       const task = byId.get(step.taskId || ""), code = step.stepKind === "code";
       const display = code ? codeStepDisplay(step) : step;
       const status = display.status || "pending";
+      const binding = code && step.codeExecution && display.lastRun === step.codeExecution.lastRun ? step.codeExecution.runtimeExecution : step.runtimeExecution;
       return {
         key: JSON.stringify(["step", workflow.id, step.id]),
         id: step.id,
@@ -2206,7 +2346,7 @@ function dashboardItems(tasks, workflows) {
         area: areaName(step.area || workflow.area),
         status,
         disabled: !!(workflow.disabled || step.disabled || (task == null ? void 0 : task.disabled)),
-        attention: needsAttention({ ...step, status, runtimeExecution: code && step.codeExecution && display.lastRun === step.codeExecution.lastRun ? step.codeExecution.runtimeExecution : step.runtimeExecution }) || !code && step.stepKind !== "delay" && !task,
+        attention: needsAttention({ ...step, status, runtimeExecution: binding }, owned(binding, workflow.id)) || !code && step.stepKind !== "delay" && !task,
         detail: `Step ${index + 1} \xB7 ${workflow.name}`,
         lastRun: display.lastRun
       };
@@ -2220,7 +2360,7 @@ function dashboardItems(tasks, workflows) {
       area: areaName(workflow.area),
       status: workflow.status || "pending",
       disabled: !!workflow.disabled,
-      attention: needsAttention(workflow) || children.some((child) => child.attention) || !!blocked && !workflow.disabled,
+      attention: needsAttention(workflow, owned(workflow.runtimeExecution, workflow.id)) || children.some((child) => child.attention) || !!blocked && !workflow.disabled,
       detail: blocked || `${children.length} steps${workflow.status === "running" ? ` \xB7 Step ${(workflow.currentStep || 0) + 1}` : ""}`,
       lastRun: workflow.lastRun,
       children,
@@ -2334,7 +2474,7 @@ var AreaDashboard = class {
     const size = item.kind === "workflow" ? Math.max(36, this.host.diameter()) : this.host.diameter();
     orb.style.width = orb.style.height = `${size}px`;
     if (item.kind === "code") orb.setText("{ }");
-    else (0, import_obsidian.setIcon)(orb, item.kind === "workflow" ? "workflow" : item.kind === "delay" ? "clock" : "terminal");
+    else (0, import_obsidian2.setIcon)(orb, item.kind === "workflow" ? "workflow" : item.kind === "delay" ? "clock" : "terminal");
     if (this.previous.has(item.key) && this.previous.get(item.key) !== `${item.status}:${item.disabled}:${item.attention}`) orb.addClass("auto-oc-area-changed");
   }
   itemButton(parent, item, step = false) {
@@ -2593,7 +2733,7 @@ function setupCodeTextarea(textarea, app) {
 }
 
 // dashboard-bubble-settings.ts
-var import_obsidian2 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 var validDiameter = (value) => typeof value === "number" && Number.isInteger(value) && value >= 10 && value <= 80;
 function preferenceStorage(app, pluginId) {
   const key = `${pluginId}:${app.vault.configDir}:dashboard-task-diameter`;
@@ -2641,7 +2781,7 @@ function dashboardTaskDiameter(settings) {
 function addDashboardBubbleSizeSetting(container, host) {
   let input, apply, reset;
   let saving = false;
-  const row = new import_obsidian2.Setting(container).setName("Task and step bubble size").setDesc("Exact diameter in pixels (10\u201380). Preview changes below; Apply updates the Dashboard. Saved on this device for this vault.");
+  const row = new import_obsidian3.Setting(container).setName("Task and step bubble size").setDesc("Exact diameter in pixels (10\u201380). Preview changes below; Apply updates the Dashboard. Saved on this device for this vault.");
   row.addText((text) => {
     input = text.inputEl;
     input.type = "number";
@@ -2713,7 +2853,7 @@ function addDashboardBubbleSizeSetting(container, host) {
 }
 
 // interactive-cli-ui.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // interactive-cli.ts
 var fs7 = __toESM(require("fs"));
@@ -3951,7 +4091,7 @@ function openCliLauncher(app, host, selected) {
     var _a;
     const settings = app.setting;
     if (!(settings == null ? void 0 : settings.open) || !(settings == null ? void 0 : settings.openTabById) || !((_a = host.manifest) == null ? void 0 : _a.id)) {
-      new import_obsidian3.Notice("Open Settings \u2192 AutoOC \u2192 Interactive CLI launchers to configure your CLIs.");
+      new import_obsidian4.Notice("Open Settings \u2192 AutoOC \u2192 Interactive CLI launchers to configure your CLIs.");
       return;
     }
     settings.open();
@@ -3963,7 +4103,7 @@ function addInteractiveCliSettings(root, host) {
   root.createEl("p", { text: "Choose which CLIs appear under \u{1F4BB} CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
   for (const cli of INTERACTIVE_CLIS) {
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
-    new import_obsidian3.Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.").addToggle((toggle) => {
+    new import_obsidian4.Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.").addToggle((toggle) => {
       var _a;
       return toggle.setValue(((_a = host.settings.cliLauncherEnabled) == null ? void 0 : _a[cli.id]) !== false).onChange(async (enabled) => {
         const previous = host.settings.cliLauncherEnabled;
@@ -3974,11 +4114,11 @@ function addInteractiveCliSettings(root, host) {
         } catch (e) {
           if (host.settings.cliLauncherEnabled === updated) host.settings.cliLauncherEnabled = previous;
           toggle.setValue((previous == null ? void 0 : previous[cli.id]) !== false);
-          new import_obsidian3.Notice("CLI preference could not be saved. Try again.");
+          new import_obsidian4.Notice("CLI preference could not be saved. Try again.");
         }
       });
     });
-    const row = new import_obsidian3.Setting(root).setName(`${cli.label} executable`);
+    const row = new import_obsidian4.Setting(root).setName(`${cli.label} executable`);
     const describe = () => {
       const detected = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
       row.setDesc(detected ? `Detected: ${detected}` : `Not found. Install ${cli.label} separately or enter its executable path. Use a path or command name without arguments.`);
@@ -3993,7 +4133,7 @@ function addInteractiveCliSettings(root, host) {
       } catch (e) {
         if (host.settings[cli.pathKey] === updated) host.settings[cli.pathKey] = previous || defaultCommand;
         input.value = host.settings[cli.pathKey] || defaultCommand;
-        new import_obsidian3.Notice("CLI path could not be saved. Try again.");
+        new import_obsidian4.Notice("CLI path could not be saved. Try again.");
       }
       describe();
     };
@@ -4003,7 +4143,7 @@ function addInteractiveCliSettings(root, host) {
     }).addButton((button) => button.setButtonText("Auto-detect").onClick(async () => {
       const found = resolveInteractiveCli(cli.id);
       if (!found) {
-        new import_obsidian3.Notice(`${cli.label} was not found. Install it or enter its executable path.`);
+        new import_obsidian4.Notice(`${cli.label} was not found. Install it or enter its executable path.`);
         return;
       }
       input.value = found;
@@ -4026,7 +4166,7 @@ function addInteractiveCliSettings(root, host) {
     describe();
   }
 }
-var CliLauncherModal = class extends import_obsidian3.Modal {
+var CliLauncherModal = class extends import_obsidian4.Modal {
   constructor(app, host, configure, selected) {
     super(app);
     this.host = host;
@@ -4052,7 +4192,7 @@ var CliLauncherModal = class extends import_obsidian3.Modal {
     } else if (!requested) this.selected = (_b = available[0]) == null ? void 0 : _b.id;
     let updateButtons = () => {
     };
-    if (available.length) new import_obsidian3.Setting(root).setName("CLI").addDropdown((dropdown) => {
+    if (available.length) new import_obsidian4.Setting(root).setName("CLI").addDropdown((dropdown) => {
       if (!this.selected) dropdown.addOption("", "Choose a CLI");
       for (const cli of available) dropdown.addOption(cli.id, cli.label);
       dropdown.setValue(this.selected || "").onChange((value) => {
@@ -4245,8 +4385,8 @@ async function applyBulkCatalogAction(catalog, selection, action, state, save) {
 }
 
 // catalog-bulk-modal.ts
-var import_obsidian4 = require("obsidian");
-var BulkCatalogModal = class extends import_obsidian4.Modal {
+var import_obsidian5 = require("obsidian");
+var BulkCatalogModal = class extends import_obsidian5.Modal {
   // Modal.open() owns `selection` for restoring the editor's DOM selection.
   constructor(app, host, selectedItems, action, onSaved) {
     super(app);
@@ -4270,7 +4410,7 @@ var BulkCatalogModal = class extends import_obsidian4.Modal {
     let area = this.action.type === "area" ? this.action.area : "";
     if (this.action.type === "area") {
       let input;
-      new import_obsidian4.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
+      new import_obsidian5.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
         input = text.inputEl;
         text.setValue(area).setPlaceholder("No area").onChange((value) => {
           area = value;
@@ -4290,7 +4430,7 @@ var BulkCatalogModal = class extends import_obsidian4.Modal {
     const feedback = root.createDiv("auto-oc-bulk-feedback");
     feedback.setAttr("role", "alert");
     for (const issue of issues) feedback.createEl("p", { text: issue });
-    new import_obsidian4.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
+    new import_obsidian5.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
       if (!this.saving) this.close();
     })).addButton((button) => {
       button.setButtonText(availability ? `${disabling ? "Disable" : "Enable"} ${this.selectedItems.length} items` : deleting ? `Delete ${this.selectedItems.length} items` : "Apply area").setDisabled(issues.length > 0);
@@ -4311,7 +4451,7 @@ var BulkCatalogModal = class extends import_obsidian4.Modal {
         }
         this.saving = false;
         this.close();
-        new import_obsidian4.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
+        new import_obsidian5.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
         this.onSaved();
       });
     });
@@ -4322,7 +4462,7 @@ var BulkCatalogModal = class extends import_obsidian4.Modal {
 };
 
 // ai-draft-modal.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // ai-draft.ts
 var import_crypto6 = require("crypto");
@@ -4498,7 +4638,7 @@ async function saveGeneratedDefinition(catalog, drafts, workflow, save) {
 }
 
 // ai-draft-modal.ts
-var AiDraftModal = class extends import_obsidian5.Modal {
+var AiDraftModal = class extends import_obsidian6.Modal {
   constructor(app, options) {
     super(app);
     this.options = options;
@@ -4519,7 +4659,7 @@ var AiDraftModal = class extends import_obsidian5.Modal {
     this.contentEl.createEl("h2", { text: this.options.kind === "task" ? "Create a task with AI" : "Create a workflow with AI" });
     this.contentEl.createEl("p", { text: "Describe the outcome you want. AI prepares a draft using the WF Builder Prompt, then you finish in the editor. Nothing is saved or scheduled yet." });
     let objectiveInput;
-    new import_obsidian5.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
+    new import_obsidian6.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
       objectiveInput = text.inputEl;
       text.inputEl.rows = 7;
       text.inputEl.maxLength = 2e4;
@@ -4544,7 +4684,7 @@ var AiDraftModal = class extends import_obsidian5.Modal {
       customModel.settingEl.style.display = "none";
       modelInput.value = this.model;
     };
-    new import_obsidian5.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
+    new import_obsidian6.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
       engineInput = dropdown.selectEl;
       dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex").addOption("copilot", "GitHub Copilot");
       dropdown.setValue(this.engine).onChange((value) => {
@@ -4556,7 +4696,7 @@ var AiDraftModal = class extends import_obsidian5.Modal {
         invalidate();
       });
     });
-    new import_obsidian5.Setting(this.contentEl).setName("Model").setDesc("Used to generate the draft and prefill tasks using this engine. Lists models loaded in AutoOC or used by your tasks. You can change each task's model in the editor.").addDropdown((dropdown) => {
+    new import_obsidian6.Setting(this.contentEl).setName("Model").setDesc("Used to generate the draft and prefill tasks using this engine. Lists models loaded in AutoOC or used by your tasks. You can change each task's model in the editor.").addDropdown((dropdown) => {
       modelDropdown = dropdown;
       dropdown.onChange((value) => {
         customModel.settingEl.hidden = value !== customValue;
@@ -4568,7 +4708,7 @@ var AiDraftModal = class extends import_obsidian5.Modal {
         invalidate();
       });
     });
-    const customModel = new import_obsidian5.Setting(this.contentEl).setName("Other model").setDesc("Enter a model ID available to this engine and your account. Empty uses the CLI default.").addText((text) => {
+    const customModel = new import_obsidian6.Setting(this.contentEl).setName("Other model").setDesc("Enter a model ID available to this engine and your account. Empty uses the CLI default.").addText((text) => {
       modelInput = text.inputEl;
       text.setValue(this.model).onChange((value) => {
         this.model = value.trim();
@@ -4580,7 +4720,7 @@ var AiDraftModal = class extends import_obsidian5.Modal {
     const preview = this.contentEl.createDiv("auto-oc-ai-draft-preview");
     let generateButton, cancelButton;
     let result;
-    const actions = new import_obsidian5.Setting(this.contentEl);
+    const actions = new import_obsidian6.Setting(this.contentEl);
     actions.addButton((button) => {
       generateButton = button.buttonEl;
       button.setButtonText("Generate draft").setCta().onClick(async () => {
@@ -5026,124 +5166,6 @@ async function generateDraftText(request, signal, timeoutMs = 18e4) {
     }
   }
 }
-
-// execution-status-help.ts
-var import_obsidian6 = require("obsidian");
-function executionStatusHelp(s) {
-  if (s.waitingApproval) return {
-    label: "Waiting for your approval",
-    attention: true,
-    explanation: "The engine is waiting for your decision on a specific action.",
-    next: "Open the details, review the request, and choose approve or reject. You do not need to run the task again."
-  };
-  if (s.stopUnconfirmed) return {
-    label: "Stop not confirmed",
-    attention: true,
-    explanation: "A stop was requested, but the work has not been confirmed as finished.",
-    next: "Read the log and check the original window or process before starting another run."
-  };
-  if (s.owned) return {
-    label: "Run controlled by this window",
-    attention: false,
-    explanation: "This window controls this run. A completed task may belong to a workflow that is still progressing.",
-    next: "You can read the log. To stop the work, use the task or workflow stop control."
-  };
-  if (s.requiresReconciliation || s.terminalUncertainty && !s.disposition) return {
-    label: "Needs review",
-    attention: true,
-    explanation: "The outcome or completion of recorded work could not be confirmed. A completed label on the card does not resolve that uncertainty.",
-    next: "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning."
-  };
-  if (s.phase === "ready" || s.phase === "in_flight" || s.status === "running") return {
-    label: "Activity not confirmed",
-    attention: true,
-    explanation: "A pending or ongoing run is not controlled by this window. It may still be running elsewhere or may have been interrupted; the available information does not distinguish between these cases.",
-    next: "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing."
-  };
-  if (s.disposition || s.phase === "abandoned") return {
-    label: "Closed with unknown outcome",
-    attention: false,
-    explanation: "This run was closed with its effects still uncertain. It has not been marked as successful.",
-    next: "The history is preserved. Review the previous effects before deciding whether to start another run."
-  };
-  if (s.phase === "failed" || s.status === "failed") return {
-    label: "Last run failed",
-    attention: true,
-    explanation: "The saved run ended with an error. Having no window controlling it is not another failure.",
-    next: "Read the log to find the cause and address it before deciding whether to start a new run."
-  };
-  if (s.phase === "completed") return {
-    label: "Last run completed",
-    attention: false,
-    explanation: "The saved run has finished. It no longer needs a window to control it.",
-    next: "You do not need to unlock or recover this run. You can read its log or history. Running it again would start new work."
-  };
-  return {
-    label: "Run information",
-    attention: false,
-    explanation: "The available information does not confirm the state of this run.",
-    next: "Read the log and history. If you need support, copy the diagnostics from this window; do not delete files to unlock the run."
-  };
-}
-var ExecutionStatusHelpModal = class extends import_obsidian6.Modal {
-  constructor(app, snapshot, showDetails, version) {
-    super(app);
-    this.snapshot = snapshot;
-    this.showDetails = showDetails;
-    this.version = version;
-  }
-  onOpen() {
-    const root = this.contentEl;
-    root.empty();
-    root.addClass("auto-oc-execution-help");
-    const current = this.snapshot();
-    root.createEl("h3", { text: "Execution help" });
-    if (!current) {
-      root.createEl("p", { text: "This item is no longer available. Close this help window and check the panel again." });
-      return;
-    }
-    const help = executionStatusHelp(current);
-    root.createEl("p", { text: current.name });
-    if (current.workflowName) root.createEl("p", { text: `Workflow run: ${current.workflowName}` });
-    root.createEl("h4", { text: help.label });
-    root.createEl("p", { text: help.explanation });
-    root.createEl("h4", { text: "What you can do" });
-    root.createEl("p", { text: help.next });
-    root.createEl("p", { text: "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
-    const actions = root.createDiv("auto-oc-card-actions");
-    actions.createEl("button", { text: current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
-      this.close();
-      this.showDetails();
-    };
-    actions.createEl("button", { text: "Refresh information" }).onclick = () => this.onOpen();
-    const technical = root.createEl("details");
-    technical.createEl("summary", { text: "Support details" });
-    const diagnostic = JSON.stringify({
-      version: this.version,
-      status: current.status,
-      phase: current.phase,
-      runId: current.runId,
-      localControl: current.owned,
-      requiresReview: !!current.requiresReconciliation,
-      uncertainOutcome: !!current.terminalUncertainty,
-      dispositionRecorded: !!current.disposition,
-      waitingApproval: !!current.waitingApproval,
-      stopUnconfirmed: !!current.stopUnconfirmed
-    }, null, 2);
-    technical.createEl("pre", { text: diagnostic });
-    technical.createEl("button", { text: "Copy diagnostics" }).onclick = async () => {
-      try {
-        await navigator.clipboard.writeText(diagnostic);
-        new import_obsidian6.Notice("Diagnostics copied.");
-      } catch (e) {
-        new import_obsidian6.Notice("Could not copy. You can select the diagnostics text instead.");
-      }
-    };
-  }
-  onClose() {
-    this.contentEl.empty();
-  }
-};
 
 // catalog-transaction.ts
 var path11 = __toESM(require("path"));
@@ -14478,7 +14500,11 @@ var AutoOCView = class extends import_obsidian8.ItemView {
       } else new import_obsidian8.Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
     this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
-      items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows),
+      items: () => dashboardItems(
+        this.plugin.settings.tasks,
+        this.plugin.settings.workflows,
+        (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)
+      ),
       diameter: () => this.plugin.getDashboardBubbleDiameter(),
       open,
       log: (item) => showLog(item, false),

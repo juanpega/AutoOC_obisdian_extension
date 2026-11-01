@@ -1,12 +1,14 @@
 import { setIcon } from "obsidian";
 import { workflowDisabledReason } from "./catalog-availability";
 import { codeStepDisplay } from "./workflow-code-step";
+import { executionStatusHelp } from "./execution-status-help";
 
 interface Source {
   id: string; name?: string; area?: string; status?: string; disabled?: boolean;
   taskKind?: string; taskId?: string; stepKind?: string; lastRun?: string;
-  runtimeExecution?: { requiresReconciliation?: boolean; terminalUncertainty?: boolean; disposition?: unknown };
+  runtimeExecution?: { workflowId?: string; runId?: string; phase?: string; requiresReconciliation?: boolean; terminalUncertainty?: boolean; disposition?: unknown };
   pendingCodexApproval?: unknown;
+  legacyExecution?: { token?: string; stopState?: string };
   codeExecution?: any;
 }
 interface Flow extends Source { steps: Source[]; currentStep?: number; }
@@ -24,19 +26,37 @@ export const createAreaDashboardState = (): AreaDashboardState => ({
   query: "", showDisabled: false, attentionOnly: false, collapsed: new Set(),
 });
 
-const needsAttention = (item: Source) => item.status === "failed" || item.status === "abandoned" ||
-  !!item.pendingCodexApproval || !!item.runtimeExecution?.requiresReconciliation ||
-  !!(item.runtimeExecution?.terminalUncertainty && !item.runtimeExecution.disposition);
+const needsAttention = (item: Source, owned: boolean) => {
+  if (item.status === "failed" || item.status === "abandoned") return true;
+  const binding = item.runtimeExecution;
+  if (!binding) return !!item.pendingCodexApproval || !!item.legacyExecution?.stopState;
+  return executionStatusHelp({
+    name: item.name || "", status: item.status || "pending", owned,
+    phase: binding.phase, runId: binding.runId,
+    requiresReconciliation: binding.requiresReconciliation, terminalUncertainty: binding.terminalUncertainty,
+    disposition: !!binding.disposition, waitingApproval: !!item.pendingCodexApproval,
+    stopUnconfirmed: !!item.legacyExecution?.stopState,
+  }).attention;
+};
 const areaName = (area?: string) => area?.trim() || "No area";
 
 /** Presentation only: never infer branch completion or write catalog/runtime state. */
-export function dashboardItems(tasks: Source[], workflows: Flow[]): DashboardItem[] {
+export function dashboardItems(tasks: Source[], workflows: Flow[], ownsExecution: (workflowId: string, runId: string) => boolean = () => false): DashboardItem[] {
   const byId = new Map(tasks.map(task => [task.id, task]));
+  // Match the exact attempt, not just an open plugin or a recorded running label.
+  // Reuse the result within this projection so shared steps do not repeat lease checks.
+  const ownership = new Map<string, boolean>();
+  const owned = (binding: Source["runtimeExecution"], workflowId = binding?.workflowId) => {
+    if (!binding?.runId || !workflowId) return false;
+    const key = JSON.stringify([workflowId, binding.runId]);
+    if (!ownership.has(key)) ownership.set(key, ownsExecution(workflowId, binding.runId));
+    return ownership.get(key)!;
+  };
   const taskItems: DashboardItem[] = tasks.map(task => ({
     key: JSON.stringify(["task", task.id]), id: task.id, taskId: task.id,
     kind: task.taskKind === "code" ? "code" : "task", name: task.name || "Untitled task",
     area: areaName(task.area), status: task.status || "pending", disabled: !!task.disabled,
-    attention: needsAttention(task), detail: task.taskKind === "code" ? "Code · JavaScript" : task.taskKind || "opencode",
+    attention: needsAttention(task, owned(task.runtimeExecution)), detail: task.taskKind === "code" ? "Code · JavaScript" : task.taskKind || "opencode",
     lastRun: task.lastRun,
   }));
   const flowItems: DashboardItem[] = workflows.map(workflow => {
@@ -44,6 +64,8 @@ export function dashboardItems(tasks: Source[], workflows: Flow[]): DashboardIte
       const task = byId.get(step.taskId || ""), code = step.stepKind === "code";
       const display = code ? codeStepDisplay(step) : step;
       const status = display.status || "pending";
+      const binding = code && step.codeExecution && display.lastRun === step.codeExecution.lastRun
+        ? step.codeExecution.runtimeExecution : step.runtimeExecution;
       return {
         key: JSON.stringify(["step", workflow.id, step.id]), id: step.id, workflowId: workflow.id,
         taskId: code || step.stepKind === "delay" ? undefined : step.taskId,
@@ -51,8 +73,7 @@ export function dashboardItems(tasks: Source[], workflows: Flow[]): DashboardIte
         name: step.name?.trim() || task?.name || (code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
         area: areaName(step.area || workflow.area), status,
         disabled: !!(workflow.disabled || step.disabled || task?.disabled),
-        attention: needsAttention({ ...step, status, runtimeExecution: code && step.codeExecution && display.lastRun === step.codeExecution.lastRun
-          ? step.codeExecution.runtimeExecution : step.runtimeExecution }) ||
+        attention: needsAttention({ ...step, status, runtimeExecution: binding }, owned(binding, workflow.id)) ||
           (!code && step.stepKind !== "delay" && !task),
         detail: `Step ${index + 1} · ${workflow.name}`, lastRun: display.lastRun,
       };
@@ -61,7 +82,7 @@ export function dashboardItems(tasks: Source[], workflows: Flow[]): DashboardIte
     return {
       key: JSON.stringify(["workflow", workflow.id]), id: workflow.id, kind: "workflow",
       name: workflow.name || "Untitled workflow", area: areaName(workflow.area), status: workflow.status || "pending",
-      disabled: !!workflow.disabled, attention: needsAttention(workflow) || children.some(child => child.attention) || !!blocked && !workflow.disabled,
+      disabled: !!workflow.disabled, attention: needsAttention(workflow, owned(workflow.runtimeExecution, workflow.id)) || children.some(child => child.attention) || !!blocked && !workflow.disabled,
       detail: blocked || `${children.length} steps${workflow.status === "running" ? ` · Step ${(workflow.currentStep || 0) + 1}` : ""}`,
       lastRun: workflow.lastRun, children, activeSteps: children.filter(child => child.status === "running").length,
     };
