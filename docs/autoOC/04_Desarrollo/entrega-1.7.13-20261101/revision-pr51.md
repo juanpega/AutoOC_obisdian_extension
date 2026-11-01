@@ -29,4 +29,20 @@ Son correcciones del arnés; no cambian fuentes del plugin/runtime, límites de 
 - Los contratos POSIX/macOS necesitan la nueva CI; no se presentan las omisiones locales como verificaciones de esas plataformas.
 - Siguiente gate: matriz completa del commit que incorpora estas correcciones, incluyendo build y empaquetado. Estado pendiente al preparar este commit.
 
+## Resultado de la revalidación completa
+
+[CI 41302679868](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41302679868), commit `2301daa847289bec112223568ab0424d4580d925`: **correcta en las tres plataformas**.
+
+| Plataforma | Correctas | Fallidas | Omitidas | Build / empaquetado / subida del ZIP de CI |
+| --- | ---: | ---: | ---: | --- |
+| Windows | 899 | 0 | 3 | Correctos |
+| Linux | 869 | 0 | 19 | Correctos |
+| macOS | 869 | 0 | 19 | Correctos |
+
+Windows ejecuta 902 casos en 244,0 s; Linux, 888 en 66,4 s; macOS, 888 en 64,0 s. Las 19 omisiones POSIX son 18 pruebas específicas de Windows y una prueba opcional del binario OpenCode 2. Las tres omisiones Windows son dos comprobaciones POSIX y ese mismo binario opcional. No hay casos cancelados ni límites relajados.
+
+La matriz ejecutó `npm run build`, `npm test` y `npm run pack:release` sobre la rama del PR integrada con su base, sin las cinco modificaciones locales ajenas. La integridad del paquete local también vuelve a pasar. La subida del ZIP como artefacto de CI no es una GitHub Release ni habilita el actualizador de otras bóvedas.
+
+Quedan pendientes la decisión de merge/publicación y la prueba real del actualizador desde otra bóveda después de publicar. El PR permanece en borrador. Esta actualización posterior del expediente solo cambia documentación; el código validado corresponde al commit citado.
+
 Evidencia local privada: `.tmp-pr51-ci-focused.log` y `.tmp-pr51-ci-affected.txt`. Los logs de CI son los del enlace anterior; no se incorporan volcados de entornos o datos privados al expediente.

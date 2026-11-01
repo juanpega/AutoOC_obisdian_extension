@@ -10,6 +10,8 @@ Actualización de preparación: commit `d274f67` subido y [PR #51](https://githu
 
 Revisión posterior: la CI de `f023b1b` terminó con fallos en las tres plataformas. Se identificaron tres problemas del arnés (identidad física de rutas, expectativa del script POSIX y drenaje antes de limpiar Live Log). [Informe y correcciones](revision-pr51.md). No se usa la ausencia de conflictos como aprobación para mergear; se exige la nueva matriz completa.
 
+Revalidación de `2301daa`: [CI 41302679868](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41302679868) correcta en Windows, Linux y macOS, incluidos build, suite completa, empaquetado y subida de artefactos CI. Windows: 899 correctas, 3 omitidas; Linux/macOS: 869 correctas y 19 omitidas cada uno; ningún fallo. El gate técnico queda superado para ese código. Merge, publicación y prueba real del actualizador siguen pendientes.
+
 ## Antes del merge
 
 - [x] Contrastar conversación, diff completo y contratos de los módulos cambiados.

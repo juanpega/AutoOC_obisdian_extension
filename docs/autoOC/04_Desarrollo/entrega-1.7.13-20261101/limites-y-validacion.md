@@ -46,6 +46,7 @@
 | ZIP corregido | SHA-256 `68df1fc7383a7f7cd3b67fc0e0329509441a6d14b73dd830627f3099080ce7af`. Siete artefactos verificados tras extraerlo; Code aislado `35f07fef-6b5f-41ca-a3a4-01e5c9c80ea6`, workflow `5b893a0b-bafb-468b-b734-4732c3febff0`; continuación sin repetir efectos y resultado del padre conservado. Bóveda sintética, no prueba autenticada de proveedor. |
 | GUI y proveedor | La instalación anterior 1.7.13 está comprobada; la corrección de preparación no cambia los bundles de GUI/runtime. No se inicia una tarea privada para demostrarlo ni se atribuye una llamada autenticada a las pruebas con dobles. |
 | Publicación / otra bóveda | Pendientes. Ni instalación local ni empaquetado acreditan descarga desde `main`, tag, GitHub Release o actualización real de otra bóveda. |
+| Revisión CI del PR #51 | `f023b1b` falló por tres problemas del arnés. Corregidos en `2301daa`: [CI 41302679868](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41302679868) completa y correcta; Windows 899 correctas / 3 omitidas, Linux y macOS 869 correctas / 19 omitidas cada uno, cero fallos. Build y empaquetado correctos en los tres sistemas. [Detalle y omisiones](revision-pr51.md). |
 
 Se conservan los fallos históricos de QA 1.7.2–1.7.11. Los resultados posteriores no reescriben esas ejecuciones ni demuestran que todas sus causas temporales estén eliminadas.
 
