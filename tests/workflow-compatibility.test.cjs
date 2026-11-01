@@ -28,7 +28,8 @@ test('cooperative historical definition hashing yields and freezes the entry sna
     const actual=await pending;
     assert.equal(actual.hash,expected.hash);assert.deepEqual(actual,expected);
     assert.ok(Object.isFrozen(actual.tasks[0]));assert.ok(ticks>=2,`input ticks ${ticks}`);
-    const {hash,...value}=actual;
+    const {hash,admissionSettings,...value}=actual;
+    assert.deepEqual(admissionSettings,{defaultConcurrency:'parallel',maxConcurrentExecutions:0});
     assert.equal(hash,require('node:crypto').createHash('sha256').update(JSON.stringify(value)).digest('hex'));
   }finally{clearInterval(timer);}
 });
@@ -54,7 +55,7 @@ test('async historical projection preserves terminal edits, prior results and al
 
 test('definition fingerprints preserve native bytes without monolithic large-field encoding',t=>{
   const workflow={id:'synthetic',steps:[{id:'code',stepKind:'code',code:('x\\\n😀\ud800@autooc-string-0').repeat(150000)}]};
-  const original=prepare(workflow,[],{}),{hash,...payload}=original;
+  const original=prepare(workflow,[],{}),{hash,admissionSettings,...payload}=original;
   const expected=require('node:crypto').createHash('sha256').update(JSON.stringify(payload)).digest('hex');
   const stringify=JSON.stringify;
   t.mock.method(JSON,'stringify',function(...args){

@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.7.16] - Candidato
+
+- Tareas y workflows pueden ejecutarse en paralelo dentro de la misma bóveda por defecto, sin límite impuesto por AutoOC. Las elecciones explícitas anteriores se conservan; ningún trabajo se inicia al actualizar.
+- Ajustes `Default concurrency` y `Maximum simultaneous runs`, con `0` para Unlimited y botón Apply. Los editores permiten heredar la bóveda, compartirla en paralelo, exigir ejecución en solitario o conservar la comprobación de proyectos separados.
+- GUI, horarios y CLI delegada comparten la admisión. Se conservan identidades, resultados, historial y parada separados, y se impide ejecutar dos veces una tarea o compartirla entre workflows activos. Las sesiones interactivas y cambios de rama declarados siguen siendo exclusivos.
+- Un intento paralelo retenido dentro del mismo propietario conserva su evidencia y tareas reservadas, sin impedir otras tareas paralelas distintas. Los intentos antiguos sin contexto verificable siguen usando la recuperación existente. Las preferencias de admisión no alteran hashes históricos ni permisos.
+- Actualizados los prompts de creación, README, skill distribuida y expediente de requisitos/contratos de paralelismo.
+
+## [1.7.15] - Candidato
+
+- Añade `Review older attempts` en los ajustes de AutoOC y en la paleta de comandos, para revisar intentos pendientes que ya no están vinculados a la tarea o workflow actual.
+- `Close this old attempt…` solicita confirmación y motivo, verifica de nuevo identidad, revisión e inactividad y utiliza el abandono oficial. Conserva el catálogo actual, su estado desactivado, los resultados y los intentos posteriores; no ejecuta trabajo nuevo.
+- Un rechazo de Run por un intento antiguo validado también abre esta revisión. Los journals ausentes, modificados o no válidos no se redirigen a otra ejecución.
+
+## [1.7.14] - Candidato
+
+- Cuando Run queda bloqueado por un intento anterior identificado, abre ayuda contextual y permite llegar directamente a los controles de la tarea o workflow que bloquea, aunque sea otro elemento. La consulta no inicia, reanuda, cierra ni modifica ejecuciones.
+- La ayuda identifica las opciones existentes para abandonar un intento o revisar incertidumbre terminal, explica sus efectos y conserva los diagnósticos sin prompts ni credenciales. Los errores ajenos y las identidades que ya no coinciden mantienen su diagnóstico original.
+- Los intentos independientes en fase `ready` también ofrecen `Abandon attempt` cuando no están controlados por el host. La opción deja de aparecer en estados terminales; conserva las verificaciones y la confirmación de la operación existente.
+
 ## [1.7.13] - Candidato
 
 - Preparación de distribución: manifiesto y descriptor coherentes con los bytes LF de Git. La generación del descriptor rechaza artefactos CRLF para evitar una actualización desde GitHub con hashes incompatibles. El empaquetador conserva los bytes de paquetes ya verificados. Regresión contra blobs reales de Git con normalización Windows.

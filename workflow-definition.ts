@@ -4,6 +4,7 @@ import { effectiveExecutionSettings } from "./execution-defaults";
 import { captureJsonStructure, encodeCapturedJson } from "./cooperative-json";
 import { setImmediate } from "timers";
 import { performance } from "perf_hooks";
+import { concurrencySettings, type ConcurrencySettings } from "./execution-concurrency-settings";
 
 // Availability gates new execution, but must not invalidate historical checkpoints.
 const runtimeFields = new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
@@ -26,6 +27,7 @@ export interface PreparedWorkflow {
   workflow: { id: string; steps: RoutingStep[]; [key: string]: any };
   tasks: Array<Record<string, any>>;
   settings: Record<string, any>;
+  admissionSettings?: ConcurrencySettings;
 }
 
 // Freeze the effective definition, including referenced tasks and engine
@@ -63,7 +65,8 @@ export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep
   const digest = createHash("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash = digest.digest("hex");
-  return freeze({...withAvailability(payload,workflow,tasks),hash});
+  // Admission preferences do not change task effects or historical fingerprints.
+  return freeze({...withAvailability(payload,workflow,tasks),hash,admissionSettings:concurrencySettings(settings)});
 }
 
 // Capture and detach the effective structure before the first yield. Strings
@@ -72,6 +75,7 @@ export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep
 export async function prepareWorkflowDefinitionAsync(workflow: {id:string;steps:RoutingStep[]}, tasks: Array<{id:string}>, settings: Record<string,any>): Promise<PreparedWorkflow> {
   const payload = freeze(definitionPayload(workflow,tasks,settings));
   const availablePayload = freeze(withAvailability(payload,workflow,tasks));
+  const admissionSettings = Object.freeze(concurrencySettings(settings));
   const captured = captureJsonStructure(payload,0), digest = createHash("sha256");
   // Also yield for many small definitions whose aggregate would monopolize a
   // turn even though no individual definition exhausts the slice budget.
@@ -84,5 +88,5 @@ export async function prepareWorkflowDefinitionAsync(workflow: {id:string;steps:
       deadline=performance.now()+4;
     }
   }
-  return Object.freeze({...availablePayload,hash:digest.digest("hex")});
+  return Object.freeze({...availablePayload,hash:digest.digest("hex"),admissionSettings});
 }

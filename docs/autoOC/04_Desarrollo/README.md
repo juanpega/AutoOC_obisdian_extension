@@ -2,6 +2,16 @@
 
 ## Entrega actual
 
+[Candidato 1.7.16: paralelismo predeterminado dentro de la bóveda](paralelismo-boveda-1.7.16/README.md).
+
+## Preparación anterior
+
+[Candidato 1.7.15: recuperar intentos antiguos desde la interfaz](recuperacion-historica-1.7.15/README.md).
+
+[Candidato 1.7.14: salida guiada ante un intento anterior que bloquea Run](recuperacion-guiada-1.7.14/README.md).
+
+## Entrega anterior
+
 [Preparación de 1.7.13: requisitos, flujos, contratos, límites y validación](entrega-1.7.13-20261101/README.md).
 
 Este expediente reconstruye los encargos directos de la conversación y los cambios desde `origin/main` 1.7.1. No representa una ejecución del workflow SDLC ni reemplaza los expedientes históricos.

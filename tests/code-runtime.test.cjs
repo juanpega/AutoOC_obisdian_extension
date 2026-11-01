@@ -390,8 +390,11 @@ test('plugin shared entry runs the installed motor while retaining its lifetime 
     p.reservePluginExecution();await p.loadSettings();
     const pending=p.runWorkflow(p.settings.workflows[0]);
     await assert.rejects(p.runSharedWorkflow('shared'),/already executing/);
-    await assert.rejects(p.runTask({id:'none'}),/owns the execution/);
-    await assert.rejects(p.runWorkflow({id:'none'}),/owns the execution/);
+    // Unknown catalog IDs do nothing; a different run is no longer rejected
+    // merely because this installation already owns a workflow.
+    await assert.doesNotReject(p.runTask({id:'none'}));
+    await assert.doesNotReject(p.runWorkflow({id:'none'}));
+    assert.equal(p.settings.tasks.length,0);assert.equal(p.settings.workflows.length,1);
     await pending;
     const result=JSON.parse(fs.readFileSync(path.join(runtime,p.settings.workflows[0].runtimeExecution.runId+'.json'),'utf8'));
     assert.equal(result.phase,'completed');assert.equal(p.settings.workflows[0].steps[0].output,'same motor');

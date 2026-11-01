@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.13",
+      version: "1.7.16",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -1969,6 +1969,24 @@ function effectiveExecutionSettings(settings, includeOpenCode2 = false) {
 // workflow-definition.ts
 var import_timers3 = require("timers");
 var import_perf_hooks3 = require("perf_hooks");
+
+// execution-concurrency-settings.ts
+function validateConcurrency(item) {
+  if (item.concurrency !== void 0 && !["exclusive", "independent", "parallel"].includes(item.concurrency)) {
+    throw new Error("Invalid concurrency policy");
+  }
+}
+function concurrencySettings(settings) {
+  const defaultConcurrency = settings.defaultConcurrency === void 0 ? "parallel" : settings.defaultConcurrency;
+  validateConcurrency({ concurrency: defaultConcurrency });
+  const maxConcurrentExecutions = settings.maxConcurrentExecutions === void 0 ? 0 : settings.maxConcurrentExecutions;
+  if (!Number.isSafeInteger(maxConcurrentExecutions) || maxConcurrentExecutions < 0) {
+    throw new Error("Maximum simultaneous runs must be a whole number of zero or more");
+  }
+  return { defaultConcurrency, maxConcurrentExecutions };
+}
+
+// workflow-definition.ts
 var runtimeFields = /* @__PURE__ */ new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 function withoutRuntime(value) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));
@@ -2018,11 +2036,12 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
   const digest = (0, import_crypto4.createHash)("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash = digest.digest("hex");
-  return freeze({ ...withAvailability(payload, workflow, tasks), hash });
+  return freeze({ ...withAvailability(payload, workflow, tasks), hash, admissionSettings: concurrencySettings(settings) });
 }
 async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
   const payload = freeze(definitionPayload(workflow, tasks, settings));
   const availablePayload = freeze(withAvailability(payload, workflow, tasks));
+  const admissionSettings = Object.freeze(concurrencySettings(settings));
   const captured = captureJsonStructure(payload, 0), digest = (0, import_crypto4.createHash)("sha256");
   await new Promise((resolve9) => (0, import_timers3.setImmediate)(resolve9));
   let deadline = import_perf_hooks3.performance.now() + 4;
@@ -2033,7 +2052,7 @@ async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
       deadline = import_perf_hooks3.performance.now() + 4;
     }
   }
-  return Object.freeze({ ...availablePayload, hash: digest.digest("hex") });
+  return Object.freeze({ ...availablePayload, hash: digest.digest("hex"), admissionSettings });
 }
 
 // workflow-progress.ts
@@ -2166,6 +2185,7 @@ function readCodeStepCheckpoint(runtime, workflow, stepId) {
 // execution-status-help.ts
 var import_obsidian = require("obsidian");
 function executionStatusHelp(s) {
+  const review = s.reviewAction === "abandon-attempt" ? "Read Log and History first. If the original process has ended and you want to close this unfinished run, open the recovery controls and choose Abandon attempt. It keeps your task and history, records the outcome as unknown, and does not start another run. A later Run starts new work and may repeat earlier effects." : s.reviewAction === "resolve-uncertainty" ? "Read Log and History and check the original process and its effects. To close the review of this finished attempt, open the recovery controls and choose Resolve historical uncertainty. Enter your reason in the confirmation. The recorded result and history are kept; unknown effects are not marked successful. This does not stop processes or start another run." : s.reviewAction === "workflow-controls" ? "Read the workflow's Log and History and check its effects first. In its recovery controls, Verify previous result and Resume saved execution can continue the saved workflow and run pending steps. If recovery is disabled, review the saved evidence before continuing. Starting a new task does not resolve that earlier workflow." : void 0;
   if (s.waitingApproval) return {
     label: "Waiting for your approval",
     attention: true,
@@ -2188,13 +2208,13 @@ function executionStatusHelp(s) {
     label: "Needs review",
     attention: true,
     explanation: "The outcome or completion of recorded work could not be confirmed. A completed label on the card does not resolve that uncertainty.",
-    next: "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning."
+    next: review || "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning."
   };
   if (s.phase === "ready" || s.phase === "in_flight" || s.status === "running") return {
     label: "Activity not confirmed",
     attention: true,
     explanation: "A pending or ongoing run is not controlled by this window. It may still be running elsewhere or may have been interrupted; the available information does not distinguish between these cases.",
-    next: "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing."
+    next: review || "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing."
   };
   if (s.disposition || s.phase === "abandoned") return {
     label: "Closed with unknown outcome",
@@ -2222,32 +2242,54 @@ function executionStatusHelp(s) {
   };
 }
 var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
-  constructor(app, snapshot, showDetails, version) {
+  constructor(app, snapshot, showDetails, version, startBlocked = false, historical) {
     super(app);
     this.snapshot = snapshot;
     this.showDetails = showDetails;
     this.version = version;
+    this.startBlocked = startBlocked;
+    this.historical = historical;
   }
   onOpen() {
+    var _a, _b;
     const root = this.contentEl;
     root.empty();
     root.addClass("auto-oc-execution-help");
     const current = this.snapshot();
-    root.createEl("h3", { text: "Execution help" });
+    root.createEl("h3", { text: this.historical ? "Review an older attempt" : this.startBlocked ? "Review the previous run" : "Execution help" });
     if (!current) {
-      root.createEl("p", { text: "This item is no longer available. Close this help window and check the panel again." });
+      root.createEl("p", { text: "This item or recorded attempt is no longer available. Close this help window and check the panel again." });
       return;
     }
     const help = executionStatusHelp(current);
     root.createEl("p", { text: current.name });
+    if (this.historical) root.createEl("p", { text: "This older attempt is still unfinished, although the task or workflow now has a different recorded attempt or has been removed. Closing it keeps the current items, disabled state, results and history unchanged. It does not stop a process, undo effects or start new work. Check the original terminal and its effects first." });
+    if (this.startBlocked) root.createEl("p", {
+      text: "No new task was started. AutoOC has a previous attempt to review before starting again. Your task definition and history are preserved."
+    });
     if (current.workflowName) root.createEl("p", { text: `Workflow run: ${current.workflowName}` });
     root.createEl("h4", { text: help.label });
     root.createEl("p", { text: help.explanation });
     root.createEl("h4", { text: "What you can do" });
     root.createEl("p", { text: help.next });
-    root.createEl("p", { text: "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
+    root.createEl("p", { text: this.historical ? "Opening this review changes nothing. Closing the old attempt requires a separate confirmation and records its outcome as unknown." : "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
     const actions = root.createDiv("auto-oc-card-actions");
-    actions.createEl("button", { text: current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
+    if (this.historical) {
+      const close = actions.createEl("button", { text: "Close this old attempt\u2026" });
+      close.onclick = async () => {
+        close.disabled = true;
+        try {
+          if (await this.historical.closeAttempt()) {
+            this.close();
+            new import_obsidian.Notice("Old attempt closed. Nothing was started. Return to your task and choose Run when ready.");
+          }
+        } catch (error) {
+          new import_obsidian.Notice(String(error));
+        } finally {
+          close.disabled = false;
+        }
+      };
+    } else actions.createEl("button", { text: this.startBlocked ? "Open recovery controls" : current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
       this.close();
       this.showDetails();
     };
@@ -2259,6 +2301,8 @@ var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
       status: current.status,
       phase: current.phase,
       runId: current.runId,
+      workflowId: (_a = this.historical) == null ? void 0 : _a.workflowId,
+      revision: (_b = this.historical) == null ? void 0 : _b.revision,
       localControl: current.owned,
       requiresReview: !!current.requiresReconciliation,
       uncertainOutcome: !!current.terminalUncertainty,
@@ -2275,6 +2319,32 @@ var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
         new import_obsidian.Notice("Could not copy. You can select the diagnostics text instead.");
       }
     };
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var HistoricalAttemptsModal = class extends import_obsidian.Modal {
+  constructor(app, rows, review) {
+    super(app);
+    this.rows = rows;
+    this.review = review;
+  }
+  onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.createEl("h3", { text: "Review older attempts" });
+    root.createEl("p", { text: "These unfinished attempts are no longer linked to the current task or workflow. Review one at a time. Opening this list does not run or close anything." });
+    if (!this.rows.length) root.createEl("p", { text: "No older unfinished attempts found. Attempts linked to current items have recovery controls on their own cards." });
+    for (const row of this.rows) {
+      const item = root.createDiv("auto-oc-card");
+      item.createEl("p", { text: row.name });
+      item.createEl("p", { text: `${row.phase} \xB7 ${row.runId}` });
+      item.createEl("button", { text: "Review this attempt" }).onclick = () => {
+        this.close();
+        this.review(row.workflowId, row.runId);
+      };
+    }
   }
   onClose() {
     this.contentEl.empty();
@@ -3244,26 +3314,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs32.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs33.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn6 } = require("child_process");
   const child = spawn6("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs32.unlinkSync(launcherFile);
+      fs33.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs32.unlinkSync(psScriptFile);
+      fs33.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3271,12 +3341,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs32.unlinkSync(launcherFile);
+      fs33.unlinkSync(launcherFile);
     } catch (e) {
     }
     if (removeScript) {
       try {
-        fs32.unlinkSync(psScriptFile);
+        fs33.unlinkSync(psScriptFile);
       } catch (e) {
       }
     }
@@ -3298,7 +3368,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs32.existsSync(effectivePidFile) ? String(fs32.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs33.existsSync(effectivePidFile) ? String(fs33.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn6("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -3307,7 +3377,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs32.unlinkSync(effectivePidFile);
+      fs33.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -3329,18 +3399,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
 }
 function launchHiddenSh(shScriptFile, pidFile) {
   var _a;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const { spawn: spawn6 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs32.chmodSync(shScriptFile, 448);
+    fs33.chmodSync(shScriptFile, 448);
   } catch (e) {
   }
   const child = spawn6("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs32.unlinkSync(shScriptFile);
+      fs33.unlinkSync(shScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3348,7 +3418,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs32.unlinkSync(shScriptFile);
+        fs33.unlinkSync(shScriptFile);
       } catch (e) {
       }
     }
@@ -3369,7 +3439,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs32.existsSync(effectivePidFile) ? String(fs32.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs33.existsSync(effectivePidFile) ? String(fs33.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -3384,7 +3454,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs32.unlinkSync(effectivePidFile);
+      fs33.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -4483,7 +4553,7 @@ function buildDraftPrompt(guide, kind, goal, engine, version) {
 IN-APP DRAFT REQUEST
 Produce a definition only. Do not perform the requested task, inspect files, call tools or execute code.
 Return one JSON object, without Markdown or commentary. Use schemaVersion "1.6.0", pluginVersion ${JSON.stringify(version)} and exportedAt ${JSON.stringify((/* @__PURE__ */ new Date()).toISOString())}.
-` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops or conditional transitions.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
+` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops or conditional transitions.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
 AutoOC applies the model selected in the creator to tasks using that engine. Do not include model IDs in the JSON.
 CREATOR EXAMPLE (replace its content with the requested objective):
 ${JSON.stringify(example, null, 2)}
@@ -5215,21 +5285,20 @@ var admissionDiagnostics = /* @__PURE__ */ new Set([
 function executionAdmissionDiagnostic(error) {
   if ((error == null ? void 0 : error.name) === "DisabledExecutionError") return "Selected task, workflow or step is disabled. Inspect list/status and enable it in AutoOC before running.";
   const message = error == null ? void 0 : error.message;
-  return typeof message === "string" && admissionDiagnostics.has(message) ? message : void 0;
-}
-function validateConcurrency(item) {
-  if (item.concurrency !== void 0 && item.concurrency !== "exclusive" && item.concurrency !== "independent") throw new Error("Invalid concurrency policy");
+  return typeof message === "string" && (admissionDiagnostics.has(message) || /^Concurrent execution limit reached \([1-9][0-9]{0,15}\)$/.test(message)) ? message : void 0;
 }
 function resources(definition, vault) {
-  var _a;
+  var _a, _b;
   const { workflow, tasks, settings } = definition;
   for (const item of [workflow, ...tasks]) validateConcurrency(item);
   const standalone = workflow.id.startsWith("@task:");
-  const result = { exclusive: (standalone ? (_a = tasks[0]) == null ? void 0 : _a.concurrency : workflow.concurrency) !== "independent", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
+  const policy = (_b = standalone ? (_a = tasks[0]) == null ? void 0 : _a.concurrency : workflow.concurrency) != null ? _b : concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
+  const result = { exclusive: policy === "exclusive" || !!workflow.handoffBranch, sharedWorkspace: policy === "parallel", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
   for (const item of [...workflow.steps.filter((s) => s.stepKind === "code"), ...tasks]) {
+    if (item.branch || workflow.handoffBranch) result.exclusive = true;
     if (item.interactiveTerminal || item.taskKind === void 0 && item.stepKind !== "code" && settings.defaultInteractiveTerminal) result.exclusive = true;
     if (item.stepKind === "code" || item.taskKind === "code") {
-      if (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal || item.branch || workflow.handoffBranch) result.exclusive = true;
+      if (!result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal)) result.exclusive = true;
       continue;
     }
     const directory = physicalPath(item.workingDirectory || settings.workingDirectory || vault);
@@ -5249,11 +5318,14 @@ function resources(definition, vault) {
       result.repositories.add(physicalPath(path12.resolve(gitRoot, common)));
     }
   }
-  if (workflow.steps.some((s) => {
+  if (!result.sharedWorkspace && workflow.steps.some((s) => {
     var _a2;
     return s.transitionMode === "eval" || ((_a2 = s.transitions) == null ? void 0 : _a2.some((t) => t.mode === "eval"));
   })) result.exclusive = true;
   return result;
+}
+function canShareWorkspace(a, b) {
+  return !a.exclusive && !b.exclusive && a.sharedWorkspace && b.sharedWorkspace;
 }
 var coordinators = /* @__PURE__ */ new WeakMap();
 function executionCoordinator(lease) {
@@ -5287,6 +5359,9 @@ var ExecutionAdmission = class {
   knows(runId) {
     return this.coordinator.knows(runId);
   }
+  permitsPending(checkpoint) {
+    return this.coordinator.permitsPending(this, checkpoint);
+  }
   confirm(checkpoint) {
     this.bind(checkpoint);
     this.confirmedTerminal = ["completed", "failed", "abandoned"].includes(checkpoint.phase) && !checkpointUncertainties(checkpoint).length;
@@ -5307,6 +5382,13 @@ var ExecutionCoordinator = class {
   knows(runId) {
     return [...this.sessions].some((s) => s.runId === runId && s.advancing);
   }
+  permitsPending(admission, checkpoint) {
+    this.assertOwned(admission, this.lease);
+    const known = [...this.sessions].find((s) => s.runId === checkpoint.runId && s.definition.workflow.id === checkpoint.workflowId && s.definition.hash === checkpoint.definitionHash);
+    if (!known) return false;
+    if (known.advancing) return true;
+    return canShareWorkspace(admission.resources, known.resources) && admission.definition.workflow.id !== known.definition.workflow.id && ![...admission.resources.tasks].some((id) => known.resources.tasks.has(id));
+  }
   admit(definition, vault, resumeRunId) {
     this.lease.assertOwned();
     const requested = resources(definition, vault);
@@ -5326,11 +5408,12 @@ var ExecutionCoordinator = class {
     }
     for (const current of this.sessions) {
       if (current.definition.workflow.id === definition.workflow.id || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
-      if (!current.advancing) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
+      if (!current.advancing && !canShareWorkspace(requested, current.resources)) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
       if (requested.exclusive || current.resources.exclusive) throw new Error("Exclusive execution must finish before shared execution");
-      if (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b)))) throw new Error("Execution resource is occupied (workspace or Git repository)");
+      if (!canShareWorkspace(requested, current.resources) && (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b))))) throw new Error("Execution resource is occupied (workspace or Git repository)");
     }
-    if (this.sessions.size >= 2) throw new Error("Concurrent execution limit reached (2)");
+    const limit = concurrencySettings(definition.admissionSettings || {}).maxConcurrentExecutions;
+    if (limit > 0 && this.sessions.size >= limit) throw new Error(`Concurrent execution limit reached (${limit})`);
     const session = new ExecutionAdmission(this, definition, requested, vault);
     this.sessions.add(session);
     return session;
@@ -6127,14 +6210,15 @@ function validCommand(value) {
   const id = (v) => typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\0\r\n]/.test(v);
   return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.stepId === void 0 || id(value.stepId) && id(value.workflowId) && value.taskId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
 }
-function createPluginRequestHost(lease, execute, edit) {
+function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({})) {
   lease.assertOwned();
   const root = fs15.realpathSync(lease.directory), directory = path16.join(root, "cli-" + lease.token);
   fs15.mkdirSync(directory, { mode: 448 });
   regularDirectory(directory);
   const descriptor = path16.join(directory, "host");
   let heartbeatAt = Date.now();
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: 2, codeStepSelection: true });
+  let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling;
@@ -6179,8 +6263,10 @@ function createPluginRequestHost(lease, execute, edit) {
   const pollOnce = async () => {
     if (closed) return;
     check();
-    if (Date.now() - heartbeatAt >= 1e3) {
+    const nextLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+    if (Date.now() - heartbeatAt >= 1e3 || publishedLimit !== nextLimit) {
       heartbeatAt = Date.now();
+      publishedLimit = nextLimit;
       try {
         await replace(descriptor, hostDescriptor(), () => {
           checkDescriptor();
@@ -6215,7 +6301,8 @@ function createPluginRequestHost(lease, execute, edit) {
       }
       if (closed) return;
       const duplicate = [...active.values()].some((e) => e.definition === `${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`);
-      const busy = duplicate ? "AutoOC is already executing this CLI definition" : active.size >= 2 ? "Concurrent execution limit reached (2)" : [...active.values()].some((e) => e.editing) || request.command === "edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : void 0;
+      const limit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+      const busy = duplicate ? "AutoOC is already executing this CLI definition" : limit > 0 && active.size >= limit ? `Concurrent execution limit reached (${limit})` : [...active.values()].some((e) => e.editing) || request.command === "edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : void 0;
       if (busy) {
         await receipt(id, { status: "rejected", error: busy });
         continue;
@@ -6824,7 +6911,7 @@ async function readPanelCatalog(file) {
 // main.ts
 var import_obsidian8 = require("obsidian");
 var os7 = __toESM(require("os"));
-var fs31 = __toESM(require("fs"));
+var fs32 = __toESM(require("fs"));
 var path29 = __toESM(require("path"));
 var crypto2 = __toESM(require("crypto"));
 
@@ -6895,13 +6982,13 @@ async function executeCodexTask(client, request) {
 // code-runtime.ts
 function executeCode(options) {
   var _a;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const path30 = require("path");
   const vm2 = require("vm");
   const vaultBase = options.vaultBase;
   const defaultCwd = options.cwd;
   const resolveInVault = (p) => {
-    const root = fs32.realpathSync(vaultBase);
+    const root = fs33.realpathSync(vaultBase);
     const resolved = path30.resolve(root, p || ".");
     if (resolved !== root && !resolved.startsWith(root + path30.sep)) {
       throw new Error(`Path escapes vault: ${p}`);
@@ -6910,7 +6997,7 @@ function executeCode(options) {
     for (const component of path30.relative(root, resolved).split(path30.sep).filter(Boolean)) {
       current = path30.join(current, component);
       try {
-        if (fs32.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
+        if (fs33.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
       } catch (error) {
         if (error.code === "ENOENT") break;
         throw error;
@@ -6918,10 +7005,10 @@ function executeCode(options) {
     }
     return resolved;
   };
-  const readText = (p) => fs32.readFileSync(p, "utf8");
+  const readText = (p) => fs33.readFileSync(p, "utf8");
   const writeText = (p, content) => {
-    fs32.mkdirSync(path30.dirname(p), { recursive: true });
-    fs32.writeFileSync(p, String(content), "utf8");
+    fs33.mkdirSync(path30.dirname(p), { recursive: true });
+    fs33.writeFileSync(p, String(content), "utf8");
     return p;
   };
   const sandbox = {
@@ -6953,13 +7040,13 @@ function executeCode(options) {
       append: (p, content) => {
         var _a2;
         const full = resolveInVault(p);
-        fs32.mkdirSync(path30.dirname(full), { recursive: true });
-        fs32.appendFileSync(full, String(content), "utf8");
+        fs33.mkdirSync(path30.dirname(full), { recursive: true });
+        fs33.appendFileSync(full, String(content), "utf8");
         (_a2 = options.onVaultMutation) == null ? void 0 : _a2.call(options, { path: full, operation: "append" });
         return full;
       },
-      exists: (p) => fs32.existsSync(resolveInVault(p)),
-      list: (p = ".") => fs32.readdirSync(resolveInVault(p))
+      exists: (p) => fs33.existsSync(resolveInVault(p)),
+      list: (p = ".") => fs33.readdirSync(resolveInVault(p))
     };
   }
   if (options.codeAllowFiles) {
@@ -6970,12 +7057,12 @@ function executeCode(options) {
       write: (p, content) => writeText(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p), content),
       append: (p, content) => {
         const full = path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p);
-        fs32.mkdirSync(path30.dirname(full), { recursive: true });
-        fs32.appendFileSync(full, String(content), "utf8");
+        fs33.mkdirSync(path30.dirname(full), { recursive: true });
+        fs33.appendFileSync(full, String(content), "utf8");
         return full;
       },
-      exists: (p) => fs32.existsSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p)),
-      list: (p = ".") => fs32.readdirSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p))
+      exists: (p) => fs33.existsSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p)),
+      list: (p = ".") => fs33.readdirSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p))
     };
   }
   if (options.codeAllowTerminal) {
@@ -7007,7 +7094,7 @@ function executeCode(options) {
 }
 function codeNodeExecutable() {
   if (!process.versions.electron) return process.execPath;
-  const fs32 = require("fs");
+  const fs33 = require("fs");
   const path30 = require("path");
   const directories = (process.env.PATH || process.env.Path || "").split(path30.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path30.isAbsolute(directory));
   if (process.platform === "win32") {
@@ -7018,8 +7105,8 @@ function codeNodeExecutable() {
   for (const directory of directories) {
     const file = path30.join(directory, process.platform === "win32" ? "node.exe" : "node");
     try {
-      if (fs32.statSync(file).isFile()) {
-        fs32.accessSync(file, fs32.constants.X_OK);
+      if (fs33.statSync(file).isFile()) {
+        fs33.accessSync(file, fs33.constants.X_OK);
         return file;
       }
     } catch (e) {
@@ -7897,7 +7984,7 @@ async function runCodeWorkflowHost(options) {
         const prior = JSON.parse(fs22.readFileSync(lease.directory + "/" + file, "utf8"));
         ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
         const resolved = prior.phase === "abandoned" || prior.disposition || ["completed", "failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
-        if (prior.runId !== options.resumeRunId && !admission.knows(prior.runId) && !resolved) {
+        if (prior.runId !== options.resumeRunId && !resolved && !admission.permitsPending(prior)) {
           throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
         }
       }
@@ -8656,12 +8743,73 @@ async function abandonInstalledExecution(options) {
   }
 }
 
+// historical-execution-recovery.ts
+var fs30 = __toESM(require("fs"));
+var import_crypto14 = require("crypto");
+function catalogEntries(catalog) {
+  if (!Array.isArray(catalog.tasks) || !Array.isArray(catalog.workflows)) throw new Error("Catalog is unavailable; review cannot continue");
+  return [...catalog.tasks, ...catalog.workflows, ...catalog.workflows.flatMap((w) => (w.steps || []).map((s) => s.codeExecution).filter(Boolean))];
+}
+function catalogReferencesRun(catalog, runId) {
+  return catalogEntries(catalog).some((entry) => {
+    var _a;
+    return ((_a = entry.runtimeExecution) == null ? void 0 : _a.runId) === runId;
+  });
+}
+function assertUnboundHistoricalAttempt(catalog, runId) {
+  const entries = catalogEntries(catalog);
+  if (catalogReferencesRun(catalog, runId)) throw new Error("This attempt is linked to a current item; use its recovery controls");
+  if (entries.some((entry) => {
+    var _a;
+    return entry.status === "running" || entry.pendingCodexApproval || ((_a = entry.legacyExecution) == null ? void 0 : _a.stopState);
+  })) throw new Error("An execution may still be active; review it before closing this attempt");
+}
+function inspectHistoricalAttempt(location, workflowId, runId, catalog) {
+  assertUnboundHistoricalAttempt(catalog, runId);
+  const state = readExecutionCheckpoint(location.runtimeDirectory, runId);
+  if (state.workflowId !== workflowId || !["ready", "in_flight"].includes(state.phase)) throw new Error("This unfinished attempt is no longer available; review again");
+  return {
+    ...dispositionLocation(location),
+    workflowId,
+    runId,
+    revision: state.revision,
+    definitionHash: state.definitionHash,
+    phase: state.phase,
+    stepCount: state.steps.length,
+    checkpointHash: (0, import_crypto14.createHash)("sha256").update(JSON.stringify(state)).digest("hex")
+  };
+}
+async function closeHistoricalAttempt(observed, lease, reason, acknowledgedUnknownEffects, assertHostIdle, beforeEffects) {
+  const location = resolveInstalledWorkflowLocation(observed.vault, observed.installationDirectory);
+  return catalogTransaction(location.configurationFile, async () => {
+    assertHostIdle();
+    lease.assertOwned();
+    if (fs30.existsSync(location.configurationFile + ".write-lock") || fs30.existsSync(location.configurationFile + ".write-intent") || fs30.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs30.readdirSync(location.runtimeDirectory).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("A write or update is pending; wait before reviewing this attempt");
+    const catalog = JSON.parse(fs30.readFileSync(location.configurationFile, "utf8"));
+    const current = inspectHistoricalAttempt(location, observed.workflowId, observed.runId, catalog);
+    if (JSON.stringify(current) !== JSON.stringify(observed)) throw new Error("The recorded attempt changed; open its review again");
+    if (acknowledgedUnknownEffects !== true || typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("Confirm the unknown outcome and enter a reason of 1\u20131000 characters");
+    assertHostIdle();
+    beforeEffects();
+    return abandonInstalledExecution({
+      vault: location.vault,
+      installationDirectory: location.installationDirectory,
+      lease,
+      runId: observed.runId,
+      workflowId: observed.workflowId,
+      revision: observed.revision,
+      reason,
+      acknowledgedUnknownEffects
+    });
+  });
+}
+
 // checkpoint-observation.ts
 var path28 = __toESM(require("path"));
-var fs30 = __toESM(require("fs"));
+var fs31 = __toESM(require("fs"));
 async function observeCheckpoint(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path28.join(directory, runId + ".json"), stat = fs30.lstatSync(file), text = await readSettingsTextAsync(file);
+  const file = path28.join(directory, runId + ".json"), stat = fs31.lstatSync(file), text = await readSettingsTextAsync(file);
   if (text === null) throw new Error("Execution checkpoint is absent");
   let checkpoint;
   try {
@@ -8673,7 +8821,7 @@ async function observeCheckpoint(directory, runId) {
   if (checkpoint.runId !== runId) throw new Error("Execution identity changed");
   const hash = await hashTextCooperatively(text);
   const assertCurrent = () => {
-    const current = fs30.lstatSync(file);
+    const current = fs31.lstatSync(file);
     if (!current.isFile() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error("Execution checkpoint changed during observation");
   };
   assertCurrent();
@@ -8719,6 +8867,7 @@ AutoOC supports DAG workflows with three step kinds:
 
 Tasks:
 A task is reusable and can be referenced by workflows.
+Concurrency for tasks and workflows is optional: omit it to inherit the vault setting; "exclusive" runs alone, "independent" requires separate folders and Git repositories, and "parallel" allows shared-vault execution. Parallel runs must use different outputs to avoid overwriting one another. The workflow's policy applies to its steps; shared reusable tasks still cannot run twice at the same time. Concurrency never grants Code or provider permissions. Do not set it unless the user explicitly requests a policy.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
@@ -9387,7 +9536,7 @@ function getUvCandidates() {
 function resolveUvBin() {
   for (const candidate of getUvCandidates()) {
     try {
-      if (fs31.existsSync(candidate)) return candidate;
+      if (fs32.existsSync(candidate)) return candidate;
     } catch (e) {
     }
   }
@@ -9558,15 +9707,15 @@ function saveLogToFile(vaultBasePath, taskId, output) {
   if (!output || !output.trim()) return null;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    fs31.mkdirSync(logDir, { recursive: true });
+    fs32.mkdirSync(logDir, { recursive: true });
   } catch (e) {
   }
   const timestamp = formatTimestampForLog();
   const logFile = path29.join(logDir, `${timestamp}.log`);
   try {
-    fs31.writeFileSync(logFile, output, "utf8");
+    fs32.writeFileSync(logFile, output, "utf8");
     const latestFile = path29.join(logDir, "latest.log");
-    fs31.writeFileSync(latestFile, output, "utf8");
+    fs32.writeFileSync(latestFile, output, "utf8");
     return logFile;
   } catch (e) {
     return null;
@@ -9575,8 +9724,8 @@ function saveLogToFile(vaultBasePath, taskId, output) {
 function getLogHistory(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return [];
-    const files2 = fs31.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    if (!fs32.existsSync(logDir)) return [];
+    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
     return files2.map((f) => ({
       file: path29.join(logDir, f),
       timestamp: formatLogFilenameTimestamp(f)
@@ -9587,7 +9736,7 @@ function getLogHistory(vaultBasePath, taskId) {
 }
 function readLogFile(filePath) {
   try {
-    return formatLogContent(fs31.readFileSync(filePath, "utf8"));
+    return formatLogContent(fs32.readFileSync(filePath, "utf8"));
   } catch (e) {
     return "(error reading log file)";
   }
@@ -9596,13 +9745,13 @@ function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
   if (maxLogs <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return;
-    const files2 = fs31.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    if (!fs32.existsSync(logDir)) return;
+    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
     while (files2.length > maxLogs) {
       const oldFile = files2.shift();
       if (oldFile) {
         try {
-          fs31.unlinkSync(path29.join(logDir, oldFile));
+          fs32.unlinkSync(path29.join(logDir, oldFile));
         } catch (e) {
         }
       }
@@ -9614,9 +9763,9 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
   if (retentionDays <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return;
+    if (!fs32.existsSync(logDir)) return;
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
-    const files2 = fs31.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
     for (const f of files2) {
       const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
       if (match) {
@@ -9624,7 +9773,7 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
         const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
         if (fileDate.getTime() < cutoff) {
           try {
-            fs31.unlinkSync(path29.join(logDir, f));
+            fs32.unlinkSync(path29.join(logDir, f));
           } catch (e) {
           }
         }
@@ -9636,16 +9785,16 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
 function clearTaskLogs(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs31.existsSync(logDir)) return;
-    const files2 = fs31.readdirSync(logDir);
+    if (!fs32.existsSync(logDir)) return;
+    const files2 = fs32.readdirSync(logDir);
     for (const f of files2) {
       try {
-        fs31.unlinkSync(path29.join(logDir, f));
+        fs32.unlinkSync(path29.join(logDir, f));
       } catch (e) {
       }
     }
     try {
-      fs31.rmdirSync(logDir);
+      fs32.rmdirSync(logDir);
     } catch (e) {
     }
   } catch (e) {
@@ -9654,13 +9803,13 @@ function clearTaskLogs(vaultBasePath, taskId) {
 function clearAllLogs(vaultBasePath) {
   const logsDir = path29.join(vaultBasePath, ".opencode", "logs");
   try {
-    if (!fs31.existsSync(logsDir)) return;
-    const dirs = fs31.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs32.existsSync(logsDir)) return;
+    const dirs = fs32.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of dirs) {
       clearTaskLogs(vaultBasePath, dir);
     }
     try {
-      fs31.rmdirSync(logsDir);
+      fs32.rmdirSync(logsDir);
     } catch (e) {
     }
   } catch (e) {
@@ -9668,7 +9817,7 @@ function clearAllLogs(vaultBasePath) {
 }
 function deleteSingleLogFile(filePath) {
   try {
-    fs31.unlinkSync(filePath);
+    fs32.unlinkSync(filePath);
   } catch (e) {
   }
 }
@@ -9931,14 +10080,14 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     const { runtime, names } = this.journalNames();
     return JSON.stringify(names.map((name) => {
       readExecutionCheckpoint(runtime, name.slice(0, -5));
-      return [name, fs31.readFileSync(path29.join(runtime, name), "utf8")];
+      return [name, fs32.readFileSync(path29.join(runtime, name), "utf8")];
     }));
   }
   journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs31.existsSync(path29.join(directory, "data.json.write-lock")) || fs31.existsSync(path29.join(directory, "data.json.write-intent")) || fs31.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
-    const names = fs31.readdirSync(runtime).sort();
+    if (fs32.existsSync(path29.join(directory, "data.json.write-lock")) || fs32.existsSync(path29.join(directory, "data.json.write-intent")) || fs32.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
+    const names = fs32.readdirSync(runtime).sort();
     if (names.some((name) => name === "update-pending.json" || name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished runtime write or update");
     return { runtime, names: names.filter((name) => /^[a-zA-Z0-9-]+\.json$/.test(name)) };
   }
@@ -9976,7 +10125,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       if (this.executionAttempted || this.observedJournalSnapshot === void 0 || this.startupPending || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) throw error;
       if (this.journalSnapshot() !== this.observedJournalSnapshot) throw error;
       const file = this.selectedExecutionLocation().configurationFile;
-      for (const settings of [this.settings, JSON.parse(fs31.readFileSync(file, "utf8"))]) {
+      for (const settings of [this.settings, JSON.parse(fs32.readFileSync(file, "utf8"))]) {
         if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw error;
         assertIdleCatalog({
           tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -9995,18 +10144,18 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     this.assertLifecycleOpen();
     lease.assertOwned();
     const file = this.observationProofPath(lease.token);
-    const fd = fs31.openSync(file, "wx", 384);
+    const fd = fs32.openSync(file, "wx", 384);
     try {
-      const identity = fs31.fstatSync(fd);
+      const identity = fs32.fstatSync(fd);
       const bytes = JSON.stringify({ schemaVersion: 1, token: lease.token, journalHash });
-      fs31.writeFileSync(fd, bytes);
-      await new Promise((resolve9, reject) => fs31.fsync(fd, (error) => error ? reject(error) : resolve9()));
+      fs32.writeFileSync(fd, bytes);
+      await new Promise((resolve9, reject) => fs32.fsync(fd, (error) => error ? reject(error) : resolve9()));
       lease.assertOwned();
       this.assertLifecycleOpen();
-      const current = fs31.lstatSync(file);
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs31.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
+      const current = fs32.lstatSync(file);
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs32.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
     } finally {
-      fs31.closeSync(fd);
+      fs32.closeSync(fd);
     }
     this.observationProof = file;
   }
@@ -10016,7 +10165,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     if (this.observationProof) {
       this.pluginExecutionLease.assertOwned();
       const file = this.observationProof;
-      if (fs31.existsSync(file)) fs31.unlinkSync(file);
+      if (fs32.existsSync(file)) fs32.unlinkSync(file);
       this.observationProof = void 0;
     }
     this.executionAttempted = true;
@@ -10024,11 +10173,11 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   assertClosedObservation(token) {
     const location = this.selectedExecutionLocation(false);
     if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package changed");
-    const file = this.observationProofPath(token), stat = fs31.lstatSync(file);
+    const file = this.observationProofPath(token), stat = fs32.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Invalid observation proof");
-    const proof = JSON.parse(fs31.readFileSync(file, "utf8"));
+    const proof = JSON.parse(fs32.readFileSync(file, "utf8"));
     if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require("crypto").createHash("sha256").update(this.journalSnapshot()).digest("hex")) throw new Error("Observed execution state changed");
-    const settings = JSON.parse(fs31.readFileSync(location.configurationFile, "utf8"));
+    const settings = JSON.parse(fs32.readFileSync(location.configurationFile, "utf8"));
     if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error("Execution requires reconciliation");
     assertIdleCatalog({
       tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10038,24 +10187,24 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   async completeInstalledRelease() {
     const location = this.selectedExecutionLocation();
     const manifestFile = path29.join(location.installationDirectory, "manifest.json");
-    const manifestStat = fs31.lstatSync(manifestFile);
+    const manifestStat = fs32.lstatSync(manifestFile);
     if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1) throw new Error("Unsafe installed plugin manifest");
-    const startingManifest = await fs31.promises.readFile(manifestFile);
+    const startingManifest = await fs32.promises.readFile(manifestFile);
     const installedManifest = JSON.parse(startingManifest.toString("utf8"));
     if (installedManifest.id !== "auto-oc" || installedManifest.id !== this.manifest.id || installedManifest.version !== PLUGIN_BUILD_VERSION) {
       throw new Error("Installed plugin manifest identity or version differs from the bundle");
     }
     const mainFile = path29.join(location.installationDirectory, "main.js");
-    const stat = fs31.lstatSync(mainFile);
+    const stat = fs32.lstatSync(mainFile);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe installed plugin bundle");
-    const startingBundle = await fs31.promises.readFile(mainFile);
+    const startingBundle = await fs32.promises.readFile(mainFile);
     const completePackage = await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION);
     const assertCatalog = await waitForInstalledCatalog(location.installationDirectory, () => {
       this.assertLifecycleOpen();
       this.selectedExecutionLocation();
       for (const [file, bytes] of [[manifestFile, startingManifest], [mainFile, startingBundle]]) {
-        const current = fs31.lstatSync(file);
-        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs31.readFileSync(file).equals(bytes)) {
+        const current = fs32.lstatSync(file);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs32.readFileSync(file).equals(bytes)) {
           throw new Error("Installed plugin identity changed during startup");
         }
       }
@@ -10071,10 +10220,10 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     try {
       const files2 = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, PLUGIN_BUILD_VERSION);
       this.assertLifecycleOpen();
-      if (!files2["main.js"].equals(startingBundle) || !fs31.readFileSync(mainFile).equals(startingBundle)) {
+      if (!files2["main.js"].equals(startingBundle) || !fs32.readFileSync(mainFile).equals(startingBundle)) {
         throw new Error("Bootstrap revision differs from the starting plugin; retry with a coherent release");
       }
-      if (!files2["manifest.json"].equals(startingManifest) || !fs31.readFileSync(manifestFile).equals(startingManifest)) {
+      if (!files2["manifest.json"].equals(startingManifest) || !fs32.readFileSync(manifestFile).equals(startingManifest)) {
         throw new Error("Bootstrap manifest differs from the starting installation");
       }
       this.assertExecutionIdle();
@@ -10084,7 +10233,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       Object.assign(this.manifest, installedManifest);
       return assertCatalog;
     } finally {
-      this.updateInProgress = fs31.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"));
+      this.updateInProgress = fs32.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"));
     }
   }
   async onload() {
@@ -10094,7 +10243,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     try {
       try {
         const location = this.selectedExecutionLocation(false);
-        if (fs31.existsSync(location.configurationFile + ".write-intent")) {
+        if (fs32.existsSync(location.configurationFile + ".write-intent")) {
           if (!await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Interrupted settings recovery requires a complete verified package");
           this.settingsRecoveryPromise = recoverInterruptedSettingsWrite(location.installationDirectory, () => this.assertLifecycleOpen());
           try {
@@ -10139,6 +10288,13 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
         id: "open-auto-oc",
         name: "Open AutoOC Task Scheduler",
         callback: () => this.activateView()
+      });
+      this.addCommand({
+        id: "review-older-attempts",
+        name: "Review older attempts",
+        callback: () => {
+          void this.openHistoricalAttemptsReview().catch((error) => new import_obsidian8.Notice(this.redactSecrets(String(error))));
+        }
       });
       this.addCommand({
         id: "create-task",
@@ -10357,7 +10513,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
             return;
           }
           try {
-            fs31.lstatSync(path29.join(current.runtimeDirectory, "execution.lock"));
+            fs32.lstatSync(path29.join(current.runtimeDirectory, "execution.lock"));
             absentSince = void 0;
             return;
           } catch (error) {
@@ -10436,7 +10592,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   closedSessionRecovery() {
     try {
       const location = this.selectedExecutionLocation(false);
-      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs31.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"))) return;
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs32.existsSync(path29.join(location.runtimeDirectory, "update-pending.json"))) return;
       assertPackageMaintenanceSafe(location.installationDirectory);
       const owner = readExecutionLeaseOwner(location.runtimeDirectory);
       try {
@@ -10447,7 +10603,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       }
       return () => {
         const current = this.selectedExecutionLocation(false);
-        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs31.existsSync(path29.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs32.existsSync(path29.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
         assertPackageMaintenanceSafe(current.installationDirectory);
         recoverExecutionLease(current.runtimeDirectory, owner.token);
       };
@@ -10572,7 +10728,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       } finally {
         this.workflowEditPending = false;
       }
-    });
+    }, () => this.settings);
   }
   async runSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId, external, stepId) {
     var _a;
@@ -11601,9 +11757,9 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   }
   isRalphLoopEnabled() {
     const configPath = getOpencodeConfigPath();
-    if (!fs31.existsSync(configPath)) return false;
+    if (!fs32.existsSync(configPath)) return false;
     try {
-      const raw = fs31.readFileSync(configPath, "utf8");
+      const raw = fs32.readFileSync(configPath, "utf8");
       const data = JSON.parse(raw);
       return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
     } catch (e) {
@@ -11613,13 +11769,13 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   async ensureRalphLoopPluginEnabled() {
     const configPath = getOpencodeConfigPath();
     const configDir = path29.dirname(configPath);
-    if (!fs31.existsSync(configDir)) {
-      fs31.mkdirSync(configDir, { recursive: true });
+    if (!fs32.existsSync(configDir)) {
+      fs32.mkdirSync(configDir, { recursive: true });
     }
     let data = {};
-    if (fs31.existsSync(configPath)) {
+    if (fs32.existsSync(configPath)) {
       try {
-        const raw = fs31.readFileSync(configPath, "utf8");
+        const raw = fs32.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -11631,7 +11787,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     }
     plugins.push("opencode-ralph-loop");
     data.plugin = plugins;
-    fs31.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+    fs32.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     return { changed: true, configPath };
   }
@@ -11656,21 +11812,21 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
   }
   ensureAutoOcMcpServerFile() {
     const { mcpPath } = this.getAutoOcMcpPaths();
-    fs31.mkdirSync(path29.dirname(mcpPath), { recursive: true });
-    fs31.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    fs32.mkdirSync(path29.dirname(mcpPath), { recursive: true });
+    fs32.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
     return mcpPath;
   }
   async ensureAutoOcMcpEnabled() {
     const configPath = getOpencodeConfigPath();
     const configDir = path29.dirname(configPath);
-    if (!fs31.existsSync(configDir)) {
-      fs31.mkdirSync(configDir, { recursive: true });
+    if (!fs32.existsSync(configDir)) {
+      fs32.mkdirSync(configDir, { recursive: true });
     }
     const mcpPath = this.ensureAutoOcMcpServerFile();
     let data = {};
-    if (fs31.existsSync(configPath)) {
+    if (fs32.existsSync(configPath)) {
       try {
-        const raw = fs31.readFileSync(configPath, "utf8");
+        const raw = fs32.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -11684,7 +11840,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       mcp["autooc-mcp"] = nextBlock;
       data.mcp = mcp;
       if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-      fs31.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+      fs32.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     }
     return { changed, configPath, mcpPath };
@@ -11817,7 +11973,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
     } catch (error) {
       new import_obsidian8.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
     } finally {
-      this.updateInProgress = !!this.pluginExecutionLease && fs31.existsSync(path29.join(this.pluginExecutionLease.directory, "update-pending.json"));
+      this.updateInProgress = !!this.pluginExecutionLease && fs32.existsSync(path29.join(this.pluginExecutionLease.directory, "update-pending.json"));
       if (maintenanceLease && this.pluginExecutionLease && !this.updateInProgress) {
         try {
           this.releasePluginExecution(false);
@@ -11865,7 +12021,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       return { output: this.redactSecrets(result.output), exitCode: result.succeeded ? 0 : -1 };
     }
     return new Promise((resolve9) => {
-      const fs32 = require("fs");
+      const fs33 = require("fs");
       const path30 = require("path");
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
@@ -11880,15 +12036,15 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       const cleanup = (removeScript = true) => {
         hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
         try {
-          fs32.unlinkSync(scriptFile);
+          fs33.unlinkSync(scriptFile);
         } catch (e) {
         }
         try {
-          fs32.unlinkSync(outFile);
+          fs33.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs32.unlinkSync(pidFile);
+          fs33.unlinkSync(pidFile);
         } catch (e) {
         }
       };
@@ -11945,7 +12101,7 @@ DONE:%s
       }
       const scriptFile = path30.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
       if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-      else fs32.writeFileSync(scriptFile, launchScript, "utf8");
+      else fs33.writeFileSync(scriptFile, launchScript, "utf8");
       hiddenProc = launchHidden(scriptFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -11958,10 +12114,10 @@ DONE:%s
           resolve9({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
-        if (!fs32.existsSync(outFile)) return;
+        if (!fs33.existsSync(outFile)) return;
         settled = true;
         clearInterval(poll);
-        const raw = fs32.readFileSync(outFile, "utf8");
+        const raw = fs33.readFileSync(outFile, "utf8");
         cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
@@ -12059,6 +12215,84 @@ DONE:%s
       this.refreshOpenViews();
     }
   }
+  async openHistoricalAttemptsReview() {
+    this.assertLifecycleOpen();
+    const { runtime, names } = this.journalNames();
+    const rows = [];
+    for (const file of names) {
+      const { checkpoint } = await observeCheckpoint(runtime, file.slice(0, -5));
+      this.assertLifecycleOpen();
+      if (!["ready", "in_flight"].includes(checkpoint.phase) || catalogReferencesRun(this.settings, checkpoint.runId)) continue;
+      const task = this.settings.tasks.find((t) => standaloneTaskWorkflow(t.id).id === checkpoint.workflowId);
+      const workflow = this.settings.workflows.find((w) => w.id === checkpoint.workflowId);
+      rows.push({ name: (task == null ? void 0 : task.name) || (workflow == null ? void 0 : workflow.name) || checkpoint.workflowId, runId: checkpoint.runId, workflowId: checkpoint.workflowId, phase: checkpoint.phase });
+    }
+    new HistoricalAttemptsModal(this.app, rows, (workflowId, runId) => {
+      try {
+        this.openHistoricalExecutionRecovery(workflowId, runId);
+      } catch (error) {
+        new import_obsidian8.Notice(this.redactSecrets(String(error)));
+      }
+    }).open();
+  }
+  openHistoricalExecutionRecovery(workflowId, runId) {
+    this.assertLifecycleOpen();
+    const location = this.selectedExecutionLocation();
+    const observed = inspectHistoricalAttempt(location, workflowId, runId, this.settings);
+    const task = this.settings.tasks.find((t) => standaloneTaskWorkflow(t.id).id === workflowId);
+    const workflow = this.settings.workflows.find((w) => w.id === workflowId);
+    const snapshot = () => {
+      try {
+        this.assertLifecycleOpen();
+        const current = inspectHistoricalAttempt(this.selectedExecutionLocation(), workflowId, runId, this.settings);
+        if (JSON.stringify(current) !== JSON.stringify(observed)) return void 0;
+        return { name: `Older attempt: ${(task == null ? void 0 : task.name) || (workflow == null ? void 0 : workflow.name) || workflowId}`, status: "pending", runId, phase: observed.phase, owned: false };
+      } catch (e) {
+        return void 0;
+      }
+    };
+    new ExecutionStatusHelpModal(this.app, snapshot, () => {
+    }, this.manifest.version, true, {
+      workflowId,
+      revision: observed.revision,
+      closeAttempt: async () => {
+        try {
+          const modal = new ConfirmModal(
+            this.app,
+            "Close this old attempt?",
+            `Attempt: ${runId}. Revision: ${observed.revision}. Confirm only after checking that its original external process has ended. The outcome remains UNKNOWN. This preserves the current task or workflow and all history. It does not stop processes, undo effects or start another run. Enter why you are closing this attempt.`,
+            true
+          );
+          if (!await modal.openAndWait()) return false;
+          const assertIdle = () => {
+            var _a, _b;
+            this.assertLifecycleOpen();
+            (_a = this.pluginExecutionLease) == null ? void 0 : _a.assertOwned();
+            this.selectedExecutionLocation();
+            if (!this.pluginExecutionLease || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_b = this.cliRequestHost) == null ? void 0 : _b.hasPendingWork)) throw new Error("An execution, save or update is active; wait before closing this attempt");
+            assertUnboundHistoricalAttempt(this.settings, runId);
+          };
+          assertIdle();
+          const reservation = { workflowId, runId, controller: new AbortController() };
+          this.sharedWorkflowExecution = reservation;
+          try {
+            await closeHistoricalAttempt(observed, this.pluginExecutionLease, modal.reason, true, () => {
+              this.assertLifecycleOpen();
+              this.selectedExecutionLocation();
+              if (this.sharedWorkflowExecution !== reservation || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.settingsWriter.hasPendingWrites) throw new Error("Recovery ownership changed; review again");
+              assertUnboundHistoricalAttempt(this.settings, runId);
+            }, () => this.beginExecutionEffects());
+          } finally {
+            if (this.sharedWorkflowExecution === reservation) this.sharedWorkflowExecution = void 0;
+            this.refreshOpenViews();
+          }
+          return true;
+        } catch (error) {
+          throw new Error(this.redactSecrets(String(error)));
+        }
+      }
+    }).open();
+  }
   async confirmAbandonTaskExecution(taskId) {
     var _a;
     this.assertLifecycleOpen();
@@ -12117,10 +12351,9 @@ DONE:%s
     return result;
   }
   async executeTask(task, onComplete, overrides = {}, owner, releaseStart) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g;
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if (this.sharedWorkflowExecution && ((_a = this.settings.tasks.find((t) => t.id === task.id)) == null ? void 0 : _a.concurrency) !== "independent") throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     assertNoRetiredDependency(this.settings.tasks[idx]);
@@ -12136,7 +12369,7 @@ DONE:%s
     assertNoRetiredDependency(effectiveTask);
     const binding = effectiveTask.runtimeExecution;
     if (!owner && (binding == null ? void 0 : binding.requiresReconciliation)) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
-    if (((_b = effectiveTask.legacyExecution) == null ? void 0 : _b.stopState) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
+    if (((_a = effectiveTask.legacyExecution) == null ? void 0 : _a.stopState) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
       throw new Error("Previous task outcome is unconfirmed; recovery is required before starting a new attempt.");
     }
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
@@ -12200,7 +12433,7 @@ DONE:%s
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_c = effectiveTask.branch) == null ? void 0 : _c.trim())) delete effectiveTask.branch;
+    if (!((_b = effectiveTask.branch) == null ? void 0 : _b.trim())) delete effectiveTask.branch;
     if (effectiveTask.branch) {
       const { isValidGitBranchName } = require_import_utils();
       if (!isValidGitBranchName(effectiveTask.branch)) {
@@ -12213,7 +12446,7 @@ DONE:%s
         return;
       }
     }
-    if (!((_d = effectiveTask.prompt) == null ? void 0 : _d.trim())) {
+    if (!((_c = effectiveTask.prompt) == null ? void 0 : _c.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
@@ -12222,7 +12455,7 @@ DONE:%s
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_e = effectiveTask.model) == null ? void 0 : _e.trim())) {
+    if (!((_d = effectiveTask.model) == null ? void 0 : _d.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
@@ -12261,7 +12494,7 @@ DONE:%s
       current.status = "running";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
-      (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
+      (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
       this.finishLegacyStart(attempt);
@@ -12297,7 +12530,7 @@ DONE:%s
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_g = this.view) == null ? void 0 : _g.resetDashboardTaskShift(task.id);
+    (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.finishLegacyStart(attempt);
@@ -12318,47 +12551,47 @@ DONE:%s
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
     const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
-    const fs32 = require("fs");
+    const fs33 = require("fs");
     try {
-      fs32.unlinkSync(outFile);
+      fs33.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(errFile);
+      fs33.unlinkSync(errFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(doneFile);
+      fs33.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(pidFile);
+      fs33.unlinkSync(pidFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(promptFile);
+      fs33.unlinkSync(promptFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(fullPromptFile);
+      fs33.unlinkSync(fullPromptFile);
     } catch (e) {
     }
     try {
-      fs32.unlinkSync(tmpFullPromptFile);
+      fs33.unlinkSync(tmpFullPromptFile);
     } catch (e) {
     }
     if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
       try {
-        fs32.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs33.writeFileSync(fullPromptFile, prompt, "utf8");
       } catch (e) {
         fullPromptFile = tmpFullPromptFile;
-        fs32.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs33.writeFileSync(fullPromptFile, prompt, "utf8");
       }
       const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
       const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
-      fs32.writeFileSync(promptFile, shortPrompt, "utf8");
+      fs33.writeFileSync(promptFile, shortPrompt, "utf8");
     } else {
-      fs32.writeFileSync(promptFile, preparedPrompt, "utf8");
+      fs33.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
@@ -12386,7 +12619,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const launchScript = buildOpenCodeScript({ pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd, major: effectiveTask.taskKind === "opencode2" ? 2 : 1 });
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-    else fs32.writeFileSync(scriptFile, launchScript, "utf8");
+    else fs33.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
     try {
       hiddenProc = launchHidden(scriptFile, pidFile);
@@ -12408,31 +12641,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
       try {
-        fs32.unlinkSync(promptFile);
+        fs33.unlinkSync(promptFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(fullPromptFile);
+        fs33.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(tmpFullPromptFile);
+        fs33.unlinkSync(tmpFullPromptFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(outFile);
+        fs33.unlinkSync(outFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(errFile);
+        fs33.unlinkSync(errFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(doneFile);
+        fs33.unlinkSync(doneFile);
       } catch (e) {
       }
       try {
-        fs32.unlinkSync(pidFile);
+        fs33.unlinkSync(pidFile);
       } catch (e) {
       }
     };
@@ -12466,7 +12699,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       new import_obsidian8.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
-    const timeoutSeconds = (_h = this.settings.taskTimeoutSeconds) != null ? _h : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -12518,9 +12751,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         new import_obsidian8.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
-      if (!fs32.existsSync(doneFile)) {
-        const stdout2 = fs32.existsSync(outFile) ? decodeCommandBuffer(fs32.readFileSync(outFile)) : "";
-        const stderr2 = fs32.existsSync(errFile) ? decodeCommandBuffer(fs32.readFileSync(errFile)) : "";
+      if (!fs33.existsSync(doneFile)) {
+        const stdout2 = fs33.existsSync(outFile) ? decodeCommandBuffer(fs33.readFileSync(outFile)) : "";
+        const stderr2 = fs33.existsSync(errFile) ? decodeCommandBuffer(fs33.readFileSync(errFile)) : "";
         const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
         if (normalized2) {
           t.output = `${normalized2}
@@ -12537,9 +12770,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      const stdout = fs32.existsSync(outFile) ? decodeCommandBuffer(fs32.readFileSync(outFile)) : "";
-      const stderr = fs32.existsSync(errFile) ? decodeCommandBuffer(fs32.readFileSync(errFile)) : "";
-      const exitCodeRaw = fs32.readFileSync(doneFile, "utf8").trim();
+      const stdout = fs33.existsSync(outFile) ? decodeCommandBuffer(fs33.readFileSync(outFile)) : "";
+      const stderr = fs33.existsSync(errFile) ? decodeCommandBuffer(fs33.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs33.readFileSync(doneFile, "utf8").trim();
       cleanupTempFiles();
       if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
@@ -13221,7 +13454,7 @@ ${current.output}`;
         title: "Export AutoOC tasks and workflows"
       });
       if (result.canceled || !result.filePath) return;
-      fs31.writeFileSync(result.filePath, json, "utf8");
+      fs32.writeFileSync(result.filePath, json, "utf8");
       new import_obsidian8.Notice(
         `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
       );
@@ -13248,7 +13481,7 @@ ${current.output}`;
     };
   }
   async importFromFile(filePath) {
-    const raw = fs31.readFileSync(filePath, "utf8");
+    const raw = fs32.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
     return this.importFromData(data);
   }
@@ -13404,13 +13637,11 @@ ${current.output}`;
     return this.withDefinitionStart("workflow", workflow.id, (release) => this.executeWorkflow(workflow, release));
   }
   async executeWorkflow(workflow, releaseStart) {
-    var _a;
     assertWorkflowEnabled(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks);
     assertWorkflowDependencies(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if (this.sharedWorkflowExecution && ((_a = this.settings.workflows.find((w) => w.id === workflow.id)) == null ? void 0 : _a.concurrency) !== "independent") throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
@@ -14770,11 +15001,15 @@ var AutoOCView = class extends import_obsidian8.ItemView {
     const target = steps && Array.from(steps).find((element) => element.getAttribute("data-auto-oc-owner-workflow-id") === workflowId && element.getAttribute("data-auto-oc-step-id") === stepId);
     target == null ? void 0 : target.scrollIntoView({ block: "center" });
   }
-  renderExecutionStatus(parent, item, kind) {
-    if (!item.runtimeExecution) return;
-    const currentItem = () => kind === "task" ? this.plugin.settings.tasks.find((entry) => entry.id === item.id) : this.plugin.settings.workflows.find((entry) => entry.id === item.id);
-    const relatedWorkflow = (current2) => {
-      const binding = current2.runtimeExecution;
+  executionHelpContext(item, kind, expected) {
+    const currentItem = () => {
+      const current = kind === "task" ? this.plugin.settings.tasks.find((entry) => entry.id === item.id) : this.plugin.settings.workflows.find((entry) => entry.id === item.id);
+      const binding = current == null ? void 0 : current.runtimeExecution;
+      if (expected && ((binding == null ? void 0 : binding.runId) !== expected.runId || (kind === "workflow" ? current == null ? void 0 : current.id : binding == null ? void 0 : binding.workflowId) !== expected.workflowId)) return void 0;
+      return current;
+    };
+    const relatedWorkflow = (current) => {
+      const binding = current.runtimeExecution;
       return kind === "task" && binding ? this.plugin.settings.workflows.find((workflow) => {
         var _a;
         return workflow.id === binding.workflowId && ((_a = workflow.runtimeExecution) == null ? void 0 : _a.runId) === binding.runId;
@@ -14782,25 +15017,95 @@ var AutoOCView = class extends import_obsidian8.ItemView {
     };
     const snapshot = () => {
       var _a;
-      const current2 = currentItem();
-      if (!current2) return;
-      const binding = current2.runtimeExecution;
-      const workflow = relatedWorkflow(current2);
+      const current = currentItem();
+      if (!current) return;
+      const binding = current.runtimeExecution;
+      const workflow = relatedWorkflow(current);
       const attempt = (workflow == null ? void 0 : workflow.runtimeExecution) || binding;
+      const owned = !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId);
+      let reviewAction;
+      if (kind === "task" && !workflow && !owned && current.status !== "running") {
+        if ((binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition && ["failed", "completed"].includes(binding.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if ((binding == null ? void 0 : binding.workflowId) === standaloneTaskWorkflow(current.id).id && ["ready", "in_flight"].includes(binding.phase)) {
+          reviewAction = "abandon-attempt";
+        }
+      } else if (kind === "workflow" && !owned) {
+        if ((attempt == null ? void 0 : attempt.terminalUncertainty) && !attempt.disposition && ["failed", "completed"].includes(attempt.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if (["ready", "in_flight"].includes(attempt == null ? void 0 : attempt.phase)) {
+          reviewAction = "workflow-controls";
+        }
+      }
       return {
-        name: current2.name,
-        status: current2.status,
+        name: current.name,
+        status: current.status,
         runId: binding == null ? void 0 : binding.runId,
         phase: attempt == null ? void 0 : attempt.phase,
-        owned: !!binding && this.plugin.ownsExecution(kind === "workflow" ? current2.id : binding.workflowId, binding.runId),
+        owned,
+        reviewAction,
         requiresReconciliation: !!((binding == null ? void 0 : binding.requiresReconciliation) || (attempt == null ? void 0 : attempt.requiresReconciliation)),
         terminalUncertainty: !!((binding == null ? void 0 : binding.terminalUncertainty) || (attempt == null ? void 0 : attempt.terminalUncertainty)),
         disposition: !!(attempt == null ? void 0 : attempt.disposition),
         workflowName: workflow == null ? void 0 : workflow.name,
-        waitingApproval: !!current2.pendingCodexApproval,
-        stopUnconfirmed: !!((_a = current2.legacyExecution) == null ? void 0 : _a.stopState)
+        waitingApproval: !!current.pendingCodexApproval,
+        stopUnconfirmed: !!((_a = current.legacyExecution) == null ? void 0 : _a.stopState)
       };
     };
+    const showDetails = () => {
+      const latest = currentItem();
+      if (!latest) return;
+      this.filterText = "";
+      this.filterStatus = "all";
+      this.filterArea = "all";
+      this.taskSource = "all";
+      const workflow = relatedWorkflow(latest);
+      if (workflow) this.openWorkflowInList(workflow);
+      else if (kind === "task") this.openTaskInList(latest);
+      else this.openWorkflowInList(latest);
+    };
+    return { snapshot, showDetails };
+  }
+  showTaskStartFailure(task, error) {
+    const current = this.plugin.settings.tasks.find((entry) => entry.id === task.id);
+    const binding = current == null ? void 0 : current.runtimeExecution;
+    const message = String(error);
+    const detail = message.replace(/^Error: /, "");
+    const previousRun = /^Previous execution requires continuation or reconciliation \(run ([^,\r\n]+), workflow ([^,\r\n]+), step [^)\r\n]*\)\. No new task was started\.$/.exec(detail);
+    if (previousRun) {
+      const [, runId, workflowId] = previousRun;
+      const workflow = this.plugin.settings.workflows.find((entry) => {
+        var _a;
+        return entry.id === workflowId && ((_a = entry.runtimeExecution) == null ? void 0 : _a.runId) === runId;
+      });
+      const blockingTask = this.plugin.settings.tasks.find((entry) => {
+        var _a, _b;
+        return standaloneTaskWorkflow(entry.id).id === workflowId && ((_a = entry.runtimeExecution) == null ? void 0 : _a.workflowId) === workflowId && ((_b = entry.runtimeExecution) == null ? void 0 : _b.runId) === runId;
+      });
+      const target = workflow || blockingTask;
+      if (target) {
+        const { snapshot, showDetails } = this.executionHelpContext(target, workflow ? "workflow" : "task", { runId, workflowId });
+        new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+        return;
+      }
+      try {
+        this.plugin.openHistoricalExecutionRecovery(workflowId, runId);
+        return;
+      } catch (e) {
+      }
+    }
+    const unfinished = !!(binding == null ? void 0 : binding.requiresReconciliation) && detail === `Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`;
+    const uncertain = !!(binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition && detail === "Previous task outcome is unconfirmed; recovery is required before starting a new attempt.";
+    if (current && (binding == null ? void 0 : binding.runId) && binding.workflowId && (unfinished || uncertain)) {
+      const { snapshot, showDetails } = this.executionHelpContext(current, "task", { runId: binding.runId, workflowId: binding.workflowId });
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+      return;
+    }
+    new import_obsidian8.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12e3);
+  }
+  renderExecutionStatus(parent, item, kind) {
+    if (!item.runtimeExecution) return;
+    const { snapshot, showDetails } = this.executionHelpContext(item, kind);
     const current = snapshot();
     if (!current) return;
     const help = executionStatusHelp(current);
@@ -14811,17 +15116,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
     button.setAttr("aria-label", `Execution help for ${item.name}`);
     button.onclick = (event) => {
       event.stopPropagation();
-      new ExecutionStatusHelpModal(this.app, snapshot, () => {
-        const latest = currentItem();
-        if (!latest) return;
-        this.filterText = "";
-        this.filterStatus = "all";
-        this.filterArea = "all";
-        const workflow = relatedWorkflow(latest);
-        if (workflow) this.openWorkflowInList(workflow);
-        else if (kind === "task") this.openTaskInList(latest);
-        else this.openWorkflowInList(latest);
-      }, this.plugin.manifest.version).open();
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version).open();
     };
   }
   renderTaskCard(parent, task) {
@@ -14867,7 +15162,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
       try {
         await this.plugin.runTask(task);
       } catch (error) {
-        new import_obsidian8.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        this.showTaskStartFailure(task, error);
       }
     };
     if (task.status === "running") {
@@ -14987,7 +15282,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
         }
       };
     }
-    if (((_l = task.runtimeExecution) == null ? void 0 : _l.requiresReconciliation) && ((_m = task.runtimeExecution) == null ? void 0 : _m.workflowId) === standaloneTaskWorkflow(task.id).id && task.status !== "running") {
+    if (((_l = task.runtimeExecution) == null ? void 0 : _l.workflowId) === standaloneTaskWorkflow(task.id).id && ["ready", "in_flight"].includes((_m = task.runtimeExecution) == null ? void 0 : _m.phase) && task.status !== "running" && !this.plugin.ownsExecution(task.runtimeExecution.workflowId, task.runtimeExecution.runId)) {
       const abandon = actions.createEl("button", { text: "Abandon attempt", cls: "auto-oc-btn-stop" });
       abandon.onclick = async (e) => {
         e.stopPropagation();
@@ -15008,7 +15303,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
       try {
         await this.plugin.runTask(task);
       } catch (error) {
-        new import_obsidian8.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        this.showTaskStartFailure(task, error);
       }
     };
     if (task.status === "running") {
@@ -15821,8 +16116,8 @@ var CreateTaskModal = class extends import_obsidian8.Modal {
         this.onOpen();
       });
     });
-    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. When this task is a workflow step, the workflow's concurrency setting applies.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
-      this.draft.concurrency = v;
+    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+      this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
     new import_obsidian8.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
@@ -16446,8 +16741,8 @@ var CreateWorkflowModal = class extends import_obsidian8.Modal {
       text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
       cls: "auto-oc-workflow-guide-tip"
     });
-    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. This does not run the steps inside this workflow in parallel.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
-      this.draft.concurrency = v;
+    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+      this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
     new import_obsidian8.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
       var _a;
@@ -17571,7 +17866,7 @@ var ImportModal = class extends import_obsidian8.Modal {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
-      const raw = fs31.readFileSync(this.filePath, "utf8");
+      const raw = fs32.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
       const result = this.validateExport(data);
@@ -18226,10 +18521,10 @@ var DiagnosticModal = class extends import_obsidian8.Modal {
       (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
     }
     this.hiddenProc = null;
-    const fs32 = require("fs");
+    const fs33 = require("fs");
     for (const file of this.tempFiles) {
       try {
-        fs32.unlinkSync(file);
+        fs33.unlinkSync(file);
       } catch (e) {
       }
     }
@@ -18256,17 +18551,17 @@ var DiagnosticModal = class extends import_obsidian8.Modal {
           new import_obsidian8.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
-        const fs32 = require("fs");
+        const fs33 = require("fs");
         const path30 = require("path");
         const osTmp = require("os").tmpdir();
         const outFile = path30.join(osTmp, "autooc-diag.txt");
         const pidFile = path30.join(osTmp, "autooc-diag.pid");
         try {
-          fs32.unlinkSync(outFile);
+          fs33.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs32.unlinkSync(pidFile);
+          fs33.unlinkSync(pidFile);
         } catch (e) {
         }
         let launchScript;
@@ -18316,7 +18611,7 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
         }
         const scriptFile = path30.join(osTmp, `autooc-diag${scriptExt()}`);
         if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-        else fs32.writeFileSync(scriptFile, launchScript, "utf8");
+        else fs33.writeFileSync(scriptFile, launchScript, "utf8");
         this.tempFiles = [outFile, pidFile, scriptFile];
         if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}
 
@@ -18329,13 +18624,13 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
             if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
             return;
           }
-          if (!fs32.existsSync(outFile)) {
+          if (!fs33.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           if (this.pollHandle) clearInterval(this.pollHandle);
           this.pollHandle = null;
-          const raw = fs32.readFileSync(outFile, "utf8");
+          const raw = fs33.readFileSync(outFile, "utf8");
           this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -18364,14 +18659,58 @@ var AutoOCSettingTab = class extends import_obsidian8.PluginSettingTab {
     this.plugin = plugin;
   }
   display() {
+    var _a;
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
+    new import_obsidian8.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
+      button.setDisabled(true);
+      try {
+        await this.plugin.openHistoricalAttemptsReview();
+      } catch (error) {
+        new import_obsidian8.Notice(this.plugin.redactSecrets(String(error)));
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
     addDashboardBubbleSizeSetting(containerEl, {
       getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
       saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
       applyDiameter: (diameter) => this.plugin.applyDashboardBubbleDiameter(diameter)
     });
+    new import_obsidian8.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
+      this.plugin.settings.defaultConcurrency = value;
+      try {
+        await this.plugin.saveSettings(false);
+      } catch (error) {
+        new import_obsidian8.Notice(this.plugin.redactSecrets(String(error)));
+      }
+    }));
+    let requestedLimit = String((_a = this.plugin.settings.maxConcurrentExecutions) != null ? _a : 0);
+    new import_obsidian8.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
+      text.inputEl.type = "number";
+      text.inputEl.min = "0";
+      text.inputEl.step = "1";
+      text.setValue(requestedLimit).onChange((value) => {
+        requestedLimit = value;
+      });
+    }).addButton((button) => button.setButtonText("Apply").onClick(async () => {
+      const limit = Number(requestedLimit);
+      if (!/^\d+$/.test(requestedLimit) || !Number.isSafeInteger(limit)) {
+        new import_obsidian8.Notice("Enter a whole number of zero or more. Zero means Unlimited.");
+        return;
+      }
+      button.setDisabled(true);
+      try {
+        this.plugin.settings.maxConcurrentExecutions = limit;
+        await this.plugin.saveSettings(false);
+        new import_obsidian8.Notice(`Maximum simultaneous runs: ${limit === 0 ? "Unlimited" : limit}.`);
+      } catch (error) {
+        new import_obsidian8.Notice(this.plugin.redactSecrets(String(error)));
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
     new import_obsidian8.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;
@@ -18456,8 +18795,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     );
     new import_obsidian8.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
       (text) => {
-        var _a;
-        return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
+        var _a2;
+        return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a2 = this.plugin.settings.taskTimeoutSeconds) != null ? _a2 : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.taskTimeoutSeconds = n;
@@ -18479,8 +18818,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     );
     new import_obsidian8.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
       (text) => {
-        var _a;
-        return text.setPlaceholder("50").setValue(String((_a = this.plugin.settings.maxLogsPerTask) != null ? _a : 50)).onChange(async (v) => {
+        var _a2;
+        return text.setPlaceholder("50").setValue(String((_a2 = this.plugin.settings.maxLogsPerTask) != null ? _a2 : 50)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.maxLogsPerTask = n;
@@ -18491,8 +18830,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     );
     new import_obsidian8.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
       (text) => {
-        var _a;
-        return text.setPlaceholder("30").setValue(String((_a = this.plugin.settings.logRetentionDays) != null ? _a : 30)).onChange(async (v) => {
+        var _a2;
+        return text.setPlaceholder("30").setValue(String((_a2 = this.plugin.settings.logRetentionDays) != null ? _a2 : 30)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.logRetentionDays = n;

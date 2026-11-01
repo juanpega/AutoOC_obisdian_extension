@@ -74,13 +74,26 @@ Since 1.7.5, Code tasks and steps display JavaScript with syntax highlighting. T
 - Import and export task and workflow packages as JSON, and use the included library packages as examples.
 - Secrets has been removed: no secret management or value injection. The historical file is preserved, along with masking of known values when available.
 
-## Independent executions
+## Parallel tasks and workflows
 
-The AutoOC editor lets you select `concurrency: "independent"` for a task or workflow. An absent value or `"exclusive"` preserves the historical exclusive behavior. A single owner host supports up to two independent runs; the GUI and delegated CLI share that limit, without a queue or automatic retries.
+Starting with the **1.7.16 development candidate**, tasks and workflows run in parallel by default, including within the same vault and using the same AI engine. There is no AutoOC limit by default. Existing items without an explicit concurrency choice inherit this behavior; saved explicit choices are preserved. Installing the update does not start any task.
 
-Definitions must not share tasks, equal or nested directories, or Git metadata (including worktrees). Code with vault, filesystem, or terminal permissions, interactive modes, and model-based evaluations require exclusivity. Non-interactive engines require separate physical workspaces. This policy coordinates trusted tasks; it neither isolates their effects nor expands permissions.
+In **Settings → AutoOC**, use **Default concurrency → Parallel in this vault** and **Maximum simultaneous runs → 0 → Apply** for unlimited parallel work. Enter a positive whole number to set your own limit. The limit counts tasks and workflows together across Play, schedules and delegated CLI requests; lowering it does not stop existing runs. Your computer and AI provider still impose their own capacity limits. At capacity, a new request is rejected; there is no automatic queue or retry.
 
-Each run keeps its own `runId`, output, and stop control. Cards indicate whether the local owner is verified. An uncertain lease remains blocked pending official continuation or reconciliation; age does not prove abandonment. If a standalone CLI owns the installation, opening Obsidian preserves the waiting view and original owner without starting tasks or transferring the run.
+Each task/workflow editor offers these choices:
+
+| Choice | JSON field | Behavior |
+| --- | --- | --- |
+| Use vault default | Omit `concurrency` | Inherit `defaultConcurrency`; its default is `"parallel"`. |
+| Parallel in this vault | `"parallel"` | Allow other parallel runs in the same folder or Git repository. |
+| Run alone | `"exclusive"` | Reserve the installation until the run finishes. |
+| Separate projects only | `"independent"` | Allow overlap only without shared folders, nested directories or common Git metadata. |
+
+Parallel work coordinates trusted tasks: it does not isolate files or expand Code/provider permissions. Give concurrent tasks different output files to avoid overwriting each other's work. The same task cannot run twice, and workflows that reference the same reusable task cannot overlap. The workflow's policy applies to its steps; steps still follow their transitions in order. Interactive sessions and declared Git branch changes continue to require exclusive execution. Older releases do not understand `"parallel"`.
+
+Each run keeps its own `runId`, output, history and stop control. Stopping one does not stop the others. A retained parallel attempt from the same owner still reserves its own tasks, but permits different parallel tasks; it retains its evidence and counts toward a finite capacity limit. After an owner restart, an unresolved attempt without verified admission context still needs the recovery controls described below. An uncertain lease remains blocked; age does not prove abandonment.
+
+The plugin host accepts multiple delegated CLI requests. Separate standalone CLI processes still cannot take ownership of the same installation simultaneously. If a standalone CLI owns it, opening Obsidian preserves the waiting view and original owner without starting tasks or transferring the run. The local host descriptor advertises `sharedWorkspaceConcurrency: true` and `concurrentExecutions` (`0` means Unlimited). Vault preferences `defaultConcurrency` and `maxConcurrentExecutions` affect admission only and do not invalidate historical definition fingerprints. No CLI commands or parameters have been added.
 
 ## Requirements
 
@@ -285,7 +298,17 @@ If the CLI already holds the lease when Obsidian opens, AutoOC waits and reloads
 
 ## Diagnostics and troubleshooting
 
+### A previous run prevents a new task from starting
+
+If you see **Previous execution requires continuation or reconciliation**, AutoOC has not started the new task. A recorded attempt must be reviewed first; it may belong to another task or workflow in the same vault. Updating the plugin does not erase that history.
+
+In 1.7.13, expand the relevant task card and check **Log** and **History**. **Abandon attempt**, when available, closes an unfinished attempt after you confirm that its external process has ended. **Resolve historical uncertainty** records your decision about a finished attempt with unknown effects. Both preserve history; neither stops processes, undoes effects, nor marks unknown work successful. A later **Run** starts new work and may repeat earlier effects. For a workflow, check its log and effects before using **Verify previous result** or **Resume saved execution**; either control can continue the saved workflow and execute pending steps.
+
+The **1.7.14 development candidate** opens **Review the previous run** automatically for an identified prior-run rejection from either task Run button. **Open recovery controls** clears list filters and expands the actual blocking task or workflow. Standalone attempts still in `ready` also expose **Abandon attempt**, without changing the existing confirmation or ownership checks. Opening the help does not perform recovery or retry execution. An error referring to a different or missing recorded identity is not redirected to an unrelated attempt. This candidate behavior is not available in older installed packages.
+
 Cards that need attention offer **What can I do?**. The help explains the recorded state and opens that item's details and options; if a task belongs to the current workflow attempt, it opens that workflow. A normally running or successfully completed attempt does not require an attention warning.
+
+The **1.7.15 development candidate** also handles an older unfinished attempt that is no longer linked to the current task or workflow. Open **Settings → AutoOC → Review older attempts → Review**, or search for **AutoOC: Review older attempts** in Obsidian's command palette. Select **Review this attempt**, check the original terminal and its effects, and choose **Close this old attempt…** only after the original process has ended. The separate confirmation requires your reason and records the outcome as unknown. Current tasks/workflows, disabled state, results and newer attempts are kept unchanged. Nothing starts automatically; return to your intended task and choose Run when ready. A matching blocked task Run also opens this review directly. Closing is rejected if the attempt has changed, is now linked to a current item, or work, writes or an update are active.
 
 - **Last run completed**: no owner recovery is needed; its record and history remain available.
 - **Needs review** or **Activity not confirmed**: review the log and check the original process before continuing or repeating work. Lack of local control does not prove that the process has ended.

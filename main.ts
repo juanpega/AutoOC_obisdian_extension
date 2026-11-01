@@ -11,7 +11,7 @@ import { BulkCatalogModal } from "./catalog-bulk-modal";
 import { AiDraftModal } from "./ai-draft-modal";
 import { generateDraftText } from "./ai-draft-runner";
 import { saveGeneratedDefinition, type DraftKind, type GeneratedDraft } from "./ai-draft";
-import { executionStatusHelp, ExecutionStatusHelpModal, type ExecutionHelpSnapshot } from "./execution-status-help";
+import { executionStatusHelp, ExecutionStatusHelpModal, HistoricalAttemptsModal, type ExecutionHelpSnapshot } from "./execution-status-help";
 import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
@@ -83,6 +83,7 @@ import { CodeStepLogModal, CodeStepHistoryModal } from "./workflow-code-modals";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { abandonInstalledExecution, inspectTerminalExecution, disposeTerminalExecution } from "./execution-abandonment";
+import { inspectHistoricalAttempt, closeHistoricalAttempt, assertUnboundHistoricalAttempt, catalogReferencesRun } from "./historical-execution-recovery";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { observeCheckpoint } from "./checkpoint-observation";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
@@ -120,6 +121,7 @@ AutoOC supports DAG workflows with three step kinds:
 
 Tasks:
 A task is reusable and can be referenced by workflows.
+Concurrency for tasks and workflows is optional: omit it to inherit the vault setting; "exclusive" runs alone, "independent" requires separate folders and Git repositories, and "parallel" allows shared-vault execution. Parallel runs must use different outputs to avoid overwriting one another. The workflow's policy applies to its steps; shared reusable tasks still cannot run twice at the same time. Concurrency never grants Code or provider permissions. Do not set it unless the user explicitly requests a policy.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
@@ -587,6 +589,8 @@ interface AutoOCSettings {
   cmdTemplate: string;
   taskTimeoutSeconds: number;
   defaultInteractiveTerminal: boolean;
+  defaultConcurrency?: ConcurrencyPolicy;
+  maxConcurrentExecutions?: number;
   logsEnabled: boolean;
   maxLogsPerTask: number;
   logRetentionDays: number;
@@ -1927,6 +1931,12 @@ export default class AutoOCPlugin extends Plugin {
 
 
       this.addCommand({
+        id: "review-older-attempts",
+        name: "Review older attempts",
+        callback: () => {void this.openHistoricalAttemptsReview().catch(error=>new Notice(this.redactSecrets(String(error))));},
+      });
+
+      this.addCommand({
         id: "create-task",
         name: "Create new AI task",
         callback: () => new CreateTaskModal(this.app, this).open(),
@@ -2345,7 +2355,7 @@ export default class AutoOCPlugin extends Plugin {
         const result=await applyWorkflowEdit({settings:this.settings,assertIdle,save:validate=>this.saveSettings(false,validate)},request);
         this.refreshOpenViews();return result;
       } finally {this.workflowEditPending=false;}
-    });
+    },()=>this.settings);
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
@@ -3791,6 +3801,69 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
+  async openHistoricalAttemptsReview():Promise<void> {
+    this.assertLifecycleOpen();
+    const {runtime,names}=this.journalNames();
+    const rows:Array<{name:string;runId:string;workflowId:string;phase:string}>=[];
+    for(const file of names) {
+      const {checkpoint}=await observeCheckpoint(runtime,file.slice(0,-5));
+      this.assertLifecycleOpen();
+      if(!['ready','in_flight'].includes(checkpoint.phase) || catalogReferencesRun(this.settings,checkpoint.runId))continue;
+      const task=this.settings.tasks.find(t=>standaloneTaskWorkflow(t.id).id===checkpoint.workflowId);
+      const workflow=this.settings.workflows.find(w=>w.id===checkpoint.workflowId);
+      rows.push({name:task?.name || workflow?.name || checkpoint.workflowId,runId:checkpoint.runId,workflowId:checkpoint.workflowId,phase:checkpoint.phase});
+    }
+    new HistoricalAttemptsModal(this.app,rows,(workflowId,runId)=>{
+      try {this.openHistoricalExecutionRecovery(workflowId,runId);}
+      catch(error){new Notice(this.redactSecrets(String(error)));}
+    }).open();
+  }
+
+  openHistoricalExecutionRecovery(workflowId:string,runId:string):void {
+    this.assertLifecycleOpen();
+    const location=this.selectedExecutionLocation();
+    const observed=inspectHistoricalAttempt(location,workflowId,runId,this.settings);
+    const task=this.settings.tasks.find(t=>standaloneTaskWorkflow(t.id).id===workflowId);
+    const workflow=this.settings.workflows.find(w=>w.id===workflowId);
+    const snapshot=():ExecutionHelpSnapshot|undefined=>{
+      try {
+        this.assertLifecycleOpen();
+        const current=inspectHistoricalAttempt(this.selectedExecutionLocation(),workflowId,runId,this.settings);
+        if(JSON.stringify(current)!==JSON.stringify(observed))return undefined;
+        return {name:`Older attempt: ${task?.name || workflow?.name || workflowId}`,status:'pending',runId,phase:observed.phase,owned:false};
+      } catch {return undefined;}
+    };
+    new ExecutionStatusHelpModal(this.app,snapshot,()=>{},this.manifest.version,true,{workflowId,revision:observed.revision,
+      closeAttempt:async()=>{
+        try {
+          const modal=new ConfirmModal(this.app,'Close this old attempt?',
+            `Attempt: ${runId}. Revision: ${observed.revision}. Confirm only after checking that its original external process has ended. The outcome remains UNKNOWN. This preserves the current task or workflow and all history. It does not stop processes, undo effects or start another run. Enter why you are closing this attempt.`,true);
+          if(!await modal.openAndWait())return false;
+          const assertIdle=()=>{
+            this.assertLifecycleOpen();this.pluginExecutionLease?.assertOwned();this.selectedExecutionLocation();
+            if(!this.pluginExecutionLease || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress ||
+              this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size ||
+              this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || this.cliRequestHost?.hasPendingWork) throw new Error('An execution, save or update is active; wait before closing this attempt');
+            assertUnboundHistoricalAttempt(this.settings,runId);
+          };
+          assertIdle();
+          const reservation={workflowId,runId,controller:new AbortController()};
+          this.sharedWorkflowExecution=reservation;
+          try {
+            await closeHistoricalAttempt(observed,this.pluginExecutionLease!,modal.reason,true,()=>{
+              this.assertLifecycleOpen();this.selectedExecutionLocation();
+              if(this.sharedWorkflowExecution!==reservation || this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.settingsWriter.hasPendingWrites) throw new Error('Recovery ownership changed; review again');
+              assertUnboundHistoricalAttempt(this.settings,runId);
+            },()=>this.beginExecutionEffects());
+          } finally {
+            if(this.sharedWorkflowExecution===reservation)this.sharedWorkflowExecution=undefined;
+            this.refreshOpenViews();
+          }
+          return true;
+        } catch(error) {throw new Error(this.redactSecrets(String(error)));}
+      }}).open();
+  }
+
   async confirmAbandonTaskExecution(taskId:string):Promise<void> {
     this.assertLifecycleOpen();
     const task=this.settings.tasks.find(item=>item.id===taskId);
@@ -3853,7 +3926,6 @@ export default class AutoOCPlugin extends Plugin {
   ) {
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if(this.sharedWorkflowExecution && this.settings.tasks.find(t=>t.id===task.id)?.concurrency!=="independent")throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     assertNoRetiredDependency(this.settings.tasks[idx]);
@@ -5193,7 +5265,6 @@ export default class AutoOCPlugin extends Plugin {
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if(this.sharedWorkflowExecution && this.settings.workflows.find(w=>w.id===workflow.id)?.concurrency!=="independent")throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
@@ -6598,11 +6669,15 @@ class AutoOCView extends ItemView {
     target?.scrollIntoView({ block: "center" });
   }
 
-  private renderExecutionStatus(parent: HTMLElement, item: ScheduledTask | Workflow, kind: "task" | "workflow") {
-    if (!(item as any).runtimeExecution) return;
-    const currentItem = () => kind === "task"
-      ? this.plugin.settings.tasks.find(entry => entry.id === item.id)
-      : this.plugin.settings.workflows.find(entry => entry.id === item.id);
+  private executionHelpContext(item: ScheduledTask | Workflow, kind: "task" | "workflow", expected?: {runId: string; workflowId: string}) {
+    const currentItem = () => {
+      const current = kind === "task"
+        ? this.plugin.settings.tasks.find(entry => entry.id === item.id)
+        : this.plugin.settings.workflows.find(entry => entry.id === item.id);
+      const binding = (current as any)?.runtimeExecution;
+      if (expected && (binding?.runId !== expected.runId || (kind === "workflow" ? current?.id : binding?.workflowId) !== expected.workflowId)) return undefined;
+      return current;
+    };
     const relatedWorkflow = (current: ScheduledTask | Workflow) => {
       const binding = (current as any).runtimeExecution;
       return kind === "task" && binding ? this.plugin.settings.workflows.find(workflow =>
@@ -6614,14 +6689,83 @@ class AutoOCView extends ItemView {
       const binding = (current as any).runtimeExecution;
       const workflow = relatedWorkflow(current);
       const attempt = (workflow as any)?.runtimeExecution || binding;
+      const owned = !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId);
+      let reviewAction: ExecutionHelpSnapshot["reviewAction"];
+      if (kind === "task" && !workflow && !owned && current.status !== "running") {
+        if (binding?.terminalUncertainty && !binding.disposition && ["failed", "completed"].includes(binding.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if (binding?.workflowId === standaloneTaskWorkflow(current.id).id && ["ready", "in_flight"].includes(binding.phase)) {
+          reviewAction = "abandon-attempt";
+        }
+      } else if (kind === "workflow" && !owned) {
+        if (attempt?.terminalUncertainty && !attempt.disposition && ["failed", "completed"].includes(attempt.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if (["ready", "in_flight"].includes(attempt?.phase)) {
+          reviewAction = "workflow-controls";
+        }
+      }
       return { name: current.name, status: current.status, runId: binding?.runId, phase: attempt?.phase,
-        owned: !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId),
+        owned, reviewAction,
         requiresReconciliation: !!(binding?.requiresReconciliation || attempt?.requiresReconciliation),
         terminalUncertainty: !!(binding?.terminalUncertainty || attempt?.terminalUncertainty),
         disposition: !!attempt?.disposition, workflowName: workflow?.name,
         waitingApproval: !!(current as ScheduledTask).pendingCodexApproval,
         stopUnconfirmed: !!(current as ScheduledTask).legacyExecution?.stopState };
     };
+    const showDetails = () => {
+      const latest = currentItem();
+      if (!latest) return;
+      this.filterText = "";
+      this.filterStatus = "all";
+      this.filterArea = "all";
+      this.taskSource = "all";
+      const workflow = relatedWorkflow(latest);
+      if (workflow) this.openWorkflowInList(workflow);
+      else if (kind === "task") this.openTaskInList(latest as ScheduledTask);
+      else this.openWorkflowInList(latest as Workflow);
+    };
+    return { snapshot, showDetails };
+  }
+
+  private showTaskStartFailure(task: ScheduledTask, error: unknown) {
+    const current = this.plugin.settings.tasks.find(entry => entry.id === task.id);
+    const binding = (current as any)?.runtimeExecution;
+    const message = String(error);
+    const detail = message.replace(/^Error: /, "");
+    const previousRun = /^Previous execution requires continuation or reconciliation \(run ([^,\r\n]+), workflow ([^,\r\n]+), step [^)\r\n]*\)\. No new task was started\.$/.exec(detail);
+    if (previousRun) {
+      const [, runId, workflowId] = previousRun;
+      // Admission can be blocked by another task or workflow in this vault.
+      // Resolve both identities against the current catalog, never just a name.
+      const workflow = this.plugin.settings.workflows.find(entry => entry.id === workflowId && (entry as any).runtimeExecution?.runId === runId);
+      const blockingTask = this.plugin.settings.tasks.find(entry =>
+        standaloneTaskWorkflow(entry.id).id === workflowId && (entry as any).runtimeExecution?.workflowId === workflowId && (entry as any).runtimeExecution?.runId === runId);
+      const target = workflow || blockingTask;
+      if (target) {
+        const { snapshot, showDetails } = this.executionHelpContext(target, workflow ? "workflow" : "task", {runId, workflowId});
+        new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+        return;
+      }
+      try {this.plugin.openHistoricalExecutionRecovery(workflowId,runId);return;}
+      catch { /* Missing, changed or currently bound journals keep the original diagnostic. */ }
+    }
+    const unfinished = !!binding?.requiresReconciliation && detail ===
+      `Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`;
+    const uncertain = !!binding?.terminalUncertainty && !binding.disposition && detail ===
+      "Previous task outcome is unconfirmed; recovery is required before starting a new attempt.";
+    // This notice identifies one attempt. Never redirect a stale error to a
+    // different run, or reinterpret unrelated launch/provider failures.
+    if (current && binding?.runId && binding.workflowId && (unfinished || uncertain)) {
+      const { snapshot, showDetails } = this.executionHelpContext(current, "task", {runId: binding.runId, workflowId: binding.workflowId});
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+      return;
+    }
+    new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12000);
+  }
+
+  private renderExecutionStatus(parent: HTMLElement, item: ScheduledTask | Workflow, kind: "task" | "workflow") {
+    if (!(item as any).runtimeExecution) return;
+    const { snapshot, showDetails } = this.executionHelpContext(item, kind);
     const current = snapshot();
     if (!current) return;
     const help = executionStatusHelp(current);
@@ -6632,17 +6776,7 @@ class AutoOCView extends ItemView {
     button.setAttr("aria-label", `Execution help for ${item.name}`);
     button.onclick = event => {
       event.stopPropagation();
-      new ExecutionStatusHelpModal(this.app, snapshot, () => {
-        const latest = currentItem();
-        if (!latest) return;
-        this.filterText = "";
-        this.filterStatus = "all";
-        this.filterArea = "all";
-        const workflow = relatedWorkflow(latest);
-        if (workflow) this.openWorkflowInList(workflow);
-        else if (kind === "task") this.openTaskInList(latest as ScheduledTask);
-        else this.openWorkflowInList(latest as Workflow);
-      }, this.plugin.manifest.version).open();
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version).open();
     };
   }
 
@@ -6693,7 +6827,7 @@ class AutoOCView extends ItemView {
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
-      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
+      catch (error) { this.showTaskStartFailure(task, error); }
     };
     if (task.status === "running") {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
@@ -6811,7 +6945,7 @@ class AutoOCView extends ItemView {
       const dispose=actions.createEl('button',{text:'Resolve historical uncertainty'});
       dispose.onclick=async e=>{e.stopPropagation();try {await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id,terminalBinding.runId);} catch(error) {new Notice(this.plugin.redactSecrets(String(error)));}};
     }
-    if ((task as any).runtimeExecution?.requiresReconciliation && (task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && task.status !== 'running') {
+    if ((task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && ['ready', 'in_flight'].includes((task as any).runtimeExecution?.phase) && task.status !== 'running' && !this.plugin.ownsExecution((task as any).runtimeExecution.workflowId, (task as any).runtimeExecution.runId)) {
       const abandon = actions.createEl('button', {text:'Abandon attempt',cls:'auto-oc-btn-stop'});
       abandon.onclick = async e => {
         e.stopPropagation();
@@ -6828,7 +6962,7 @@ class AutoOCView extends ItemView {
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
-      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
+      catch (error) { this.showTaskStartFailure(task, error); }
     };
 
     if (task.status === "running") {
@@ -7658,13 +7792,11 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl)
       .setName("Concurrency")
-      .setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. " +
-        "Run alone (default): no other task or workflow can run at the same time. " +
-        "Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. " +
-        "For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. " +
-        "When this task is a workflow step, the workflow's concurrency setting applies.")
-      .addDropdown(dd=>dd.addOption("exclusive","Run alone (default)").addOption("independent","Allow alongside other work")
-        .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
+      .setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. " +
+        "Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. " +
+        "The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.")
+      .addDropdown(dd=>dd.addOption("inherit","Use vault default").addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
+        .setValue(this.draft.concurrency || "inherit").onChange(v=>{this.draft.concurrency=v==="inherit" ? undefined : v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
       .setName("Name")
@@ -8470,13 +8602,11 @@ class CreateWorkflowModal extends Modal {
 
     new Setting(contentEl)
       .setName("Concurrency")
-      .setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. " +
-        "Run alone (default): no other task or workflow can run at the same time. " +
-        "Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. " +
-        "For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. " +
-        "This does not run the steps inside this workflow in parallel.")
-      .addDropdown(dd=>dd.addOption("exclusive","Run alone (default)").addOption("independent","Allow alongside other work")
-        .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
+      .setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. " +
+        "Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. " +
+        "Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.")
+      .addDropdown(dd=>dd.addOption("inherit","Use vault default").addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
+        .setValue(this.draft.concurrency || "inherit").onChange(v=>{this.draft.concurrency=v==="inherit" ? undefined : v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
       .setName("Name")
@@ -10658,11 +10788,49 @@ class AutoOCSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
 
+    new Setting(containerEl).setName('Review older attempts')
+      .setDesc('Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.')
+      .addButton(button=>button.setButtonText('Review').onClick(async()=>{
+        button.setDisabled(true);
+        try {await this.plugin.openHistoricalAttemptsReview();}
+        catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
+        finally {button.setDisabled(false);}
+      }));
+
     addDashboardBubbleSizeSetting(containerEl, {
       getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
       saveDiameter: diameter => this.plugin.saveDashboardBubbleDiameter(diameter),
       applyDiameter: diameter => this.plugin.applyDashboardBubbleDiameter(diameter),
     });
+
+    new Setting(containerEl).setName("Default concurrency")
+      .setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.")
+      .addDropdown(dropdown=>dropdown.addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
+        .setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async value=>{
+          this.plugin.settings.defaultConcurrency=value as ConcurrencyPolicy;
+          try {await this.plugin.saveSettings(false);}
+          catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
+        }));
+    let requestedLimit=String(this.plugin.settings.maxConcurrentExecutions ?? 0);
+    new Setting(containerEl).setName("Maximum simultaneous runs")
+      .setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.")
+      .addText(text=>{
+        text.inputEl.type="number";text.inputEl.min="0";text.inputEl.step="1";
+        text.setValue(requestedLimit).onChange(value=>{requestedLimit=value;});
+      })
+      .addButton(button=>button.setButtonText("Apply").onClick(async()=>{
+        const limit=Number(requestedLimit);
+        if(!/^\d+$/.test(requestedLimit) || !Number.isSafeInteger(limit)) {
+          new Notice("Enter a whole number of zero or more. Zero means Unlimited.");return;
+        }
+        button.setDisabled(true);
+        try {
+          this.plugin.settings.maxConcurrentExecutions=limit;
+          await this.plugin.saveSettings(false);
+          new Notice(`Maximum simultaneous runs: ${limit===0 ? "Unlimited" : limit}.`);
+        } catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
+        finally {button.setDisabled(false);}
+      }));
 
     new Setting(containerEl)
       .setName("Default AI engine")

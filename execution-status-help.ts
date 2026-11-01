@@ -12,11 +12,19 @@ export interface ExecutionHelpSnapshot {
   waitingApproval?: boolean;
   stopUnconfirmed?: boolean;
   workflowName?: string;
+  reviewAction?: "abandon-attempt" | "resolve-uncertainty" | "workflow-controls";
 }
 
 // Presentation only: an absent local owner is not evidence of an orphan process.
 // Never use this guidance to admit, resume, stop or modify an execution.
 export function executionStatusHelp(s: ExecutionHelpSnapshot) {
+  const review = s.reviewAction === "abandon-attempt"
+    ? "Read Log and History first. If the original process has ended and you want to close this unfinished run, open the recovery controls and choose Abandon attempt. It keeps your task and history, records the outcome as unknown, and does not start another run. A later Run starts new work and may repeat earlier effects."
+    : s.reviewAction === "resolve-uncertainty"
+      ? "Read Log and History and check the original process and its effects. To close the review of this finished attempt, open the recovery controls and choose Resolve historical uncertainty. Enter your reason in the confirmation. The recorded result and history are kept; unknown effects are not marked successful. This does not stop processes or start another run."
+      : s.reviewAction === "workflow-controls"
+        ? "Read the workflow's Log and History and check its effects first. In its recovery controls, Verify previous result and Resume saved execution can continue the saved workflow and run pending steps. If recovery is disabled, review the saved evidence before continuing. Starting a new task does not resolve that earlier workflow."
+        : undefined;
   if (s.waitingApproval) return {
     label: "Waiting for your approval", attention: true,
     explanation: "The engine is waiting for your decision on a specific action.",
@@ -35,12 +43,12 @@ export function executionStatusHelp(s: ExecutionHelpSnapshot) {
   if (s.requiresReconciliation || (s.terminalUncertainty && !s.disposition)) return {
     label: "Needs review", attention: true,
     explanation: "The outcome or completion of recorded work could not be confirmed. A completed label on the card does not resolve that uncertainty.",
-    next: "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning.",
+    next: review || "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning.",
   };
   if (s.phase === "ready" || s.phase === "in_flight" || s.status === "running") return {
     label: "Activity not confirmed", attention: true,
     explanation: "A pending or ongoing run is not controlled by this window. It may still be running elsewhere or may have been interrupted; the available information does not distinguish between these cases.",
-    next: "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing.",
+    next: review || "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing.",
   };
   if (s.disposition || s.phase === "abandoned") return {
     label: "Closed with unknown outcome", attention: false,
@@ -66,28 +74,41 @@ export function executionStatusHelp(s: ExecutionHelpSnapshot) {
 
 export class ExecutionStatusHelpModal extends Modal {
   constructor(app: App, private snapshot: () => ExecutionHelpSnapshot | undefined,
-    private showDetails: () => void, private version: string) { super(app); }
+    private showDetails: () => void, private version: string, private startBlocked = false,
+    private historical?: {workflowId:string;revision:number;closeAttempt:()=>Promise<boolean>}) { super(app); }
 
   onOpen() {
     const root = this.contentEl;
     root.empty();
     root.addClass("auto-oc-execution-help");
     const current = this.snapshot();
-    root.createEl("h3", { text: "Execution help" });
+    root.createEl("h3", { text: this.historical ? "Review an older attempt" : this.startBlocked ? "Review the previous run" : "Execution help" });
     if (!current) {
-      root.createEl("p", { text: "This item is no longer available. Close this help window and check the panel again." });
+      root.createEl("p", { text: "This item or recorded attempt is no longer available. Close this help window and check the panel again." });
       return;
     }
     const help = executionStatusHelp(current);
     root.createEl("p", { text: current.name });
+    if(this.historical) root.createEl("p", {text:"This older attempt is still unfinished, although the task or workflow now has a different recorded attempt or has been removed. Closing it keeps the current items, disabled state, results and history unchanged. It does not stop a process, undo effects or start new work. Check the original terminal and its effects first."});
+    if (this.startBlocked) root.createEl("p", {
+      text: "No new task was started. AutoOC has a previous attempt to review before starting again. Your task definition and history are preserved.",
+    });
     if (current.workflowName) root.createEl("p", { text: `Workflow run: ${current.workflowName}` });
     root.createEl("h4", { text: help.label });
     root.createEl("p", { text: help.explanation });
     root.createEl("h4", { text: "What you can do" });
     root.createEl("p", { text: help.next });
-    root.createEl("p", { text: "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
+    root.createEl("p", { text: this.historical ? "Opening this review changes nothing. Closing the old attempt requires a separate confirmation and records its outcome as unknown." : "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
     const actions = root.createDiv("auto-oc-card-actions");
-    actions.createEl("button", { text: current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
+    if(this.historical) {
+      const close=actions.createEl('button',{text:'Close this old attempt…'});
+      close.onclick=async()=>{
+        close.disabled=true;
+        try {if(await this.historical!.closeAttempt()) {this.close();new Notice('Old attempt closed. Nothing was started. Return to your task and choose Run when ready.');}}
+        catch(error) {new Notice(String(error));}
+        finally {close.disabled=false;}
+      };
+    } else actions.createEl("button", { text: this.startBlocked ? "Open recovery controls" : current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
       this.close();
       this.showDetails();
     };
@@ -96,7 +117,7 @@ export class ExecutionStatusHelpModal extends Modal {
     technical.createEl("summary", { text: "Support details" });
     // Deliberate allowlist: never copy prompts, output, tokens, paths or secrets.
     const diagnostic = JSON.stringify({ version: this.version, status: current.status,
-      phase: current.phase, runId: current.runId, localControl: current.owned,
+      phase: current.phase, runId: current.runId, workflowId:this.historical?.workflowId, revision:this.historical?.revision, localControl: current.owned,
       requiresReview: !!current.requiresReconciliation, uncertainOutcome: !!current.terminalUncertainty,
       dispositionRecorded: !!current.disposition, waitingApproval: !!current.waitingApproval,
       stopUnconfirmed: !!current.stopUnconfirmed }, null, 2);
@@ -108,4 +129,22 @@ export class ExecutionStatusHelpModal extends Modal {
   }
 
   onClose() { this.contentEl.empty(); }
+}
+
+export class HistoricalAttemptsModal extends Modal {
+  constructor(app:App,private rows:Array<{name:string;runId:string;workflowId:string;phase:string}>,
+    private review:(workflowId:string,runId:string)=>void) {super(app);}
+  onOpen() {
+    const root=this.contentEl;root.empty();
+    root.createEl('h3',{text:'Review older attempts'});
+    root.createEl('p',{text:'These unfinished attempts are no longer linked to the current task or workflow. Review one at a time. Opening this list does not run or close anything.'});
+    if(!this.rows.length)root.createEl('p',{text:'No older unfinished attempts found. Attempts linked to current items have recovery controls on their own cards.'});
+    for(const row of this.rows) {
+      const item=root.createDiv('auto-oc-card');
+      item.createEl('p',{text:row.name});
+      item.createEl('p',{text:`${row.phase} · ${row.runId}`});
+      item.createEl('button',{text:'Review this attempt'}).onclick=()=>{this.close();this.review(row.workflowId,row.runId);};
+    }
+  }
+  onClose(){this.contentEl.empty();}
 }

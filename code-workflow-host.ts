@@ -134,7 +134,7 @@ export async function runCodeWorkflowHost(options: {
       const prior = JSON.parse(fs.readFileSync(lease.directory + "/" + file, "utf8"));
       ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
       const resolved=prior.phase==='abandoned' || prior.disposition || ["completed","failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
-      if (prior.runId !== options.resumeRunId && !admission.knows(prior.runId) && !resolved) {
+      if (prior.runId !== options.resumeRunId && !resolved && !admission.permitsPending(prior)) {
         throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
       }
     }

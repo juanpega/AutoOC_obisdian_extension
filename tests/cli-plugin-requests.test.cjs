@@ -6,9 +6,9 @@ const ts=require('typescript');
 function load(name){const file=path.resolve(__dirname,'..',name+'.ts'),mod=new Module(file,module);mod.filename=file;mod.paths=module.paths;mod.require=name=>name.startsWith('.')?load(name):require(name);mod._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,file);return mod.exports;}
 const {createPluginRequestHost,requestPluginExecution,requestPluginWorkflowEdit}=load('cli-plugin-requests');
 const {acquireExecutionLease}=load('execution-lease');
-function fixture(t,execute,edit){
+function fixture(t,execute,edit,getConcurrency=()=>({maxConcurrentExecutions:2})){
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-mailbox-')),lease=acquireExecutionLease(runtime);
-  const host=createPluginRequestHost(lease,execute,edit),directory=path.join(runtime,'cli-'+lease.token);
+  const host=createPluginRequestHost(lease,execute,edit,getConcurrency),directory=path.join(runtime,'cli-'+lease.token);
   let released=false;const release=()=>{lease.release();released=true;};
   t.after(async()=>{host.close();await host.drain?.().catch(()=>{});if(!released)release();assert.equal(path.dirname(fs.realpathSync(runtime)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(runtime).startsWith('autooc-mailbox-'));fs.rmSync(runtime,{recursive:true,force:true});});
   const request=(changes={})=>{const id=randomUUID(),data={protocol:1,owner:lease.token,id,command:'run',workflowId:'w',expiresAt:Date.now()+30000,...changes};fs.writeFileSync(path.join(directory,id+'.request'),JSON.stringify(data));return id;};
@@ -17,6 +17,24 @@ function fixture(t,execute,edit){
 }
 const state={runId:'aa11',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('mailbox advertises and applies configured capacity, including Unlimited above two',async t=>{
+  let finish;const gate=new Promise(resolve=>{finish=resolve;});
+  const settings={maxConcurrentExecutions:4},started=[];
+  const f=fixture(t,async command=>{started.push(command.workflowId);await gate;return {...state,workflowId:command.workflowId};},undefined,()=>settings);
+  try {
+    const initial=JSON.parse(fs.readFileSync(path.join(f.directory,'host')));
+    assert.equal(initial.concurrentExecutions,4);assert.equal(initial.sharedWorkspaceConcurrency,true);
+    for(let i=0;i<4;i++)f.request({workflowId:'first-'+i});
+    await f.host.poll();await settle();assert.equal(started.length,4);
+    const rejected=f.request({workflowId:'capacity-exceeded'});await f.host.poll();
+    assert.match(f.receipt(rejected).error,/limit reached \(4\)/);
+    settings.maxConcurrentExecutions=0;
+    for(let i=0;i<8;i++)f.request({workflowId:'unlimited-'+i});
+    await f.host.poll();await settle();assert.equal(started.length,12);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.directory,'host'))).concurrentExecutions,0);
+  } finally {finish();await f.host.drain();}
+});
 
 test('Code selection is preserved in mailbox progress and terminal identity',async t=>{
   const f=fixture(t,async(command,signal,report)=>{

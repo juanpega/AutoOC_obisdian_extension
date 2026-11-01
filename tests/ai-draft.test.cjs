@@ -68,6 +68,25 @@ const workflowPackage = () => packageOf([task()], [{ name: 'Draft and wait', des
   { id: 'b', stepKind: 'delay', delayValue: 1, delayUnit: 'seconds', transitions: [] },
 ] }]);
 
+test('creator prompts and editors expose parallel policy without overriding inherited preferences',()=>{
+  const h=harness();
+  assert.match(h.AUTOOC_WORKFLOW_PROMPT,/"parallel" allows shared-vault execution/);
+  assert.match(h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,'task','Synthetic goal','codex','1.7.16'),/Omit concurrency/);
+  for(const kind of ['task','workflow']){
+    const draft=h.parseGeneratedDraft(JSON.stringify(kind==='task' ? packageOf() : workflowPackage()),kind,defaults);
+    const item=kind==='task' ? draft.tasks[0] : draft.workflow;
+    assert.equal(item.concurrency,undefined);
+    const modal=kind==='task' ? new h.CreateTaskModal(h.plugin.app,h.plugin,item) : new h.CreateWorkflowModal(h.plugin.app,h.plugin,item);
+    modal.open();
+    const setting=modal.contentEl.all().find(el=>el.name==='Concurrency');
+    const select=setting.all().find(el=>el.tag==='select');
+    assert.equal(select.value,'inherit');
+    select.change('parallel');assert.equal(modal.draft.concurrency,'parallel');
+    select.change('exclusive');assert.equal(modal.draft.concurrency,'exclusive');
+    select.change('inherit');assert.equal(modal.draft.concurrency,undefined);
+  }
+});
+
 test('saving an already open editor preserves an availability change from another view', async () => {
   for (const kind of ['task', 'workflow']) {
     const h = harness(), draft = h.parseGeneratedDraft(JSON.stringify(workflowPackage()), 'workflow', defaults);
