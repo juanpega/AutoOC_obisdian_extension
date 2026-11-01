@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.13",
+      version: "1.7.14",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -2166,6 +2166,7 @@ function readCodeStepCheckpoint(runtime, workflow, stepId) {
 // execution-status-help.ts
 var import_obsidian = require("obsidian");
 function executionStatusHelp(s) {
+  const review = s.reviewAction === "abandon-attempt" ? "Read Log and History first. If the original process has ended and you want to close this unfinished run, open the recovery controls and choose Abandon attempt. It keeps your task and history, records the outcome as unknown, and does not start another run. A later Run starts new work and may repeat earlier effects." : s.reviewAction === "resolve-uncertainty" ? "Read Log and History and check the original process and its effects. To close the review of this finished attempt, open the recovery controls and choose Resolve historical uncertainty. Enter your reason in the confirmation. The recorded result and history are kept; unknown effects are not marked successful. This does not stop processes or start another run." : s.reviewAction === "workflow-controls" ? "Read the workflow's Log and History and check its effects first. In its recovery controls, Verify previous result and Resume saved execution can continue the saved workflow and run pending steps. If recovery is disabled, review the saved evidence before continuing. Starting a new task does not resolve that earlier workflow." : void 0;
   if (s.waitingApproval) return {
     label: "Waiting for your approval",
     attention: true,
@@ -2188,13 +2189,13 @@ function executionStatusHelp(s) {
     label: "Needs review",
     attention: true,
     explanation: "The outcome or completion of recorded work could not be confirmed. A completed label on the card does not resolve that uncertainty.",
-    next: "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning."
+    next: review || "Open the run details and read the log. Check its effects and whether the process is still active before using the available review or continuation options. Do not repeat the run just to dismiss this warning."
   };
   if (s.phase === "ready" || s.phase === "in_flight" || s.status === "running") return {
     label: "Activity not confirmed",
     attention: true,
     explanation: "A pending or ongoing run is not controlled by this window. It may still be running elsewhere or may have been interrupted; the available information does not distinguish between these cases.",
-    next: "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing."
+    next: review || "Check the window or terminal where you started it. If it is still working, wait. If it has finished, review the log and run options before continuing."
   };
   if (s.disposition || s.phase === "abandoned") return {
     label: "Closed with unknown outcome",
@@ -2222,24 +2223,28 @@ function executionStatusHelp(s) {
   };
 }
 var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
-  constructor(app, snapshot, showDetails, version) {
+  constructor(app, snapshot, showDetails, version, startBlocked = false) {
     super(app);
     this.snapshot = snapshot;
     this.showDetails = showDetails;
     this.version = version;
+    this.startBlocked = startBlocked;
   }
   onOpen() {
     const root = this.contentEl;
     root.empty();
     root.addClass("auto-oc-execution-help");
     const current = this.snapshot();
-    root.createEl("h3", { text: "Execution help" });
+    root.createEl("h3", { text: this.startBlocked ? "Review the previous run" : "Execution help" });
     if (!current) {
-      root.createEl("p", { text: "This item is no longer available. Close this help window and check the panel again." });
+      root.createEl("p", { text: "This item or recorded attempt is no longer available. Close this help window and check the panel again." });
       return;
     }
     const help = executionStatusHelp(current);
     root.createEl("p", { text: current.name });
+    if (this.startBlocked) root.createEl("p", {
+      text: "No new task was started. AutoOC has a previous attempt to review before starting again. Your task definition and history are preserved."
+    });
     if (current.workflowName) root.createEl("p", { text: `Workflow run: ${current.workflowName}` });
     root.createEl("h4", { text: help.label });
     root.createEl("p", { text: help.explanation });
@@ -2247,7 +2252,7 @@ var ExecutionStatusHelpModal = class extends import_obsidian.Modal {
     root.createEl("p", { text: help.next });
     root.createEl("p", { text: "This help reads the information available in the panel. It does not run tasks or change their state.", cls: "setting-item-description" });
     const actions = root.createDiv("auto-oc-card-actions");
-    actions.createEl("button", { text: current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
+    actions.createEl("button", { text: this.startBlocked ? "Open recovery controls" : current.workflowName ? "View workflow and options" : "View details and options" }).onclick = () => {
       this.close();
       this.showDetails();
     };
@@ -14770,11 +14775,15 @@ var AutoOCView = class extends import_obsidian8.ItemView {
     const target = steps && Array.from(steps).find((element) => element.getAttribute("data-auto-oc-owner-workflow-id") === workflowId && element.getAttribute("data-auto-oc-step-id") === stepId);
     target == null ? void 0 : target.scrollIntoView({ block: "center" });
   }
-  renderExecutionStatus(parent, item, kind) {
-    if (!item.runtimeExecution) return;
-    const currentItem = () => kind === "task" ? this.plugin.settings.tasks.find((entry) => entry.id === item.id) : this.plugin.settings.workflows.find((entry) => entry.id === item.id);
-    const relatedWorkflow = (current2) => {
-      const binding = current2.runtimeExecution;
+  executionHelpContext(item, kind, expected) {
+    const currentItem = () => {
+      const current = kind === "task" ? this.plugin.settings.tasks.find((entry) => entry.id === item.id) : this.plugin.settings.workflows.find((entry) => entry.id === item.id);
+      const binding = current == null ? void 0 : current.runtimeExecution;
+      if (expected && ((binding == null ? void 0 : binding.runId) !== expected.runId || (kind === "workflow" ? current == null ? void 0 : current.id : binding == null ? void 0 : binding.workflowId) !== expected.workflowId)) return void 0;
+      return current;
+    };
+    const relatedWorkflow = (current) => {
+      const binding = current.runtimeExecution;
       return kind === "task" && binding ? this.plugin.settings.workflows.find((workflow) => {
         var _a;
         return workflow.id === binding.workflowId && ((_a = workflow.runtimeExecution) == null ? void 0 : _a.runId) === binding.runId;
@@ -14782,25 +14791,90 @@ var AutoOCView = class extends import_obsidian8.ItemView {
     };
     const snapshot = () => {
       var _a;
-      const current2 = currentItem();
-      if (!current2) return;
-      const binding = current2.runtimeExecution;
-      const workflow = relatedWorkflow(current2);
+      const current = currentItem();
+      if (!current) return;
+      const binding = current.runtimeExecution;
+      const workflow = relatedWorkflow(current);
       const attempt = (workflow == null ? void 0 : workflow.runtimeExecution) || binding;
+      const owned = !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId);
+      let reviewAction;
+      if (kind === "task" && !workflow && !owned && current.status !== "running") {
+        if ((binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition && ["failed", "completed"].includes(binding.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if ((binding == null ? void 0 : binding.workflowId) === standaloneTaskWorkflow(current.id).id && ["ready", "in_flight"].includes(binding.phase)) {
+          reviewAction = "abandon-attempt";
+        }
+      } else if (kind === "workflow" && !owned) {
+        if ((attempt == null ? void 0 : attempt.terminalUncertainty) && !attempt.disposition && ["failed", "completed"].includes(attempt.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if (["ready", "in_flight"].includes(attempt == null ? void 0 : attempt.phase)) {
+          reviewAction = "workflow-controls";
+        }
+      }
       return {
-        name: current2.name,
-        status: current2.status,
+        name: current.name,
+        status: current.status,
         runId: binding == null ? void 0 : binding.runId,
         phase: attempt == null ? void 0 : attempt.phase,
-        owned: !!binding && this.plugin.ownsExecution(kind === "workflow" ? current2.id : binding.workflowId, binding.runId),
+        owned,
+        reviewAction,
         requiresReconciliation: !!((binding == null ? void 0 : binding.requiresReconciliation) || (attempt == null ? void 0 : attempt.requiresReconciliation)),
         terminalUncertainty: !!((binding == null ? void 0 : binding.terminalUncertainty) || (attempt == null ? void 0 : attempt.terminalUncertainty)),
         disposition: !!(attempt == null ? void 0 : attempt.disposition),
         workflowName: workflow == null ? void 0 : workflow.name,
-        waitingApproval: !!current2.pendingCodexApproval,
-        stopUnconfirmed: !!((_a = current2.legacyExecution) == null ? void 0 : _a.stopState)
+        waitingApproval: !!current.pendingCodexApproval,
+        stopUnconfirmed: !!((_a = current.legacyExecution) == null ? void 0 : _a.stopState)
       };
     };
+    const showDetails = () => {
+      const latest = currentItem();
+      if (!latest) return;
+      this.filterText = "";
+      this.filterStatus = "all";
+      this.filterArea = "all";
+      this.taskSource = "all";
+      const workflow = relatedWorkflow(latest);
+      if (workflow) this.openWorkflowInList(workflow);
+      else if (kind === "task") this.openTaskInList(latest);
+      else this.openWorkflowInList(latest);
+    };
+    return { snapshot, showDetails };
+  }
+  showTaskStartFailure(task, error) {
+    const current = this.plugin.settings.tasks.find((entry) => entry.id === task.id);
+    const binding = current == null ? void 0 : current.runtimeExecution;
+    const message = String(error);
+    const detail = message.replace(/^Error: /, "");
+    const previousRun = /^Previous execution requires continuation or reconciliation \(run ([^,\r\n]+), workflow ([^,\r\n]+), step [^)\r\n]*\)\. No new task was started\.$/.exec(detail);
+    if (previousRun) {
+      const [, runId, workflowId] = previousRun;
+      const workflow = this.plugin.settings.workflows.find((entry) => {
+        var _a;
+        return entry.id === workflowId && ((_a = entry.runtimeExecution) == null ? void 0 : _a.runId) === runId;
+      });
+      const blockingTask = this.plugin.settings.tasks.find((entry) => {
+        var _a, _b;
+        return standaloneTaskWorkflow(entry.id).id === workflowId && ((_a = entry.runtimeExecution) == null ? void 0 : _a.workflowId) === workflowId && ((_b = entry.runtimeExecution) == null ? void 0 : _b.runId) === runId;
+      });
+      const target = workflow || blockingTask;
+      if (target) {
+        const { snapshot, showDetails } = this.executionHelpContext(target, workflow ? "workflow" : "task", { runId, workflowId });
+        new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+        return;
+      }
+    }
+    const unfinished = !!(binding == null ? void 0 : binding.requiresReconciliation) && detail === `Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`;
+    const uncertain = !!(binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition && detail === "Previous task outcome is unconfirmed; recovery is required before starting a new attempt.";
+    if (current && (binding == null ? void 0 : binding.runId) && binding.workflowId && (unfinished || uncertain)) {
+      const { snapshot, showDetails } = this.executionHelpContext(current, "task", { runId: binding.runId, workflowId: binding.workflowId });
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+      return;
+    }
+    new import_obsidian8.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12e3);
+  }
+  renderExecutionStatus(parent, item, kind) {
+    if (!item.runtimeExecution) return;
+    const { snapshot, showDetails } = this.executionHelpContext(item, kind);
     const current = snapshot();
     if (!current) return;
     const help = executionStatusHelp(current);
@@ -14811,17 +14885,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
     button.setAttr("aria-label", `Execution help for ${item.name}`);
     button.onclick = (event) => {
       event.stopPropagation();
-      new ExecutionStatusHelpModal(this.app, snapshot, () => {
-        const latest = currentItem();
-        if (!latest) return;
-        this.filterText = "";
-        this.filterStatus = "all";
-        this.filterArea = "all";
-        const workflow = relatedWorkflow(latest);
-        if (workflow) this.openWorkflowInList(workflow);
-        else if (kind === "task") this.openTaskInList(latest);
-        else this.openWorkflowInList(latest);
-      }, this.plugin.manifest.version).open();
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version).open();
     };
   }
   renderTaskCard(parent, task) {
@@ -14867,7 +14931,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
       try {
         await this.plugin.runTask(task);
       } catch (error) {
-        new import_obsidian8.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        this.showTaskStartFailure(task, error);
       }
     };
     if (task.status === "running") {
@@ -14987,7 +15051,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
         }
       };
     }
-    if (((_l = task.runtimeExecution) == null ? void 0 : _l.requiresReconciliation) && ((_m = task.runtimeExecution) == null ? void 0 : _m.workflowId) === standaloneTaskWorkflow(task.id).id && task.status !== "running") {
+    if (((_l = task.runtimeExecution) == null ? void 0 : _l.workflowId) === standaloneTaskWorkflow(task.id).id && ["ready", "in_flight"].includes((_m = task.runtimeExecution) == null ? void 0 : _m.phase) && task.status !== "running" && !this.plugin.ownsExecution(task.runtimeExecution.workflowId, task.runtimeExecution.runId)) {
       const abandon = actions.createEl("button", { text: "Abandon attempt", cls: "auto-oc-btn-stop" });
       abandon.onclick = async (e) => {
         e.stopPropagation();
@@ -15008,7 +15072,7 @@ var AutoOCView = class extends import_obsidian8.ItemView {
       try {
         await this.plugin.runTask(task);
       } catch (error) {
-        new import_obsidian8.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        this.showTaskStartFailure(task, error);
       }
     };
     if (task.status === "running") {

@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.14] - Candidato
+
+- Cuando Run queda bloqueado por un intento anterior identificado, abre ayuda contextual y permite llegar directamente a los controles de la tarea o workflow que bloquea, aunque sea otro elemento. La consulta no inicia, reanuda, cierra ni modifica ejecuciones.
+- La ayuda identifica las opciones existentes para abandonar un intento o revisar incertidumbre terminal, explica sus efectos y conserva los diagnósticos sin prompts ni credenciales. Los errores ajenos y las identidades que ya no coinciden mantienen su diagnóstico original.
+- Los intentos independientes en fase `ready` también ofrecen `Abandon attempt` cuando no están controlados por el host. La opción deja de aparecer en estados terminales; conserva las verificaciones y la confirmación de la operación existente.
+
 ## [1.7.13] - Candidato
 
 - Preparación de distribución: manifiesto y descriptor coherentes con los bytes LF de Git. La generación del descriptor rechaza artefactos CRLF para evitar una actualización desde GitHub con hashes incompatibles. El empaquetador conserva los bytes de paquetes ya verificados. Regresión contra blobs reales de Git con normalización Windows.

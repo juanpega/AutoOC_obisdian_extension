@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
 
 function harness() {
   class Element {
-    constructor(options={}) {this.textContent=options.text||'';this.children=[];this.attrs={};}
+    constructor(options={}) {this.textContent=options.text||'';this.children=[];this.attrs={};this.style={};this.classList={add(){},toggle(){}};}
     createEl(tag, options) {const child=new Element(options);child.tag=tag;this.children.push(child);return child;}
     createDiv(cls) {const child=this.createEl('div');child.cls=cls;return child;}
     empty() {this.children=[];}
@@ -12,9 +12,9 @@ function harness() {
     setAttr(key,value) {this.attrs[key]=value;}
     all() {return [this,...this.children.flatMap(child=>child.all())];}
   }
-  const mod={exports:{}},opened=[],copies=[];
+  const mod={exports:{}},opened=[],copies=[],notices=[];
   class Stub {}
-  const obsidian={Plugin:Stub,ItemView:Stub,PluginSettingTab:Stub,Setting:Stub,Notice:Stub,
+  const obsidian={Plugin:Stub,ItemView:Stub,PluginSettingTab:Stub,Setting:Stub,Notice:class {constructor(text){notices.push(text);}},
     Modal:class {constructor(){this.contentEl=new Element();} open(){opened.push(this);this.onOpen();} close(){this.onClose();}}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8')+
     '\nmodule.exports.helpTest={AutoOCView,executionStatusHelp,ExecutionStatusHelpModal};',
@@ -22,10 +22,13 @@ function harness() {
       setTimeout,clearTimeout,setInterval,clearInterval,AbortController,
       navigator:{clipboard:{async writeText(value){copies.push(value);}}}});
   const {AutoOCView,executionStatusHelp}=mod.exports.helpTest;
-  const view=Object.create(AutoOCView.prototype),plugin={manifest:{version:'1.7.2'},settings:{tasks:[],workflows:[]},ownsExecution:()=>false};
+  const view=Object.create(AutoOCView.prototype),plugin={manifest:{version:'1.7.14'},settings:{tasks:[],workflows:[]},ownsExecution:()=>false,
+    availableModels:[],taskStopIdentity:()=>undefined,configureStartButton(){},getEffectiveAgent:()=>'',redactSecrets:text=>text};
   view.plugin=plugin;view.app={};view.openTaskInList=item=>view.destination=['task',item.id];view.openWorkflowInList=item=>view.destination=['workflow',item.id];
   const render=(item,kind)=>{plugin.settings[kind==='task'?'tasks':'workflows']=[item];const root=new Element();view.renderExecutionStatus(root,item,kind);return root;};
-  return {view,plugin,render,opened,copies,help:executionStatusHelp};
+  view.expandedTasks=new Set();view.renderSelectionCheckbox=()=>{};view.renderAvailabilityButton=()=>{};
+  const renderCard=item=>{plugin.settings.tasks=[item];const root=new Element();view.renderTaskCard(root,item);return root;};
+  return {view,plugin,render,renderCard,opened,copies,notices,help:executionStatusHelp};
 }
 const base={name:'Synthetic',status:'completed',runId:'run-old',phase:'completed',owned:false};
 test('finished history needs no live owner; incomplete and uncertain attempts still need guidance',()=>{
@@ -122,5 +125,92 @@ test('owned tasks still show approval and unconfirmed-stop guidance',()=>{
   for(const flags of [{pendingCodexApproval:{requestId:'approval'}},{legacyExecution:{stopState:'unconfirmed'}}]) {
     const root=h.render({id:'t',name:'Needs action',status:'running',runtimeExecution:{runId:'run',phase:'in_flight'},...flags},'task');
     assert.ok(root.all().some(el=>el.textContent==='What can I do?'));
+  }
+});
+
+function previousTask(phase='ready', flags={}) {
+  return {id:'t',name:'Previous task',status:'pending',taskKind:'opencode',prompt:'PRIVATE_PROMPT',scheduleType:'manual',
+    runtimeExecution:{workflowId:'@task:t',runId:'run-previous',phase,...flags}};
+}
+function blockedError(task) {
+  const b=task.runtimeExecution;
+  return new Error(`Previous execution requires continuation or reconciliation (run ${b.runId}, workflow ${b.workflowId}, step task). No new task was started.`);
+}
+
+for(const label of ['▶','▶ Run']) test(`${label} opens actionable recovery for a ready attempt without changing its state`,async()=>{
+  const h=harness(),task=previousTask(),root=h.renderCard(task),before=JSON.stringify(h.plugin.settings);
+  let starts=0;h.plugin.runTask=async()=>{starts++;throw blockedError(task);};
+  assert.ok(root.all().some(el=>el.textContent==='Abandon attempt'),'ready checkpoints need an exit even without requiresReconciliation');
+  await root.all().find(el=>el.tag==='button'&&el.textContent===label).onclick({stopPropagation(){}});
+  assert.equal(starts,1);assert.equal(h.opened.length,1);assert.equal(h.notices.length,0);
+  const modal=h.opened[0],text=modal.contentEl.all().map(el=>el.textContent).join(' ');
+  assert.match(text,/No new task was started/);assert.match(text,/choose Abandon attempt/);
+  assert.match(text,/process has ended/);assert.match(text,/may repeat earlier effects/);
+  h.view.taskSource='workflow-code';h.view.filterArea='Hidden area';
+  modal.contentEl.all().find(el=>el.textContent==='Open recovery controls').onclick();
+  assert.deepEqual(h.view.destination,['task','t']);assert.equal(h.view.taskSource,'all');assert.equal(h.view.filterArea,'all');
+  assert.equal(JSON.stringify(h.plugin.settings),before);assert.equal(starts,1,'review must not retry the task');
+});
+
+test('unfinished and terminal guards explain the available recovery action, not a reset',()=>{
+  const cases=[
+    [previousTask('in_flight',{requiresReconciliation:true}), 'Unfinished attempt run-previous. Use Abandon attempt on this task after checking its external process has ended. No new task was started.', 'Abandon attempt'],
+    [previousTask('failed',{requiresReconciliation:true,terminalUncertainty:true}), 'Previous task outcome is unconfirmed; recovery is required before starting a new attempt.', 'Resolve historical uncertainty'],
+  ];
+  for(const [task,message,label] of cases){
+    const h=harness(),root=h.renderCard(task),before=JSON.stringify(h.plugin.settings);
+    h.view.showTaskStartFailure(task,new Error(message));
+    assert.equal(h.opened.length,1);
+    assert.ok(h.opened[0].contentEl.all().some(el=>el.textContent.includes(label)));
+    assert.ok(root.all().some(el=>el.textContent===label));
+    if(task.runtimeExecution.phase==='failed')assert.ok(!root.all().some(el=>el.textContent==='Abandon attempt'));
+    assert.equal(JSON.stringify(h.plugin.settings),before);
+  }
+});
+
+test('a blocked task belonging to a workflow opens the owning workflow controls',()=>{
+  const h=harness(),task=previousTask('completed');task.runtimeExecution.workflowId='w';
+  h.plugin.settings.workflows=[{id:'w',name:'Owning workflow',status:'pending',runtimeExecution:{runId:'run-previous',phase:'in_flight',requiresReconciliation:true}}];
+  h.renderCard(task);h.view.showTaskStartFailure(task,blockedError(task));
+  const modal=h.opened[0];assert.ok(modal.contentEl.all().some(el=>el.textContent==='Owning workflow'));
+  assert.ok(modal.contentEl.all().some(el=>el.textContent.includes('Verify previous result')));
+  modal.contentEl.all().find(el=>el.textContent==='Open recovery controls').onclick();
+  assert.deepEqual(h.view.destination,['workflow','w']);
+});
+
+test('starting another task identifies the blocking task rather than the clicked card',async()=>{
+  const h=harness(),blocking=previousTask(),clicked={...previousTask(),id:'other',name:'New task',runtimeExecution:undefined};
+  const root=h.renderCard(clicked);h.plugin.settings.tasks.push(blocking);
+  const before=JSON.stringify(h.plugin.settings);h.plugin.runTask=async()=>{throw blockedError(blocking);};
+  await root.all().find(el=>el.tag==='button'&&el.textContent==='▶').onclick({stopPropagation(){}});
+  const modal=h.opened[0];assert.ok(modal.contentEl.all().some(el=>el.textContent==='Previous task'));
+  modal.contentEl.all().find(el=>el.textContent==='Open recovery controls').onclick();
+  assert.deepEqual(h.view.destination,['task','t']);assert.equal(JSON.stringify(h.plugin.settings),before);
+});
+
+test('unrelated failures, deleted tasks and errors from another attempt never redirect recovery',()=>{
+  const h=harness(),task=previousTask();h.renderCard(task);
+  h.view.showTaskStartFailure(task,new Error('Provider unavailable'));
+  const old=blockedError(task);task.runtimeExecution.runId='new-run';h.view.showTaskStartFailure(task,old);
+  h.plugin.settings.tasks=[];h.view.showTaskStartFailure(task,blockedError(task));
+  assert.equal(h.opened.length,0);assert.equal(h.notices.length,3);
+});
+
+test('owned attempts do not offer abandonment and still direct the user to live controls',()=>{
+  const h=harness();h.plugin.ownsExecution=()=>true;
+  const task=previousTask('in_flight',{requiresReconciliation:true}),root=h.renderCard(task);
+  assert.ok(!root.all().some(el=>el.textContent==='Abandon attempt'));
+  h.view.showTaskStartFailure(task,blockedError(task));
+  assert.ok(!h.opened[0].contentEl.all().some(el=>el.textContent.includes('choose Abandon attempt')));
+});
+
+test('blocked-run help stays bound to the observed attempt after the catalog changes',()=>{
+  for(const action of ['Open recovery controls','Refresh information']){
+    const h=harness(),task=previousTask();h.renderCard(task);
+    h.view.showTaskStartFailure(task,blockedError(task));
+    const modal=h.opened[0];task.runtimeExecution.runId='replacement';
+    modal.contentEl.all().find(el=>el.textContent===action).onclick();
+    assert.equal(h.view.destination,undefined);
+    if(action==='Refresh information')assert.ok(modal.contentEl.all().some(el=>el.textContent.includes('no longer available')));
   }
 });

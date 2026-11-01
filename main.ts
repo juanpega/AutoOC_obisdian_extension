@@ -6598,11 +6598,15 @@ class AutoOCView extends ItemView {
     target?.scrollIntoView({ block: "center" });
   }
 
-  private renderExecutionStatus(parent: HTMLElement, item: ScheduledTask | Workflow, kind: "task" | "workflow") {
-    if (!(item as any).runtimeExecution) return;
-    const currentItem = () => kind === "task"
-      ? this.plugin.settings.tasks.find(entry => entry.id === item.id)
-      : this.plugin.settings.workflows.find(entry => entry.id === item.id);
+  private executionHelpContext(item: ScheduledTask | Workflow, kind: "task" | "workflow", expected?: {runId: string; workflowId: string}) {
+    const currentItem = () => {
+      const current = kind === "task"
+        ? this.plugin.settings.tasks.find(entry => entry.id === item.id)
+        : this.plugin.settings.workflows.find(entry => entry.id === item.id);
+      const binding = (current as any)?.runtimeExecution;
+      if (expected && (binding?.runId !== expected.runId || (kind === "workflow" ? current?.id : binding?.workflowId) !== expected.workflowId)) return undefined;
+      return current;
+    };
     const relatedWorkflow = (current: ScheduledTask | Workflow) => {
       const binding = (current as any).runtimeExecution;
       return kind === "task" && binding ? this.plugin.settings.workflows.find(workflow =>
@@ -6614,14 +6618,81 @@ class AutoOCView extends ItemView {
       const binding = (current as any).runtimeExecution;
       const workflow = relatedWorkflow(current);
       const attempt = (workflow as any)?.runtimeExecution || binding;
+      const owned = !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId);
+      let reviewAction: ExecutionHelpSnapshot["reviewAction"];
+      if (kind === "task" && !workflow && !owned && current.status !== "running") {
+        if (binding?.terminalUncertainty && !binding.disposition && ["failed", "completed"].includes(binding.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if (binding?.workflowId === standaloneTaskWorkflow(current.id).id && ["ready", "in_flight"].includes(binding.phase)) {
+          reviewAction = "abandon-attempt";
+        }
+      } else if (kind === "workflow" && !owned) {
+        if (attempt?.terminalUncertainty && !attempt.disposition && ["failed", "completed"].includes(attempt.phase)) {
+          reviewAction = "resolve-uncertainty";
+        } else if (["ready", "in_flight"].includes(attempt?.phase)) {
+          reviewAction = "workflow-controls";
+        }
+      }
       return { name: current.name, status: current.status, runId: binding?.runId, phase: attempt?.phase,
-        owned: !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId),
+        owned, reviewAction,
         requiresReconciliation: !!(binding?.requiresReconciliation || attempt?.requiresReconciliation),
         terminalUncertainty: !!(binding?.terminalUncertainty || attempt?.terminalUncertainty),
         disposition: !!attempt?.disposition, workflowName: workflow?.name,
         waitingApproval: !!(current as ScheduledTask).pendingCodexApproval,
         stopUnconfirmed: !!(current as ScheduledTask).legacyExecution?.stopState };
     };
+    const showDetails = () => {
+      const latest = currentItem();
+      if (!latest) return;
+      this.filterText = "";
+      this.filterStatus = "all";
+      this.filterArea = "all";
+      this.taskSource = "all";
+      const workflow = relatedWorkflow(latest);
+      if (workflow) this.openWorkflowInList(workflow);
+      else if (kind === "task") this.openTaskInList(latest as ScheduledTask);
+      else this.openWorkflowInList(latest as Workflow);
+    };
+    return { snapshot, showDetails };
+  }
+
+  private showTaskStartFailure(task: ScheduledTask, error: unknown) {
+    const current = this.plugin.settings.tasks.find(entry => entry.id === task.id);
+    const binding = (current as any)?.runtimeExecution;
+    const message = String(error);
+    const detail = message.replace(/^Error: /, "");
+    const previousRun = /^Previous execution requires continuation or reconciliation \(run ([^,\r\n]+), workflow ([^,\r\n]+), step [^)\r\n]*\)\. No new task was started\.$/.exec(detail);
+    if (previousRun) {
+      const [, runId, workflowId] = previousRun;
+      // Admission can be blocked by another task or workflow in this vault.
+      // Resolve both identities against the current catalog, never just a name.
+      const workflow = this.plugin.settings.workflows.find(entry => entry.id === workflowId && (entry as any).runtimeExecution?.runId === runId);
+      const blockingTask = this.plugin.settings.tasks.find(entry =>
+        standaloneTaskWorkflow(entry.id).id === workflowId && (entry as any).runtimeExecution?.workflowId === workflowId && (entry as any).runtimeExecution?.runId === runId);
+      const target = workflow || blockingTask;
+      if (target) {
+        const { snapshot, showDetails } = this.executionHelpContext(target, workflow ? "workflow" : "task", {runId, workflowId});
+        new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+        return;
+      }
+    }
+    const unfinished = !!binding?.requiresReconciliation && detail ===
+      `Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`;
+    const uncertain = !!binding?.terminalUncertainty && !binding.disposition && detail ===
+      "Previous task outcome is unconfirmed; recovery is required before starting a new attempt.";
+    // This notice identifies one attempt. Never redirect a stale error to a
+    // different run, or reinterpret unrelated launch/provider failures.
+    if (current && binding?.runId && binding.workflowId && (unfinished || uncertain)) {
+      const { snapshot, showDetails } = this.executionHelpContext(current, "task", {runId: binding.runId, workflowId: binding.workflowId});
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
+      return;
+    }
+    new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12000);
+  }
+
+  private renderExecutionStatus(parent: HTMLElement, item: ScheduledTask | Workflow, kind: "task" | "workflow") {
+    if (!(item as any).runtimeExecution) return;
+    const { snapshot, showDetails } = this.executionHelpContext(item, kind);
     const current = snapshot();
     if (!current) return;
     const help = executionStatusHelp(current);
@@ -6632,17 +6703,7 @@ class AutoOCView extends ItemView {
     button.setAttr("aria-label", `Execution help for ${item.name}`);
     button.onclick = event => {
       event.stopPropagation();
-      new ExecutionStatusHelpModal(this.app, snapshot, () => {
-        const latest = currentItem();
-        if (!latest) return;
-        this.filterText = "";
-        this.filterStatus = "all";
-        this.filterArea = "all";
-        const workflow = relatedWorkflow(latest);
-        if (workflow) this.openWorkflowInList(workflow);
-        else if (kind === "task") this.openTaskInList(latest as ScheduledTask);
-        else this.openWorkflowInList(latest as Workflow);
-      }, this.plugin.manifest.version).open();
+      new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version).open();
     };
   }
 
@@ -6693,7 +6754,7 @@ class AutoOCView extends ItemView {
     btnQuickRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
-      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
+      catch (error) { this.showTaskStartFailure(task, error); }
     };
     if (task.status === "running") {
       const btnQuickStop = quickActions.createEl("button", { text: "⏹", cls: "auto-oc-btn-stop" });
@@ -6811,7 +6872,7 @@ class AutoOCView extends ItemView {
       const dispose=actions.createEl('button',{text:'Resolve historical uncertainty'});
       dispose.onclick=async e=>{e.stopPropagation();try {await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id,terminalBinding.runId);} catch(error) {new Notice(this.plugin.redactSecrets(String(error)));}};
     }
-    if ((task as any).runtimeExecution?.requiresReconciliation && (task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && task.status !== 'running') {
+    if ((task as any).runtimeExecution?.workflowId === standaloneTaskWorkflow(task.id).id && ['ready', 'in_flight'].includes((task as any).runtimeExecution?.phase) && task.status !== 'running' && !this.plugin.ownsExecution((task as any).runtimeExecution.workflowId, (task as any).runtimeExecution.runId)) {
       const abandon = actions.createEl('button', {text:'Abandon attempt',cls:'auto-oc-btn-stop'});
       abandon.onclick = async e => {
         e.stopPropagation();
@@ -6828,7 +6889,7 @@ class AutoOCView extends ItemView {
     btnRun.onclick = async (e) => {
       e.stopPropagation();
       try { await this.plugin.runTask(task); }
-      catch (error) { new Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12000); }
+      catch (error) { this.showTaskStartFailure(task, error); }
     };
 
     if (task.status === "running") {

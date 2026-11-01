@@ -285,6 +285,14 @@ If the CLI already holds the lease when Obsidian opens, AutoOC waits and reloads
 
 ## Diagnostics and troubleshooting
 
+### A previous run prevents a new task from starting
+
+If you see **Previous execution requires continuation or reconciliation**, AutoOC has not started the new task. A recorded attempt must be reviewed first; it may belong to another task or workflow in the same vault. Updating the plugin does not erase that history.
+
+In 1.7.13, expand the relevant task card and check **Log** and **History**. **Abandon attempt**, when available, closes an unfinished attempt after you confirm that its external process has ended. **Resolve historical uncertainty** records your decision about a finished attempt with unknown effects. Both preserve history; neither stops processes, undoes effects, nor marks unknown work successful. A later **Run** starts new work and may repeat earlier effects. For a workflow, check its log and effects before using **Verify previous result** or **Resume saved execution**; either control can continue the saved workflow and execute pending steps.
+
+The **1.7.14 development candidate** opens **Review the previous run** automatically for an identified prior-run rejection from either task Run button. **Open recovery controls** clears list filters and expands the actual blocking task or workflow. Standalone attempts still in `ready` also expose **Abandon attempt**, without changing the existing confirmation or ownership checks. Opening the help does not perform recovery or retry execution. An error referring to a different or missing recorded identity is not redirected to an unrelated attempt. This candidate behavior is not available in older installed packages.
+
 Cards that need attention offer **What can I do?**. The help explains the recorded state and opens that item's details and options; if a task belongs to the current workflow attempt, it opens that workflow. A normally running or successfully completed attempt does not require an attention warning.
 
 - **Last run completed**: no owner recovery is needed; its record and history remain available.
