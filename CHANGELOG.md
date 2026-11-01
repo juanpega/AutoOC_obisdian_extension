@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.10] - Candidato
+
+- CLI: `list` y `status` muestran desactivación propia, bloqueo por dependencias y pasos Code. `--workflow ID --step ID` permite ejecutar, continuar, reconciliar o detener un paso Code aislado como en la interfaz, conservando el resultado del workflow completo. La delegación exige un propietario compatible y valida la identidad del paso; los rechazos por desactivación ofrecen un diagnóstico legible.
+- README: referencia completa de comandos, parámetros, selección, archivos de decisión, efectos y códigos de retorno. Actualizada la guía distribuida del runtime.
+
 ## [1.7.9] - Candidato
 
 - El tamaño de las burbujas admite **10–80 px**. Apply guarda esta preferencia por bóveda y dispositivo, separada del catálogo de tareas e históricos, y actualiza las burbujas visibles sin reconstruir el panel. Evita esperar la cola de guardados del catálogo para un cambio visual. Conserva el tamaño anterior hasta elegir otro y muestra el estado del guardado.

@@ -7,6 +7,76 @@ const { spawnSync } = require('node:child_process');
 const cli = path.resolve(__dirname, '../autooc-cli.cjs');
 const call = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
 
+function availabilityFixture(t, config) {
+  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-availability-'));
+  const folder=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(folder,{recursive:true});
+  const file=path.join(folder,'data.json');fs.writeFileSync(file,JSON.stringify(config));
+  t.after(()=>{assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));fs.rmSync(root,{recursive:true});});
+  return {root,folder,file};
+}
+
+test('CLI lists disabled dependencies and isolated Code availability without leaking contents or writing',t=>{
+  const config={tasks:[{id:'t',name:'Task',disabled:true,prompt:'PRIVATE_PROMPT',output:'PRIVATE_RESULT'}],workflows:[
+    {id:'w',name:'Workflow',status:'completed',steps:[{id:'ref',taskId:'t'},{id:'code',stepKind:'code',code:'PRIVATE_CODE',status:'failed'}]},
+    {id:'off',name:'Off',disabled:true,steps:[{id:'code',stepKind:'code'}]},
+    {id:'step-off',name:'Step off',steps:[{id:'code',stepKind:'code',disabled:true}]},
+  ]};
+  const f=availabilityFixture(t,config),before=fs.readFileSync(f.file);
+  for(const command of ['list','status']) {
+    const result=call(command,'--vault',f.root);assert.equal(result.status,0,result.stderr);
+    const data=JSON.parse(result.stdout);
+    assert.equal(data.tasks[0].disabled,true);assert.equal(data.workflows[0].disabled,false);
+    assert.equal(data.workflows[0].blockedByDisabled,true);assert.match(data.workflows[0].disabledReason,/Task/);
+    assert.equal(data.codeSteps.length,3);assert.equal(data.codeSteps[0].blockedByDisabled,false,'unrelated disabled reference does not block isolated Code');
+    assert.equal(data.codeSteps[1].disabled,false);assert.equal(data.codeSteps[1].blockedByDisabled,true);
+    assert.equal(data.codeSteps[2].disabled,true);assert.equal(data.codeSteps[2].blockedByDisabled,true);
+    assert.equal(data.codeSteps[0].recordedStatus,command==='status'?'failed':undefined);
+    assert.doesNotMatch(result.stdout+result.stderr,/PRIVATE_/);assert.equal(data.activityVerified,false);
+  }
+  assert.deepEqual(fs.readFileSync(f.file),before);assert.equal(fs.existsSync(path.join(f.folder,'runtime')),false);
+});
+
+test('CLI selects one Code step, retains the parent result and refuses a different stop identity',t=>{
+  const f=availabilityFixture(t,{tasks:[],workflows:[{id:'w',name:'Workflow',status:'failed',output:'PARENT_RESULT',steps:[
+    {id:'before',stepKind:'code',code:'throw Error("must not run")'},
+    {id:'chosen',name:'Chosen',stepKind:'code',codeAllowVault:true,code:'if(input!=="" || Object.keys(outputs).length) throw Error("unexpected input"); vault.append("effect.txt","once"); output="PRIVATE_RESULT";'},
+    {id:'after',stepKind:'code',code:'throw Error("must not run")'},
+  ]}]});
+  const first=call('run','--vault',f.root,'--workflow','w','--step','chosen');assert.equal(first.status,0,first.stderr);
+  const state=JSON.parse(first.stdout);assert.equal(state.stepId,'chosen');assert.equal(state.executionKind,'workflow');
+  for(const command of ['resume','reconcile']) {
+    const result=call(command,'--vault',f.root,'--workflow','w','--step','chosen','--run',state.runId);
+    assert.equal(result.status,0,result.stderr);assert.equal(JSON.parse(result.stdout).stepId,'chosen');
+  }
+  assert.equal(fs.readFileSync(path.join(f.root,'effect.txt'),'utf8'),'once');
+  const saved=JSON.parse(fs.readFileSync(f.file)).workflows[0];
+  assert.equal(saved.status,'failed');assert.equal(saved.output,'PARENT_RESULT');assert.equal(saved.runtimeExecution,undefined);
+  assert.equal(saved.steps[1].codeExecution.runtimeExecution.runId,state.runId);
+  assert.equal(call('stop','--vault',f.root,'--workflow','w','--step','before','--run',state.runId).status,1);
+  const stopped=call('stop','--vault',f.root,'--workflow','w','--step','chosen','--run',state.runId);
+  assert.equal(stopped.status,0,stopped.stderr);assert.equal(JSON.parse(stopped.stdout).requested,false);
+  assert.equal(call('run','--vault',f.root,'--task','w','--step','chosen').status,1);
+  assert.equal(call('run','--vault',f.root,'--workflow','w','--step','missing').status,1);
+  assert.doesNotMatch(first.stdout+first.stderr,/PRIVATE_|PARENT_RESULT/);
+});
+
+for(const target of ['task','workflow','step']) test(`CLI run/resume reject disabled ${target}; reconciliation and stop remain available`,t=>{
+  const config={tasks:[{id:'t',name:'Task',taskKind:'code',code:'output="ok"'}],workflows:[{id:'w',name:'Workflow',steps:[{id:'s',stepKind:'code',code:'output="ok"'}]}]};
+  const f=availabilityFixture(t,config);
+  const selector=target==='task'?['--task','t']:['--workflow','w',...(target==='step'?['--step','s']:[])];
+  const first=call('run','--vault',f.root,...selector);assert.equal(first.status,0,first.stderr);
+  const runId=JSON.parse(first.stdout).runId,saved=JSON.parse(fs.readFileSync(f.file));
+  (target==='task'?saved.tasks[0]:target==='workflow'?saved.workflows[0]:saved.workflows[0].steps[0]).disabled=true;
+  fs.writeFileSync(f.file,JSON.stringify(saved));const before=fs.readFileSync(f.file);
+  for(const command of ['run','resume']) {
+    const rejected=call(command,'--vault',f.root,...selector,...(command==='resume'?['--run',runId]:[]));
+    assert.equal(rejected.status,1);assert.match(rejected.stderr,/disabled/);assert.deepEqual(fs.readFileSync(f.file),before);
+  }
+  for(const command of ['reconcile','stop']) {
+    const result=call(command,'--vault',f.root,...selector,'--run',runId);assert.equal(result.status,0,result.stderr);
+  }
+});
+
 test('workflow name arrives before a retained Code step finishes and stays out of journals',async t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-name-'));
   const folder=path.join(root,'.obsidian/plugins/auto-oc');fs.mkdirSync(folder,{recursive:true});

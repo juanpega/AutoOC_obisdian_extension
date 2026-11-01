@@ -19,6 +19,23 @@ function fixture(t){
   return {vault,directory,plugin};
 }
 function cli(vault,...args){return cliObserved(vault,undefined,...args);}
+
+test('CLI delegates isolated Code to the real plugin host and explains disabled selections',async t=>{
+  const {vault,directory,plugin}=fixture(t);
+  fs.writeFileSync(path.join(directory,'data.json'),JSON.stringify({tasks:[],workflows:[{id:'w',name:'Workflow',status:'pending',steps:[
+    {id:'off',stepKind:'code',disabled:true,code:'throw Error("must not execute")'},
+    {id:'code',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once"); output="done";'},
+  ]}]}));
+  await plugin.loadSettings();plugin.startCliRequests();
+  const timer=setInterval(()=>plugin.cliRequestHost.poll(),10);t.after(()=>clearInterval(timer));
+  const rejected=await cli(vault,'run','--workflow','w');assert.equal(rejected.code,1);assert.match(rejected.stderr,/disabled/);
+  const run=await cli(vault,'run','--workflow','w','--step','code');assert.equal(run.code,0,run.stderr);
+  const result=JSON.parse(run.stdout);assert.equal(result.stepId,'code');assert.equal(result.workflowId,'w');
+  assert.ok(run.stderr.trim().split('\n').every(line=>JSON.parse(line).host==='obsidian'));
+  const continued=await cli(vault,'resume','--workflow','w','--step','code','--run',result.runId);assert.equal(continued.code,0,continued.stderr);
+  assert.equal(fs.readFileSync(path.join(vault,'effects.txt'),'utf8'),'once');
+  assert.equal(plugin.settings.workflows[0].status,'pending');
+});
 function cliObserved(vault,onProgress,...args){return new Promise((resolve,reject)=>{
   const child=spawn(process.execPath,[path.join(root,'autooc-cli.cjs'),...args,'--vault',vault],{windowsHide:true});
   let stdout='',stderr='',timedOut=false;

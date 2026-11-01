@@ -18,7 +18,7 @@ export function workflowDisabledReason(workflow: Activatable & { steps?: Array<A
 
 export function assertWorkflowEnabled(workflow: Parameters<typeof workflowDisabledReason>[0], tasks: Activatable[]): void {
   const reason = workflowDisabledReason(workflow, tasks);
-  if (reason) throw new Error(reason);
+  if (reason) throw Object.assign(new Error(reason), {name: 'DisabledExecutionError'});
 }
 
 export function validateDisabled(item: Activatable): void {

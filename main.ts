@@ -2323,7 +2323,7 @@ export default class AutoOCPlugin extends Plugin {
       this.assertLifecycleOpen();
       try {
         return await this.runSharedWorkflow(request.taskId ? standaloneTaskWorkflow(request.taskId).id : request.workflowId!,
-          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress});
+          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress}, request.stepId);
       } catch (error) {
         if (!this.lifecycleStopped) new Notice(`AutoOC: CLI request failed — ${this.redactSecrets(String(error))}`);
         throw error;

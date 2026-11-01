@@ -5,6 +5,14 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Disponibilidad y pasos Code (1.7.10+)
+
+Verificar `version` y `help` de la instalación. `catalogAvailability: 1` anuncia que `list` y `status` incluyen `disabled`, `blockedByDisabled`, `disabledReason` y `codeSteps`. La desactivación es independiente del estado guardado; un elemento sin bloqueo de desactivación todavía puede tener impedimentos de ejecución. Las consultas no prueban actividad real ni exponen prompts, código o resultados.
+
+Con `codeStepSelection: true`, usar `--workflow WORKFLOW_ID --step STEP_ID` en `run`, `resume`, `reconcile` y `stop`. Obtener ambas identidades de `codeSteps`; las tres últimas llamadas requieren `--run RUN_ID`. Solo se ejecuta ese paso Code, con entrada y resultados previos vacíos, sin seguir sus transiciones ni sustituir el resultado del workflow completo. No combinar `--step` con `--task`. El plugin propietario debe anunciar también esta capacidad; si no, recargar el paquete compatible, nunca omitir `--step` para reintentar.
+
+`run` y `resume` rechazan tareas, workflows y pasos desactivados, incluidas las dependencias de un workflow completo. Un paso aislado depende de su padre y del propio paso. `reconcile` y `stop` siguen disponibles para la identidad registrada sin reactivar el elemento. Enable/Disable se gestiona en Obsidian; la CLI no ofrece una operación para cambiarlo. La preferencia visual del diámetro de burbujas no cambia la disponibilidad. Ver la referencia completa de llamadas y parámetros en el README del paquete fuente.
+
 ## Concurrencia dentro del propietario
 
 En este candidato, `concurrency: "independent"` habilita admisión compatible hasta dos sesiones dentro del mismo host. El editor clásico, Visual Builder e importación/exportación conservan la política. Ausente o `"exclusive"` significa exclusividad; no se modifican retrospectivamente definiciones ni permisos. GUI y peticiones CLI delegadas comparten el mismo límite. El descriptor del buzón compatible anuncia `concurrentExecutions: 2`; no atribuir esta capacidad a otra instalación por compartir número de versión.

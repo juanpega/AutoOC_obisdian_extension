@@ -1360,7 +1360,7 @@ function workflowDisabledReason(workflow, tasks) {
 }
 function assertWorkflowEnabled(workflow, tasks) {
   const reason = workflowDisabledReason(workflow, tasks);
-  if (reason) throw new Error(reason);
+  if (reason) throw Object.assign(new Error(reason), { name: "DisabledExecutionError" });
 }
 
 // workflow-definition.ts
@@ -1534,20 +1534,43 @@ function selectCodeStep(workflow, stepId, historical = false) {
     steps: [{ ...step, transitions: [], transitionMode: void 0, evaluatePrompt: void 0, forceContinue: void 0 }]
   };
 }
+function codeStepDisplay(step) {
+  const solo = step.codeExecution;
+  return solo && (!step.lastRun || solo.lastRun >= step.lastRun) ? { status: solo.status, output: solo.output || "", lastRun: solo.lastRun } : { status: step.status || "pending", output: step.output || "", lastRun: step.lastRun };
+}
+function readCodeStepCheckpoint(runtime, workflow, stepId) {
+  const selected = selectCodeStep(workflow, stepId), binding = selected.runtimeExecution;
+  if (!binding) return void 0;
+  const checkpoint = readExecutionCheckpoint(runtime, binding.runId);
+  validateProgressBinding(selected, checkpoint, binding.runId);
+  if (checkpoint.steps.some((step) => step.stepId !== stepId)) throw new Error("Isolated execution contains another step");
+  return checkpoint;
+}
 
 // execution-presentation.ts
 function executionPresentation(workflow, taskId) {
   if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
     throw new Error("Invalid execution presentation identity");
   }
-  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+  const presentation = {
+    ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {},
+    executionKind: taskId === void 0 ? "workflow" : "task",
+    ...workflow.isolatedCodeStep !== void 0 ? { stepId: workflow.isolatedCodeStep } : {}
+  };
+  presentationFields(presentation);
+  return presentation;
 }
 function presentationFields(value) {
-  if (value.workflowName === void 0 && value.executionKind === void 0) return {};
+  if (value.workflowName === void 0 && value.executionKind === void 0 && value.stepId === void 0) return {};
   if (value.workflowName !== void 0 && typeof value.workflowName !== "string" || !["workflow", "task"].includes(value.executionKind)) {
     throw new Error("Invalid execution presentation metadata");
   }
-  return { ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {}, executionKind: value.executionKind };
+  if (value.stepId !== void 0 && (value.executionKind !== "workflow" || typeof value.stepId !== "string" || !value.stepId || value.stepId.length > 256 || /[\0\r\n]/.test(value.stepId))) throw new Error("Invalid code step presentation identity");
+  return {
+    ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {},
+    executionKind: value.executionKind,
+    ...value.stepId !== void 0 ? { stepId: value.stepId } : {}
+  };
 }
 
 // catalog-transaction.ts
@@ -4818,7 +4841,7 @@ async function replace(file, value, check, asyncFlush = true) {
 function validCommand(value) {
   if (value?.command === "edit-workflow") return validWorkflowEdit(value);
   const id = (v) => typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\0\r\n]/.test(v);
-  return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
+  return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.stepId === void 0 || id(value.stepId) && id(value.workflowId) && value.taskId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
 }
 async function requestPluginExecution(runtime, command, signal, onProgress) {
   return requestPluginCommand(runtime, command, signal, onProgress);
@@ -4842,6 +4865,7 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
     const host = read(path20.join(directory, "host"));
     if (host.protocol !== 1 || host.owner !== owner.token || host.pid !== owner.pid) throw new Error("Invalid CLI request host");
     if (command.command === "edit-workflow" && host.workflowEditing !== true) throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");
+    if ("stepId" in command && command.stepId !== void 0 && host.codeStepSelection !== true) throw new Error("Loaded AutoOC does not support code step selection; reload the updated plugin before running this step");
     if (host.heartbeatAt !== void 0) {
       if (!Number.isFinite(host.heartbeatAt) || host.heartbeatAt > Date.now() + 6e4 || Date.now() - host.heartbeatAt > 3e4)
         throw new Error("CLI host heartbeat expired; terminal publication is uncertain");
@@ -4880,6 +4904,7 @@ async function requestPluginCommand(runtime, command, signal, onProgress) {
           if (observedPresentation !== void 0 && serializedMetadata !== observedPresentation) throw new Error("CLI receipt presentation changed");
           observedPresentation = serializedMetadata;
           if (metadata.executionKind !== void 0 && metadata.executionKind !== (command.taskId ? "task" : "workflow")) throw new Error("CLI receipt execution kind mismatch");
+          if (metadata.stepId !== ("stepId" in command ? command.stepId : void 0)) throw new Error("CLI receipt code step identity mismatch");
         }
         if (result.checkpoint) {
           runId = result.checkpoint.runId;
@@ -5521,8 +5546,36 @@ async function maintainRelease(options) {
   }
 }
 
+// cli-catalog-summary.ts
+function summarizeCliCatalog(config, includeStatus) {
+  const status = (value) => ["idle", "pending", "running", "completed", "failed", "cancelled", "abandoned"].includes(value) ? value : "unknown";
+  const summarize = (item, reason, recordedStatus = item?.status) => {
+    if (!item || typeof item.id !== "string" || typeof item.name !== "string") throw new Error("Invalid catalog entry.");
+    return {
+      id: item.id,
+      name: item.name,
+      disabled: item.disabled === true,
+      blockedByDisabled: !!reason,
+      ...reason ? { disabledReason: reason } : {},
+      ...includeStatus ? { recordedStatus: status(recordedStatus) } : {}
+    };
+  };
+  const tasks = config.tasks.map((task) => summarize(task, taskDisabledReason(task)));
+  const workflows = config.workflows.map((workflow) => summarize(workflow, workflowDisabledReason(workflow, config.tasks)));
+  const codeSteps = config.workflows.flatMap((workflow) => (workflow.steps || []).filter((step) => step.stepKind === "code").map((step) => ({
+    ...summarize(
+      { id: step.id, name: step.name || step.id, disabled: step.disabled },
+      workflowDisabledReason(selectCodeStep(workflow, step.id), config.tasks),
+      codeStepDisplay(step).status
+    ),
+    workflowId: workflow.id,
+    workflowName: workflow.name
+  })));
+  return { tasks, workflows, codeSteps };
+}
+
 // autooc-cli.ts
-var version = "1.7.9";
+var version = "1.7.10";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "inspect-settings-write" || command === "recover-settings-write") {
@@ -5602,12 +5655,16 @@ async function main(args) {
     }
     return { version, ...recoverExecutionLease(directory, rest[3]) };
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow"], taskSelection: true, pluginRequests: 1, workflowEditing: 1 };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", settingsWriteRecovery: "inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground: true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow"], taskSelection: true, codeStepSelection: true, catalogAvailability: 1, pluginRequests: 1, workflowEditing: 1 };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id [--step code-step-id]|--task id> [--run <run-id> for resume/reconcile/stop]", catalog: "list/status include disabled, blockedByDisabled, disabledReason and codeSteps; these are availability gates, not proof of readiness or live activity.", codeSteps: "--step selects one Code step with empty input/outputs and preserves the full workflow result. Requires codeStepSelection:true in CLI and loaded host. run/resume reject disabled items; reconcile/stop remain available for the exact recorded execution.", settingsWriteRecovery: "inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground: true };
   if (["run", "resume", "reconcile", "stop"].includes(command)) {
     const values = /* @__PURE__ */ new Map();
     const target = rest.includes("--task") ? "--task" : "--workflow";
     const allowed = command === "run" ? ["--vault", target] : ["--vault", target, "--run"];
+    if (rest.includes("--step")) {
+      if (target !== "--workflow") throw new Error("--step requires --workflow, not --task");
+      allowed.push("--step");
+    }
     if (rest.length !== allowed.length * 2) throw new Error("Execution requires explicit vault, workflow and recovery identity where applicable");
     for (let index = 0; index < rest.length; index += 2) {
       const key = rest[index], value = rest[index + 1];
@@ -5625,6 +5682,18 @@ async function main(args) {
       const state = readExecutionCheckpoint(directory, values.get("--run"));
       const identity2 = target === "--task" ? standaloneTaskWorkflow(values.get(target)).id : values.get(target);
       if (state.workflowId !== identity2) throw new Error("Execution belongs to another workflow or task");
+      if (values.has("--step")) {
+        let catalog;
+        try {
+          catalog = JSON.parse(fs26.readFileSync(path26.join(path26.dirname(directory), "data.json"), "utf8"));
+        } catch {
+          throw new Error("Cannot read valid AutoOC configuration");
+        }
+        const matches = catalog.workflows?.filter((workflow) => workflow.id === identity2);
+        if (matches?.length !== 1) throw new Error("Workflow identity is missing or ambiguous");
+        const selected = readCodeStepCheckpoint(directory, matches[0], values.get("--step"));
+        if (selected?.runId !== state.runId) throw new Error("Execution does not belong to the selected isolated code step");
+      }
       return { version, experimental: true, ...await requestWorkflowStop(directory, state.runId) };
     }
     const controller = new AbortController();
@@ -5638,12 +5707,14 @@ async function main(args) {
         command,
         workflowId: values.get("--workflow"),
         taskId: values.get("--task"),
+        stepId: values.get("--step"),
         runId: values.get("--run")
       }, controller.signal, (state) => progress("obsidian", state));
       const result = delegated || await runInstalledWorkflow({
         vault: values.get("--vault"),
         workflowId: values.get("--workflow"),
         taskId: values.get("--task"),
+        stepId: values.get("--step"),
         resumeRunId: values.get("--run"),
         newExecution: command === "run",
         reconcile: command === "reconcile",
@@ -5679,12 +5750,7 @@ async function main(args) {
     throw new Error("Cannot read valid AutoOC configuration.");
   }
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog.");
-  const summarize = (items) => items.map((item) => {
-    if (!item || typeof item.id !== "string" || typeof item.name !== "string") throw new Error("Invalid catalog entry.");
-    const entry = { id: item.id, name: item.name };
-    if (command === "status") entry.recordedStatus = ["idle", "pending", "running", "completed", "failed", "cancelled", "abandoned"].includes(item.status) ? item.status : "unknown";
-    return entry;
-  });
+  const summary = summarizeCliCatalog(config, command === "status");
   let runtime = {};
   if (command === "status") {
     const directory = path26.join(path26.dirname(location), "runtime");
@@ -5720,7 +5786,7 @@ async function main(args) {
     }
     runtime = { executions, executionLockPresent, ...executionOwner ? { executionOwner } : {} };
   }
-  return { version, experimental: true, vault, activityVerified: false, tasks: summarize(config.tasks), workflows: summarize(config.workflows), ...runtime };
+  return { version, experimental: true, vault, activityVerified: false, ...summary, ...runtime };
 }
 main(process.argv.slice(2)).then((result) => {
   process.stdout.write(JSON.stringify(result) + "\n");

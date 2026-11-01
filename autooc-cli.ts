@@ -13,6 +13,8 @@ import {workflowEditDefinition,workflowEditHash,validWorkflowEdit} from "./workf
 import {resolveInstalledWorkflowLocation} from "./installed-workflow-location";
 import {inspectSettingsWrite, recoverSettingsWrite, readSettingsWriteDecision} from './settings-write-inspection';
 import {maintainRelease,readDecisionFile} from "./release-maintenance";
+import {summarizeCliCatalog} from './cli-catalog-summary';
+import {readCodeStepCheckpoint} from './workflow-code-step';
 declare const AUTOOC_VERSION: string;
 const version = AUTOOC_VERSION;
 
@@ -85,12 +87,16 @@ async function main(args: string[]) {
     }
     return {version,...recoverExecutionLease(directory,rest[3])};
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon","inspect-terminal","dispose-terminal","maintain-release","export-workflow","edit-workflow"], taskSelection:true, pluginRequests:1,workflowEditing:1 };
-  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id|--task id> [--run <run-id> for resume/reconcile/stop]", settingsWriteRecovery:"inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition:"inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.",maintenance:"maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.",abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground:true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["list", "status", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon","inspect-terminal","dispose-terminal","maintain-release","export-workflow","edit-workflow"], taskSelection:true, codeStepSelection:true, catalogAvailability:1, pluginRequests:1,workflowEditing:1 };
+  if (command === "help" && !rest.length) return { usage: "node autooc-cli.cjs <list|status> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id [--step code-step-id]|--task id> [--run <run-id> for resume/reconcile/stop]", catalog:"list/status include disabled, blockedByDisabled, disabledReason and codeSteps; these are availability gates, not proof of readiness or live activity.", codeSteps:"--step selects one Code step with empty input/outputs and preserves the full workflow result. Requires codeStepSelection:true in CLI and loaded host. run/resume reject disabled items; reconcile/stop remain available for the exact recorded execution.", settingsWriteRecovery:"inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery:"recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision:"<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition:"inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.",maintenance:"maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.",abandonment:"abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground:true };
   if (["run","resume","reconcile","stop"].includes(command)) {
     const values = new Map<string,string>();
     const target = rest.includes("--task") ? "--task" : "--workflow";
     const allowed = command === "run" ? ["--vault",target] : ["--vault",target,"--run"];
+    if (rest.includes('--step')) {
+      if (target !== '--workflow') throw new Error('--step requires --workflow, not --task');
+      allowed.push('--step');
+    }
     if (rest.length !== allowed.length*2) throw new Error("Execution requires explicit vault, workflow and recovery identity where applicable");
     for (let index=0;index<rest.length;index+=2) {
       const key=rest[index], value=rest[index+1];
@@ -108,6 +114,15 @@ async function main(args: string[]) {
       const state=readExecutionCheckpoint(directory,values.get("--run")!);
       const identity = target === "--task" ? standaloneTaskWorkflow(values.get(target)!).id : values.get(target);
       if(state.workflowId!==identity) throw new Error("Execution belongs to another workflow or task");
+      if (values.has('--step')) {
+        let catalog:any;
+        try {catalog=JSON.parse(fs.readFileSync(path.join(path.dirname(directory),'data.json'),'utf8'));}
+        catch {throw new Error('Cannot read valid AutoOC configuration');}
+        const matches=catalog.workflows?.filter((workflow:any)=>workflow.id===identity);
+        if(matches?.length!==1)throw new Error('Workflow identity is missing or ambiguous');
+        const selected=readCodeStepCheckpoint(directory,matches[0],values.get('--step')!);
+        if(selected?.runId!==state.runId)throw new Error('Execution does not belong to the selected isolated code step');
+      }
       return {version,experimental:true,...await requestWorkflowStop(directory,state.runId)};
     }
     const controller = new AbortController();
@@ -117,10 +132,10 @@ async function main(args: string[]) {
       const location=resolveInstalledWorkflowLocation(values.get("--vault")!);
       const progress=(host:"obsidian"|"standalone",state:ExecutionSummary)=>process.stderr.write(JSON.stringify({event:"progress",host,...executionSummary(state)})+"\n");
       const delegated=await requestPluginExecution(location.runtimeDirectory,{
-        command:command as "run"|"resume"|"reconcile",workflowId:values.get("--workflow"),taskId:values.get("--task"),runId:values.get("--run")
+        command:command as "run"|"resume"|"reconcile",workflowId:values.get("--workflow"),taskId:values.get("--task"),stepId:values.get('--step'),runId:values.get("--run")
       },controller.signal,state=>progress("obsidian",state));
       const result = delegated || await runInstalledWorkflow({vault:values.get("--vault")!,workflowId:values.get("--workflow"),taskId:values.get("--task"),
-        resumeRunId:values.get("--run"),newExecution:command === "run",reconcile:command === "reconcile",
+        stepId:values.get('--step'),resumeRunId:values.get("--run"),newExecution:command === "run",reconcile:command === "reconcile",
         signal:controller.signal,redact:text=>text,includePresentation:true,
         onCheckpoint:async (checkpoint,_catalog,presentation)=>{progress("standalone",executionSummary(checkpoint,presentation));}});
       if (controller.signal.aborted) process.exitCode=130;
@@ -143,12 +158,7 @@ async function main(args: string[]) {
   try { config = JSON.parse(fs.readFileSync(location, "utf8")); }
   catch { throw new Error("Cannot read valid AutoOC configuration."); }
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) throw new Error("Invalid AutoOC catalog.");
-  const summarize = (items: any[]) => items.map(item => {
-    if (!item || typeof item.id !== "string" || typeof item.name !== "string") throw new Error("Invalid catalog entry.");
-    const entry: {id: string; name: string; recordedStatus?: string} = { id: item.id, name: item.name };
-    if (command === "status") entry.recordedStatus = ["idle", "pending", "running", "completed", "failed", "cancelled", "abandoned"].includes(item.status) ? item.status : "unknown";
-    return entry;
-  });
+  const summary = summarizeCliCatalog(config, command === 'status');
   let runtime:object = {};
   if (command === "status") {
     const directory = path.join(path.dirname(location),"runtime");
@@ -174,7 +184,7 @@ async function main(args: string[]) {
     }
     runtime = {executions,executionLockPresent,...(executionOwner ? {executionOwner} : {})};
   }
-  return { version, experimental: true, vault, activityVerified: false, tasks: summarize(config.tasks), workflows: summarize(config.workflows),...runtime };
+  return { version, experimental: true, vault, activityVerified: false, ...summary,...runtime };
 }
 
 main(process.argv.slice(2)).then(result=>{process.stdout.write(JSON.stringify(result) + "\n");}).catch(error=>{

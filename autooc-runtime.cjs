@@ -423,7 +423,7 @@ function workflowDisabledReason(workflow, tasks) {
 }
 function assertWorkflowEnabled(workflow, tasks) {
   const reason = workflowDisabledReason(workflow, tasks);
-  if (reason) throw new Error(reason);
+  if (reason) throw Object.assign(new Error(reason), { name: "DisabledExecutionError" });
 }
 
 // path-identity.ts
@@ -2667,7 +2667,25 @@ function executionPresentation(workflow, taskId) {
   if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
     throw new Error("Invalid execution presentation identity");
   }
-  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+  const presentation = {
+    ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {},
+    executionKind: taskId === void 0 ? "workflow" : "task",
+    ...workflow.isolatedCodeStep !== void 0 ? { stepId: workflow.isolatedCodeStep } : {}
+  };
+  presentationFields(presentation);
+  return presentation;
+}
+function presentationFields(value) {
+  if (value.workflowName === void 0 && value.executionKind === void 0 && value.stepId === void 0) return {};
+  if (value.workflowName !== void 0 && typeof value.workflowName !== "string" || !["workflow", "task"].includes(value.executionKind)) {
+    throw new Error("Invalid execution presentation metadata");
+  }
+  if (value.stepId !== void 0 && (value.executionKind !== "workflow" || typeof value.stepId !== "string" || !value.stepId || value.stepId.length > 256 || /[\0\r\n]/.test(value.stepId))) throw new Error("Invalid code step presentation identity");
+  return {
+    ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {},
+    executionKind: value.executionKind,
+    ...value.stepId !== void 0 ? { stepId: value.stepId } : {}
+  };
 }
 
 // installed-workflow-host.ts

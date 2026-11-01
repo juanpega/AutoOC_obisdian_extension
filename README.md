@@ -4,6 +4,8 @@
 
 AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Codex, and GitHub Copilot CLI tasks and visual workflows from an Obsidian vault.
 
+**Automatización y agentes:** [referencia completa de la CLI: comandos, parámetros y ejemplos](#referencia-completa-de-la-cli-autooc).
+
 ## Abrir una CLI interactiva
 
 OpenCode 1 y OpenCode 2 se configuran como motores separados, con rutas, modelos y agentes propios. **Check version** identifica la instalación y las tareas existentes conservan su motor. Consulta la [guía de OpenCode 2](docs/opencode-2.md) para configurar tareas automáticas, sesiones interactivas y borradores.
@@ -139,7 +141,95 @@ El plugin mantiene un componente interno de solo lectura para enmascarar valores
 
 El puente MCP local se retira en 1.6.2 para eliminar su carrera de arranque y descarga. AutoOC no modifica configuraciones ni credenciales de otros clientes. La ejecución autónoma sigue disponible con la CLI y la [skill distribuida](skills/autooc-runtime/SKILL.md). El almacén de credenciales existente se conserva.
 
-## CLI con Obsidian abierto
+## Referencia completa de la CLI AutoOC
+
+La CLI distribuida con la extensión es **`autooc-cli.cjs`**. Esta referencia corresponde al candidato **1.7.10**. Consulta siempre `version` y `help` de la instalación que vayas a utilizar: una CLI antigua puede no admitir las opciones nuevas. No es la CLI del proveedor (OpenCode, Codex, Copilot o Claude); el botón **CLI** abre esos programas interactivos por separado.
+
+```powershell
+$cliPath = 'C:/ruta/vault/.obsidian/plugins/auto-oc/autooc-cli.cjs'
+$vaultPath = 'C:/ruta/vault'
+node $cliPath version
+node $cliPath help
+node $cliPath list --vault $vaultPath
+node $cliPath status --vault $vaultPath
+```
+
+Requiere Node.js 18 o posterior. En la tabla, `CLI` es la ruta absoluta del archivo anterior y `VAULT` la ruta absoluta de la bóveda. **Anteponer `node CLI` a cada llamada** y entrecomillar las rutas con espacios. La CLI selecciona `<VAULT>/.obsidian/plugins/auto-oc`; no busca carpetas de configuración alternativas ni ofrece un parámetro para elegirlas.
+
+### Todas las llamadas disponibles
+
+| Llamada y parámetros | Qué hace y qué necesita |
+| --- | --- |
+| `version` | Consulta versión, capacidades y compatibilidad. Sin parámetros. |
+| `help` | Consulta la sintaxis admitida. Sin parámetros; no es `--help`. |
+| `list --vault VAULT` | Lista tareas, workflows y `codeSteps`, incluyendo su desactivación. Solo lectura. |
+| `status --vault VAULT` | Añade estados guardados, ejecuciones, reservas y aprobaciones pendientes. Solo lectura; no certifica actividad real. |
+| `run --vault VAULT SELECTOR` | Inicia una ejecución **nueva**. Rechaza elementos desactivados y respeta las reservas, dependencias y permisos. |
+| `resume --vault VAULT SELECTOR --run RUN_ID` | Continúa la ejecución exacta; puede ejecutar pasos pendientes. También rechaza elementos desactivados. |
+| `reconcile --vault VAULT SELECTOR --run RUN_ID` | Revisa y persiste el resultado de la ejecución registrada sin lanzar el siguiente paso. No es una consulta ni repite un trabajo incierto. |
+| `stop --vault VAULT SELECTOR --run RUN_ID` | Solicita parar esa ejecución. Si ya es terminal, devuelve `requested: false`. No deshace efectos ni prueba que hayan terminado todos los procesos externos. |
+| `approve --vault VAULT --run RUN_ID --approval TOKEN` | Aprueba la solicitud pendiente identificada por su token exacto; puede permitir que continúe una operación. |
+| `deny --vault VAULT --run RUN_ID --approval TOKEN` | Rechaza esa solicitud pendiente. |
+| `export-workflow --vault VAULT --workflow WORKFLOW_ID --out ARCHIVO_JSON` | Exporta los campos editables y su `expectedHash` a un archivo nuevo. No exporta el paquete de importación completo. |
+| `edit-workflow --vault VAULT --workflow WORKFLOW_ID --patch ARCHIVO_JSON` | Aplica un parche compatible a través del plugin abierto, sin actividad pendiente. Exige el hash observado; no ejecuta el workflow. |
+| `inspect-terminal --vault VAULT --run RUN_ID` | Obtiene la inspección de un intento terminal para revisar sus efectos inciertos. Solo lectura. |
+| `dispose-terminal --vault VAULT --decision ARCHIVO_JSON` | Registra una decisión humana sobre ese intento terminal, conservando su estado y los efectos desconocidos. Plugin descargado y decisión basada en la inspección exacta. |
+| `abandon --vault VAULT --workflow WORKFLOW_ID --run RUN_ID --revision N --reason TEXTO --acknowledge-unknown-effects true` | Abandona explícitamente un intento no terminal sin inventar un resultado. Plugin descargado; autorización humana para aceptar efectos desconocidos. Para tareas independientes, `WORKFLOW_ID` es `@task:TASK_ID`. |
+| `recover-lease --vault VAULT --owner TOKEN` | Recupera la reserva del propietario observado únicamente si se demuestra su ausencia. No reanuda ejecuciones ni resuelve efectos inciertos. |
+| `inspect-settings-write --vault VAULT` | Inspecciona un guardado interrumpido, identidades y motivos que impiden recuperarlo. Solo lectura. |
+| `recover-settings-write --vault VAULT --decision ARCHIVO_JSON` | Recupera el guardado conforme a una decisión explícita vinculada a esa inspección. Conserva el catálogo; no recupera la reserva de ejecución ni reanuda tareas. |
+| `maintain-release --vault VAULT --inspect` | Inspecciona la actualización desde un paquete nuevo completo, separado de la instalación de destino. No instala. |
+| `maintain-release --vault VAULT --install` | Respalda e instala ese paquete con el plugin descargado y la reserva libre. Conserva históricos y no resuelve intentos por su cuenta. |
+| `maintain-release --vault VAULT --decisions ARCHIVO_JSON` | Aplica decisiones administrativas revisadas y después instala bajo la misma reserva. Las decisiones son un array; una decisión ya persistida no se deshace si falla la instalación posterior. |
+
+Las tres variantes de `maintain-release` son excluyentes. Todos los argumentos de la tabla son obligatorios; `SELECTOR` se sustituye por **una** de estas formas:
+
+| Selección | Parámetros |
+| --- | --- |
+| Tarea independiente, incluida una tarea de tipo Code | `--task TASK_ID` |
+| Workflow completo | `--workflow WORKFLOW_ID` |
+| Un paso Code del workflow | `--workflow WORKFLOW_ID --step STEP_ID` |
+
+`--step` requiere `codeStepSelection: true` en `version` y un plugin cargado compatible si hay delegación. Solo admite pasos Code, no pasos de espera o referencias a tareas. Los IDs proceden de `list`/`status`; los nombres pueden repetirse. No mezclar `--task` y `--workflow`.
+
+### Parámetros y archivos de decisión
+
+- `--vault`: ruta absoluta a la bóveda, no a la carpeta del plugin. `--out`, `--patch` y `--decision`/`--decisions` también usan rutas absolutas.
+- `--run`: `runId` exacto devuelto por la ejecución o por `status`. Es obligatorio para `resume`, `reconcile` y `stop`; no se admite en `run`.
+- `--owner`: token de la reserva observado en `status`, no el PID. `--approval`: token de la aprobación pendiente. No inventar ni reutilizar tokens de otra solicitud.
+- `--revision`: revisión entera no negativa observada en el intento. `--reason`: explicación de la decisión humana. `--acknowledge-unknown-effects` exige el literal `true`.
+- `--out`: archivo que todavía no exista. `--patch`: archivo JSON regular de hasta 60 KB, con `expectedHash` y `changes`. Los cambios admitidos son `name`, `description` y `stepChanges: [{id, name?, code?, evaluatePrompt?}]` para pasos existentes. No cambia estructura, tareas referenciadas, motores, modelos, permisos ni desactivación. Ante conflicto, exportar de nuevo antes de preparar otro parche.
+- `dispose-terminal --decision`: JSON con la inspección exacta de `inspect-terminal`, más `reason` y `acknowledgedUnknownEffects: true`. No convertir una incertidumbre en éxito.
+- `recover-settings-write --decision`: JSON con `schemaVersion: 1`, `action: "recover-settings-write"`, `vault`, `installationDirectory`, `inspectionHash`, `token` y `transactionId` de la inspección; además `reason`, `preserveCatalog: true` y `executionsResumed: false`. Si la inspección no autoriza recuperar, el comando rechaza la operación.
+- `maintain-release --decisions`: array de inspecciones individuales revisadas, cada una con `reason` y `acknowledgedUnknownEffects: true`. Consultar el procedimiento de mantenimiento y la [guía distribuida](skills/autooc-runtime/SKILL.md) antes de usarlo.
+
+Para `run`, `resume`, `reconcile` y `stop` se admite otro orden de parámetros, sin duplicados. **Para el resto, conservar el orden mostrado en la tabla.** No hay parámetros generales para sobrescribir motor, modelo, prompt, permisos o desactivación: se usan los de la definición instalada.
+
+### Elementos desactivados y pasos Code
+
+`list` y `status` conservan los elementos desactivados en sus resultados. `disabled` indica la desactivación del propio elemento; `blockedByDisabled` incluye el bloqueo por dependencias y `disabledReason` explica el motivo. Un workflow activo puede estar bloqueado por una tarea o un paso desactivado. `recordedStatus`, presente en `status`, es el estado guardado de ejecución y es independiente de la desactivación. `blockedByDisabled: false` **no certifica** que se pueda ejecutar: aún se comprueban propiedad, actividad, configuración y permisos.
+
+`codeSteps` identifica los pasos Code mediante `workflowId` e `id` del paso. Su disponibilidad corresponde a su ejecución aislada: requiere que el padre y ese paso estén activos, sin depender de otros pasos del workflow que no se van a ejecutar. El tamaño de burbujas y las opciones de colapso son preferencias visuales; no alteran esta disponibilidad.
+
+```powershell
+# Ejecutar únicamente el paso Code seleccionado, con entrada/resultados previos vacíos.
+node $cliPath run --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID
+
+# Conservar el runId devuelto; no lanzar otro run para continuar el anterior.
+node $cliPath resume --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID --run RUN_ID
+node $cliPath reconcile --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID --run RUN_ID
+node $cliPath stop --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID --run RUN_ID
+```
+
+La ejecución aislada no sigue las transiciones del paso ni sustituye el último resultado del workflow completo. `--step` verifica también la pertenencia del intento al detenerlo. La CLI no reactiva automáticamente elementos: **Enable/Disable** se gestiona en AutoOC. `reconcile` y `stop` siguen disponibles para el intento exacto de un elemento desactivado; las demás comprobaciones de identidad y recuperación continúan vigentes.
+
+### Salida y códigos de retorno
+
+Las llamadas completadas devuelven un único documento JSON por **stdout**. Las ejecuciones emiten progreso JSON por líneas en **stderr**, con `host: "obsidian"` o `"standalone"`. Los resúmenes incluyen `runId`, `workflowId`, `phase`, `revision`, `nextStepId` y, cuando están disponibles, `workflowName` y `executionKind`. Una ejecución aislada añade `stepId` y conserva `executionKind: "workflow"`. Los journals no incorporan estos campos de presentación.
+
+El código de salida es **0** al completar la llamada, **1** ante error o resultado `failed`, y **130** cuando la ejecución devuelve tras SIGINT/SIGTERM. Una interrupción durante la espera delegada puede devolver 1 con petición de cancelación y resultado incierto. Un código 0 de `stop`, `approve` o `reconcile` no significa que el workflow haya terminado correctamente: consultar el JSON. Un timeout tampoco autoriza repetir efectos. `activityVerified: false` en las consultas deja explícito que no son una prueba de actividad en vivo.
+
+### CLI con Obsidian abierto
 
 En un paquete que indique `pluginRequests: 1` al consultar `version`, la CLI puede pedir al plugin abierto que ejecute una tarea o workflow. Abre el Dashboard para ver su progreso y resultados. Se usan los mismos comandos:
 

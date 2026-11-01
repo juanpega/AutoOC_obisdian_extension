@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.9",
+      version: "1.7.10",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -1032,7 +1032,7 @@ function workflowDisabledReason(workflow, tasks) {
 }
 function assertWorkflowEnabled(workflow, tasks) {
   const reason = workflowDisabledReason(workflow, tasks);
-  if (reason) throw new Error(reason);
+  if (reason) throw Object.assign(new Error(reason), { name: "DisabledExecutionError" });
 }
 function validateDisabled(item) {
   if (item.disabled !== void 0 && typeof item.disabled !== "boolean") throw new Error("Disabled must be a boolean.");
@@ -4851,6 +4851,7 @@ var admissionDiagnostics = /* @__PURE__ */ new Set([
   "Catalog has unresolved running activity; verify its owner before execution"
 ]);
 function executionAdmissionDiagnostic(error) {
+  if ((error == null ? void 0 : error.name) === "DisabledExecutionError") return "Selected task, workflow or step is disabled. Inspect list/status and enable it in AutoOC before running.";
   const message = error == null ? void 0 : error.message;
   return typeof message === "string" && admissionDiagnostics.has(message) ? message : void 0;
 }
@@ -5598,14 +5599,25 @@ function executionPresentation(workflow, taskId) {
   if (workflow.name !== void 0 && typeof workflow.name !== "string" || taskId !== void 0 && workflow.id !== `@task:${taskId}`) {
     throw new Error("Invalid execution presentation identity");
   }
-  return { ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {}, executionKind: taskId === void 0 ? "workflow" : "task" };
+  const presentation = {
+    ...typeof workflow.name === "string" ? { workflowName: workflow.name } : {},
+    executionKind: taskId === void 0 ? "workflow" : "task",
+    ...workflow.isolatedCodeStep !== void 0 ? { stepId: workflow.isolatedCodeStep } : {}
+  };
+  presentationFields(presentation);
+  return presentation;
 }
 function presentationFields(value) {
-  if (value.workflowName === void 0 && value.executionKind === void 0) return {};
+  if (value.workflowName === void 0 && value.executionKind === void 0 && value.stepId === void 0) return {};
   if (value.workflowName !== void 0 && typeof value.workflowName !== "string" || !["workflow", "task"].includes(value.executionKind)) {
     throw new Error("Invalid execution presentation metadata");
   }
-  return { ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {}, executionKind: value.executionKind };
+  if (value.stepId !== void 0 && (value.executionKind !== "workflow" || typeof value.stepId !== "string" || !value.stepId || value.stepId.length > 256 || /[\0\r\n]/.test(value.stepId))) throw new Error("Invalid code step presentation identity");
+  return {
+    ...value.workflowName !== void 0 ? { workflowName: value.workflowName } : {},
+    executionKind: value.executionKind,
+    ...value.stepId !== void 0 ? { stepId: value.stepId } : {}
+  };
 }
 
 // cli-plugin-requests.ts
@@ -5751,7 +5763,7 @@ async function replace(file, value, check, asyncFlush = true) {
 function validCommand(value) {
   if ((value == null ? void 0 : value.command) === "edit-workflow") return validWorkflowEdit(value);
   const id = (v) => typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\0\r\n]/.test(v);
-  return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
+  return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.stepId === void 0 || id(value.stepId) && id(value.workflowId) && value.taskId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
 }
 function createPluginRequestHost(lease, execute, edit) {
   lease.assertOwned();
@@ -5760,7 +5772,7 @@ function createPluginRequestHost(lease, execute, edit) {
   regularDirectory(directory);
   const descriptor = path16.join(directory, "host");
   let heartbeatAt = Date.now();
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: 2 });
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: 2, codeStepSelection: true });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling;
@@ -10168,7 +10180,8 @@ var AutoOCPlugin = class extends import_obsidian7.Plugin {
           request.command === "reconcile",
           request.command === "run",
           request.taskId,
-          { signal, progress }
+          { signal, progress },
+          request.stepId
         );
       } catch (error) {
         if (!this.lifecycleStopped) new import_obsidian7.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
