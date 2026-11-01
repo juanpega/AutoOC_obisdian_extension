@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.7.8] - Candidato
+
+- Settings permite elegir el diámetro exacto de las burbujas de tareas y steps del Dashboard entre 16 y 80 píxeles, en incrementos de 1. Incluye vista previa, **Apply** y **Reset to default** (30 px). Conserva el tamaño elegido en versiones anteriores.
+
 ## [1.7.2] - Candidato
 
 - OpenCode 2 como motor independiente: ejecutable, modelo y agente propios, **Check version** en Settings y selección por tarea o como motor predeterminado. Las tareas automáticas usan `run --standalone` y las interactivas con prompt, `mini --standalone`; OpenCode 1 conserva sus comandos. Incluye workflows mixtos, importación/exportación y borradores con IA. No convierte tareas ni actualiza la CLI automáticamente. [Configuración y diferencias](docs/opencode-2.md).

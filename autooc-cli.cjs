@@ -5522,7 +5522,7 @@ async function maintainRelease(options) {
 }
 
 // autooc-cli.ts
-var version = "1.7.7";
+var version = "1.7.8";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "inspect-settings-write" || command === "recover-settings-write") {

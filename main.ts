@@ -1,4 +1,5 @@
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
+import { dashboardTaskDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import type { InteractiveCliProvider } from "./interactive-cli";
@@ -591,6 +592,7 @@ interface AutoOCSettings {
   libraryUrl: string;
   dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
   dashboardTaskBubbleSize: "sm" | "md" | "lg" | "xl";
+  dashboardTaskBubbleDiameter?: number;
   linuxTerminal?: string;
 }
 
@@ -6392,7 +6394,7 @@ class AutoOCView extends ItemView {
     // Every task/step bubble renders at the same physical diameter,
     // regardless of usage, status, or nesting depth. Containers must adapt
     // around tasks; tasks should not shrink based on the current container.
-    const TASK_BUBBLE_PX = { sm: 24, md: 30, lg: 38, xl: 48 }[this.plugin.settings.dashboardTaskBubbleSize];
+    const TASK_BUBBLE_PX = dashboardTaskDiameter(this.plugin.settings);
     const taskBubbleSizeForParent = (parent: HTMLElement) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -11241,18 +11243,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
 
-    new Setting(containerEl)
-      .setName("Dashboard task bubble size")
-      .setDesc("Fixed task bubble diameter in pixels.")
-      .addDropdown((dropdown) => dropdown
-        .addOptions({ sm: "Small (24px)", md: "Medium (30px)", lg: "Large (38px)", xl: "Extra large (48px)" })
-        .setValue(this.plugin.settings.dashboardTaskBubbleSize)
-        .onChange(async (value) => {
-          if (value === "sm" || value === "md" || value === "lg" || value === "xl") {
-            this.plugin.settings.dashboardTaskBubbleSize = value;
-            await this.plugin.saveSettings();
-          }
-        }));
+    addDashboardBubbleSizeSetting(containerEl, this.plugin);
 
     new Setting(containerEl)
       .setName("Default AI engine")

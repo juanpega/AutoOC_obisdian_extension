@@ -444,6 +444,8 @@
 .auto-oc-dashboard-task-lg { border-width: 2px; }
 .auto-oc-dashboard-task-md { border-width: 2px; }
 .auto-oc-dashboard-task-sm { border-width: 1px; opacity: 0.9; }
+.auto-oc-bubble-size-preview { display: flex; align-items: center; gap: 12px; min-height: 88px; margin-bottom: 16px; color: var(--text-muted); }
+.auto-oc-bubble-size-sample { flex-shrink: 0; box-sizing: border-box; border: 2px solid var(--color-green); border-radius: 50%; background: radial-gradient(circle at 30% 25%, var(--background-primary), var(--color-green)); }
 
 .auto-oc-dashboard-task-loose {
   z-index: 9;

@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.7",
+      version: "1.7.8",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -896,6 +896,94 @@ function setupCodeTextarea(textarea, app) {
   } else mount();
 }
 
+// dashboard-bubble-settings.ts
+var import_obsidian = require("obsidian");
+var validDiameter = (value) => typeof value === "number" && Number.isInteger(value) && value >= 16 && value <= 80;
+function dashboardTaskDiameter(settings) {
+  if (validDiameter(settings.dashboardTaskBubbleDiameter)) return settings.dashboardTaskBubbleDiameter;
+  switch (settings.dashboardTaskBubbleSize) {
+    case "sm":
+      return 24;
+    case "lg":
+      return 38;
+    case "xl":
+      return 48;
+    default:
+      return 30;
+  }
+}
+function addDashboardBubbleSizeSetting(container, host) {
+  let input, apply, reset;
+  let saving = false;
+  const row = new import_obsidian.Setting(container).setName("Task and step bubble size").setDesc("Exact diameter in pixels (16\u201380). Preview changes below; Apply updates the Dashboard.");
+  row.addText((text) => {
+    input = text.inputEl;
+    input.type = "number";
+    input.min = "16";
+    input.max = "80";
+    input.step = "1";
+    input.style.width = "80px";
+    input.setAttribute("aria-label", "Task and step bubble size in pixels");
+    text.setValue(String(dashboardTaskDiameter(host.settings))).onChange(() => preview());
+  });
+  row.addButton((button) => {
+    apply = button.buttonEl;
+    button.setButtonText("Apply").setCta().onClick(() => save());
+  });
+  row.addButton((button) => {
+    reset = button.buttonEl;
+    button.setButtonText("Reset to default").onClick(() => {
+      if (saving) return;
+      input.value = "30";
+      preview();
+      return save();
+    });
+  });
+  const sample = container.createDiv("auto-oc-bubble-size-preview");
+  sample.createSpan({ text: "Preview" });
+  const bubble = sample.createDiv({ cls: "auto-oc-bubble-size-sample", attr: { "aria-hidden": "true" } });
+  const feedback = sample.createSpan({ attr: { role: "status", "aria-live": "polite" } });
+  const value = () => input.value.trim() ? Number(input.value) : NaN;
+  function preview() {
+    const diameter = value(), valid = validDiameter(diameter);
+    input.setAttribute("aria-invalid", String(!valid));
+    apply.disabled = saving || !valid || diameter === dashboardTaskDiameter(host.settings);
+    if (valid) {
+      bubble.style.width = bubble.style.height = `${diameter}px`;
+      feedback.setText(`${diameter} px`);
+    } else feedback.setText("Enter a whole number from 16 to 80.");
+  }
+  async function save() {
+    const diameter = value();
+    if (saving || !validDiameter(diameter)) return;
+    saving = true;
+    input.disabled = apply.disabled = reset.disabled = true;
+    const previous = host.settings.dashboardTaskBubbleDiameter;
+    host.settings.dashboardTaskBubbleDiameter = diameter;
+    try {
+      await host.saveSettings();
+      feedback.setText(`Saved: ${diameter} px`);
+    } catch (e) {
+      if (host.settings.dashboardTaskBubbleDiameter === diameter) {
+        if (previous === void 0) delete host.settings.dashboardTaskBubbleDiameter;
+        else host.settings.dashboardTaskBubbleDiameter = previous;
+      }
+      feedback.setText("Could not save the size. Your previous size is kept. Try Apply again.");
+    } finally {
+      saving = false;
+      input.disabled = reset.disabled = false;
+      apply.disabled = value() === dashboardTaskDiameter(host.settings);
+    }
+  }
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void save();
+    }
+  });
+  preview();
+}
+
 // catalog-availability.ts
 function taskDisabledReason(task) {
   return (task == null ? void 0 : task.disabled) === true ? `Task "${task.name || task.id}" is disabled. Enable it before running.` : void 0;
@@ -919,7 +1007,7 @@ function validateDisabled(item) {
 }
 
 // interactive-cli-ui.ts
-var import_obsidian = require("obsidian");
+var import_obsidian2 = require("obsidian");
 
 // interactive-cli.ts
 var fs4 = __toESM(require("fs"));
@@ -2157,7 +2245,7 @@ function openCliLauncher(app, host, selected) {
     var _a;
     const settings = app.setting;
     if (!(settings == null ? void 0 : settings.open) || !(settings == null ? void 0 : settings.openTabById) || !((_a = host.manifest) == null ? void 0 : _a.id)) {
-      new import_obsidian.Notice("Open Settings \u2192 AutoOC \u2192 Interactive CLI launchers to configure your CLIs.");
+      new import_obsidian2.Notice("Open Settings \u2192 AutoOC \u2192 Interactive CLI launchers to configure your CLIs.");
       return;
     }
     settings.open();
@@ -2169,7 +2257,7 @@ function addInteractiveCliSettings(root, host) {
   root.createEl("p", { text: "Choose which CLIs appear under \u{1F4BB} CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
   for (const cli of INTERACTIVE_CLIS) {
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
-    new import_obsidian.Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.").addToggle((toggle) => {
+    new import_obsidian2.Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.").addToggle((toggle) => {
       var _a;
       return toggle.setValue(((_a = host.settings.cliLauncherEnabled) == null ? void 0 : _a[cli.id]) !== false).onChange(async (enabled) => {
         const previous = host.settings.cliLauncherEnabled;
@@ -2180,11 +2268,11 @@ function addInteractiveCliSettings(root, host) {
         } catch (e) {
           if (host.settings.cliLauncherEnabled === updated) host.settings.cliLauncherEnabled = previous;
           toggle.setValue((previous == null ? void 0 : previous[cli.id]) !== false);
-          new import_obsidian.Notice("CLI preference could not be saved. Try again.");
+          new import_obsidian2.Notice("CLI preference could not be saved. Try again.");
         }
       });
     });
-    const row = new import_obsidian.Setting(root).setName(`${cli.label} executable`);
+    const row = new import_obsidian2.Setting(root).setName(`${cli.label} executable`);
     const describe = () => {
       const detected = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
       row.setDesc(detected ? `Detected: ${detected}` : `Not found. Install ${cli.label} separately or enter its executable path. Use a path or command name without arguments.`);
@@ -2199,7 +2287,7 @@ function addInteractiveCliSettings(root, host) {
       } catch (e) {
         if (host.settings[cli.pathKey] === updated) host.settings[cli.pathKey] = previous || defaultCommand;
         input.value = host.settings[cli.pathKey] || defaultCommand;
-        new import_obsidian.Notice("CLI path could not be saved. Try again.");
+        new import_obsidian2.Notice("CLI path could not be saved. Try again.");
       }
       describe();
     };
@@ -2209,7 +2297,7 @@ function addInteractiveCliSettings(root, host) {
     }).addButton((button) => button.setButtonText("Auto-detect").onClick(async () => {
       const found = resolveInteractiveCli(cli.id);
       if (!found) {
-        new import_obsidian.Notice(`${cli.label} was not found. Install it or enter its executable path.`);
+        new import_obsidian2.Notice(`${cli.label} was not found. Install it or enter its executable path.`);
         return;
       }
       input.value = found;
@@ -2232,7 +2320,7 @@ function addInteractiveCliSettings(root, host) {
     describe();
   }
 }
-var CliLauncherModal = class extends import_obsidian.Modal {
+var CliLauncherModal = class extends import_obsidian2.Modal {
   constructor(app, host, configure, selected) {
     super(app);
     this.host = host;
@@ -2258,7 +2346,7 @@ var CliLauncherModal = class extends import_obsidian.Modal {
     } else if (!requested) this.selected = (_b = available[0]) == null ? void 0 : _b.id;
     let updateButtons = () => {
     };
-    if (available.length) new import_obsidian.Setting(root).setName("CLI").addDropdown((dropdown) => {
+    if (available.length) new import_obsidian2.Setting(root).setName("CLI").addDropdown((dropdown) => {
       if (!this.selected) dropdown.addOption("", "Choose a CLI");
       for (const cli of available) dropdown.addOption(cli.id, cli.label);
       dropdown.setValue(this.selected || "").onChange((value) => {
@@ -3828,8 +3916,8 @@ async function applyBulkCatalogAction(catalog, selection, action, state, save) {
 }
 
 // catalog-bulk-modal.ts
-var import_obsidian2 = require("obsidian");
-var BulkCatalogModal = class extends import_obsidian2.Modal {
+var import_obsidian3 = require("obsidian");
+var BulkCatalogModal = class extends import_obsidian3.Modal {
   // Modal.open() owns `selection` for restoring the editor's DOM selection.
   constructor(app, host, selectedItems, action, onSaved) {
     super(app);
@@ -3853,7 +3941,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
     let area = this.action.type === "area" ? this.action.area : "";
     if (this.action.type === "area") {
       let input;
-      new import_obsidian2.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
+      new import_obsidian3.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
         input = text.inputEl;
         text.setValue(area).setPlaceholder("No area").onChange((value) => {
           area = value;
@@ -3873,7 +3961,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
     const feedback = root.createDiv("auto-oc-bulk-feedback");
     feedback.setAttr("role", "alert");
     for (const issue of issues) feedback.createEl("p", { text: issue });
-    new import_obsidian2.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
+    new import_obsidian3.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
       if (!this.saving) this.close();
     })).addButton((button) => {
       button.setButtonText(availability ? `${disabling ? "Disable" : "Enable"} ${this.selectedItems.length} items` : deleting ? `Delete ${this.selectedItems.length} items` : "Apply area").setDisabled(issues.length > 0);
@@ -3894,7 +3982,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
         }
         this.saving = false;
         this.close();
-        new import_obsidian2.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
+        new import_obsidian3.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
         this.onSaved();
       });
     });
@@ -3905,7 +3993,7 @@ var BulkCatalogModal = class extends import_obsidian2.Modal {
 };
 
 // ai-draft-modal.ts
-var import_obsidian3 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 
 // ai-draft.ts
 var import_crypto6 = require("crypto");
@@ -4068,7 +4156,7 @@ async function saveGeneratedDefinition(catalog, drafts, workflow, save) {
 }
 
 // ai-draft-modal.ts
-var AiDraftModal = class extends import_obsidian3.Modal {
+var AiDraftModal = class extends import_obsidian4.Modal {
   constructor(app, options) {
     super(app);
     this.options = options;
@@ -4088,7 +4176,7 @@ var AiDraftModal = class extends import_obsidian3.Modal {
     this.contentEl.createEl("h2", { text: this.options.kind === "task" ? "Create a task with AI" : "Create a workflow with AI" });
     this.contentEl.createEl("p", { text: "Describe the outcome you want. AI prepares a draft using the WF Builder Prompt, then you finish in the editor. Nothing is saved or scheduled yet." });
     let objectiveInput;
-    new import_obsidian3.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
+    new import_obsidian4.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
       objectiveInput = text.inputEl;
       text.inputEl.rows = 7;
       text.inputEl.maxLength = 2e4;
@@ -4099,7 +4187,7 @@ var AiDraftModal = class extends import_obsidian3.Modal {
       });
     });
     let engineInput, modelInput;
-    new import_obsidian3.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
+    new import_obsidian4.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
       engineInput = dropdown.selectEl;
       dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex").addOption("copilot", "GitHub Copilot");
       dropdown.setValue(this.engine).onChange((value) => {
@@ -4109,7 +4197,7 @@ var AiDraftModal = class extends import_obsidian3.Modal {
         invalidate();
       });
     });
-    new import_obsidian3.Setting(this.contentEl).setName("Model").setDesc("Leave empty to use the engine's default model.").addText((text) => {
+    new import_obsidian4.Setting(this.contentEl).setName("Model").setDesc("Leave empty to use the engine's default model.").addText((text) => {
       modelInput = text.inputEl;
       text.setValue(this.model).onChange((value) => {
         this.model = value.trim();
@@ -4120,7 +4208,7 @@ var AiDraftModal = class extends import_obsidian3.Modal {
     const preview = this.contentEl.createDiv("auto-oc-ai-draft-preview");
     let generateButton, cancelButton;
     let result;
-    const actions = new import_obsidian3.Setting(this.contentEl);
+    const actions = new import_obsidian4.Setting(this.contentEl);
     actions.addButton((button) => {
       generateButton = button.buttonEl;
       button.setButtonText("Generate draft").setCta().onClick(async () => {
@@ -4568,7 +4656,7 @@ async function generateDraftText(request, signal, timeoutMs = 18e4) {
 }
 
 // execution-status-help.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian5 = require("obsidian");
 function executionStatusHelp(s) {
   if (s.waitingApproval) return {
     label: "Waiting for your approval",
@@ -4625,7 +4713,7 @@ function executionStatusHelp(s) {
     next: "Read the log and history. If you need support, copy the diagnostics from this window; do not delete files to unlock the run."
   };
 }
-var ExecutionStatusHelpModal = class extends import_obsidian4.Modal {
+var ExecutionStatusHelpModal = class extends import_obsidian5.Modal {
   constructor(app, snapshot, showDetails, version) {
     super(app);
     this.snapshot = snapshot;
@@ -4674,9 +4762,9 @@ var ExecutionStatusHelpModal = class extends import_obsidian4.Modal {
     technical.createEl("button", { text: "Copy diagnostics" }).onclick = async () => {
       try {
         await navigator.clipboard.writeText(diagnostic);
-        new import_obsidian4.Notice("Diagnostics copied.");
+        new import_obsidian5.Notice("Diagnostics copied.");
       } catch (e) {
-        new import_obsidian4.Notice("Could not copy. You can select the diagnostics text instead.");
+        new import_obsidian5.Notice("Could not copy. You can select the diagnostics text instead.");
       }
     };
   }
@@ -6328,7 +6416,7 @@ async function readPanelCatalog(file) {
 }
 
 // main.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 var os7 = __toESM(require("os"));
 var fs31 = __toESM(require("fs"));
 var path29 = __toESM(require("path"));
@@ -8012,9 +8100,9 @@ async function runInstalledWorkflow(options) {
 }
 
 // workflow-code-modals.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 var fs28 = __toESM(require("fs"));
-var CodeStepLogModal = class extends import_obsidian5.Modal {
+var CodeStepLogModal = class extends import_obsidian6.Modal {
   constructor(app, title, read2) {
     super(app);
     this.title = title;
@@ -8042,7 +8130,7 @@ var CodeStepLogModal = class extends import_obsidian5.Modal {
     this.contentEl.empty();
   }
 };
-var CodeStepHistoryModal = class extends import_obsidian5.Modal {
+var CodeStepHistoryModal = class extends import_obsidian6.Modal {
   constructor(app, runtime, workflowId, stepId, title, openOutput) {
     super(app);
     this.runtime = runtime;
@@ -8572,28 +8660,28 @@ function getCopilotTaskValidationError(task) {
   return null;
 }
 function addCopilotTaskSettings(container, draft, defaultModel) {
-  new import_obsidian6.Setting(container).setName("Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.").addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "").onChange((value) => {
+  new import_obsidian7.Setting(container).setName("Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.").addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "").onChange((value) => {
     draft.model = value.trim();
   }));
-  new import_obsidian6.Setting(container).setName("Allow tools automatically").setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.").addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true).onChange((value) => {
+  new import_obsidian7.Setting(container).setName("Allow tools automatically").setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.").addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true).onChange((value) => {
     draft.copilotAllowAllTools = value;
   }));
 }
 function addCopilotGlobalSettings(container, plugin) {
   container.createEl("h3", { text: "GitHub Copilot task defaults" });
-  new import_obsidian6.Setting(container).setName("Test Copilot installation").addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
+  new import_obsidian7.Setting(container).setName("Test Copilot installation").addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
     try {
       const bin = resolveCopilotBin(plugin.settings.copilotPath);
       const cwd = plugin.settings.workingDirectory || plugin.app.vault.adapter.basePath || ".";
       const version = await checkCopilotInstallation(bin, cwd);
-      new import_obsidian6.Notice(`AutoOC: ${version}
+      new import_obsidian7.Notice(`AutoOC: ${version}
 ${bin}
 CLI detected. Account access is checked when a task runs.`, 1e4);
     } catch (error) {
-      new import_obsidian6.Notice(`AutoOC: could not start GitHub Copilot CLI \u2014 ${String(error)}`, 1e4);
+      new import_obsidian7.Notice(`AutoOC: could not start GitHub Copilot CLI \u2014 ${String(error)}`, 1e4);
     }
   }));
-  new import_obsidian6.Setting(container).setName("Default Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.").addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "").onChange(async (value) => {
+  new import_obsidian7.Setting(container).setName("Default Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.").addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "").onChange(async (value) => {
     plugin.settings.defaultCopilotModel = value.trim();
     await plugin.saveSettings();
   }));
@@ -9244,7 +9332,7 @@ function isWorkflowDue(wf) {
   }
   return false;
 }
-var AutoOCPlugin = class extends import_obsidian6.Plugin {
+var AutoOCPlugin = class extends import_obsidian7.Plugin {
   constructor() {
     super(...arguments);
     this.bulkCatalogMutationInProgress = false;
@@ -9255,7 +9343,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
     this.settingsLoadRevision = 0;
     this.settingsPublicationState = "ready";
     this.legacyOutputRedaction = new LegacyOutputRedaction(() => {
-      new import_obsidian6.Notice("AutoOC: historical output masking is unavailable or incomplete. The historical store was kept unchanged.");
+      new import_obsidian7.Notice("AutoOC: historical output masking is unavailable or incomplete. The historical store was kept unchanged.");
     });
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
@@ -9598,7 +9686,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
           this.settingsRecoveryPromise = recoverInterruptedSettingsWrite(location.installationDirectory, () => this.assertLifecycleOpen());
           try {
             const recovered = await this.settingsRecoveryPromise;
-            if (recovered) new import_obsidian6.Notice("AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.", 1e4);
+            if (recovered) new import_obsidian7.Notice("AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.", 1e4);
           } finally {
             this.settingsRecoveryPromise = void 0;
           }
@@ -9659,7 +9747,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
         name: "Check due tasks now",
         callback: async () => {
           await this.runDueAll();
-          new import_obsidian6.Notice("AutoOC: check completed.");
+          new import_obsidian7.Notice("AutoOC: check completed.");
         }
       });
       this.addCommand({
@@ -9672,7 +9760,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
         name: "AutoOC: Ralph Loop Assistant (install/activate)",
         callback: async () => {
           const result = await this.ensureRalphLoopPluginEnabled();
-          new import_obsidian6.Notice(
+          new import_obsidian7.Notice(
             result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
           );
         }
@@ -9720,7 +9808,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
       } catch (cleanup) {
         console.warn("AutoOC host registration cleanup failed", cleanup);
       }
-      new import_obsidian6.Notice(`AutoOC: startup failed \u2014 ${String(error)}`);
+      new import_obsidian7.Notice(`AutoOC: startup failed \u2014 ${String(error)}`);
       throw error;
     } finally {
       this.startupPending = false;
@@ -9735,12 +9823,12 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
         event.preventDefault();
         event.returnValue = false;
         if (!this.windowCloseDrain) {
-          new import_obsidian6.Notice("AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.", 8e3);
+          new import_obsidian7.Notice("AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.", 8e3);
           this.windowCloseDrain = Promise.all([this.settingsWriter.drain(), publishingCLI ? (_b = this.cliRequestHost) == null ? void 0 : _b.drain() : void 0, this.settingsRecoveryPromise]).then(() => {
-            new import_obsidian6.Notice("AutoOC: saving finished. You can close or reload the window.");
+            new import_obsidian7.Notice("AutoOC: saving finished. You can close or reload the window.");
           }).catch((error) => {
             console.warn("AutoOC window kept open after save failure", error);
-            new import_obsidian6.Notice("AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.", 1e4);
+            new import_obsidian7.Notice("AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.", 1e4);
           }).finally(() => {
             this.windowCloseDrain = void 0;
           });
@@ -9872,7 +9960,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
           await this.retryLoadingAutoOC();
         } catch (error) {
           this.stopStartupWait();
-          new import_obsidian6.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
+          new import_obsidian7.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
         }
       }, 1e3);
       this.registerInterval(this.startupWaitTimer);
@@ -9921,7 +10009,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
         await this.checkForUpdates(true);
         if (this.updateCheckError) throw new Error(this.updateCheckError);
         if (this.updateAvailable) await this.updatePlugin();
-        else new import_obsidian6.Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
+        else new import_obsidian7.Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
       }
     ));
     this.addRibbonIcon("workflow", "Open AutoOC", () => {
@@ -9930,7 +10018,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
     this.addCommand({ id: "open-auto-oc", name: "Open AutoOC", callback: () => {
       void open();
     } });
-    new import_obsidian6.Notice(this.startupWaitingForOwner ? "AutoOC is open for consultation while another execution owns the engine." : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 1e4);
+    new import_obsidian7.Notice(this.startupWaitingForOwner ? "AutoOC is open for consultation while another execution owns the engine." : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 1e4);
   }
   closedSessionRecovery() {
     try {
@@ -10051,7 +10139,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
           { signal, progress }
         );
       } catch (error) {
-        if (!this.lifecycleStopped) new import_obsidian6.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
+        if (!this.lifecycleStopped) new import_obsidian7.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
         throw error;
       }
     }, async (request) => {
@@ -10227,7 +10315,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
       throw new Error("Step execution changed; refresh before stopping.");
     }
     this.sharedExecution(workflowId, void 0, observed.runId).controller.abort();
-    new import_obsidian6.Notice("Stop requested. Commands already started may still have effects.");
+    new import_obsidian7.Notice("Stop requested. Commands already started may still have effects.");
   }
   async setCodeStepDisabled(workflowId, stepId, disabled) {
     const save = async (transaction) => {
@@ -10720,9 +10808,9 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
       }
       await this.saveSettings(false);
       (_a = this.view) == null ? void 0 : _a.refresh();
-      if (showNotice) new import_obsidian6.Notice(`AutoOC: ${models.length} Codex models loaded.`);
+      if (showNotice) new import_obsidian7.Notice(`AutoOC: ${models.length} Codex models loaded.`);
     } catch (error) {
-      if (showNotice) new import_obsidian6.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
+      if (showNotice) new import_obsidian7.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
     } finally {
       client.dispose();
     }
@@ -10865,7 +10953,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
     this.legacyOutputRedaction.load(path29.join((location == null ? void 0 : location.installationDirectory) || path29.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path29.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
     for (const item of [...nextSettings.tasks, ...nextSettings.workflows, ...nextSettings.workflows.flatMap((w) => w.steps || [])]) {
       const error = autoOCDependencyError(item);
-      if (error) new import_obsidian6.Notice(error);
+      if (error) new import_obsidian7.Notice(error);
     }
     nextSettings.tasks = nextSettings.tasks.map((task) => {
       var _a2, _b2;
@@ -11229,14 +11317,14 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
       this.updateAvailable = comparison > 0 || comparison === 0 && !!incomplete;
       (_a = this.view) == null ? void 0 : _a.refresh();
       if (!silent) {
-        new import_obsidian6.Notice(
+        new import_obsidian7.Notice(
           this.updateAvailable ? `AutoOC: install or repair the complete v${remoteVersion} package.` : `AutoOC: already up to date (v${this.manifest.version}).`
         );
       }
     } catch (e) {
       this.updateCheckError = String(e);
       (_b = this.view) == null ? void 0 : _b.refresh();
-      if (!silent) new import_obsidian6.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
+      if (!silent) new import_obsidian7.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
     }
   }
   get panelAvailable() {
@@ -11278,7 +11366,7 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
         maintenanceLease = true;
       }
       (_a = this.view) == null ? void 0 : _a.refresh();
-      new import_obsidian6.Notice("AutoOC: downloading update\u2026");
+      new import_obsidian7.Notice("AutoOC: downloading update\u2026");
       const files2 = await downloadRelease("https://raw.githubusercontent.com/" + GITHUB_REPO + "/" + GITHUB_BRANCH, targetVersion);
       await this.settingsWriter.drain();
       this.assertPackageUpdateIdle();
@@ -11290,18 +11378,18 @@ var AutoOCPlugin = class extends import_obsidian6.Plugin {
       this.stopStartupWait();
       (_b = this.cliRequestHost) == null ? void 0 : _b.close();
       this.releasePluginExecution(false);
-      new import_obsidian6.Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin\u2026");
+      new import_obsidian7.Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin\u2026");
       try {
         await this.app.plugins.disablePlugin(this.manifest.id);
         await this.app.plugins.enablePlugin(this.manifest.id);
         const loaded = (_c = this.app.plugins.plugins) == null ? void 0 : _c[this.manifest.id];
         if (!(loaded == null ? void 0 : loaded.panelAvailable) && !(loaded == null ? void 0 : loaded.ready)) throw new Error("New plugin panel did not open");
-        new import_obsidian6.Notice("AutoOC: plugin reloaded.");
+        new import_obsidian7.Notice("AutoOC: plugin reloaded.");
       } catch (e) {
-        new import_obsidian6.Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12e3);
+        new import_obsidian7.Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12e3);
       }
     } catch (error) {
-      new import_obsidian6.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
+      new import_obsidian7.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
     } finally {
       this.updateInProgress = !!this.pluginExecutionLease && fs31.existsSync(path29.join(this.pluginExecutionLease.directory, "update-pending.json"));
       if (maintenanceLease && this.pluginExecutionLease && !this.updateInProgress) {
@@ -11613,7 +11701,7 @@ DONE:%s
     const disabledReason = taskDisabledReason(this.settings.tasks[idx]);
     if (disabledReason) throw new Error(disabledReason);
     if (this.isTaskActive(this.settings.tasks[idx])) {
-      new import_obsidian6.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
+      new import_obsidian7.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
       if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
@@ -11664,13 +11752,13 @@ DONE:%s
     }
     if (effectiveTask.taskKind === "codex") {
       void this.runCodexTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
-        new import_obsidian6.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian7.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
     if (effectiveTask.taskKind === "copilot") {
       void this.runCopilotTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
-        new import_obsidian6.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian7.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
@@ -11682,7 +11770,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a string when provided.";
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
+      new import_obsidian7.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -11694,7 +11782,7 @@ DONE:%s
         this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
         this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
         await this.saveSettings();
-        new import_obsidian6.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        new import_obsidian7.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
         if (onComplete) await onComplete(this.settings.tasks[idx], -1);
         return;
       }
@@ -11704,7 +11792,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: "${task.name}" has an empty prompt.`);
+      new import_obsidian7.Notice(`AutoOC: "${task.name}" has an empty prompt.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -11713,7 +11801,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: "${task.name}" has no model selected.`);
+      new import_obsidian7.Notice(`AutoOC: "${task.name}" has no model selected.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -11741,7 +11829,7 @@ DONE:%s
         await this.saveSettings();
         if (!this.isLegacyCurrent(attempt) || cancelled2 || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current || current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller2) return;
         if (this.runningProcesses.get(task.id) === controller2) this.runningProcesses.delete(task.id);
-        new import_obsidian6.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
+        new import_obsidian7.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
         if (onComplete) await onComplete(current, error ? -1 : 0);
       };
       current.status = "running";
@@ -11787,7 +11875,7 @@ DONE:%s
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.finishLegacyStart(attempt);
-    new import_obsidian6.Notice(`AutoOC: running "${task.name}"\u2026`);
+    new import_obsidian7.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
     const bin = checkedOpenCode2Bin || args[0];
     let prompt = effectiveTask.prompt;
@@ -11882,7 +11970,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: could not launch "${task.name}".`);
+      new import_obsidian7.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
       return;
     }
@@ -11949,7 +12037,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       cleanupTempFiles();
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: could not launch "${task.name}".`);
+      new import_obsidian7.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
     const timeoutSeconds = (_h = this.settings.taskTimeoutSeconds) != null ? _h : DEFAULT_TASK_TIMEOUT_SECONDS;
@@ -11982,7 +12070,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
 [\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings(false);
         if (!this.isLegacyCurrent(attempt)) return;
-        new import_obsidian6.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
+        new import_obsidian7.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
         if (shouldAbortBeforeFinalMutation(t)) return;
@@ -12001,7 +12089,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         await this.saveSettings();
         if (wasManuallyStopped(t)) return;
         if (onComplete) await onComplete(t, -1);
-        new import_obsidian6.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
+        new import_obsidian7.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
       if (!fs32.existsSync(doneFile)) {
@@ -12037,10 +12125,10 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         t.output += `
 [exit code: ${exitCode}]`;
         (_c2 = this.view) == null ? void 0 : _c2.startGradualSink(task.id);
-        new import_obsidian6.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
+        new import_obsidian7.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
-        new import_obsidian6.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
+        new import_obsidian7.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, task.id, t.output);
@@ -12145,7 +12233,7 @@ ${current.output}`);
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.emitTaskUpdated(current);
-    new import_obsidian6.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
+    new import_obsidian7.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
     if (onComplete) await onComplete(current, exitCode);
   }
   createCopilotClient(cwd, onOutput) {
@@ -12197,14 +12285,14 @@ ${current.output}`);
     await this.saveSettings();
     if (!isCurrent()) return;
     this.finishLegacyStart(attempt);
-    new import_obsidian6.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
+    new import_obsidian7.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
     const scheduleSave = () => {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
         if (!isCurrent()) return;
         void this.saveSettings(false).catch(() => {
-          new import_obsidian6.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
+          new import_obsidian7.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
         });
       }, 1e4);
     };
@@ -12216,9 +12304,9 @@ ${current.output}`);
         if (task.interactiveTerminal) {
           const bin = resolveCodexBin(this.settings.codexPath);
           openCodexApp(bin, taskCwd, (error) => {
-            new import_obsidian6.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
+            new import_obsidian7.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
           });
-          new import_obsidian6.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
+          new import_obsidian7.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
         }
         scheduleSave();
       },
@@ -12240,7 +12328,7 @@ ${current.output}`);
         current.output += `${current.output ? "\n" : ""}[waiting for approval: ${approval.summary}]`;
         void this.saveSettings(false);
         this.emitTaskUpdated(current);
-        new import_obsidian6.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
+        new import_obsidian7.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
       }
     });
     this.runningCodexClients.set(task.id, client);
@@ -12269,13 +12357,13 @@ ${current.output}`);
       current.output = finalOutput;
       if (successful) {
         current.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
-        new import_obsidian6.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
+        new import_obsidian7.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
       } else {
         current.status = "failed";
         current.output += `
 [Codex status: ${result.status}]`;
         (_c = this.view) == null ? void 0 : _c.startGradualSink(task.id);
-        new import_obsidian6.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+        new import_obsidian7.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
       }
       codexLogOutput = `${metadata}
 [started: ${startedAt}]
@@ -12299,7 +12387,7 @@ ${this.redactSecrets(result.transcript || current.output)}`;
 
 ${current.output}`;
       (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
-      new import_obsidian6.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+      new import_obsidian7.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
       if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
@@ -12332,11 +12420,11 @@ ${current.output}`;
     const client = this.runningCodexClients.get(taskId);
     const approval = task == null ? void 0 : task.pendingCodexApproval;
     if (!task || !client || !approval) {
-      new import_obsidian6.Notice("AutoOC: this Codex approval is no longer active.");
+      new import_obsidian7.Notice("AutoOC: this Codex approval is no longer active.");
       return;
     }
     if (!client.resolveApproval(approval.requestId, approved)) {
-      new import_obsidian6.Notice("AutoOC: could not answer the Codex approval.");
+      new import_obsidian7.Notice("AutoOC: could not answer the Codex approval.");
       return;
     }
     task.output += `
@@ -12371,7 +12459,7 @@ ${current.output}`;
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[AutoOC] Code task not launched: code is empty.";
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: "${current.name}" has empty code.`);
+      new import_obsidian7.Notice(`AutoOC: "${current.name}" has empty code.`);
       if (onComplete) await onComplete(current, -1);
       return;
     }
@@ -12383,7 +12471,7 @@ ${current.output}`;
     current.output = "[running code task...]\n";
     (_a = this.view) == null ? void 0 : _a.resetDashboardTaskShift(current.id);
     await this.saveSettings();
-    new import_obsidian6.Notice(`AutoOC: running code task "${current.name}"...`);
+    new import_obsidian7.Notice(`AutoOC: running code task "${current.name}"...`);
     try {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       this.finishLegacyStart(attempt);
@@ -12401,7 +12489,7 @@ ${current.output}`;
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = this.redactSecrets((current.output || "") + out);
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
-      new import_obsidian6.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
+      new import_obsidian7.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, current.id, current.output || "(no output)");
         cleanupOldLogs(vaultBasePath, current.id, this.settings.maxLogsPerTask);
@@ -12420,7 +12508,7 @@ ${current.output}`;
         cleanupLogsByAge(vaultBasePath, current.id, this.settings.logRetentionDays);
       }
       await this.saveSettings();
-      new import_obsidian6.Notice(`AutoOC: \u274C code task "${current.name}" failed.`);
+      new import_obsidian7.Notice(`AutoOC: \u274C code task "${current.name}" failed.`);
       if (onComplete) await onComplete(current, -1);
     } finally {
       if (this.codeTaskRuns.get(current.id) === execution) this.codeTaskRuns.delete(current.id);
@@ -12474,7 +12562,7 @@ ${current.output}`;
         if (((_a2 = this.legacyAttempts) == null ? void 0 : _a2.get(id)) === attempt && task.legacyExecution === metadata) {
           await this.saveSettings();
           if (((_b2 = this.legacyAttempts) == null ? void 0 : _b2.get(id)) !== attempt || task.legacyExecution !== metadata || (ownerWorkflow == null ? void 0 : ownerWorkflow.legacyExecution) !== ownerExecution) return "stop-requested";
-          new import_obsidian6.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
+          new import_obsidian7.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
         }
         return "stop-requested";
       })();
@@ -12494,7 +12582,7 @@ ${current.output}`;
       }
       if (!execution.controller.signal.aborted) {
         execution.controller.abort();
-        new import_obsidian6.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
+        new import_obsidian7.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
       }
       return "stop-requested";
     }
@@ -12526,7 +12614,7 @@ ${current.output}`;
     if (wf.legacyExecution !== execution || ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id))) return;
     if (((_i = this.definitionStarts) == null ? void 0 : _i.get(`workflow:${id}`)) === startToken) (_j = this.definitionStarts) == null ? void 0 : _j.delete(`workflow:${id}`);
     this.refreshStartControls();
-    new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
+    new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
   async runDueAll() {
     if (this.lifecycleStopped || this.startupPending || this.updateInProgress || this.bulkCatalogMutationInProgress) return;
@@ -12546,7 +12634,7 @@ ${current.output}`;
       if (this.definitionDisabledReason("task", dueTasks[i].id)) continue;
       const error = autoOCDependencyError(dueTasks[i]);
       if (error) {
-        new import_obsidian6.Notice(error);
+        new import_obsidian7.Notice(error);
         continue;
       }
       await this.runTask(dueTasks[i]);
@@ -12561,7 +12649,7 @@ ${current.output}`;
       try {
         assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks);
       } catch (error) {
-        new import_obsidian6.Notice(String(error));
+        new import_obsidian7.Notice(String(error));
         continue;
       }
       await this.runWorkflow(dueWorkflows[i]);
@@ -12594,17 +12682,17 @@ ${current.output}`;
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
-    new import_obsidian6.Notice(`Task "${copy.name}" duplicated.`);
+    new import_obsidian7.Notice(`Task "${copy.name}" duplicated.`);
   }
   async clearTaskLogs(id) {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     clearTaskLogs(vaultBasePath, id);
-    new import_obsidian6.Notice("Logs cleared for this task.");
+    new import_obsidian7.Notice("Logs cleared for this task.");
   }
   async clearAllLogs() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     clearAllLogs(vaultBasePath);
-    new import_obsidian6.Notice("All logs cleared.");
+    new import_obsidian7.Notice("All logs cleared.");
   }
   workflowTaskIds(workflow) {
     return Array.from(new Set(workflow.steps.map((step) => step.taskId).filter(Boolean)));
@@ -12652,7 +12740,7 @@ ${current.output}`;
     };
     this.settings.workflows.push(copy);
     await this.saveSettings();
-    new import_obsidian6.Notice(`Workflow "${copy.name}" duplicated.`);
+    new import_obsidian7.Notice(`Workflow "${copy.name}" duplicated.`);
   }
   ensureUniqueTaskName(name) {
     const existing = new Set(this.settings.tasks.map((t) => t.name));
@@ -12708,11 +12796,11 @@ ${current.output}`;
       });
       if (result.canceled || !result.filePath) return;
       fs31.writeFileSync(result.filePath, json, "utf8");
-      new import_obsidian6.Notice(
+      new import_obsidian7.Notice(
         `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
       );
     } catch (e) {
-      new import_obsidian6.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
+      new import_obsidian7.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
     }
   }
   buildExportSelectionPayload(selectedTaskIds, selectedWorkflowIds) {
@@ -12875,7 +12963,7 @@ ${current.output}`;
     await this.saveSettings();
     for (const item of [...this.settings.tasks, ...this.settings.workflows, ...this.settings.workflows.flatMap((w) => w.steps || [])]) {
       const error = autoOCDependencyError(item);
-      if (error) new import_obsidian6.Notice(error);
+      if (error) new import_obsidian7.Notice(error);
     }
     return { tasksImported, workflowsImported };
   }
@@ -12908,21 +12996,21 @@ ${current.output}`;
       const execution = item.runtimeExecution;
       return execution && !["completed", "failed", "abandoned"].includes(execution.phase) && !this.ownsSharedRun(item.id, execution.runId);
     })) {
-      new import_obsidian6.Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
+      new import_obsidian7.Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
       return;
     }
     if (wf.status === "running") {
-      new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
       return;
     }
     if (wf.steps.length === 0) {
-      new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
+      new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
       return;
     }
     for (let i = 0; i < wf.steps.length; i++) {
       const step = wf.steps[i];
       if (step.stepKind === "task" && !this.settings.tasks.find((t) => t.id === step.taskId)) {
-        new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
+        new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
         return;
       }
     }
@@ -12957,13 +13045,13 @@ ${current.output}`;
     if (this.workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     releaseStart == null ? void 0 : releaseStart();
     this.refreshStartControls();
-    new import_obsidian6.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
+    new import_obsidian7.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
     const entryStep = this.findEntryStep(wf);
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
       if (this.workflowRuntime.get(wf.id) !== context) return;
-      new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
+      new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
     await this.runWorkflowStepById(wf.id, entryStep.id);
@@ -12985,7 +13073,7 @@ ${current.output}`;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
       wf.status = "failed";
-      new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
+      new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
       await this.saveSettings();
       return;
     }
@@ -13003,7 +13091,7 @@ ${current.output}`;
     return resolveWorkflowTransition(wf.steps, currentStepIndex, lastOutput, lastSucceeded, transitions, this.getRuntimeOutputs(wf.id), {
       evaluate: async (transition, target, input) => {
         var _a, _b;
-        new import_obsidian6.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
+        new import_obsidian7.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
         const cwd = this.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
         const model = this.settings.defaultAiEngine === "opencode2" ? this.settings.defaultOpencode2Model || "" : ((_a = this.availableModels[0]) == null ? void 0 : _a.value) || this.settings.defaultModel || "opencode/default";
         const prompt = ((_b = transition.evaluatePrompt) == null ? void 0 : _b.trim()) || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
@@ -13018,7 +13106,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         return result.output;
       },
       onError: (kind, error) => {
-        new import_obsidian6.Notice(`AutoOC: ${kind} error \u2014 ${String(error)}`);
+        new import_obsidian7.Notice(`AutoOC: ${kind} error \u2014 ${String(error)}`);
       }
     });
   }
@@ -13076,7 +13164,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     (_a = this.workflowDelayControllers.get(wf.id)) == null ? void 0 : _a.abort();
     const controller = new AbortController();
     this.workflowDelayControllers.set(wf.id, controller);
-    new import_obsidian6.Notice(`AutoOC: \u23F1 ${spec.output} in "${wf.name}"...`);
+    new import_obsidian7.Notice(`AutoOC: \u23F1 ${spec.output} in "${wf.name}"...`);
     try {
       await waitForWorkflowDelay(spec.milliseconds, controller.signal);
       if (controller.signal.aborted || wf.status !== "running" || this.workflowRuntime.get(wf.id) !== ctx) return;
@@ -13111,13 +13199,13 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (this.workflowRuntime.get(wf.id) !== ctx) return;
       const masked = this.redactSecrets(out);
       if (ctx) ctx.stepOutputs.set(step.id, masked);
-      new import_obsidian6.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
+      new import_obsidian7.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
       await this.completeStep(wf, step, stepIndex, true, masked);
     } catch (err) {
       if (this.workflowRuntime.get(wf.id) !== ctx) return;
       const msg = this.redactSecrets(`[code error: ${String(err)}]`);
       if (ctx) ctx.stepOutputs.set(step.id, msg);
-      new import_obsidian6.Notice(this.redactSecrets(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`));
+      new import_obsidian7.Notice(this.redactSecrets(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`));
       await this.completeStep(wf, step, stepIndex, false, msg);
     }
   }
@@ -13133,7 +13221,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
-      new import_obsidian6.Notice(`AutoOC: Workflow "${wf.name}" failed \u2014 task not found at step ${stepIndex + 1}.`);
+      new import_obsidian7.Notice(`AutoOC: Workflow "${wf.name}" failed \u2014 task not found at step ${stepIndex + 1}.`);
       await this.saveSettings();
       return;
     }
@@ -13178,7 +13266,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         completedTask.output += failedByTask ? `
 [Workflow failed at step ${stepIndex + 1}/${currentWf.steps.length}]` : `
 [Workflow completed at step ${stepIndex + 1}/${currentWf.steps.length}]`;
-        new import_obsidian6.Notice(
+        new import_obsidian7.Notice(
           failedByTask ? `AutoOC: \u274C Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.` : `AutoOC: \u2705 Workflow "${currentWf.name}" completed at step ${stepIndex + 1}/${currentWf.steps.length}.`
         );
         this.workflowRuntime.delete(currentWf.id);
@@ -13189,7 +13277,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (nextIdx === -1) {
         if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         currentWf.status = "failed";
-        new import_obsidian6.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
+        new import_obsidian7.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
         await this.saveSettings();
         return;
       }
@@ -13198,7 +13286,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       await this.saveSettings();
       if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
-      new import_obsidian6.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
+      new import_obsidian7.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
         if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
@@ -13234,7 +13322,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         wfRef2.status = succeeded ? "completed" : "failed";
         await this.saveSettings();
         if (this.workflowRuntime.get(wf.id) !== ctx) return;
-        new import_obsidian6.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
+        new import_obsidian7.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
       }
       this.workflowRuntime.delete(wf.id);
       return;
@@ -13246,7 +13334,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
         if (!isCurrentExecution()) return;
-        new import_obsidian6.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
+        new import_obsidian7.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
         setTimeout(() => {
           if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId);
         }, 200);
@@ -13254,7 +13342,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     }
   }
 };
-var AutoOCView = class extends import_obsidian6.ItemView {
+var AutoOCView = class extends import_obsidian7.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.selectionMode = false;
@@ -13384,7 +13472,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         this.render();
       } catch (error) {
         button.disabled = false;
-        new import_obsidian6.Notice(`AutoOC: Could not change availability. ${String(error)}`);
+        new import_obsidian7.Notice(`AutoOC: Could not change availability. ${String(error)}`);
       }
     };
   }
@@ -13879,21 +13967,21 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       "autooc-mcp": this.plugin.getAutoOcMcpConfigBlock()
     };
     await copyTextToClipboard(JSON.stringify(snippet, null, 2));
-    new import_obsidian6.Notice("AutoOC: autooc-mcp install JSON copied.");
+    new import_obsidian7.Notice("AutoOC: autooc-mcp install JSON copied.");
   }
   async installAutoOcMcpInOpenCode() {
     try {
       const result = await this.plugin.ensureAutoOcMcpEnabled();
-      new import_obsidian6.Notice(
+      new import_obsidian7.Notice(
         result.changed ? `AutoOC: autooc-mcp installed at ${result.configPath}. Restart OpenCode.` : `AutoOC: autooc-mcp was already configured at ${result.configPath}.`
       );
     } catch (e) {
-      new import_obsidian6.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
+      new import_obsidian7.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
     }
   }
   async copyUvInstallCommand() {
     await copyTextToClipboard(getUvInstallCommand());
-    new import_obsidian6.Notice("AutoOC: uv install command copied.");
+    new import_obsidian7.Notice("AutoOC: uv install command copied.");
   }
   // Renders the extension header at the top of the panel: title,
   // version, check-updates button, and a status pill when an update
@@ -14036,7 +14124,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
       return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
     };
-    const TASK_BUBBLE_PX = { sm: 24, md: 30, lg: 38, xl: 48 }[this.plugin.settings.dashboardTaskBubbleSize];
+    const TASK_BUBBLE_PX = dashboardTaskDiameter(this.plugin.settings);
     const taskBubbleSizeForParent = (parent) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -14707,7 +14795,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           await callback();
         } catch (error) {
-          new import_obsidian6.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
+          new import_obsidian7.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
         } finally {
           if (button.isConnected) button.disabled = false;
         }
@@ -14771,7 +14859,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           await this.plugin.resolveCodeStepAttempt(workflow.id, step.id);
         } catch (error) {
-          new import_obsidian6.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian7.Notice(this.plugin.redactSecrets(String(error)));
         }
       };
     }
@@ -14821,7 +14909,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
     var _a;
     const workflow = this.plugin.settings.workflows.find((item) => item.id === workflowId);
     if (!(workflow == null ? void 0 : workflow.steps.some((step) => step.id === stepId && step.stepKind === "code"))) {
-      new import_obsidian6.Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
+      new import_obsidian7.Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
       this.render();
       return;
     }
@@ -14903,7 +14991,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       } catch (error) {
         button.disabled = false;
         button.textContent = label;
-        new import_obsidian6.Notice(`AutoOC: ${String(error)}`);
+        new import_obsidian7.Notice(`AutoOC: ${String(error)}`);
       }
     };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
@@ -14932,7 +15020,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         await this.plugin.runTask(task);
       } catch (error) {
-        new import_obsidian6.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian7.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }
     };
     if (task.status === "running") {
@@ -14971,7 +15059,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         new LogHistoryModal(this.app, task, this.plugin).open();
       } catch (err) {
-        new import_obsidian6.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        new import_obsidian7.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
       }
     };
     if (task.status === "failed") {
@@ -14982,7 +15070,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         task.status = "pending";
         await this.plugin.saveSettings();
         this.render();
-        new import_obsidian6.Notice(`AutoOC: "${task.name}" reset to pending.`);
+        new import_obsidian7.Notice(`AutoOC: "${task.name}" reset to pending.`);
       };
     }
     const details = card.createDiv("auto-oc-card-details");
@@ -15048,7 +15136,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id, terminalBinding.runId);
         } catch (error) {
-          new import_obsidian6.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian7.Notice(this.plugin.redactSecrets(String(error)));
         }
       };
     }
@@ -15059,7 +15147,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           await this.plugin.confirmAbandonTaskExecution(task.id);
         } catch (error) {
-          new import_obsidian6.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
+          new import_obsidian7.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
         }
       };
     }
@@ -15073,7 +15161,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         await this.plugin.runTask(task);
       } catch (error) {
-        new import_obsidian6.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian7.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }
     };
     if (task.status === "running") {
@@ -15120,7 +15208,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         new LogHistoryModal(this.app, task, this.plugin).open();
       } catch (err) {
-        new import_obsidian6.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        new import_obsidian7.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
       }
     };
     const btnCmd = actions.createEl("button", {
@@ -15141,7 +15229,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         new CreateTaskModal(this.app, this.plugin, task).open();
       } catch (err) {
-        new import_obsidian6.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+        new import_obsidian7.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
       }
     };
     const btnDuplicate = actions.createEl("button", {
@@ -15296,7 +15384,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         await this.plugin.runWorkflow(workflow);
       } catch (error) {
-        new import_obsidian6.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian7.Notice(this.plugin.redactSecrets(String(error)));
       }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
@@ -15335,7 +15423,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         workflow.status = "pending";
         await this.plugin.saveSettings();
         this.render();
-        new import_obsidian6.Notice(`Workflow "${workflow.name}" reset to pending.`);
+        new import_obsidian7.Notice(`Workflow "${workflow.name}" reset to pending.`);
       };
     }
     const details = card.createDiv("auto-oc-card-details");
@@ -15476,7 +15564,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           new LogHistoryModal(this.app, task, this.plugin).open();
         } catch (err) {
-          new import_obsidian6.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+          new import_obsidian7.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
         }
       };
       const btnCmd = taskActions.createEl("button", {
@@ -15496,7 +15584,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           new CreateTaskModal(this.app, this.plugin, task).open();
         } catch (err) {
-          new import_obsidian6.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+          new import_obsidian7.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
         }
       };
     }
@@ -15547,7 +15635,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           await this.plugin.confirmTerminalDisposition(workflow.id, durableExecution.runId);
         } catch (error) {
-          new import_obsidian6.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian7.Notice(this.plugin.redactSecrets(String(error)));
         } finally {
           this.refresh();
         }
@@ -15570,7 +15658,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
         try {
           await this.plugin.recoverSharedWorkflow(workflow.id, durableExecution.runId);
         } catch (error) {
-          new import_obsidian6.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian7.Notice(this.plugin.redactSecrets(String(error)));
         } finally {
           this.refresh();
         }
@@ -15586,7 +15674,7 @@ var AutoOCView = class extends import_obsidian6.ItemView {
       try {
         await this.plugin.runWorkflow(workflow);
       } catch (error) {
-        new import_obsidian6.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian7.Notice(this.plugin.redactSecrets(String(error)));
       }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
@@ -15654,7 +15742,7 @@ ${sharedCount} task(s) are also used by other workflows and will be kept.` : "";
     };
   }
 };
-var ConfirmModal = class extends import_obsidian6.Modal {
+var ConfirmModal = class extends import_obsidian7.Modal {
   constructor(app, titleText, bodyText, requireReason = false) {
     super(app);
     this.titleText = titleText;
@@ -15675,17 +15763,17 @@ var ConfirmModal = class extends import_obsidian6.Modal {
     setupModalX(this);
     contentEl.createEl("h3", { text: this.titleText });
     contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
-    if (this.requireReason) new import_obsidian6.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
+    if (this.requireReason) new import_obsidian7.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
       this.reason = value;
     }));
-    new import_obsidian6.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
+    new import_obsidian7.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
       var _a;
       (_a = this.resolve) == null ? void 0 : _a.call(this, false);
       this.close();
     })).addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => {
       var _a;
       if (this.requireReason && (!this.reason.trim() || this.reason.length > 1e3)) {
-        new import_obsidian6.Notice("Enter a reason of 1\u20131000 characters");
+        new import_obsidian7.Notice("Enter a reason of 1\u20131000 characters");
         return;
       }
       (_a = this.resolve) == null ? void 0 : _a.call(this, true);
@@ -15699,7 +15787,7 @@ var ConfirmModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var AutoOCRecoveryView = class extends import_obsidian6.ItemView {
+var AutoOCRecoveryView = class extends import_obsidian7.ItemView {
   constructor(leaf, reason, retry, recoverClosedSession, waitingForOwner = false, sameProcessOwner = false, readCatalog, updatePackage) {
     super(leaf);
     this.reason = reason;
@@ -15732,7 +15820,7 @@ var AutoOCRecoveryView = class extends import_obsidian6.ItemView {
         try {
           await this.updatePackage();
         } catch (error) {
-          new import_obsidian6.Notice("AutoOC: " + String(error));
+          new import_obsidian7.Notice("AutoOC: " + String(error));
         } finally {
           update.disabled = false;
         }
@@ -15755,7 +15843,7 @@ var AutoOCRecoveryView = class extends import_obsidian6.ItemView {
           this.recoverClosedSession();
           await this.retry();
         } catch (error) {
-          new import_obsidian6.Notice("AutoOC: " + String(error));
+          new import_obsidian7.Notice("AutoOC: " + String(error));
           recover.disabled = false;
         }
       };
@@ -15766,7 +15854,7 @@ var AutoOCRecoveryView = class extends import_obsidian6.ItemView {
       try {
         await this.retry();
       } catch (error) {
-        new import_obsidian6.Notice("AutoOC: " + String(error));
+        new import_obsidian7.Notice("AutoOC: " + String(error));
         button.disabled = false;
       }
     };
@@ -15793,7 +15881,7 @@ var AutoOCRecoveryView = class extends import_obsidian6.ItemView {
     this.contentEl.empty();
   }
 };
-var CreateTaskModal = class extends import_obsidian6.Modal {
+var CreateTaskModal = class extends import_obsidian7.Modal {
   constructor(app, plugin, editTask, saveDraft) {
     super(app);
     this.saveDraft = saveDraft;
@@ -15839,7 +15927,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
-    if (!this.editTask) new import_obsidian6.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a draft. Review and edit it here before creating the task.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
+    if (!this.editTask) new import_obsidian7.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a draft. Review and edit it here before creating the task.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
       this.aiDraftModal = this.plugin.openAiDraft("task", this.draft.prompt || this.draft.name || "", (generated) => {
         if (this.editorClosed) return;
         this.draft = generated.tasks[0];
@@ -15849,7 +15937,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       });
     }));
     if (this.saveDraft) contentEl.createEl("p", { text: "This task is part of an unsaved workflow draft. Changes stay in the editor until you create the workflow." });
-    new import_obsidian6.Setting(contentEl).setName("Task type").setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.").addDropdown((dd) => {
+    new import_obsidian7.Setting(contentEl).setName("Task type").setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.").addDropdown((dd) => {
       dd.addOption("opencode", "OpenCode 1 task");
       dd.addOption("opencode2", "OpenCode 2 task");
       dd.addOption("codex", "Codex task");
@@ -15886,16 +15974,16 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
         this.onOpen();
       });
     });
-    new import_obsidian6.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. When this task is a workflow step, the workflow's concurrency setting applies.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
+    new import_obsidian7.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. When this task is a workflow step, the workflow's concurrency setting applies.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
       this.draft.concurrency = v;
     }));
-    new import_obsidian6.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a2 = this.draft.name) != null ? _a2 : "").onChange((v) => this.draft.name = v);
       if (shouldFocusName) window.setTimeout(() => text.inputEl.focus(), 50);
     });
-    new import_obsidian6.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a2 = this.draft.area) != null ? _a2 : "").onChange((v) => this.draft.area = v.trim());
@@ -15905,14 +15993,14 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
     });
     if (taskKind === "code") {
       const initialCode = (_a = this.draft.code) != null ? _a : "// Set output to pass data forward\noutput = input;";
-      new import_obsidian6.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.").addTextArea((ta) => {
+      new import_obsidian7.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.").addTextArea((ta) => {
         ta.setValue(initialCode).onChange((v) => this.draft.code = v);
         ta.inputEl.addClass("auto-oc-modal-textarea");
         setupCodeTextarea(ta.inputEl, this.app);
         ta.inputEl.rows = 12;
         ta.inputEl.style.width = "100%";
       });
-      new import_obsidian6.Setting(contentEl).setName("Variables").setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Variables").setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
       }).addText((text) => {
@@ -15922,7 +16010,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
     } else {
       const promptNotice = contentEl.createDiv("auto-oc-prompt-notice");
       promptNotice.style.display = "none";
-      new import_obsidian6.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
+      new import_obsidian7.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
         var _a2, _b2;
         const updatePromptNotice = (value) => {
           if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
@@ -15949,14 +16037,14 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       });
     }
     contentEl.createDiv("auto-oc-modal-section-title").setText(isOpenCodeTask(taskKind) ? "\u{1F4C2} Workspace & Git" : "\u{1F4C2} Workspace");
-    new import_obsidian6.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.app.vault.adapter.basePath || "C:\\path\\to\\project").setValue((_a2 = this.draft.workingDirectory) != null ? _a2 : "").onChange((v) => this.draft.workingDirectory = v);
     });
     let branchInput = null;
     if (isOpenCodeTask(taskKind)) {
-      new import_obsidian6.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
         var _a2;
         branchInput = text.inputEl;
         text.inputEl.addClass("auto-oc-modal-input");
@@ -15964,7 +16052,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       }).addButton(
         (btn) => btn.setButtonText("\u{1F50D} Discover").onClick(async () => {
           const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-          new import_obsidian6.Notice("AutoOC: Fetching branches...");
+          new import_obsidian7.Notice("AutoOC: Fetching branches...");
           try {
             const branches = listGitBranches(taskCwd);
             if (branches.length > 0) {
@@ -15972,17 +16060,17 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
               if (selected) {
                 this.draft.branch = selected;
                 if (branchInput) branchInput.value = selected;
-                new import_obsidian6.Notice(`AutoOC: Selected branch ${selected}`);
+                new import_obsidian7.Notice(`AutoOC: Selected branch ${selected}`);
               }
             } else {
-              new import_obsidian6.Notice("AutoOC: No branches found.");
+              new import_obsidian7.Notice("AutoOC: No branches found.");
             }
           } catch (e) {
-            new import_obsidian6.Notice(`AutoOC: Could not list branches: ${String(e)}`);
+            new import_obsidian7.Notice(`AutoOC: Could not list branches: ${String(e)}`);
           }
         })
       );
-      new import_obsidian6.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.createBranch) != null ? _a2 : false);
         tog.onChange((v) => this.draft.createBranch = v);
@@ -15991,7 +16079,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
     if (taskKind === "opencode") {
       const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
       const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
-      new import_obsidian6.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
+      new import_obsidian7.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
         var _a2;
         projectAgents.forEach((a) => dd.addOption(a.value, a.label));
         const current = (_a2 = this.draft.agent) != null ? _a2 : this.plugin.getEffectiveAgent();
@@ -16003,15 +16091,15 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.agent = v);
       });
-      new import_obsidian6.Setting(contentEl).addButton(
+      new import_obsidian7.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Agents").onClick(() => {
           this.plugin.refreshAgents(agentCwd);
-          new import_obsidian6.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
+          new import_obsidian7.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
           this.contentEl.empty();
           this.onOpen();
         })
       );
-      new import_obsidian6.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
+      new import_obsidian7.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
         var _a2;
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
@@ -16024,18 +16112,18 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.model = v);
       });
-      new import_obsidian6.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.forceModel) != null ? _a2 : false);
         tog.onChange((v) => this.draft.forceModel = v);
       });
-      new import_obsidian6.Setting(contentEl).addButton(
+      new import_obsidian7.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Models").onClick(() => {
           this.plugin.refreshModels();
-          new import_obsidian6.Notice("AutoOC: models updated. Reopen dialog.");
+          new import_obsidian7.Notice("AutoOC: models updated. Reopen dialog.");
         })
       );
-      new import_obsidian6.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.useRalphLoop) != null ? _a2 : false);
         tog.onChange((v) => this.draft.useRalphLoop = v);
@@ -16043,29 +16131,29 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
         (btn) => btn.setButtonText("Installation Assistant").onClick(async () => {
           try {
             const result = await this.plugin.ensureRalphLoopPluginEnabled();
-            new import_obsidian6.Notice(
+            new import_obsidian7.Notice(
               result.changed ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `Ralph Loop was already active at ${result.configPath}.`
             );
           } catch (e) {
-            new import_obsidian6.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+            new import_obsidian7.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
           }
         })
       );
     } else if (taskKind === "opencode2") {
       (_b = this.draft).model || (_b.model = this.plugin.settings.defaultOpencode2Model || "");
       (_c = this.draft).agent || (_c.agent = this.plugin.settings.defaultOpencode2Agent || "build");
-      new import_obsidian6.Setting(contentEl).setName("OpenCode 2 model").setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.").addText((text) => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "").onChange((value) => {
+      new import_obsidian7.Setting(contentEl).setName("OpenCode 2 model").setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.").addText((text) => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "").onChange((value) => {
         this.draft.model = value.trim();
       }));
-      new import_obsidian6.Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build").onChange((value) => {
+      new import_obsidian7.Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build").onChange((value) => {
         this.draft.agent = value.trim();
       }));
-      new import_obsidian6.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
+      new import_obsidian7.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
         this.draft.forceModel = value;
       }));
       contentEl.createEl("p", { text: this.draft.interactiveTerminal ? "Opens OpenCode 2 mini with your model, agent and prompt. AutoOC confirms startup; the terminal session remains under your control." : "Runs OpenCode 2 with a private server. AutoOC captures the result and waits for completion. Explicitly denied permissions remain denied.", cls: "setting-item-description" });
     } else if (taskKind === "codex") {
-      new import_obsidian6.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
+      new import_obsidian7.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
         var _a2, _b2;
         dd.addOption("", "Automatic");
         this.plugin.availableCodexModels.forEach((entry) => dd.addOption(entry.value, entry.label));
@@ -16082,7 +16170,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
         await this.plugin.refreshCodexModels(true);
         this.onOpen();
       }));
-      new import_obsidian6.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
+      new import_obsidian7.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
         const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
         efforts.forEach((effort) => dd.addOption(effort, effort));
         const current = this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -16094,20 +16182,20 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       addCopilotTaskSettings(contentEl, this.draft, this.plugin.settings.defaultCopilotModel);
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
-      new import_obsidian6.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowVault);
         tog.onChange((v) => this.draft.codeAllowVault = v);
       });
-      new import_obsidian6.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowFiles);
         tog.onChange((v) => this.draft.codeAllowFiles = v);
       });
-      new import_obsidian6.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }).").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }).").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowTerminal);
         tog.onChange((v) => this.draft.codeAllowTerminal = v);
       });
     }
-    new import_obsidian6.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
+    new import_obsidian7.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a2;
       dd.addOption("manual", "Manual (run only when I press play)");
       dd.addOption("once", "Once (specific date and time)");
@@ -16122,14 +16210,14 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian6.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(todayString()).setValue((_a2 = this.draft.scheduleDate) != null ? _a2 : "").onChange((v) => this.draft.scheduleDate = v);
       });
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian6.Setting(contentEl).setName("Weekdays");
+      const daySetting = new import_obsidian7.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -16154,7 +16242,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       });
     }
     if (this.draft.scheduleType === "monthly") {
-      new import_obsidian6.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("1, 15, 31").setValue(((_a2 = this.draft.scheduleMonthDays) != null ? _a2 : []).join(", ")).onChange((v) => {
@@ -16164,7 +16252,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       });
     }
     if (this.draft.scheduleType === "interval") {
-      new import_obsidian6.Setting(contentEl).setName("Interval").setDesc("Run the task repeatedly every X units").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Interval").setDesc("Run the task repeatedly every X units").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -16183,42 +16271,42 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
       });
     }
     if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
-      new import_obsidian6.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("09:00").setValue((_a2 = this.draft.scheduleTime) != null ? _a2 : "").onChange((v) => this.draft.scheduleTime = v);
       });
     }
-    new import_obsidian6.Setting(contentEl).addButton(
+    new import_obsidian7.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.saveDraft ? "Apply to workflow draft" : this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
         var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
         if (!((_a2 = this.draft.name) == null ? void 0 : _a2.trim())) {
-          new import_obsidian6.Notice("Name is required.");
+          new import_obsidian7.Notice("Name is required.");
           return;
         }
         const savingTaskKind = this.draft.taskKind || "opencode";
         if (savingTaskKind !== "code" && !((_b2 = this.draft.prompt) == null ? void 0 : _b2.trim())) {
-          new import_obsidian6.Notice("Prompt is required.");
+          new import_obsidian7.Notice("Prompt is required.");
           return;
         }
         if (savingTaskKind === "code" && !(this.draft.code || "").trim()) {
-          new import_obsidian6.Notice("Code is required.");
+          new import_obsidian7.Notice("Code is required.");
           return;
         }
         if (isOpenCodeTask(savingTaskKind) && !((_c2 = this.draft.model) != null ? _c2 : "").trim()) {
-          new import_obsidian6.Notice("You must select a model.");
+          new import_obsidian7.Notice("You must select a model.");
           return;
         }
         if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_d = this.draft.scheduleTime) != null ? _d : "")) {
-          new import_obsidian6.Notice("Invalid time. Use HH:MM format.");
+          new import_obsidian7.Notice("Invalid time. Use HH:MM format.");
           return;
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_e = this.draft.scheduleDate) != null ? _e : "")) {
-          new import_obsidian6.Notice("Invalid date. Use YYYY-MM-DD format.");
+          new import_obsidian7.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.draft.scheduleType === "monthly" && ((_f = this.draft.scheduleMonthDays) != null ? _f : []).length === 0) {
-          new import_obsidian6.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
+          new import_obsidian7.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         if (this.saveDraft) {
@@ -16306,10 +16394,10 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
             btn.setDisabled(true);
             try {
               await this.plugin.saveGeneratedDefinitionDraft([task]);
-              new import_obsidian6.Notice(`Task "${task.name}" saved.`);
+              new import_obsidian7.Notice(`Task "${task.name}" saved.`);
               this.close();
             } catch (error) {
-              new import_obsidian6.Notice(`Could not save the task: ${error.message}. Your draft is still available.`);
+              new import_obsidian7.Notice(`Could not save the task: ${error.message}. Your draft is still available.`);
             } finally {
               this.savingGeneratedDraft = false;
               btn.setDisabled(false);
@@ -16323,7 +16411,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
           if (areaChanged) (_t = this.plugin.view) == null ? void 0 : _t.render();
           this.plugin.emitTaskUpdated(updatedTask);
         }
-        new import_obsidian6.Notice(`Task "${this.draft.name}" saved.`);
+        new import_obsidian7.Notice(`Task "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -16335,7 +16423,7 @@ var CreateTaskModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var EditWorkflowStepModal = class extends import_obsidian6.Modal {
+var EditWorkflowStepModal = class extends import_obsidian7.Modal {
   constructor(app, plugin, workflow, step) {
     super(app);
     this.plugin = plugin;
@@ -16354,17 +16442,17 @@ var EditWorkflowStepModal = class extends import_obsidian6.Modal {
     contentEl.createEl("h3", {
       text: this.step.stepKind === "delay" ? "Edit Delay Step" : "Edit Code Step"
     });
-    new import_obsidian6.Setting(contentEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.step.stepKind === "delay" ? "Delay" : "Code").setValue(this.draft.name || "").onChange((v) => this.draft.name = v.trim());
     });
-    new import_obsidian6.Setting(contentEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(((_a = this.workflow.area) == null ? void 0 : _a.trim()) || "No area").setValue(this.draft.area || this.workflow.area || "").onChange((v) => this.draft.area = v.trim());
     });
     if (this.step.stepKind === "delay") {
-      new import_obsidian6.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -16382,13 +16470,13 @@ var EditWorkflowStepModal = class extends import_obsidian6.Modal {
       });
     } else {
       const initialCode = this.draft.code || "";
-      new import_obsidian6.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
+      new import_obsidian7.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
         text.inputEl.addClass("auto-oc-modal-textarea");
         text.inputEl.rows = 12;
         text.setValue(initialCode).onChange((v) => this.draft.code = v);
         setupCodeTextarea(text.inputEl, this.app);
       });
-      new import_obsidian6.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
       }).addText((text) => {
@@ -16396,15 +16484,15 @@ var EditWorkflowStepModal = class extends import_obsidian6.Modal {
         text.setPlaceholder("output").setValue(this.draft.codeOutputVar || "output").onChange((v) => this.draft.codeOutputVar = v || "output");
       });
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
-      new import_obsidian6.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowVault);
         tog.onChange((v) => this.draft.codeAllowVault = v);
       });
-      new import_obsidian6.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowFiles);
         tog.onChange((v) => this.draft.codeAllowFiles = v);
       });
-      new import_obsidian6.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
+      new import_obsidian7.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowTerminal);
         tog.onChange((v) => this.draft.codeAllowTerminal = v);
       });
@@ -16413,7 +16501,7 @@ var EditWorkflowStepModal = class extends import_obsidian6.Modal {
         cls: "setting-item-description auto-oc-workflow-section-help"
       });
     }
-    new import_obsidian6.Setting(contentEl).addButton(
+    new import_obsidian7.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Save Step").setCta().onClick(async () => {
         var _a, _b;
         if (!((_a = this.draft.area) == null ? void 0 : _a.trim())) this.draft.area = this.workflow.area || "";
@@ -16427,7 +16515,7 @@ var EditWorkflowStepModal = class extends import_obsidian6.Modal {
         }
         await this.plugin.saveSettings();
         (_b = this.plugin.view) == null ? void 0 : _b.refresh();
-        new import_obsidian6.Notice("AutoOC: workflow step saved.");
+        new import_obsidian7.Notice("AutoOC: workflow step saved.");
         this.close();
       })
     );
@@ -16436,7 +16524,7 @@ var EditWorkflowStepModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var CreateWorkflowModal = class extends import_obsidian6.Modal {
+var CreateWorkflowModal = class extends import_obsidian7.Modal {
   constructor(app, plugin, editWorkflow) {
     var _a;
     super(app);
@@ -16481,7 +16569,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
     headerBar.createEl("h3", {
       text: this.editWorkflow ? "Edit Workflow" : "New Workflow"
     });
-    if (!this.editWorkflow) new import_obsidian6.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
+    if (!this.editWorkflow) new import_obsidian7.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
       this.aiDraftModal = this.plugin.openAiDraft("workflow", this.draft.description || this.draft.name || "", (generated) => {
         if (this.editorClosed) return;
         this.draft = generated.workflow;
@@ -16511,16 +16599,16 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
       cls: "auto-oc-workflow-guide-tip"
     });
-    new import_obsidian6.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. This does not run the steps inside this workflow in parallel.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
+    new import_obsidian7.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. This does not run the steps inside this workflow in parallel.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
       this.draft.concurrency = v;
     }));
-    new import_obsidian6.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
       window.setTimeout(() => text.inputEl.focus(), 50);
     });
-    new import_obsidian6.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => {
@@ -16541,7 +16629,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
         });
       });
     });
-    new import_obsidian6.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.description) != null ? _a : "").onChange((v) => this.draft.description = v);
@@ -16551,12 +16639,12 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       text: "Handoff passes context from the task that just finished to the next task at runtime only. It does not edit the original task prompt.",
       cls: "setting-item-description auto-oc-workflow-section-help"
     });
-    new import_obsidian6.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
+    new import_obsidian7.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffBranch = v);
     });
-    new import_obsidian6.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
+    new import_obsidian7.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffOutput) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffOutput = v);
@@ -16566,7 +16654,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       text: "This schedule belongs to the workflow itself. The individual task schedules are not used while the workflow is running.",
       cls: "setting-item-description auto-oc-workflow-section-help"
     });
-    new import_obsidian6.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
+    new import_obsidian7.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a;
       dd.addOption("manual", "Manual (run only when I press play)");
       dd.addOption("once", "Once (specific date and time)");
@@ -16581,14 +16669,14 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian6.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(todayString()).setValue((_a = this.draft.scheduleDate) != null ? _a : "").onChange((v) => this.draft.scheduleDate = v);
       });
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian6.Setting(contentEl).setName("Weekdays");
+      const daySetting = new import_obsidian7.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -16613,7 +16701,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       });
     }
     if (this.draft.scheduleType === "monthly") {
-      new import_obsidian6.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("1, 15, 31").setValue(((_a = this.draft.scheduleMonthDays) != null ? _a : []).join(", ")).onChange((v) => {
@@ -16623,7 +16711,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       });
     }
     if (this.draft.scheduleType === "interval") {
-      new import_obsidian6.Setting(contentEl).setName("Interval").setDesc("Run the workflow repeatedly every X units").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Interval").setDesc("Run the workflow repeatedly every X units").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -16642,7 +16730,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
       });
     }
     if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
-      new import_obsidian6.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      new import_obsidian7.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
@@ -16655,27 +16743,27 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
     });
     const stepsContainer = contentEl.createDiv("auto-oc-workflow-steps-container");
     this.renderStepsList(stepsContainer);
-    new import_obsidian6.Setting(contentEl).addButton(
+    new import_obsidian7.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
         var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
-          new import_obsidian6.Notice("Name is required.");
+          new import_obsidian7.Notice("Name is required.");
           return;
         }
         if (this.selectedSteps.length < 2) {
-          new import_obsidian6.Notice("A workflow needs at least 2 steps.");
+          new import_obsidian7.Notice("A workflow needs at least 2 steps.");
           return;
         }
         if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_b = this.draft.scheduleTime) != null ? _b : "")) {
-          new import_obsidian6.Notice("Invalid time. Use HH:MM format.");
+          new import_obsidian7.Notice("Invalid time. Use HH:MM format.");
           return;
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_c = this.draft.scheduleDate) != null ? _c : "")) {
-          new import_obsidian6.Notice("Invalid date. Use YYYY-MM-DD format.");
+          new import_obsidian7.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.draft.scheduleType === "monthly" && ((_d = this.draft.scheduleMonthDays) != null ? _d : []).length === 0) {
-          new import_obsidian6.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
+          new import_obsidian7.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         const steps = this.selectedSteps.map((src, idx) => {
@@ -16764,10 +16852,10 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
             btn.setDisabled(true);
             try {
               await this.plugin.saveGeneratedDefinitionDraft(this.draftTasks, workflow);
-              new import_obsidian6.Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
+              new import_obsidian7.Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
               this.close();
             } catch (error) {
-              new import_obsidian6.Notice(`Could not save the workflow: ${error.message}. Your draft is still available.`);
+              new import_obsidian7.Notice(`Could not save the workflow: ${error.message}. Your draft is still available.`);
             } finally {
               this.savingGeneratedDraft = false;
               btn.setDisabled(false);
@@ -16781,7 +16869,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
           if (areaChanged) (_B = this.plugin.view) == null ? void 0 : _B.render();
           this.plugin.emitWorkflowUpdated(updatedWorkflow);
         }
-        new import_obsidian6.Notice(`Workflow "${this.draft.name}" saved.`);
+        new import_obsidian7.Notice(`Workflow "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -16853,33 +16941,33 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
         delete this.stepConfigs[step.id];
         this.renderStepsList(container);
       };
-      new import_obsidian6.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+      new import_obsidian7.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(this.defaultWorkflowStepName(step, i)).setValue(step.name || "").onChange((v) => {
           step.name = v.trim();
         });
       });
-      new import_obsidian6.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
+      new import_obsidian7.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(((_a2 = this.draft.area) == null ? void 0 : _a2.trim()) || "No area").setValue(step.area || this.draft.area || "").onChange((v) => step.area = v.trim());
       });
       if (step.stepKind === "code") {
         const initialCode = step.code || "";
-        new import_obsidian6.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
+        new import_obsidian7.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
           text.inputEl.addClass("auto-oc-modal-textarea");
           text.inputEl.rows = 6;
           text.setValue(initialCode).onChange((v) => step.code = v);
           setupCodeTextarea(text.inputEl, this.app);
         });
-        new import_obsidian6.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
+        new import_obsidian7.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
           text.setPlaceholder("input").setValue(step.codeInputVar || "input").onChange((v) => step.codeInputVar = v || "input");
         }).addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
           text.setPlaceholder("output").setValue(step.codeOutputVar || "output").onChange((v) => step.codeOutputVar = v || "output");
         });
-        new import_obsidian6.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
+        new import_obsidian7.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
           tog.setTooltip("Vault API");
           tog.setValue(!!step.codeAllowVault);
           tog.onChange((v) => step.codeAllowVault = v);
@@ -16896,7 +16984,7 @@ var CreateWorkflowModal = class extends import_obsidian6.Modal {
           tog.toggleEl.insertAdjacentHTML("afterend", `<span class="auto-oc-day-label">Terminal</span>`);
         });
       } else if (step.stepKind === "delay") {
-        new import_obsidian6.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+        new import_obsidian7.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
           var _a2;
           text.inputEl.addClass("auto-oc-modal-input");
           text.inputEl.type = "number";
@@ -17094,7 +17182,7 @@ Reply ONLY with YES or NO.`;
           if (newTasks.length > 0) {
             const newest = newTasks[newTasks.length - 1];
             this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: newest.id, area: this.draft.area || newest.area || "", transitions: [], position: { x: 0, y: 0 } });
-            new import_obsidian6.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
+            new import_obsidian7.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
           }
           this.renderStepsList(container);
         }, 200);
@@ -17173,7 +17261,7 @@ Reply ONLY with YES or NO.`;
     this.contentEl.empty();
   }
 };
-var ExportModal = class extends import_obsidian6.Modal {
+var ExportModal = class extends import_obsidian7.Modal {
   constructor(app, plugin, taskIds, workflowIds) {
     super(app);
     this.selectedTaskIds = /* @__PURE__ */ new Set();
@@ -17195,10 +17283,10 @@ var ExportModal = class extends import_obsidian6.Modal {
       text: "Select the items you want to share. Selected workflows automatically include their referenced tasks so the file remains importable on another machine.",
       cls: "setting-item-description"
     });
-    new import_obsidian6.Setting(contentEl).setName("Export name (optional)").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Export name (optional)").addText((text) => {
       text.setPlaceholder("My tasks").onChange((v) => this.name = v);
     });
-    new import_obsidian6.Setting(contentEl).setName("Description (optional)").addText((text) => {
+    new import_obsidian7.Setting(contentEl).setName("Description (optional)").addText((text) => {
       text.setPlaceholder("Shared AutoOC configuration").onChange((v) => this.description = v);
     });
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4CB} Tasks");
@@ -17315,7 +17403,7 @@ ${stepNames}` : stepNames;
     btnCopy.onclick = async () => {
       const payload = getPayload();
       if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-        new import_obsidian6.Notice("AutoOC: nothing selected to export.");
+        new import_obsidian7.Notice("AutoOC: nothing selected to export.");
         return;
       }
       const json = this.plugin.buildExportJson(
@@ -17326,9 +17414,9 @@ ${stepNames}` : stepNames;
       );
       try {
         await navigator.clipboard.writeText(json);
-        new import_obsidian6.Notice("AutoOC: JSON copied to clipboard.");
+        new import_obsidian7.Notice("AutoOC: JSON copied to clipboard.");
       } catch (e) {
-        new import_obsidian6.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
+        new import_obsidian7.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
       }
     };
     const btnSave = btnRow.createEl("button", {
@@ -17338,7 +17426,7 @@ ${stepNames}` : stepNames;
     btnSave.onclick = async () => {
       const payload = getPayload();
       if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-        new import_obsidian6.Notice("AutoOC: nothing selected to export.");
+        new import_obsidian7.Notice("AutoOC: nothing selected to export.");
         return;
       }
       await this.plugin.exportToFile(
@@ -17354,7 +17442,7 @@ ${stepNames}` : stepNames;
     this.contentEl.empty();
   }
 };
-var ImportModal = class extends import_obsidian6.Modal {
+var ImportModal = class extends import_obsidian7.Modal {
   constructor(app, plugin) {
     super(app);
     this.filePath = null;
@@ -17437,12 +17525,12 @@ var ImportModal = class extends import_obsidian6.Modal {
       btnImport.textContent = "Importing\u2026";
       try {
         const result = await this.plugin.importFromData(this.previewData);
-        new import_obsidian6.Notice(
+        new import_obsidian7.Notice(
           `AutoOC: imported ${result.tasksImported} task(s) and ${result.workflowsImported} workflow(s).`
         );
         this.close();
       } catch (e) {
-        new import_obsidian6.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
+        new import_obsidian7.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
         btnImport.disabled = false;
         btnImport.textContent = "Import";
       }
@@ -17457,7 +17545,7 @@ var ImportModal = class extends import_obsidian6.Modal {
     this.renderPreview();
   }
   renderFilePanel(panel) {
-    new import_obsidian6.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
+    new import_obsidian7.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
       (btn) => btn.setButtonText("Choose file\u2026").onClick(async () => {
         const chosen = await this.chooseFile();
         if (chosen) {
@@ -17503,21 +17591,21 @@ var ImportModal = class extends import_obsidian6.Modal {
         this.lastValidation = result;
         if (!result.ok) {
           this.previewData = null;
-          new import_obsidian6.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+          new import_obsidian7.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
         } else {
           this.previewData = data;
           this.filePath = null;
           this.selectedLibraryFile = null;
           if (result.warnings.length > 0) {
-            new import_obsidian6.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+            new import_obsidian7.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
           } else {
-            new import_obsidian6.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+            new import_obsidian7.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
           }
         }
       } catch (e) {
         this.previewData = null;
         this.lastValidation = { ok: false, errors: [`Could not parse JSON: ${String(e)}`], warnings: [] };
-        new import_obsidian6.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
+        new import_obsidian7.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
       }
       this.renderPreview();
       this.updateImportButton();
@@ -17550,7 +17638,7 @@ var ImportModal = class extends import_obsidian6.Modal {
         this.pastedJson = formatted;
         parse3();
       } catch (e) {
-        new import_obsidian6.Notice(`AutoOC: cannot format \u2014 ${String(e)}`);
+        new import_obsidian7.Notice(`AutoOC: cannot format \u2014 ${String(e)}`);
       }
     };
   }
@@ -17628,7 +17716,7 @@ var ImportModal = class extends import_obsidian6.Modal {
         return result.filePaths[0];
       }
     } catch (e) {
-      new import_obsidian6.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
+      new import_obsidian7.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
     }
     return null;
   }
@@ -17643,18 +17731,18 @@ var ImportModal = class extends import_obsidian6.Modal {
       this.lastValidation = result;
       if (!result.ok) {
         this.previewData = null;
-        new import_obsidian6.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        new import_obsidian7.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
       } else {
         this.previewData = data;
         if (result.warnings.length > 0) {
-          new import_obsidian6.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          new import_obsidian7.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
         } else {
-          new import_obsidian6.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          new import_obsidian7.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
         }
       }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian6.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
+      new import_obsidian7.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -17673,7 +17761,7 @@ var ImportModal = class extends import_obsidian6.Modal {
       this.libraryEntries = data.library;
     } catch (e) {
       this.libraryError = String(e);
-      new import_obsidian6.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
+      new import_obsidian7.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
     }
   }
   async loadLibraryFile(fileName) {
@@ -17687,18 +17775,18 @@ var ImportModal = class extends import_obsidian6.Modal {
       this.lastValidation = result;
       if (!result.ok) {
         this.previewData = null;
-        new import_obsidian6.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        new import_obsidian7.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
       } else {
         this.previewData = data;
         if (result.warnings.length > 0) {
-          new import_obsidian6.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          new import_obsidian7.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
         } else {
-          new import_obsidian6.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          new import_obsidian7.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
         }
       }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian6.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
+      new import_obsidian7.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -17980,7 +18068,7 @@ var ImportModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var LiveLogModal = class extends import_obsidian6.Modal {
+var LiveLogModal = class extends import_obsidian7.Modal {
   constructor(app, task, plugin) {
     super(app);
     this.renderEl = null;
@@ -18032,7 +18120,7 @@ var LiveLogModal = class extends import_obsidian6.Modal {
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.lastRenderedContent);
-      new import_obsidian6.Notice("Log copied.");
+      new import_obsidian7.Notice("Log copied.");
     };
     const btnClear = toolbar.createEl("button", {
       text: "\u{1F5D1} Clear View",
@@ -18060,7 +18148,7 @@ var LiveLogModal = class extends import_obsidian6.Modal {
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();
-        void import_obsidian6.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
+        void import_obsidian7.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
         if (this.autoScroll) {
           this.renderEl.scrollTop = this.renderEl.scrollHeight;
         }
@@ -18083,7 +18171,7 @@ var LiveLogModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var LogHistoryModal = class extends import_obsidian6.Modal {
+var LogHistoryModal = class extends import_obsidian7.Modal {
   constructor(app, task, plugin) {
     super(app);
     this.task = task;
@@ -18117,7 +18205,7 @@ var LogHistoryModal = class extends import_obsidian6.Modal {
       if (confirm(`Delete ALL ${history.length} logs for "${this.task.name}"?`)) {
         clearTaskLogs(vaultBasePath, this.task.id);
         this.close();
-        new import_obsidian6.Notice("All logs cleared.");
+        new import_obsidian7.Notice("All logs cleared.");
       }
     };
     const list2 = contentEl.createDiv("auto-oc-log-history-list");
@@ -18148,7 +18236,7 @@ var LogHistoryModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var LogPreviewModal = class extends import_obsidian6.Modal {
+var LogPreviewModal = class extends import_obsidian7.Modal {
   constructor(app, taskName, timestamp, content, plugin) {
     super(app);
     this.taskName = taskName;
@@ -18170,7 +18258,7 @@ var LogPreviewModal = class extends import_obsidian6.Modal {
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.content);
-      new import_obsidian6.Notice("Log copied.");
+      new import_obsidian7.Notice("Log copied.");
     };
     const btnClose = toolbar.createEl("button", {
       text: "\u2716 Close",
@@ -18178,14 +18266,14 @@ var LogPreviewModal = class extends import_obsidian6.Modal {
     });
     btnClose.onclick = () => this.close();
     const renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
-    void import_obsidian6.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
+    void import_obsidian7.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
     renderEl.scrollTop = renderEl.scrollHeight;
   }
   onClose() {
     this.contentEl.empty();
   }
 };
-var BranchSelectorModal = class extends import_obsidian6.Modal {
+var BranchSelectorModal = class extends import_obsidian7.Modal {
   constructor(app, branches) {
     super(app);
     this.selectedBranch = null;
@@ -18222,7 +18310,7 @@ var BranchSelectorModal = class extends import_obsidian6.Modal {
     this.resolveSelection = null;
   }
 };
-var TextPreviewModal = class extends import_obsidian6.Modal {
+var TextPreviewModal = class extends import_obsidian7.Modal {
   constructor(app, titleText, bodyText) {
     super(app);
     this.titleText = titleText;
@@ -18233,10 +18321,10 @@ var TextPreviewModal = class extends import_obsidian6.Modal {
     contentEl.createEl("h3", { text: this.titleText });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.bodyText || "(empty)";
-    new import_obsidian6.Setting(contentEl).addButton(
+    new import_obsidian7.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.bodyText || "");
-        new import_obsidian6.Notice("Output copied.");
+        new import_obsidian7.Notice("Output copied.");
       })
     );
   }
@@ -18244,7 +18332,7 @@ var TextPreviewModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var CommandPreviewModal = class extends import_obsidian6.Modal {
+var CommandPreviewModal = class extends import_obsidian7.Modal {
   constructor(app, taskName, cmd) {
     super(app);
     this.taskName = taskName;
@@ -18259,10 +18347,10 @@ var CommandPreviewModal = class extends import_obsidian6.Modal {
     });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.cmd;
-    new import_obsidian6.Setting(contentEl).addButton(
+    new import_obsidian7.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.cmd);
-        new import_obsidian6.Notice("Command copied.");
+        new import_obsidian7.Notice("Command copied.");
       })
     );
   }
@@ -18270,7 +18358,7 @@ var CommandPreviewModal = class extends import_obsidian6.Modal {
     this.contentEl.empty();
   }
 };
-var DiagnosticModal = class extends import_obsidian6.Modal {
+var DiagnosticModal = class extends import_obsidian7.Modal {
   constructor(app, plugin) {
     super(app);
     this.logEl = null;
@@ -18311,14 +18399,14 @@ var DiagnosticModal = class extends import_obsidian6.Modal {
     const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
     contentEl.createEl("p", { text: `Detected binary: ${bin}`, cls: "setting-item-description" });
     contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
-    new import_obsidian6.Setting(contentEl).addButton(
+    new import_obsidian7.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u25B6 Launch test: 'di hola'").setCta().onClick(() => {
         this.cleanupDiagnostics(true);
         if (this.logEl) this.logEl.textContent = "[launching detached process\u2026]\n";
         const bin2 = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
         if (!model) {
-          new import_obsidian6.Notice("AutoOC: no model selected. Reload models in Settings.");
+          new import_obsidian7.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
         const fs32 = require("fs");
@@ -18423,7 +18511,7 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
     this.contentEl.empty();
   }
 };
-var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
+var AutoOCSettingTab = class extends import_obsidian7.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -18432,13 +18520,8 @@ var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
-    new import_obsidian6.Setting(containerEl).setName("Dashboard task bubble size").setDesc("Fixed task bubble diameter in pixels.").addDropdown((dropdown) => dropdown.addOptions({ sm: "Small (24px)", md: "Medium (30px)", lg: "Large (38px)", xl: "Extra large (48px)" }).setValue(this.plugin.settings.dashboardTaskBubbleSize).onChange(async (value) => {
-      if (value === "sm" || value === "md" || value === "lg" || value === "xl") {
-        this.plugin.settings.dashboardTaskBubbleSize = value;
-        await this.plugin.saveSettings();
-      }
-    }));
-    new import_obsidian6.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
+    addDashboardBubbleSizeSetting(containerEl, this.plugin);
+    new import_obsidian7.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;
         await this.plugin.saveSettings();
@@ -18447,17 +18530,17 @@ var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
     addInteractiveCliSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
     containerEl.createEl("p", { text: "Select OpenCode 2 in a task's Task type to use these settings. Existing OpenCode 1 tasks keep their engine. The executable path is configured under OpenCode 2 CLI above.", cls: "setting-item-description" });
-    new import_obsidian6.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.").addText((text) => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async (value) => {
+    new import_obsidian7.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.").addText((text) => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async (value) => {
       this.plugin.settings.defaultOpencode2Model = value.trim();
       await this.plugin.saveSettings(false);
     }));
-    new import_obsidian6.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async (value) => {
+    new import_obsidian7.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async (value) => {
       this.plugin.settings.defaultOpencode2Agent = value.trim() || "build";
       await this.plugin.saveSettings(false);
     }));
     addCopilotGlobalSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "Codex task defaults" });
-    new import_obsidian6.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
       dropdown.addOption("", "Automatic");
       this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
       const current = this.plugin.settings.defaultCodexModel || "";
@@ -18475,7 +18558,7 @@ var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
       await this.plugin.refreshCodexModels(true);
       this.display();
     }));
-    new import_obsidian6.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
       const efforts = this.plugin.getCodexReasoningEfforts();
       efforts.forEach((effort) => dropdown.addOption(effort, effort));
       const current = this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -18486,7 +18569,7 @@ var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
       });
     });
     containerEl.createEl("h3", { text: "CLI folders and terminals" });
-    new import_obsidian6.Setting(containerEl).setName("Working Directory").setDesc(
+    new import_obsidian7.Setting(containerEl).setName("Working Directory").setDesc(
       "Default folder for interactive CLI sessions and supported tasks. Empty = vault folder."
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
@@ -18494,14 +18577,14 @@ var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
+    new import_obsidian7.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
       (tog) => tog.setValue(!!this.plugin.settings.defaultInteractiveTerminal).onChange(async (v) => {
         this.plugin.settings.defaultInteractiveTerminal = v;
         await this.plugin.saveSettings();
       })
     );
     if (process.platform === "linux") {
-      new import_obsidian6.Setting(containerEl).setName("Linux terminal emulator").setDesc(
+      new import_obsidian7.Setting(containerEl).setName("Linux terminal emulator").setDesc(
         "Command used to open interactive CLI sessions. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
       ).addText(
         (text) => text.setPlaceholder("auto-detect (e.g. konsole)").setValue(this.plugin.settings.linuxTerminal || "").onChange(async (v) => {
@@ -18510,7 +18593,7 @@ var AutoOCSettingTab = class extends import_obsidian6.PluginSettingTab {
         })
       );
     }
-    new import_obsidian6.Setting(containerEl).setName("Shared Library URL").setDesc(
+    new import_obsidian7.Setting(containerEl).setName("Shared Library URL").setDesc(
       `GitHub repo or raw URL used by the Import \u2192 Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.
 Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     ).addText(
@@ -18520,7 +18603,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         this.display();
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
+    new import_obsidian7.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
       (text) => {
         var _a;
         return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
@@ -18537,13 +18620,13 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
       cls: "setting-item-description"
     });
-    new import_obsidian6.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
+    new import_obsidian7.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
       (tog) => tog.setValue(this.plugin.settings.logsEnabled).onChange(async (v) => {
         this.plugin.settings.logsEnabled = v;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
+    new import_obsidian7.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
       (text) => {
         var _a;
         return text.setPlaceholder("50").setValue(String((_a = this.plugin.settings.maxLogsPerTask) != null ? _a : 50)).onChange(async (v) => {
@@ -18555,7 +18638,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian6.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
+    new import_obsidian7.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
       (text) => {
         var _a;
         return text.setPlaceholder("30").setValue(String((_a = this.plugin.settings.logRetentionDays) != null ? _a : 30)).onChange(async (v) => {
@@ -18567,7 +18650,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian6.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
+    new import_obsidian7.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
       (btn) => btn.setButtonText("\u{1F9F9} Clear All Logs").setWarning().onClick(async () => {
         if (confirm("Delete ALL log files for ALL tasks? This cannot be undone.")) {
           await this.plugin.clearAllLogs();
@@ -18583,26 +18666,26 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
       cls: "setting-item-description"
     });
-    new import_obsidian6.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
+    new import_obsidian7.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
       (btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
         try {
           const result = await this.plugin.ensureRalphLoopPluginEnabled();
-          new import_obsidian6.Notice(
+          new import_obsidian7.Notice(
             result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
           );
           this.display();
         } catch (e) {
-          new import_obsidian6.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+          new import_obsidian7.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
         }
       })
     ).addButton(
       (btn) => btn.setButtonText("Show status path").onClick(() => {
         const basePath = this.app.vault.adapter.basePath || ".";
         const statePath = getRalphStateFilePath(basePath);
-        new import_obsidian6.Notice(`Ralph state file: ${statePath}`);
+        new import_obsidian7.Notice(`Ralph state file: ${statePath}`);
       })
     );
-    new import_obsidian6.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+    new import_obsidian7.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       const agents = this.plugin.availableAgents;
       agents.forEach((a) => dd.addOption(a.value, a.label));
       const current = this.plugin.getEffectiveAgent();
@@ -18623,7 +18706,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     refreshAgentsBtn.style.marginBottom = "8px";
     refreshAgentsBtn.onclick = () => {
       this.plugin.refreshAgents();
-      new import_obsidian6.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+      new import_obsidian7.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
       this.display();
     };
     containerEl.createEl("p", {
@@ -18639,7 +18722,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = agentsBody.createEl("tr");
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
-    new import_obsidian6.Setting(containerEl).setName("Default OpenCode Model").addDropdown((dd) => {
+    new import_obsidian7.Setting(containerEl).setName("Default OpenCode Model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
       const current = this.plugin.getEffectiveDefaultModel();
@@ -18662,7 +18745,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     refreshBtn.style.marginBottom = "8px";
     refreshBtn.onclick = () => {
       this.plugin.refreshModels();
-      new import_obsidian6.Notice("AutoOC: models reloaded. Refresh this panel.");
+      new import_obsidian7.Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
     containerEl.createEl("p", {
