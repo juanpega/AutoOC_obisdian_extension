@@ -1,7 +1,7 @@
 {
   "id": "auto-oc",
   "name": "AutoOC — OpenCode Task Scheduler",
-  "version": "1.7.11",
+  "version": "1.7.12",
   "minAppVersion": "1.0.0",
   "description": "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
   "author": "JuanPe",

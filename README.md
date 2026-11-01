@@ -6,6 +6,16 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Automatización y agentes:** [referencia completa de la CLI: comandos, parámetros y ejemplos](#referencia-completa-de-la-cli-autooc).
 
+## Dashboard por áreas
+
+Desde 1.7.12, **Dashboard** organiza los workflows y tareas por su campo **Area**, con un grupo **No area** para los elementos sin asignar. Para reorganizarlos, cambia su área desde el editor o las acciones de selección. Las posiciones del mapa anterior se conservan en la configuración.
+
+Cada elemento tiene una burbuja y un nombre visible: doble anillo para workflows, terminal para tareas IA y **{ }** para Code. Selecciona un workflow para ver sus pasos, incluidos Code y esperas, y selecciona un paso para consultar **Log**, **History** o **Open controls**. Este último abre los controles habituales de ejecución, parada, edición y desactivación. El log de un workflow corresponde a su paso actual; los pasos tienen resultados propios y no se consideran completados solo porque terminó el workflow.
+
+La búsqueda incluye nombres de pasos y áreas. **Needs attention** filtra incidencias registradas; **Show disabled** muestra los desactivados en gris. Cada área se puede plegar, y **Collapse areas / Expand areas** actúan sobre todos los grupos. Selección, búsqueda y colapsos se conservan durante la sesión del panel. El tamaño exacto de las burbujas de tareas y pasos sigue disponible en Settings (10–80 px).
+
+Los contadores separan elementos principales y pasos en ejecución. Muestran estado registrado, no una verificación independiente de actividad del proceso. El panel se actualiza con los eventos existentes, mantiene las posiciones de lectura y limita inicialmente los pasos visibles a 40, ampliables con **Show more steps**. No añade consultas periódicas ni movimiento continuo; solo una señal breve cuando cambia un estado, respetando la preferencia de movimiento reducido.
+
 ## Abrir una CLI interactiva
 
 OpenCode 1 y OpenCode 2 se configuran como motores separados, con rutas, modelos y agentes propios. **Check version** identifica la instalación y las tareas existentes conservan su motor. Consulta la [guía de OpenCode 2](docs/opencode-2.md) para configurar tareas automáticas, sesiones interactivas y borradores.

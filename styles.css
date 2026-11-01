@@ -1960,3 +1960,53 @@
 .auto-oc-code-toolbar button[aria-pressed="true"] { background: var(--interactive-accent); color: var(--text-on-accent); }
 .auto-oc-code-help { font-size: 11px; color: var(--text-muted); padding: 6px 8px; }
 textarea.auto-oc-code-editor[hidden] { display: none !important; }
+/* Dashboard by area. Layout follows the pane; only changed states animate once. */
+.auto-oc-areas-dashboard { container: autooc-areas / inline-size; padding: 8px 0 16px; }
+.auto-oc-areas-heading h2 { margin: 2px 0 6px; font-size: 21px; }
+.auto-oc-areas-heading p, .auto-oc-areas-legend, .auto-oc-areas-event { color: var(--text-muted); font-size: 12px; }
+.auto-oc-areas-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; padding: 14px 0; border-bottom: 1px solid var(--background-modifier-border); font-size: 12px; color: var(--text-muted); }
+.auto-oc-areas-summary strong { color: var(--text-normal); font-size: 17px; }
+.auto-oc-areas-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 15px 0; }
+.auto-oc-areas-tools input[type=search] { flex: 1 1 240px; min-width: 140px; }
+.auto-oc-areas-tools label { display: flex; gap: 5px; align-items: center; font-size: 12px; }
+.auto-oc-areas-tools button, .auto-oc-area-actions button { font-size: 12px; }
+.auto-oc-areas-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(240px, 32%); gap: 16px; align-items: start; }
+.auto-oc-areas-map { min-width: 0; max-height: max(340px, calc(100vh - 340px)); overflow-y: auto; scrollbar-gutter: stable; padding-right: 4px; }
+.auto-oc-area-group { border: 1px solid var(--background-modifier-border); border-radius: 12px; margin-bottom: 12px; background: var(--background-primary); }
+.auto-oc-area-group > summary { padding: 14px; cursor: pointer; font-weight: 600; overflow-wrap: anywhere; }
+.auto-oc-area-group > summary span:last-child { display: block; margin: 5px 0 0 15px; font-size: 11px; font-weight: 400; color: var(--text-muted); }
+.auto-oc-area-nodes { display: grid; grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); gap: 7px; padding: 0 10px 12px; }
+.auto-oc-areas-dashboard button.auto-oc-area-node, .auto-oc-areas-dashboard button.auto-oc-area-step { height: auto; min-width: 0; white-space: normal; box-shadow: none; background: transparent; border: 1px solid transparent; border-radius: 9px; color: var(--text-normal); }
+.auto-oc-areas-dashboard button.auto-oc-area-node { display: flex; flex-direction: column; align-items: center; justify-content: start; gap: 7px; padding: 12px 8px; text-align: center; }
+.auto-oc-areas-dashboard button.auto-oc-area-node:hover, .auto-oc-areas-dashboard button.auto-oc-area-step:hover { background: var(--background-secondary); }
+.auto-oc-areas-dashboard button[aria-pressed=true] { border-color: var(--interactive-accent); background: var(--background-secondary); }
+.auto-oc-areas-dashboard button:focus-visible, .auto-oc-area-group > summary:focus-visible { outline: 2px solid var(--interactive-accent); outline-offset: 2px; }
+.auto-oc-area-name { display: block; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; font-weight: 550; }
+.auto-oc-area-meta { display: block; font-size: 11px; line-height: 1.5; color: var(--text-muted); overflow-wrap: anywhere; }
+.auto-oc-areas-dashboard .auto-oc-area-orb { position: static; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; min-width: 0; min-height: 0; max-width: none; max-height: none; border-radius: 50%; border: 2px solid var(--text-muted); color: var(--text-muted); background: var(--background-secondary); transform: none; animation: none; box-shadow: none; aspect-ratio: 1; overflow: hidden; font-size: 10px; font-family: var(--font-monospace); }
+.auto-oc-areas-dashboard .auto-oc-area-orb::before, .auto-oc-areas-dashboard .auto-oc-area-orb::after { content: none; }
+.auto-oc-area-orb svg { width: 55%; height: 55%; }
+.auto-oc-areas-dashboard .auto-oc-area-orb[data-kind=workflow] { border-style: double; border-width: 4px; }
+.auto-oc-areas-dashboard .auto-oc-area-orb[data-state=running] { color: var(--color-blue); border-color: var(--color-blue); }
+.auto-oc-areas-dashboard .auto-oc-area-orb[data-state=completed] { color: var(--color-green); border-color: var(--color-green); }
+.auto-oc-areas-dashboard .auto-oc-area-orb[data-state=attention] { color: var(--color-red); border-color: var(--color-red); }
+.auto-oc-areas-dashboard [data-disabled=true] { opacity: .55; }
+.auto-oc-areas-inspector { border: 1px solid var(--background-modifier-border); border-radius: 12px; background: var(--background-secondary); padding: 16px; min-width: 0; max-height: max(340px, calc(100vh - 340px)); overflow-y: auto; scrollbar-gutter: stable; }
+.auto-oc-areas-inspector h3 { margin: 8px 0 10px; font-size: 17px; overflow-wrap: anywhere; }
+.auto-oc-areas-inspector p { font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.auto-oc-areas-inspector h4 { font-size: 12px; margin-bottom: 10px; }
+.auto-oc-area-eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); overflow-wrap: anywhere; }
+.auto-oc-area-actions { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0; }
+.auto-oc-area-steps { display: grid; gap: 5px; }
+.auto-oc-areas-dashboard button.auto-oc-area-step { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 10px; text-align: left; padding: 8px; width: 100%; }
+.auto-oc-area-step .auto-oc-area-orb { grid-row: 1 / 3; align-self: center; }
+.auto-oc-area-step .auto-oc-area-name, .auto-oc-area-step .auto-oc-area-meta { grid-column: 2; }
+.auto-oc-areas-event { border-top: 1px solid var(--background-modifier-border); padding-top: 10px; }
+.auto-oc-areas-dashboard .auto-oc-area-changed { animation: autooc-area-signal .65s ease-out 1; }
+@keyframes autooc-area-signal { 50% { transform: scale(1.12); } }
+@container autooc-areas (max-width: 720px) {
+  .auto-oc-areas-workspace { grid-template-columns: 1fr; }
+  .auto-oc-areas-map { max-height: 42vh; }
+  .auto-oc-areas-inspector { max-height: 42vh; }
+}
+@media (prefers-reduced-motion: reduce) { .auto-oc-areas-dashboard .auto-oc-area-changed { animation: none; } }

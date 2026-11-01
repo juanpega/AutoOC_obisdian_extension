@@ -1,3 +1,4 @@
+import { AreaDashboard, createAreaDashboardState, dashboardItems, type DashboardItem } from "./dashboard-areas";
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
 import { loadDashboardBubbleDiameter, saveDashboardBubbleDiameter, applyDashboardBubbleDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
@@ -5669,6 +5670,8 @@ class AutoOCView extends ItemView {
   private filterStatus: string = "all";
   private filterArea: string = "all";
   private taskSource: "all" | "catalog" | "workflow-code" = "all";
+  private areaDashboard?: AreaDashboard;
+  private areaDashboardState = createAreaDashboardState();
   private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedCodeSteps: Set<string> = new Set();
@@ -5758,9 +5761,13 @@ class AutoOCView extends ItemView {
     // Stop callbacks synchronously, before waiting for an active instance's write.
     await this.persistDashboardPositionsSafely();
   }
-  refresh() { this.render(); }
+  refresh() {
+    if (this.currentTab === "dashboard" && this.areaDashboard?.root.isConnected) this.areaDashboard.update();
+    else this.render();
+  }
 
   private updateTaskNameDom(task: ScheduledTask) {
+    this.areaDashboard?.update();
     const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
       return count + workflow.steps.filter((step) => step.taskId === task.id).length;
     }, 0);
@@ -5775,6 +5782,7 @@ class AutoOCView extends ItemView {
   }
 
   private updateWorkflowNameDom(workflow: Workflow) {
+    this.areaDashboard?.update();
     const area = workflow.area?.trim() || "No area";
     this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
       el.querySelector<HTMLElement>(".auto-oc-task-name")?.setText(workflow.name);
@@ -6144,6 +6152,7 @@ class AutoOCView extends ItemView {
   }
 
   render() {
+    this.areaDashboard = undefined;
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
@@ -6314,654 +6323,39 @@ class AutoOCView extends ItemView {
   }
 
   private renderDashboard(containerEl: HTMLElement) {
-    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed", "abandoned"];
-    const tasks = this.plugin.settings.tasks;
-    const workflows = this.plugin.settings.workflows;
-
-    if (tasks.length === 0 && workflows.length === 0) {
-      const empty = containerEl.createDiv("auto-oc-empty auto-oc-dashboard-empty");
-      empty.createEl("div", { text: "No activity yet", cls: "auto-oc-dashboard-empty-title" });
-      empty.createEl("div", { text: "Create tasks and workflows to see scheduler KPIs here." });
-      return;
-    }
-
-    const taskCounts = Object.fromEntries(statuses.map((status) => [status, tasks.filter((task) => task.status === status).length])) as Record<TaskStatus, number>;
-    const workflowCounts = Object.fromEntries(statuses.map((status) => [status, workflows.filter((workflow) => workflow.status === status).length])) as Record<WorkflowStatus, number>;
-    const taskUsage = new Map<string, number>();
-    workflows.forEach((workflow) => {
-      workflow.steps.forEach((step) => {
-        if (step.taskId) taskUsage.set(step.taskId, (taskUsage.get(step.taskId) || 0) + 1);
-      });
-    });
-    const totalReferences = Array.from(taskUsage.values()).reduce((sum, count) => sum + count, 0);
-    const mostUsed = tasks.reduce<{ name: string; count: number } | null>((best, task) => {
-      const count = taskUsage.get(task.id) || 0;
-      if (!best || count > best.count) return { name: task.name, count };
-      return best;
-    }, null);
-    const unusedTasks = tasks.filter((task) => !taskUsage.has(task.id)).length;
-
-    const taskFailCounts = new Map<string, number>();
-    tasks.forEach((task) => {
-      let fails = 0;
-      const out = task.output || "";
-      const exitMatch = out.match(/\[exit code:\s*(-?\d+)\]/g);
-      if (exitMatch) fails = exitMatch.length;
-      if (task.status === "failed") fails = Math.max(fails, 1);
-      if (fails > 0) taskFailCounts.set(task.id, fails);
-    });
-
-    const dashboard = containerEl.createDiv("auto-oc-dashboard");
-    const kpis = dashboard.createDiv(this.showDashboardKpis ? "auto-oc-dashboard-kpis" : "auto-oc-dashboard-kpis auto-oc-dashboard-kpis-hidden");
-    const addKpi = (label: string, value: string | number, cls?: string) => {
-      const kpi = kpis.createDiv("auto-oc-dashboard-kpi");
-      kpi.createEl("span", { text: label, cls: "auto-oc-dashboard-kpi-label" });
-      kpi.createEl("strong", { text: String(value), cls });
+    const locate = (item: DashboardItem) => {
+      const workflow = this.plugin.settings.workflows.find(wf => wf.id === (item.workflowId || (item.kind === "workflow" ? item.id : "")));
+      const step = workflow?.steps.find(entry => entry.id === item.id);
+      const task = this.plugin.settings.tasks.find(entry => entry.id === item.taskId);
+      return { workflow, step, task };
     };
-
-    addKpi("Tasks", tasks.length);
-    statuses.forEach((status) => addKpi(`Tasks ${status}`, taskCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : undefined));
-    addKpi("Workflows", workflows.length);
-    statuses.forEach((status) => addKpi(`Workflows ${status}`, workflowCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : undefined));
-    addKpi("Task refs", totalReferences);
-    addKpi("Most used", mostUsed && mostUsed.count > 0 ? `${mostUsed.name} (${mostUsed.count})` : "None");
-    addKpi("Unused tasks", unusedTasks);
-
-    const map = dashboard.createDiv("auto-oc-dashboard-map");
-    this.createDashboardAmbientLayer(map);
-    this.watchDashboardMapResize(map);
-    const btnToggleKpis = map.createEl("button", {
-      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
-      cls: "auto-oc-dashboard-kpi-toggle",
-    });
-    btnToggleKpis.onclick = () => {
-      this.showDashboardKpis = !this.showDashboardKpis;
-      this.render();
+    const open = (item: DashboardItem) => {
+      const { workflow, step, task } = locate(item);
+      this.filterText = ""; this.filterArea = this.filterStatus = "all"; this.taskSource = "all";
+      if (workflow && step?.stepKind === "code") this.openWorkflowCodeEntry(workflow.id, step.id);
+      else if (task) this.openTaskInList(task);
+      else if (workflow) this.openWorkflowInList(workflow);
+      else { new Notice("This item was removed. Refresh the Dashboard."); this.refresh(); }
     };
-    const areaName = (value?: string) => value?.trim() || "No area";
-    const layoutSignature = JSON.stringify({
-      tasks: tasks.map((task) => ({ id: task.id, area: areaName(task.area) })).sort((a, b) => a.id.localeCompare(b.id)),
-      workflows: workflows.map((workflow) => ({
-        id: workflow.id,
-        area: areaName(workflow.area),
-        steps: workflow.steps.map((step) => step.taskId || step.id),
-      })).sort((a, b) => a.id.localeCompare(b.id)),
-    });
-    const layoutChanged = layoutSignature !== this.dashboardLayoutSignature;
-    if (layoutChanged) this.dashboardLayoutSignature = layoutSignature;
-    const areaNames = Array.from(new Set([
-      ...workflows.map((workflow) => areaName(workflow.area)),
-      ...tasks.map((task) => areaName(task.area)),
-    ])).sort((a, b) => a.localeCompare(b));
-    const taskById = new Map(tasks.map((task) => [task.id, task]));
-    const mapRect = map.getBoundingClientRect();
-    const mapWidthPx = Math.max(mapRect.width || 0, 520);
-    const pctFromPx = (px: number, parentPx: number, minPct: number, maxPct: number) => {
-      const pct = (px / Math.max(parentPx, 1)) * 100;
-      return Math.max(minPct, Math.min(maxPct, pct));
-    };
-    const areaSizeForContent = (contentWeight: number) => {
-      const px = Math.min(260, Math.max(120, 92 + Math.sqrt(Math.max(contentWeight, 1)) * 42));
-      return { px, pct: pctFromPx(px, mapWidthPx, 1, 36) };
-    };
-    const workflowSizePxForTasks = (taskCount: number) => {
-      return Math.min(190, Math.max(92, 72 + Math.sqrt(Math.max(taskCount, 1)) * 34));
-    };
-    const workflowSizePctForParent = (taskCount: number, parent: HTMLElement) => {
-      const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
-      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
-    };
-    // Every task/step bubble renders at the same physical diameter,
-    // regardless of usage, status, or nesting depth. Containers must adapt
-    // around tasks; tasks should not shrink based on the current container.
-    const TASK_BUBBLE_PX = this.plugin.getDashboardBubbleDiameter();
-    const taskBubbleSizeForParent = (parent: HTMLElement) => {
-      const rect = parent.getBoundingClientRect();
-      const parentDiameter = rect.height || rect.width || 0;
-      if (parentDiameter <= 0) return { px: TASK_BUBBLE_PX, pct: 12 };
-      const px = TASK_BUBBLE_PX;
-      return { px, pct: (px / parentDiameter) * 100 };
-    };
-    const setBubbleRect = (el: HTMLElement, x: number, y: number, size: number) => {
-      el.style.left = `${x}%`;
-      el.style.top = `${y}%`;
-      el.style.width = `${size}%`;
-      el.style.height = "";
-    };
-    const saveBubblePosition = (bubble: HTMLElement) => {
-      const key = bubble.getAttribute("data-dashboard-key");
-      if (!key) return;
-      this.dashboardPositions.set(key, {
-        x: parseFloat(bubble.style.left || "0"),
-        y: parseFloat(bubble.style.top || "0"),
-        size: this.parseBubbleSizeForSave(bubble),
-        sizePx: this.parseBubbleSizePxForSave(bubble),
-      });
-    };
-    const saveBubbleTreePositions = (parent: HTMLElement) => {
-      const bubbles = Array.from(parent.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble, .auto-oc-dashboard-workflow-bubble, .auto-oc-dashboard-task-bubble"));
-      bubbles.forEach(saveBubblePosition);
-    };
-    const addLabel = (el: HTMLElement, name: string, ariaLabel = name) => {
-      el.tabIndex = 0;
-      el.setAttr("aria-label", ariaLabel);
-      el.createDiv("auto-oc-dashboard-hover-label").setText(name);
-    };
-    const addBubbleVisual = (el: HTMLElement) => {
-      el.createDiv("auto-oc-dashboard-bubble-visual");
-    };
-    const isDashboardBubble = (el: HTMLElement) => {
-      return el.classList.contains("auto-oc-dashboard-area-bubble")
-        || el.classList.contains("auto-oc-dashboard-workflow-bubble")
-        || el.classList.contains("auto-oc-dashboard-task-bubble");
-    };
-    const withDashboardMeasuring = <T>(fn: () => T): T => {
-      map.addClass("auto-oc-dashboard-measuring");
-      try {
-        return fn();
-      } finally {
-        map.removeClass("auto-oc-dashboard-measuring");
+    const showLog = (item: DashboardItem, history: boolean) => {
+      let { workflow, step, task } = locate(item);
+      if (workflow && item.kind === "workflow") {
+        step = workflow.steps[workflow.currentStep];
+        task = this.plugin.settings.tasks.find(entry => entry.id === step?.taskId);
       }
+      if (workflow && step?.stepKind === "code") {
+        if (history) this.plugin.openCodeStepHistory(workflow.id, step.id);
+        else new CodeStepLogModal(this.app, step.name || "Code step", () => this.plugin.codeStepState(workflow!.id, step!.id)).open();
+      } else if (task) {
+        if (history) new LogHistoryModal(this.app, task, this.plugin).open();
+        else new LiveLogModal(this.app, task, this.plugin).open();
+      } else new Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
-    const clampBubbleToParent = (bubble: HTMLElement) => {
-      const parent = bubble.offsetParent as HTMLElement | null;
-      if (!parent) return;
-      const bounds = parent.getBoundingClientRect();
-      const rect = bubble.getBoundingClientRect();
-      const widthPct = (rect.width / bounds.width) * 100;
-      const heightPct = (rect.height / bounds.height) * 100;
-      let leftPct = ((rect.left - bounds.left) / bounds.width) * 100;
-      let topPct = ((rect.top - bounds.top) / bounds.height) * 100;
-
-      if (isDashboardBubble(parent)) {
-        const parentRadius = Math.min(bounds.width, bounds.height) / 2;
-        const bubbleRadius = rect.width / 2;
-        const parentCenterX = bounds.left + bounds.width / 2;
-        const parentCenterY = bounds.top + bounds.height / 2;
-        const bubbleCenterX = rect.left + rect.width / 2;
-        const bubbleCenterY = rect.top + rect.height / 2;
-        let dx = bubbleCenterX - parentCenterX;
-        let dy = bubbleCenterY - parentCenterY;
-        let distance = Math.hypot(dx, dy);
-        const maxDistance = Math.max(0, parentRadius - bubbleRadius * 0.88);
-        if (distance > maxDistance) {
-          if (distance < 0.01) {
-            dx = 1;
-            dy = 0;
-            distance = 1;
-          }
-          const nextCenterX = parentCenterX + (dx / distance) * maxDistance;
-          const nextCenterY = parentCenterY + (dy / distance) * maxDistance;
-          leftPct = ((nextCenterX - bubbleRadius - bounds.left) / bounds.width) * 100;
-          topPct = ((nextCenterY - bubbleRadius - bounds.top) / bounds.height) * 100;
-        }
-      }
-
-      bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, leftPct))}%`;
-      bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, topPct))}%`;
-    };
-    const fitContainerToChildren = (container: HTMLElement) => {
-      return withDashboardMeasuring(() => {
-      if (!isDashboardBubble(container)) return;
-      const parent = container.offsetParent as HTMLElement | null;
-      if (!parent) return;
-      const children = Array.from(container.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
-      if (children.length === 0) return;
-
-      const parentRect = parent.getBoundingClientRect();
-      const childRects = children.map((child) => ({ child, rect: child.getBoundingClientRect() }));
-      const padding = 12;
-      const minX = Math.min(...childRects.map(({ rect }) => rect.left)) - padding;
-      const maxX = Math.max(...childRects.map(({ rect }) => rect.right)) + padding;
-      const minY = Math.min(...childRects.map(({ rect }) => rect.top)) - padding;
-      const maxY = Math.max(...childRects.map(({ rect }) => rect.bottom)) + padding;
-      const diameterPx = Math.max(maxX - minX, maxY - minY, ...childRects.map(({ rect }) => rect.width + padding * 2));
-      const oldCenters = childRects.map(({ child, rect }) => ({
-        child,
-        centerX: rect.left + rect.width / 2,
-        centerY: rect.top + rect.height / 2,
-        width: rect.width,
-        height: rect.height,
-      }));
-      const centerX = (minX + maxX) / 2;
-      const centerY = (minY + maxY) / 2;
-      const sizePx = Math.min(parentRect.width * 0.96, Math.max(44, diameterPx));
-      container.style.left = `${((centerX - sizePx / 2 - parentRect.left) / parentRect.width) * 100}%`;
-      container.style.top = `${((centerY - sizePx / 2 - parentRect.top) / parentRect.height) * 100}%`;
-      container.style.width = `${sizePx}px`;
-      clampBubbleToParent(container);
-
-      const nextRect = container.getBoundingClientRect();
-      oldCenters.forEach(({ child, centerX: childCenterX, centerY: childCenterY, width, height }) => {
-        child.style.left = `${((childCenterX - width / 2 - nextRect.left) / nextRect.width) * 100}%`;
-        child.style.top = `${((childCenterY - height / 2 - nextRect.top) / nextRect.height) * 100}%`;
-        clampBubbleToParent(child);
-      });
-      saveBubbleTreePositions(parent);
-      void this.persistDashboardPositionsSafely();
-      });
-    };
-    const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
-      return withDashboardMeasuring(() => {
-      const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
-      const bounds = parent.getBoundingClientRect();
-      if (bubbles.length < 2 || bounds.width === 0 || bounds.height === 0) return;
-
-      for (let pass = 0; pass < passes; pass++) {
-        let movedAny = false;
-        for (let i = 0; i < bubbles.length; i++) {
-          for (let j = i + 1; j < bubbles.length; j++) {
-            const a = bubbles[i];
-            const b = bubbles[j];
-            const aRect = a.getBoundingClientRect();
-            const bRect = b.getBoundingClientRect();
-            const aRadius = aRect.width / 2;
-            const bRadius = bRect.width / 2;
-            const aCenterX = aRect.left + aRadius;
-            const aCenterY = aRect.top + aRect.height / 2;
-            const bCenterX = bRect.left + bRadius;
-            const bCenterY = bRect.top + bRect.height / 2;
-            let dx = bCenterX - aCenterX;
-            let dy = bCenterY - aCenterY;
-            let distance = Math.hypot(dx, dy);
-            const minDistance = aRadius + bRadius + 2;
-            if (distance >= minDistance) continue;
-            if (distance < 0.01) {
-              const angle = ((i + j + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
-              dx = Math.cos(angle);
-              dy = Math.sin(angle);
-              distance = 1;
-            }
-            const push = (minDistance - distance) * 0.75;
-            const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
-              const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
-              const nextTopPx = rect.top - bounds.top + (dy / distance) * amount;
-              const nextLeftPct = (nextLeftPx / bounds.width) * 100;
-              const nextTopPct = (nextTopPx / bounds.height) * 100;
-              const widthPct = (rect.width / bounds.width) * 100;
-              const heightPct = (rect.height / bounds.height) * 100;
-              bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
-              bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
-              clampBubbleToParent(bubble);
-            };
-            moveBubble(a, aRect, -push);
-            moveBubble(b, bRect, push);
-            movedAny = true;
-          }
-        }
-        if (!movedAny) break;
-      }
-      saveBubbleTreePositions(parent);
-      void this.persistDashboardPositionsSafely();
-      });
-    };
-    const hasBubbleOverlap = (parent: HTMLElement) => {
-      const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
-      for (let i = 0; i < bubbles.length; i++) {
-        for (let j = i + 1; j < bubbles.length; j++) {
-          const aRect = bubbles[i].getBoundingClientRect();
-          const bRect = bubbles[j].getBoundingClientRect();
-          const aRadius = aRect.width / 2;
-          const bRadius = bRect.width / 2;
-          const distance = Math.hypot(
-            bRect.left + bRadius - (aRect.left + aRadius),
-            bRect.top + bRect.height / 2 - (aRect.top + aRect.height / 2),
-          );
-          if (distance < aRadius + bRadius + 2) return true;
-        }
-      }
-      return false;
-    };
-    const attachBubbleDrag = (el: HTMLElement, onClick?: () => void) => {
-      let startX = 0;
-      let startY = 0;
-      let startLeft = 0;
-      let startTop = 0;
-      let moved = false;
-      let parentRect: DOMRect | null = null;
-      let pointerId: number | null = null;
-
-      const resolveSiblingCollisions = () => {
-        const parent = el.offsetParent as HTMLElement | null;
-        if (!parent) return;
-        const bounds = parent.getBoundingClientRect();
-        const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => {
-          return child instanceof HTMLElement && isDashboardBubble(child);
-        });
-        let frontier = new Set<HTMLElement>([el]);
-
-        for (let pass = 0; pass < 5 && frontier.size > 0; pass++) {
-          const nextFrontier = new Set<HTMLElement>();
-          for (const a of frontier) {
-            for (const b of bubbles) {
-              if (a === b) continue;
-              const aRect = a.getBoundingClientRect();
-              const bRect = b.getBoundingClientRect();
-              const aRadius = aRect.width / 2;
-              const bRadius = bRect.width / 2;
-              const aCenterX = aRect.left + aRadius;
-              const aCenterY = aRect.top + aRect.height / 2;
-              const bCenterX = bRect.left + bRadius;
-              const bCenterY = bRect.top + bRect.height / 2;
-              let dx = bCenterX - aCenterX;
-              let dy = bCenterY - aCenterY;
-              let distance = Math.hypot(dx, dy);
-              const minDistance = aRadius + bRadius + 4;
-              if (distance >= minDistance) continue;
-              if (distance < 0.01) {
-                const angle = ((bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
-                dx = Math.cos(angle);
-                dy = Math.sin(angle);
-                distance = 1;
-              }
-
-              const push = (minDistance - distance) * 1.05;
-              const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
-                if (amount === 0) return;
-                const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
-                const nextTopPx = rect.top - bounds.top + (dy / distance) * amount;
-                const nextLeftPct = (nextLeftPx / bounds.width) * 100;
-                const nextTopPct = (nextTopPx / bounds.height) * 100;
-                const widthPct = (rect.width / bounds.width) * 100;
-                const heightPct = (rect.height / bounds.height) * 100;
-                bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
-                bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
-              };
-              moveBubble(b, bRect, push);
-              clampBubbleToParent(b);
-              nextFrontier.add(b);
-            }
-          }
-          frontier = nextFrontier;
-        }
-      };
-
-      el.onpointerdown = (event: PointerEvent) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.stopPropagation();
-        pointerId = event.pointerId;
-        startX = event.clientX;
-        startY = event.clientY;
-        startLeft = parseFloat(el.style.left || "0");
-        startTop = parseFloat(el.style.top || "0");
-        parentRect = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect() || null;
-        moved = false;
-        el.addClass("auto-oc-dashboard-dragging");
-        (el.offsetParent as HTMLElement | null)?.addClass("auto-oc-dashboard-colliding");
-        el.style.zIndex = "30";
-        el.setPointerCapture(event.pointerId);
-      };
-      el.onpointermove = (event: PointerEvent) => {
-        if (pointerId !== event.pointerId || !parentRect) return;
-        const dx = event.clientX - startX;
-        const dy = event.clientY - startY;
-        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
-        const bubbleRect = el.getBoundingClientRect();
-        const widthPct = (bubbleRect.width / parentRect.width) * 100;
-        const heightPct = (bubbleRect.height / parentRect.height) * 100;
-        const nextLeft = startLeft + (dx / parentRect.width) * 100;
-        const nextTop = startTop + (dy / parentRect.height) * 100;
-        el.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeft))}%`;
-        el.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTop))}%`;
-        resolveSiblingCollisions();
-      };
-      el.onpointerup = (event: PointerEvent) => {
-        if (pointerId !== event.pointerId) return;
-        const parent = el.offsetParent as HTMLElement | null;
-        event.preventDefault();
-        event.stopPropagation();
-        el.releasePointerCapture(event.pointerId);
-        el.removeClass("auto-oc-dashboard-dragging");
-        parent?.removeClass("auto-oc-dashboard-colliding");
-        el.style.zIndex = "";
-        pointerId = null;
-        parentRect = null;
-        if (parent) {
-          settleBubbleCollisions(parent, 24);
-          if (isDashboardBubble(parent)) {
-            fitContainerToChildren(parent);
-            const grandParent = parent.offsetParent as HTMLElement | null;
-            if (grandParent && isDashboardBubble(grandParent)) fitContainerToChildren(grandParent);
-          }
-        }
-        if (!moved && onClick) onClick();
-      };
-      el.onpointercancel = (event: PointerEvent) => {
-        if (pointerId !== event.pointerId) return;
-        el.removeClass("auto-oc-dashboard-dragging");
-        (el.offsetParent as HTMLElement | null)?.removeClass("auto-oc-dashboard-colliding");
-        el.style.zIndex = "";
-        pointerId = null;
-        parentRect = null;
-      };
-      el.onkeydown = (event: KeyboardEvent) => {
-        if (event.key !== "Enter" || !onClick) return;
-        event.preventDefault();
-        event.stopPropagation();
-        onClick();
-      };
-    };
-    const layoutTopLevel = (items: { key: string; size: number; maxPx?: number }[]) => {
-      const jitterForKey = (key: string, axis: number) => {
-        let hash = 0;
-        for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i) + axis * 131) | 0;
-        return ((Math.abs(hash) % 1000) / 1000 - 0.5) * 10;
-      };
-      const count = Math.max(items.length, 1);
-      const cols = count <= 1 ? 1 : count <= 4 ? 2 : Math.ceil(Math.sqrt(count));
-      const rows = Math.ceil(count / cols);
-      const gap = 4;
-      const cellWidth = (100 - gap * (cols + 1)) / cols;
-      const cellHeight = (100 - gap * (rows + 1)) / rows;
-      return items.map((item, index) => {
-        const col = index % cols;
-        const row = Math.floor(index / cols);
-        const size = Math.min(item.size, cellWidth, cellHeight);
-        const saved = this.dashboardPositions.get(item.key);
-        if (saved) {
-          return {
-            ...item,
-            size,
-            x: Math.max(0, Math.min(100 - size, saved.x)),
-            y: Math.max(0, Math.min(100 - size, saved.y)),
-          };
-        }
-        const jitterX = Math.max(-cellWidth * 0.18, Math.min(cellWidth * 0.18, jitterForKey(item.key, 0)));
-        const jitterY = Math.max(-cellHeight * 0.18, Math.min(cellHeight * 0.18, jitterForKey(item.key, 1)));
-        return {
-          ...item,
-          size,
-          x: Math.max(0, Math.min(100 - size, gap + col * (cellWidth + gap) + (cellWidth - size) / 2 + jitterX)),
-          y: Math.max(0, Math.min(100 - size, gap + row * (cellHeight + gap) + (cellHeight - size) / 2 + jitterY)),
-        };
-      });
-    };
-    const createAreaBubble = (name: string, x: number, y: number, size: number, maxPx?: number) => {
-      const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
-      areaBubble.setAttr("data-dashboard-key", `area:${name}`);
-      setBubbleRect(areaBubble, x, y, size);
-      const saved = this.dashboardPositions.get(`area:${name}`);
-      const widthPx = saved?.sizePx ?? maxPx;
-      if (widthPx) areaBubble.style.width = `${widthPx}px`;
-      addBubbleVisual(areaBubble);
-      areaBubble.setAttr("aria-label", `Area: ${name}`);
-      areaBubble.tabIndex = 0;
-
-      const areaLabel = areaBubble.createDiv("auto-oc-dashboard-area-label");
-      areaLabel.setText(name);
-      areaBubble.createDiv("auto-oc-dashboard-hover-label").setText(name);
-      attachBubbleDrag(areaBubble);
-      clampBubbleToParent(areaBubble);
-      return areaBubble;
-    };
-
-    const createTaskBubble = (parent: HTMLElement, task: ScheduledTask, x: number, y: number, size: number, extraCls = "", positionKey = `task:${task.id}`) => {
-      // All task bubbles render at the same size regardless of usage/failure
-      // history — only their position drifts based on activity, not their size.
-      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${this.plugin.settings.dashboardTaskBubbleSize} ${extraCls}`.trim());
-      if (task.disabled) taskBubble.addClass("auto-oc-disabled");
-      taskBubble.setAttr("data-auto-oc-task-id", task.id);
-      taskBubble.setAttr("data-dashboard-key", positionKey);
-      taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
-      addBubbleVisual(taskBubble);
-      const saved = this.dashboardPositions.get(positionKey);
-      let posX = saved?.x ?? x;
-      let posY = saved?.y ?? y;
-      if (!saved) {
-        const usage = taskUsage.get(task.id) || 0;
-        const fails = taskFailCounts.get(task.id) || 0;
-        const usageLift = Math.min(usage * 1.2, 14);
-        const failDrop = Math.min(fails * 1.5, 12);
-        posY = Math.max(0, Math.min(100 - size, posY - usageLift + failDrop));
-      }
-      setBubbleRect(taskBubble, posX, posY, size);
-      // Hard-override to a fixed physical diameter regardless of what % the
-      // caller's radial-layout math assumed, and regardless of any later
-      // parent resize (fitContainerToChildren changes container size but
-      // never touches child width%, which would otherwise make % sizing
-      // drift away from "uniform" after the container grows/shrinks).
-      // Capped to the immediate parent's own real size — a task bubble
-      // bigger than its own workflow/area ring would overflow past its
-      // border and visually bleed into whatever neighboring bubble happens
-      // to be nearby, looking like it belongs to the wrong container.
-      const finalPx = taskBubbleSizeForParent(parent).px;
-      taskBubble.style.width = `${finalPx}px`;
-      taskBubble.style.height = `${finalPx}px`;
-      const usageCount = taskUsage.get(task.id) || 0;
-      addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
-      attachBubbleDrag(taskBubble, () => this.openTaskInList(task));
-      clampBubbleToParent(taskBubble);
-    };
-
-    const configuredAreaNames = areaNames.filter((name) => name !== "No area");
-    const areaContentWeight = (areaWorkflows: Workflow[], looseTasks: ScheduledTask[]) => {
-      return looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
-        return sum + workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length;
-      }, 0);
-    };
-    const topLevelItems: { key: string; size: number; maxPx?: number }[] = [];
-    configuredAreaNames.forEach((name) => {
-      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
-      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
-      if (contentWeight === 0) return;
-      const areaSize = areaSizeForContent(contentWeight);
-      topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
+    this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
+      items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows),
+      diameter: () => this.plugin.getDashboardBubbleDiameter(), open,
+      log: item => showLog(item, false), history: item => showLog(item, true),
     });
-    const noAreaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === "No area");
-    const noAreaLooseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === "No area");
-    noAreaWorkflows.forEach((workflow) => {
-      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowPx = workflowSizePxForTasks(taskSteps.length);
-      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 1, 30), maxPx: workflowPx });
-    });
-    noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
-    const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
-
-    configuredAreaNames.forEach((name) => {
-      const areaLayout = topLevelLayout.get(`area:${name}`);
-      if (!areaLayout) return;
-      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
-      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
-      if (contentWeight === 0) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
-      if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "running"))) {
-        areaBubble.addClass("auto-oc-dashboard-has-running");
-      }
-      if (looseTasks.some((task) => task.status === "failed") || areaWorkflows.some((workflow) => workflow.status === "failed" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "failed"))) {
-        areaBubble.addClass("auto-oc-dashboard-has-failed");
-      }
-      const areaWorkflowCount = Math.max(areaWorkflows.length, 1);
-      areaWorkflows.forEach((workflow, workflowIndex) => {
-        const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-        const angle = -Math.PI / 2 + (workflowIndex * Math.PI * 2) / areaWorkflowCount;
-        const workflowSize = workflowSizePctForParent(taskSteps.length, areaBubble);
-        const workflowRadius = areaWorkflowCount === 1 ? 0 : Math.max(0, 46 - workflowSize / 2);
-        const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
-        const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
-        const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
-        if (workflow.disabled) workflowBubble.addClass("auto-oc-disabled");
-        workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
-        addBubbleVisual(workflowBubble);
-        if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
-        if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
-        const workflowKey = `area:${name}:workflow:${workflow.id}`;
-        workflowBubble.setAttr("data-dashboard-key", workflowKey);
-        const savedWorkflow = this.dashboardPositions.get(workflowKey);
-        setBubbleRect(workflowBubble, savedWorkflow?.x ?? workflowX, savedWorkflow?.y ?? workflowY, workflowSize);
-        workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowSizePxForTasks(taskSteps.length)}px`;
-        addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
-        attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
-        clampBubbleToParent(workflowBubble);
-
-        const taskCount = Math.max(taskSteps.length, 1);
-        taskSteps.forEach((step, stepIndex) => {
-          const task = taskById.get(step.taskId!);
-          if (!task) return;
-          const taskAngle = -Math.PI / 2 + (stepIndex * Math.PI * 2) / taskCount;
-          const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
-          const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
-          const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
-          const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
-          createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `${workflowKey}:task:${task.id}:${stepIndex}`);
-        });
-      });
-
-      const looseCount = Math.max(looseTasks.length, 1);
-      looseTasks.forEach((task, taskIndex) => {
-        const angle = -Math.PI / 2 + (taskIndex * Math.PI * 2) / looseCount;
-        const taskSize = taskBubbleSizeForParent(areaBubble).pct;
-        const radius = looseCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
-        const taskX = 50 + Math.cos(angle) * radius - taskSize / 2;
-        const taskY = 50 + Math.sin(angle) * radius - taskSize / 2;
-        createTaskBubble(areaBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-loose", `area:${name}:task:${task.id}`);
-      });
-    });
-
-    noAreaWorkflows.forEach((workflow) => {
-      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 1, 30);
-      const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
-      if (!workflowLayout) return;
-      const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
-      workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
-      addBubbleVisual(workflowBubble);
-      if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
-      if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
-      workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
-      const savedWorkflow = this.dashboardPositions.get(`workflow:${workflow.id}`);
-      setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowSize);
-      workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowLayout.maxPx ?? workflowSizePxForTasks(taskSteps.length)}px`;
-      addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
-      attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
-      clampBubbleToParent(workflowBubble);
-
-      const taskCount = Math.max(taskSteps.length, 1);
-      taskSteps.forEach((step, stepIndex) => {
-        const task = taskById.get(step.taskId!);
-        if (!task) return;
-        const taskAngle = -Math.PI / 2 + (stepIndex * Math.PI * 2) / taskCount;
-        const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
-        const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
-        const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
-        const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
-        createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `workflow:${workflow.id}:task:${task.id}:${stepIndex}`);
-      });
-    });
-
-    noAreaLooseTasks.forEach((task) => {
-      const taskLayout = topLevelLayout.get(`task:${task.id}`);
-      if (!taskLayout) return;
-      const taskSize = taskBubbleSizeForParent(map).pct;
-      createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
-    });
-
-    this.syncDashboardTaskDrift(tasks);
-
-    this.forceDashboardFitOnNextRender = false;
-    return;
   }
 
   private renderTasks(containerEl: HTMLElement) {

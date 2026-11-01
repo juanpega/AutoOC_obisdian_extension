@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "version": "1.7.11",
+  "version": "1.7.12",
   "sha256": {
-    "main.js": "5700c5ccdd76b701ce5a2ae4cf0f51083ba70343f7c637088bc66357229d6ed8",
-    "manifest.json": "8e13c30d30ebba3fdd98ef6be45640f45809798c6469f3a6ca2b27fde6a409d3",
-    "styles.css": "6857278b53a0d61d3d28d7e1175f5af885b85f9a960d8a2d8bb936b624016012",
-    "autooc-cli.cjs": "79c91b80512a0b9f4815c7f4d4b8854a0f52afcc14c76440cd0ea45ea9ec310d",
+    "main.js": "2e036f283b05bfae3b9ce13a3dbc0aa5f8a84d967a4c87fb1589df32ce56714b",
+    "manifest.json": "0195a2279c19e59418bc21682b706a39c2a1c1fadabf1f48f6e653d79d0280c2",
+    "styles.css": "a91139ff227a34be1a77f6fbbb4f76f6a8792ee9a8161cdc1790f9cb7be337cb",
+    "autooc-cli.cjs": "a06d2000e2f2fbe0034d32f433e51fae561bdc5930303fc6000204176f007ef6",
     "autooc-runtime.cjs": "ec02bf83a1fe89d8636308c53a317b2a5fffde02179bc638e9f000d6edc07ad8",
     "skills/autooc-runtime/SKILL.md": "6fc9bbd3f812ef855d01f586c31e845ee05e8118709c66d724cf1a370ddc1f01"
   }

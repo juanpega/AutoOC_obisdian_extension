@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.12] - Candidato
+
+- Dashboard por áreas: grupos plegables con nombres visibles, burbujas distintas para workflows, tareas y Code, búsqueda de pasos, filtro de atención y opción de mostrar los desactivados.
+- Panel de detalle con pasos del workflow, log, historial y acceso a los controles existentes. Los pasos Code conservan su identidad y muestran el último resultado aplicable, incluida la ejecución aislada.
+- Diseño adaptable al ancho del panel, detalle de pasos por bloques de 40 y señales breves al cambiar el estado. No se ejecutan simulaciones de movimiento, consultas periódicas ni guardados de catálogo por las interacciones del Dashboard. Las posiciones históricas se conservan.
+
 ## [1.7.11] - Candidato
 
 - Los creadores de tareas y workflows con IA ofrecen un selector de modelos por motor, con las listas ya cargadas y los modelos usados en tareas. Conservan la elección al cambiar de motor y admiten un identificador personalizado o la selección automática de la CLI. El modelo elegido se usa en la generación y en las tareas propuestas con ese motor.
