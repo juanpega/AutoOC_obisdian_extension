@@ -1,11 +1,48 @@
-import { Setting } from "obsidian";
+import { Setting, type App } from "obsidian";
 
 interface BubbleSettings {
   dashboardTaskBubbleSize?: string;
   dashboardTaskBubbleDiameter?: number;
 }
 const validDiameter = (value: unknown): value is number =>
-  typeof value === "number" && Number.isInteger(value) && value >= 16 && value <= 80;
+  typeof value === "number" && Number.isInteger(value) && value >= 10 && value <= 80;
+
+// A visual preference must never serialize or wait for the execution catalog.
+// Obsidian scopes this store to the vault. Include the configuration directory
+// as well so separate plugin installations in one vault stay independent.
+function preferenceStorage(app: App, pluginId: string) {
+  const key = `${pluginId}:${app.vault.configDir}:dashboard-task-diameter`;
+  if (typeof app.loadLocalStorage === "function" && typeof app.saveLocalStorage === "function") {
+    return { read: () => app.loadLocalStorage(key), write: (value: number) => app.saveLocalStorage(key, value) };
+  }
+  // Compatibility with Obsidian before 1.8.7; its localStorage is shared by vaults.
+  const base = (app.vault.adapter as {basePath?: string}).basePath;
+  if (!base) throw new Error("Cannot identify the vault for the visual preference");
+  const scopedKey = `${key}:${base}`;
+  return {
+    read: () => JSON.parse(localStorage.getItem(scopedKey) || "null"),
+    write: (value: number) => localStorage.setItem(scopedKey, JSON.stringify(value)),
+  };
+}
+
+export function loadDashboardBubbleDiameter(app: App, pluginId: string, legacy: BubbleSettings): number {
+  try {
+    const value = preferenceStorage(app, pluginId).read();
+    if (validDiameter(value)) return value;
+  } catch { /* Keep the existing size if local preferences are unavailable. */ }
+  return dashboardTaskDiameter(legacy);
+}
+
+export function saveDashboardBubbleDiameter(app: App, pluginId: string, diameter: number): void {
+  if (!validDiameter(diameter)) throw new Error("Enter a whole number from 10 to 80.");
+  preferenceStorage(app, pluginId).write(diameter);
+}
+
+export function applyDashboardBubbleDiameter(root: HTMLElement, diameter: number): void {
+  for (const bubble of Array.from(root.querySelectorAll<HTMLElement>(".auto-oc-dashboard-task-bubble"))) {
+    bubble.style.width = bubble.style.height = `${diameter}px`;
+  }
+}
 
 export function dashboardTaskDiameter(settings: BubbleSettings): number {
   if (validDiameter(settings.dashboardTaskBubbleDiameter)) return settings.dashboardTaskBubbleDiameter;
@@ -18,17 +55,21 @@ export function dashboardTaskDiameter(settings: BubbleSettings): number {
 }
 
 /** Preview locally; save only an explicit Apply or Reset, not each keystroke. */
-export function addDashboardBubbleSizeSetting(container: HTMLElement, host: {settings: BubbleSettings; saveSettings(): Promise<void>}) {
+export function addDashboardBubbleSizeSetting(container: HTMLElement, host: {
+  getDiameter(): number;
+  saveDiameter(diameter: number): void | Promise<void>;
+  applyDiameter(diameter: number): void;
+}) {
   let input: HTMLInputElement, apply: HTMLButtonElement, reset: HTMLButtonElement;
   let saving = false;
   const row = new Setting(container).setName("Task and step bubble size")
-    .setDesc("Exact diameter in pixels (16–80). Preview changes below; Apply updates the Dashboard.");
+    .setDesc("Exact diameter in pixels (10–80). Preview changes below; Apply updates the Dashboard. Saved on this device for this vault.");
   row.addText(text => {
     input = text.inputEl;
-    input.type = "number"; input.min = "16"; input.max = "80"; input.step = "1";
+    input.type = "number"; input.min = "10"; input.max = "80"; input.step = "1";
     input.style.width = "80px";
     input.setAttribute("aria-label", "Task and step bubble size in pixels");
-    text.setValue(String(dashboardTaskDiameter(host.settings))).onChange(() => preview());
+    text.setValue(String(host.getDiameter())).onChange(() => preview());
   });
   row.addButton(button => {
     apply = button.buttonEl;
@@ -49,30 +90,29 @@ export function addDashboardBubbleSizeSetting(container: HTMLElement, host: {set
   function preview() {
     const diameter = value(), valid = validDiameter(diameter);
     input.setAttribute("aria-invalid", String(!valid));
-    apply.disabled = saving || !valid || diameter === dashboardTaskDiameter(host.settings);
+    apply.disabled = saving || !valid || diameter === host.getDiameter();
     if (valid) {
       bubble.style.width = bubble.style.height = `${diameter}px`;
       feedback.setText(`${diameter} px`);
-    } else feedback.setText("Enter a whole number from 16 to 80.");
+    } else feedback.setText("Enter a whole number from 10 to 80.");
   }
   async function save() {
     const diameter = value();
     if (saving || !validDiameter(diameter)) return;
     saving = true; input.disabled = apply.disabled = reset.disabled = true;
-    const previous = host.settings.dashboardTaskBubbleDiameter;
-    host.settings.dashboardTaskBubbleDiameter = diameter;
+    apply.setText("Saving…");
+    feedback.setText("Saving size…");
     try {
-      await host.saveSettings();
+      await host.saveDiameter(diameter);
       feedback.setText(`Saved: ${diameter} px`);
+      try { host.applyDiameter(diameter); }
+      catch { feedback.setText(`Saved: ${diameter} px. Reopen the Dashboard to refresh its bubbles.`); }
     } catch {
-      if (host.settings.dashboardTaskBubbleDiameter === diameter) {
-        if (previous === undefined) delete host.settings.dashboardTaskBubbleDiameter;
-        else host.settings.dashboardTaskBubbleDiameter = previous;
-      }
       feedback.setText("Could not save the size. Your previous size is kept. Try Apply again.");
     } finally {
       saving = false; input.disabled = reset.disabled = false;
-      apply.disabled = value() === dashboardTaskDiameter(host.settings);
+      apply.setText("Apply");
+      apply.disabled = value() === host.getDiameter();
     }
   }
   input!.addEventListener("keydown", event => {

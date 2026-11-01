@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.7.9] - Candidato
+
+- El tamaño de las burbujas admite **10–80 px**. Apply guarda esta preferencia por bóveda y dispositivo, separada del catálogo de tareas e históricos, y actualiza las burbujas visibles sin reconstruir el panel. Evita esperar la cola de guardados del catálogo para un cambio visual. Conserva el tamaño anterior hasta elegir otro y muestra el estado del guardado.
+
 ## [1.7.8] - Candidato
 
 - Settings permite elegir el diámetro exacto de las burbujas de tareas y steps del Dashboard entre 16 y 80 píxeles, en incrementos de 1. Incluye vista previa, **Apply** y **Reset to default** (30 px). Conserva el tamaño elegido en versiones anteriores.

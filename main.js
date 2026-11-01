@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.8",
+      version: "1.7.9",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -898,7 +898,37 @@ function setupCodeTextarea(textarea, app) {
 
 // dashboard-bubble-settings.ts
 var import_obsidian = require("obsidian");
-var validDiameter = (value) => typeof value === "number" && Number.isInteger(value) && value >= 16 && value <= 80;
+var validDiameter = (value) => typeof value === "number" && Number.isInteger(value) && value >= 10 && value <= 80;
+function preferenceStorage(app, pluginId) {
+  const key = `${pluginId}:${app.vault.configDir}:dashboard-task-diameter`;
+  if (typeof app.loadLocalStorage === "function" && typeof app.saveLocalStorage === "function") {
+    return { read: () => app.loadLocalStorage(key), write: (value) => app.saveLocalStorage(key, value) };
+  }
+  const base2 = app.vault.adapter.basePath;
+  if (!base2) throw new Error("Cannot identify the vault for the visual preference");
+  const scopedKey = `${key}:${base2}`;
+  return {
+    read: () => JSON.parse(localStorage.getItem(scopedKey) || "null"),
+    write: (value) => localStorage.setItem(scopedKey, JSON.stringify(value))
+  };
+}
+function loadDashboardBubbleDiameter(app, pluginId, legacy) {
+  try {
+    const value = preferenceStorage(app, pluginId).read();
+    if (validDiameter(value)) return value;
+  } catch (e) {
+  }
+  return dashboardTaskDiameter(legacy);
+}
+function saveDashboardBubbleDiameter(app, pluginId, diameter) {
+  if (!validDiameter(diameter)) throw new Error("Enter a whole number from 10 to 80.");
+  preferenceStorage(app, pluginId).write(diameter);
+}
+function applyDashboardBubbleDiameter(root, diameter) {
+  for (const bubble of Array.from(root.querySelectorAll(".auto-oc-dashboard-task-bubble"))) {
+    bubble.style.width = bubble.style.height = `${diameter}px`;
+  }
+}
 function dashboardTaskDiameter(settings) {
   if (validDiameter(settings.dashboardTaskBubbleDiameter)) return settings.dashboardTaskBubbleDiameter;
   switch (settings.dashboardTaskBubbleSize) {
@@ -915,16 +945,16 @@ function dashboardTaskDiameter(settings) {
 function addDashboardBubbleSizeSetting(container, host) {
   let input, apply, reset;
   let saving = false;
-  const row = new import_obsidian.Setting(container).setName("Task and step bubble size").setDesc("Exact diameter in pixels (16\u201380). Preview changes below; Apply updates the Dashboard.");
+  const row = new import_obsidian.Setting(container).setName("Task and step bubble size").setDesc("Exact diameter in pixels (10\u201380). Preview changes below; Apply updates the Dashboard. Saved on this device for this vault.");
   row.addText((text) => {
     input = text.inputEl;
     input.type = "number";
-    input.min = "16";
+    input.min = "10";
     input.max = "80";
     input.step = "1";
     input.style.width = "80px";
     input.setAttribute("aria-label", "Task and step bubble size in pixels");
-    text.setValue(String(dashboardTaskDiameter(host.settings))).onChange(() => preview());
+    text.setValue(String(host.getDiameter())).onChange(() => preview());
   });
   row.addButton((button) => {
     apply = button.buttonEl;
@@ -947,32 +977,34 @@ function addDashboardBubbleSizeSetting(container, host) {
   function preview() {
     const diameter = value(), valid = validDiameter(diameter);
     input.setAttribute("aria-invalid", String(!valid));
-    apply.disabled = saving || !valid || diameter === dashboardTaskDiameter(host.settings);
+    apply.disabled = saving || !valid || diameter === host.getDiameter();
     if (valid) {
       bubble.style.width = bubble.style.height = `${diameter}px`;
       feedback.setText(`${diameter} px`);
-    } else feedback.setText("Enter a whole number from 16 to 80.");
+    } else feedback.setText("Enter a whole number from 10 to 80.");
   }
   async function save() {
     const diameter = value();
     if (saving || !validDiameter(diameter)) return;
     saving = true;
     input.disabled = apply.disabled = reset.disabled = true;
-    const previous = host.settings.dashboardTaskBubbleDiameter;
-    host.settings.dashboardTaskBubbleDiameter = diameter;
+    apply.setText("Saving\u2026");
+    feedback.setText("Saving size\u2026");
     try {
-      await host.saveSettings();
+      await host.saveDiameter(diameter);
       feedback.setText(`Saved: ${diameter} px`);
-    } catch (e) {
-      if (host.settings.dashboardTaskBubbleDiameter === diameter) {
-        if (previous === void 0) delete host.settings.dashboardTaskBubbleDiameter;
-        else host.settings.dashboardTaskBubbleDiameter = previous;
+      try {
+        host.applyDiameter(diameter);
+      } catch (e) {
+        feedback.setText(`Saved: ${diameter} px. Reopen the Dashboard to refresh its bubbles.`);
       }
+    } catch (e) {
       feedback.setText("Could not save the size. Your previous size is kept. Try Apply again.");
     } finally {
       saving = false;
       input.disabled = reset.disabled = false;
-      apply.disabled = value() === dashboardTaskDiameter(host.settings);
+      apply.setText("Apply");
+      apply.disabled = value() === host.getDiameter();
     }
   }
   input.addEventListener("keydown", (event) => {
@@ -10474,6 +10506,18 @@ var AutoOCPlugin = class extends import_obsidian7.Plugin {
       if (leaf.view instanceof AutoOCView) leaf.view.refresh();
     }
   }
+  getDashboardBubbleDiameter() {
+    return loadDashboardBubbleDiameter(this.app, this.manifest.id, this.settings);
+  }
+  saveDashboardBubbleDiameter(diameter) {
+    this.assertLifecycleOpen();
+    saveDashboardBubbleDiameter(this.app, this.manifest.id, diameter);
+  }
+  applyDashboardBubbleDiameter(diameter) {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AutoOCView) applyDashboardBubbleDiameter(leaf.view.containerEl, diameter);
+    }
+  }
   getMcpBridgePath() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     return path29.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
@@ -14124,7 +14168,7 @@ var AutoOCView = class extends import_obsidian7.ItemView {
       const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
       return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
     };
-    const TASK_BUBBLE_PX = dashboardTaskDiameter(this.plugin.settings);
+    const TASK_BUBBLE_PX = this.plugin.getDashboardBubbleDiameter();
     const taskBubbleSizeForParent = (parent) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -18520,7 +18564,11 @@ var AutoOCSettingTab = class extends import_obsidian7.PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
-    addDashboardBubbleSizeSetting(containerEl, this.plugin);
+    addDashboardBubbleSizeSetting(containerEl, {
+      getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
+      saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
+      applyDiameter: (diameter) => this.plugin.applyDashboardBubbleDiameter(diameter)
+    });
     new import_obsidian7.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;

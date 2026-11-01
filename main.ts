@@ -1,5 +1,5 @@
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
-import { dashboardTaskDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
+import { loadDashboardBubbleDiameter, saveDashboardBubbleDiameter, applyDashboardBubbleDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import type { InteractiveCliProvider } from "./interactive-cli";
@@ -2614,6 +2614,21 @@ export default class AutoOCPlugin extends Plugin {
   private refreshOpenViews():void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view instanceof AutoOCView) leaf.view.refresh();
+    }
+  }
+
+  getDashboardBubbleDiameter(): number {
+    return loadDashboardBubbleDiameter(this.app, this.manifest.id, this.settings);
+  }
+
+  saveDashboardBubbleDiameter(diameter: number): void {
+    this.assertLifecycleOpen();
+    saveDashboardBubbleDiameter(this.app, this.manifest.id, diameter);
+  }
+
+  applyDashboardBubbleDiameter(diameter: number): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AutoOCView) applyDashboardBubbleDiameter(leaf.view.containerEl, diameter);
     }
   }
 
@@ -6394,7 +6409,7 @@ class AutoOCView extends ItemView {
     // Every task/step bubble renders at the same physical diameter,
     // regardless of usage, status, or nesting depth. Containers must adapt
     // around tasks; tasks should not shrink based on the current container.
-    const TASK_BUBBLE_PX = dashboardTaskDiameter(this.plugin.settings);
+    const TASK_BUBBLE_PX = this.plugin.getDashboardBubbleDiameter();
     const taskBubbleSizeForParent = (parent: HTMLElement) => {
       const rect = parent.getBoundingClientRect();
       const parentDiameter = rect.height || rect.width || 0;
@@ -11243,7 +11258,11 @@ class AutoOCSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
 
-    addDashboardBubbleSizeSetting(containerEl, this.plugin);
+    addDashboardBubbleSizeSetting(containerEl, {
+      getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
+      saveDiameter: diameter => this.plugin.saveDashboardBubbleDiameter(diameter),
+      applyDiameter: diameter => this.plugin.applyDashboardBubbleDiameter(diameter),
+    });
 
     new Setting(containerEl)
       .setName("Default AI engine")
