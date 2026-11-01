@@ -6,6 +6,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Automation and agents:** [complete CLI reference: commands, parameters, and examples](#complete-autooc-cli-reference).
 
+**Update blocked?** [Install the new version while keeping your tasks, workflows, and history](#update-blocked-install-without-losing-your-data).
+
 **Development tracking:** [1.7.13 delivery record: changes, flows, contracts, limitations, and release preparation](docs/autoOC/04_Desarrollo/entrega-1.7.13-20261101/README.md) (in Spanish).
 
 ## Area dashboard
@@ -87,6 +89,8 @@ Each run keeps its own `runId`, output, and stop control. Cards indicate whether
 - Windows, macOS, or Linux.
 
 ## Install
+
+If **Check updates** reports **Unfinished execution or uncertain effect requires reconciliation**, follow the [blocked-update guide](#update-blocked-install-without-losing-your-data). You do not need to uninstall AutoOC or reset your catalog.
 
 ### From a release
 
@@ -328,25 +332,96 @@ Start with the [architecture](docs/architecture.md).
 
 AutoOC is open source under the [MIT License](LICENSE).
 
-## Updating installations blocked by historical attempts
+<a id="updating-installations-blocked-by-historical-attempts"></a>
 
-If the updater reports uncertain effects and `abandon` rejects a terminal run, use a complete new package from a separate folder. This maintenance path was introduced for upgrades from **1.6.6 / 1.6.7 to 1.6.9** and remains available in **1.7.13**. Verify the package's official origin before running it.
+## Update blocked? Install without losing your data
 
-1. Unload AutoOC normally from Obsidian by disabling the plugin. A remaining lease blocks the procedure: do not delete locks or journals.
-2. From the extracted ZIP, run:
-   `node autooc-cli.cjs maintain-release --vault "C:/path/to/vault" --inspect`.
-   Inspection does not change the installation and shows physical identity, revision, and reasons, without prompts or private results.
-3. Save a **list** containing only the reviewed run inspections in a private JSON file. Preserve every field; add `"reason":"specific human reason"` and `"acknowledgedUnknownEffects":true` to each object. Do not select runs from another vault or infer blanket decisions.
-4. From the same folder, run:
-   `node autooc-cli.cjs maintain-release --vault "C:/path/to/vault" --decisions "C:/path/to/decisions.json"`.
-   Check the receipt: it reports the verified private backup and each durable decision, and installs the seven artifacts while holding the target lease.
-5. Enable AutoOC normally and check the version, history, and a sample note saved and reopened. The installation receipt **does not establish successful loading in Obsidian**.
+If **Check updates** shows this message:
 
-The historical phase, steps, and results are preserved; the external outcome remains **unknown**, even after the administrative block is resolved. The decision does not stop processes, confirm their termination, or repeat steps. If another uncertain attempt or pending write remains, installation stops. Older readers accept the added field and retain their protective block. No new command is needed in the old CLI.
+> Unfinished execution or uncertain effect requires reconciliation. Your configuration is preserved; do not uninstall the plugin.
 
-Since 1.6.9, maintenance also recognizes an official abandonment already recorded when the catalog retains the previous links for the same attempt. It verifies the complete original snapshot, identity, historical hash, revision, phase, and steps; it neither changes those links nor records abandonment again. If no other uncertainties need a decision, save `[]` in the decision file after a fresh inspection. The external outcome remains `unknown`, and `applied` is empty. A missing, unsafe, or inconsistent snapshot, another unresolved attempt, a lease, or a pending write blocks the procedure. Do not edit the catalog or evidence to bypass the diagnosis.
+Use the installer included in the **new ZIP**, from outside your vault. Older updaters can treat an interrupted or canceled run as a reason to reject the update before downloading anything. The 1.7.13 installer separates replacing the plugin from resolving those old runs.
 
-After a partial failure, preserve the receipt, backup, and snapshots. Durable decisions remain in effect; inspect again and select only pending cases (use an explicit `[]` list if all decisions are already durable). If `update-pending.json` remains, use the installer's supported recovery before running more work. Do not edit its records.
+**The normal recovery path is `maintain-release --install`.** It preserves tasks, workflows, settings, results, and recorded attempts. It does not execute tasks, resume a workflow, mark a failed run as successful, or accept unknown effects on your behalf. A historical attempt may still need review before you can run it again; that is separate from installing the update.
+
+### 1. Save, stop, and back up
+
+1. Save any open task or workflow editors. Let active work finish, or use **Stop** and confirm it has finished, including any external CLI work using this vault.
+2. In **Settings → Community plugins**, **disable AutoOC**. If its panel cannot load, close the affected Obsidian vault normally. Wait for any saving notice to finish. Closing the Dashboard tab alone does not unload the plugin; do not force-kill a saving process.
+3. Copy the vault to a separate backup location, including the hidden `.obsidian` folder, while its files are no longer being written. At a minimum, preserve the entire `.obsidian/plugins/auto-oc/` folder. Keep the backup until you have checked the updated vault.
+
+Do **not uninstall AutoOC**, delete its folder, or replace it with an empty folder. These are existing user data, not files to remove for an update:
+
+| Keep | What it contains |
+| --- | --- |
+| `data.json` | Task and workflow definitions, settings, schedules, and saved results/history. |
+| `runtime/` | Execution journals, checkpoints, receipts, and recovery evidence. |
+| `secrets.vault.json`, if present | The historical credentials file; preserve it unchanged. |
+| Your vault notes and project files | Files referenced or produced by your tasks and workflows. |
+
+The commands below target the default installation at `<vault>/.obsidian/plugins/auto-oc/`. If you use a **custom Obsidian configuration folder**, do not run them against a guessed location: this CLI does not select custom configuration folders. Use an installation-specific maintenance procedure; do not rename the folder or create a second installation to bypass this limitation.
+
+### 2. Extract the complete new package outside the vault
+
+Download **`auto-oc-1.7.13.zip`** from the [official 1.7.13 release](https://github.com/juanpega/AutoOC_obisdian_extension/releases/tag/v1.7.13) and extract it into a separate folder, such as `C:\Downloads\AutoOC-1.7.13`.
+
+Use the release ZIP asset, not GitHub's **Source code (zip)** download. Check that the extracted folder contains all seven artifacts listed in [Install](#from-a-release), including `autooc-cli.cjs` and `release-integrity.json`. **Use this new CLI, not the old one inside the vault.** The old plugin does not need to support the new maintenance command.
+
+You need Node.js 18 or later. In PowerShell, replace these two paths with the actual extracted package and target vault:
+
+```powershell
+$newCli = 'C:\Downloads\AutoOC-1.7.13\autooc-cli.cjs'
+$targetVault = 'C:\path\to\your\vault'
+
+node $newCli version
+node $newCli help
+node $newCli maintain-release --vault $targetVault --inspect
+```
+
+Confirm the CLI reports **1.7.13**, supports `maintain-release`, and identifies the intended vault and existing installation. Inspection is read-only. It may list interrupted or uncertain attempts; their presence alone does not require you to close or discard them to update. Inspection is not proof that external processes have finished. If it reports a blocking error, use the table below before proceeding.
+
+### 3. Install while preserving the existing catalog
+
+With AutoOC still unloaded and the inspection reviewed, run:
+
+```powershell
+node $newCli maintain-release --vault $targetVault --install
+```
+
+The installer verifies the new package, takes the installation lease, creates and verifies a private backup of the existing package, catalog, journals, and relevant snapshots, then replaces the seven release artifacts. It leaves the catalog and unresolved run records intact. The historical credentials file is not replaced.
+
+A successful JSON receipt contains `mode: "installed"`, a `maintenanceBackup` path, `applied: []`, and `reloadRequired: true`. Save that receipt and keep the backup. `loadedInObsidian: false` is expected: installation on disk does not prove that the plugin has loaded yet.
+
+If the command fails, preserve its exact error, any receipt, and backups. Do not follow it with a manual file overwrite or lock deletion; use the matching diagnosis below.
+
+### 4. Reopen and check your data
+
+Open the vault and enable AutoOC again. Check the installed version, your task and workflow lists, schedules, disabled items, and the history of a known item. Open a familiar note as well. **Re-enabling AutoOC restores its saved schedules**, so due work may start once the engine is available.
+
+The panel should let you inspect the preserved catalog even if an old attempt still needs review. Review that attempt separately before resuming or repeating it. An update is not a reset of execution state.
+
+### If maintenance still stops
+
+| Message or situation | What to do |
+| --- | --- |
+| `node` is not recognized | Install Node.js 18 or later, reopen the terminal, and check `node --version`. |
+| `Run maintenance from a separate extracted package` | Point `$newCli` to the CLI in the new ZIP's extracted folder, outside the installed plugin directory. |
+| `execution reservation is present`, or the owner is live or cannot be verified absent | Confirm AutoOC is unloaded and check the original CLI/window. `node $newCli status --vault $targetVault` reports the recorded owner; it does not prove inactivity. Wait for active work. A confirmed closed owner's reservation requires the official `recover-lease` procedure with its exact observed token and an explicit recovery decision. Never delete `execution.lock` or infer abandonment from its age. |
+| `Unfinished write requires reconciliation before package maintenance` | Preserve `data.json`, write locks, intents, and temporary files. Inspect with `node $newCli inspect-settings-write --vault $targetVault`; follow [interrupted-save recovery](#interrupted-saves). Do not select a temporary file to overwrite the catalog. |
+| `Incomplete plugin update requires recovery`, or `runtime/update-pending.json` remains | Preserve the marker and referenced backup. Recover that specific interrupted installation using its recovery record before retrying. Do not remove the marker to force an update or restore the catalog as part of a package repair. |
+| Missing artifacts, an invalid catalog, invalid recovery evidence, or a hash mismatch | Confirm the new ZIP is complete and from the official release. An incomplete existing installation or inconsistent data needs diagnosis of the exact error. Preserve your backup and report the error without posting the catalog, prompts, or credentials publicly. |
+
+The maintenance path rejects live or unverifiable ownership, unfinished writes, incomplete updates, and inconsistent evidence. Those checks protect the data you want to keep; bypassing them is not part of this procedure.
+
+### Advanced: resolving a historical attempt is optional
+
+**Do not use `abandon` or `--decisions` merely to install 1.7.13.** Use `--install` to preserve existing attempts. An explicit `--decisions` file containing `[]` is also supported and installs without closing any attempt.
+
+Only if you separately choose to close a reviewed terminal attempt, use its exact inspection object, add a specific `reason` and `acknowledgedUnknownEffects: true`, and supply the reviewed array through `maintain-release --vault VAULT --decisions ABSOLUTE_JSON_FILE`. This records an administrative decision; the external outcome stays **unknown**. It does not stop processes, confirm their termination, or repeat steps. `abandon` has a different contract for non-terminal attempts; see the [CLI reference](#complete-autooc-cli-reference).
+
+Maintenance can recognize an official abandonment already recorded when the catalog still has earlier links for the same attempt. It verifies the original snapshot, identity, hash, revision, phase, and steps without changing those links or recording the decision again. Missing or inconsistent evidence still blocks maintenance.
+
+If installation fails after a decision was saved, the decision remains durable. Keep the receipt, backup, and snapshots; inspect again and select only decisions still pending. Do not replay a decision to retry the installation. See the [runtime guide](skills/autooc-runtime/SKILL.md) for the detailed recovery contracts.
 
 ## Interrupted saves
 
