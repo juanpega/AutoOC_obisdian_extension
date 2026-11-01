@@ -1,5 +1,7 @@
+import { assertWorkflowEnabled } from "./catalog-availability";
+import { selectCodeStep } from "./workflow-code-step";
 import {executionPresentation, type ExecutionPresentation} from "./execution-presentation";
-import { catalogTransaction } from "./catalog-transaction";
+import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { samePhysicalPath } from "./path-identity";
 import * as fs from "fs";
@@ -28,6 +30,7 @@ export async function runInstalledWorkflow(options: {
   installationDirectory?: string;
   workflowId?: string;
   taskId?: string;
+  stepId?: string;
   resumeRunId?: string;
   newExecution?: boolean;
   reconcile?: boolean;
@@ -35,7 +38,7 @@ export async function runInstalledWorkflow(options: {
   maxSteps?: number;
   redact: (output:string) => string;
   lease?: ExecutionLease;
-  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog, presentation?:ExecutionPresentation)=>Promise<void>;
+  onCheckpoint?: (checkpoint:RunCheckpoint, catalog?:PersistedWorkflowCatalog, presentation?:ExecutionPresentation, transaction?:CatalogTransaction)=>Promise<void>;
   onTaskOutput?: (event:WorkflowTaskOutput)=>void;
   vaultMutations?: VaultMutationBatchFactory;
   catalogWriter?: SettingsWriter;
@@ -45,6 +48,7 @@ export async function runInstalledWorkflow(options: {
   includePresentation?: boolean;
 }) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
+  if (options.stepId !== undefined && (!options.workflowId || !options.stepId)) throw new Error("A code step requires its parent workflow identity");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
   const {vault, configurationFile, runtimeDirectory} = location;
@@ -74,9 +78,11 @@ export async function runInstalledWorkflow(options: {
   if (virtual && config.workflows.some((workflow:any)=>workflow.id === virtual.id)) throw new Error("Reserved task identity conflicts with a workflow");
   const matches = virtual ? config.tasks.filter((task:any)=>task.id === options.taskId) : config.workflows.filter((workflow:any)=>workflow.id === options.workflowId);
   if (matches.length !== 1) throw new Error("Missing or ambiguous workflow identity");
+  if (options.stepId) matches[0] = selectCodeStep(matches[0], options.stepId);
   if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
     throw new Error("Workflow has a bound execution; select that identity explicitly");
   }
+  if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks);
   const definition = prepareWorkflowDefinition(virtual || matches[0],config.tasks,config);
   preflightInstalledWorkflow(definition,vault);
   ensureInstalledWorkflowRuntime(location);
@@ -131,8 +137,8 @@ export async function runInstalledWorkflow(options: {
       admission?.bind(checkpoint);
       activeRunId=checkpoint.runId;
       checkStop();
-      const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
-        onCommitted:async catalog=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation});admission?.confirm(checkpoint);}});
+      const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,stepId:options.stepId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
+        onCommitted:async (catalog,transaction)=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation},transaction);admission?.confirm(checkpoint);}});
     },
   });
   if(stopError) throw stopError;

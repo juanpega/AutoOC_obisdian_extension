@@ -3,13 +3,21 @@ import * as path from "path";
 import * as os from "os";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
+import { createAuxiliaryDirectory, completeAuxiliaryDirectory, auxiliaryCompletionRecord, AUXILIARY_COMPLETION } from './execution-files';
 
-// Resolve the opencode binary. On Windows prefer .cmd so Electron finds it without
-// PATH. On macOS/Linux GUI apps (Obsidian) don't inherit the shell PATH, so probe the
-// common install locations explicitly before falling back to the bare command name.
+// Honor the selected command on PATH before probing fallback installations.
+// GUI apps may have an incomplete PATH, so keep the common install locations.
 export function resolveOpencodeBin(configured: string): string {
-  if (configured && configured !== "opencode") return configured;
+  const requested = configured?.trim();
+  if (requested && requested !== "opencode") return requested;
   const candidates: string[] = [];
+  const extensions = os.platform() === "win32" ? [".exe", ".cmd", ".bat"] : [""];
+  for (const entry of (process.env.PATH || process.env.Path || "").split(path.delimiter)) {
+    const directory = entry.trim().replace(/^"|"$/g, "");
+    // Never make the active vault an implicit executable search directory.
+    if (!path.isAbsolute(directory)) continue;
+    for (const extension of extensions) candidates.push(path.join(directory, `opencode${extension}`));
+  }
   if (os.platform() === "win32") {
     // Common npm global path
     candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
@@ -24,14 +32,15 @@ export function resolveOpencodeBin(configured: string): string {
       "/usr/local/bin/opencode",
     );
   }
-  const { accessSync, constants } = require("fs");
+  const { accessSync, statSync, constants } = require("fs");
   for (const candidate of candidates) {
     try {
       accessSync(candidate, constants.X_OK);
+      if (!statSync(candidate).isFile()) continue;
       return candidate;
     } catch { /* ignore */ }
   }
-  return configured || "opencode";
+  return requested || "opencode";
 }
 
 export function psSingleQuoted(value: string): string {
@@ -131,6 +140,7 @@ export interface CliLaunchOptions {
   onError?: (error: Error) => void;
   onLaunched?: () => void;
   linuxTerminal?: string;
+  opencodeMajor?: 1 | 2;
 }
 
 export function openOpencodeCli(
@@ -193,20 +203,15 @@ export function openOpencodeCliLongPromptWindows(
   options: CliLaunchOptions = {},
 ): void {
   const attempt = crypto.randomBytes(16).toString("hex");
-  const directory = fs.mkdtempSync(path.join(path.resolve(cwd), ".autooc-interactive-"));
+  let directory: string;
+  try { directory = createAuxiliaryDirectory(cwd, 'interactive'); }
+  catch (error) { options.onError?.(error instanceof Error ? error : new Error(String(error))); return; }
   const promptFile = path.join(directory, "prompt.txt");
   const stateFile = path.join(directory, "state.json");
   const ignoreFile = path.join(directory, ".gitignore");
   // This owned directory ignores itself in any Git workspace. Never edit the
   // destination's existing ignore rules or sweep files by a shared prefix.
-  const cleanup = () => {
-    for (const file of [promptFile, stateFile, ignoreFile]) {
-      try { fs.unlinkSync(file); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") console.warn("AutoOC: interactive cleanup pending", file);
-      }
-    }
-    try { fs.rmdirSync(directory); } catch { /* Keep unexpected files intact. */ }
-  };
+  const cleanup = () => completeAuxiliaryDirectory(directory, 'interactive');
   let settled = false;
   let poll: ReturnType<typeof setInterval> | undefined;
   let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -224,27 +229,29 @@ export function openOpencodeCliLongPromptWindows(
   try {
     fs.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
     fs.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
-    const instruction = `Read the full task prompt from ${path.basename(directory)}/prompt.txt and follow it exactly.`;
+    const instruction = `Read the full task prompt from ${path.relative(path.resolve(cwd), promptFile).split(path.sep).join('/')} and follow it exactly.`;
+    const completionFile = path.join(directory, AUXILIARY_COMPLETION);
+    const completion = `  ${psSingleQuoted(auxiliaryCompletionRecord(directory, 'interactive'))} | Set-Content -LiteralPath ${psSingleQuoted(completionFile)} -Encoding UTF8`;
+    const checkDirectory = `function Test-AutoOCAuxiliary { $item = Get-Item -LiteralPath ${psSingleQuoted(directory)} -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 3; $i++) { if ($null -eq $item -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }; $item = Get-Item -LiteralPath $item.Parent.FullName -Force -ErrorAction SilentlyContinue }; return $true }`;
     // Values stay in PowerShell literals. Credentials are inherited through the
     // environment, never written into a script or a command-line argument.
     const runner = [
       "$ErrorActionPreference = 'Stop'",
+      checkDirectory,
       `Set-Location -LiteralPath ${psSingleQuoted(path.resolve(cwd))}`,
       "try {",
       `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
-      `  $cliArgs = @('-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
+      `  $cliArgs = @(${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
       "  & $target.Source @cliArgs",
       "  exit $LASTEXITCODE",
       "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
       "finally {",
-      `  Remove-Item -LiteralPath ${psSingleQuoted(promptFile)} -ErrorAction SilentlyContinue`,
+      `  if (Test-AutoOCAuxiliary) { Remove-Item -LiteralPath ${psSingleQuoted(promptFile)} -ErrorAction SilentlyContinue }`,
       // The standalone Node host exits after startup confirmation. Windows may
-      // then stop its hidden observer, so the visible runner must own cleanup
-      // when that host is gone. Delete only this attempt's known files; never
-      // recursively delete a directory that could contain unrelated files.
-      `  if (-not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) {`,
-      `    Remove-Item -LiteralPath ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)} -ErrorAction SilentlyContinue`,
-      `    try { [System.IO.Directory]::Delete(${psSingleQuoted(directory)}, $false) } catch { }`,
+      // then stop its hidden observer, so the visible runner leaves a completion
+      // receipt for cleanup on the next launch if that observer cannot finish.
+      `  if ((Test-AutoOCAuxiliary) -and -not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)) {`,
+      completion,
       "  }",
       "}",
     ].join("\n");
@@ -254,8 +261,9 @@ export function openOpencodeCliLongPromptWindows(
     // starting PowerShell/cmd alone is explicitly insufficient.
     const observer = [
       "$ErrorActionPreference = 'Stop'",
+      checkDirectory,
       "$session = $null; $confirmed = $false",
-      `function Report($status, $ended) { @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
+      `function Report($status, $ended) { if (-not (Test-AutoOCAuxiliary)) { throw 'AutoOC auxiliary directory changed' }; @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
       "try {",
       `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path.resolve(cwd))} -PassThru`,
       "  while (-not $session.HasExited) {",
@@ -274,6 +282,14 @@ export function openOpencodeCliLongPromptWindows(
       "} catch {",
       "  Report 'error' ($null -eq $session)",
       "  if ($null -ne $session) { $session.WaitForExit(); Report 'error' $true }",
+      "} finally {",
+      // The observer is the last writer of state.json. If the Node host has
+      // exited, it owns final cleanup; the runner leaves a receipt as fallback.
+      `  if ($null -ne $session -and $session.HasExited -and -not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue) -and (Test-AutoOCAuxiliary)) {`,
+      completion,
+      `    Remove-Item -LiteralPath ${psSingleQuoted(promptFile)}, ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)} -ErrorAction SilentlyContinue`,
+      `    try { if (@([System.IO.Directory]::GetFileSystemEntries(${psSingleQuoted(directory)})).Count -eq 1 -and (Test-Path -LiteralPath ${psSingleQuoted(completionFile)})) { Remove-Item -LiteralPath ${psSingleQuoted(completionFile)}; [System.IO.Directory]::Delete(${psSingleQuoted(directory)}, $false) } } catch { }`,
+      "  }",
       "}",
     ].join("\n");
     const encodedObserver = Buffer.from(observer, "utf16le").toString("base64");

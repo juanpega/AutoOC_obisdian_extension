@@ -4,18 +4,77 @@
 
 AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Codex, and GitHub Copilot CLI tasks and visual workflows from an Obsidian vault.
 
+**Automatización y agentes:** [referencia completa de la CLI: comandos, parámetros y ejemplos](#referencia-completa-de-la-cli-autooc).
+
+**Seguimiento de desarrollo:** [expediente 1.7.13: cambios, flujos, contratos, límites y preparación de entrega](docs/autoOC/04_Desarrollo/entrega-1.7.13-20261101/README.md).
+
+## Dashboard por áreas
+
+Desde 1.7.12, **Dashboard** organiza los workflows y tareas por su campo **Area**, con un grupo **No area** para los elementos sin asignar. Para reorganizarlos, cambia su área desde el editor o las acciones de selección. Las posiciones del mapa anterior se conservan en la configuración.
+
+Cada elemento tiene una burbuja y un nombre visible: doble anillo para workflows, terminal para tareas IA y **{ }** para Code. Selecciona un workflow para ver sus pasos, incluidos Code y esperas, y selecciona un paso para consultar **Log**, **History** o **Open controls**. Este último abre los controles habituales de ejecución, parada, edición y desactivación. El log de un workflow corresponde a su paso actual; los pasos tienen resultados propios y no se consideran completados solo porque terminó el workflow.
+
+La búsqueda incluye nombres de pasos y áreas. **Needs attention** filtra incidencias registradas; **Show disabled** muestra los desactivados en gris. Cada área se puede plegar, y **Collapse areas / Expand areas** actúan sobre todos los grupos. Selección, búsqueda y colapsos se conservan durante la sesión del panel. El tamaño exacto de las burbujas de tareas y pasos sigue disponible en Settings (10–80 px).
+
+Desde 1.7.13, una ejecución controlada por esta instancia muestra **Running** sin convertir las marcas internas de recuperación en avisos. Se verifica la identidad de ese intento; tener Obsidian abierto no basta. Los avisos de aprobación pendiente, parada no confirmada, fallo o control no confirmado se conservan.
+
+Los contadores separan elementos principales y pasos en ejecución. Muestran estado registrado, no una verificación independiente de actividad del proceso. El panel se actualiza con los eventos existentes, mantiene las posiciones de lectura y limita inicialmente los pasos visibles a 40, ampliables con **Show more steps**. No añade consultas periódicas ni movimiento continuo; solo una señal breve cuando cambia un estado, respetando la preferencia de movimiento reducido.
+
+## Abrir una CLI interactiva
+
+OpenCode 1 y OpenCode 2 se configuran como motores separados, con rutas, modelos y agentes propios. **Check version** identifica la instalación y las tareas existentes conservan su motor. Consulta la [guía de OpenCode 2](docs/opencode-2.md) para configurar tareas automáticas, sesiones interactivas y borradores.
+
+**💻 CLI** reúne OpenCode, Codex CLI, GitHub Copilot CLI y Claude Code. El selector muestra los ejecutables disponibles que hayas habilitado y permite abrir la carpeta del proyecto o elegir otra.
+
+En **Settings → AutoOC → Interactive CLI launchers**, activa los accesos que quieras y configura su ejecutable. **Auto-detect** busca primero en `PATH`; también puedes indicar una ruta absoluta, sin argumentos. Las rutas de OpenCode, Codex y Copilot se comparten con sus tareas. Claude Code se incorpora como lanzador interactivo; no añade un nuevo tipo de tarea programada.
+
+Cada sesión se abre directamente en una terminal y usa la autenticación, el modelo y las aprobaciones propios de esa CLI. Codex se inicia como `codex`, sin abrir la aplicación de escritorio; Claude usa `claude`, su [entrada interactiva oficial](https://code.claude.com/docs/en/cli-reference). AutoOC no añade prompts ni permisos automáticos. Estas sesiones no crean tareas ni adquieren la reserva del programador, y se gestionan desde su terminal.
+
+Si un ejecutable falta o está deshabilitado, el diálogo ofrece **Configure CLIs**. **Working Directory** determina la carpeta inicial; vacía usa la bóveda. Linux conserva la configuración de **Linux terminal emulator**. El comando anterior de Codex mantiene su identificador para conservar los atajos y ahora se llama **Open Codex CLI**.
+
+## Crear desde una descripción
+
+En **New Task** y **New Workflow**, **Create with AI** abre un formulario para describir el objetivo y elegir motor y modelo. Usa el **WF Builder Prompt** integrado y la sesión de la CLI configurada; la generación se puede cancelar.
+
+Desde 1.7.11, **Model** es un desplegable: reutiliza las listas cargadas de OpenCode 1 y Codex y los modelos usados por tareas del motor seleccionado. OpenCode 2 y Copilot muestran sus modelos configurados o usados, sin mezclar motores. **Other model…** permite introducir un identificador propio; **Automatic (CLI default)** deja que la CLI lo elija. La selección se conserva al cambiar de motor dentro del formulario, se usa para generar el borrador y se copia a las tareas creadas con ese motor. Puedes cambiar después el modelo de cada tarea. El selector no consulta proveedores ni cambia los ajustes globales al abrirse.
+
+Cuando termina, **Review in editor** lleva el borrador al editor habitual. Los workflows generados son secuenciales, con entre 2 y 30 pasos. **Edit draft task** permite revisar los prompts, modelos y permisos de sus tareas antes de pulsar **Create Workflow**. Las tareas nuevas se guardan junto con el workflow; cancelar no las añade al catálogo. La programación inicial es manual y los permisos adicionales de código están desactivados hasta su revisión.
+
+Si la respuesta es inválida, hay un problema de autenticación o se agota el tiempo, el formulario conserva el objetivo y permite reintentar o cambiar de motor. La generación no depende de la reserva de ejecución ni inicia las tareas generadas. OpenCode 1 necesita una CLI compatible con `run --pure`; OpenCode 2 utiliza `run --standalone`. Los motores requieren instalación y autenticación propias.
+
+## Selección múltiple
+
+**Tasks** también muestra **Workflow code steps**: el código guardado directamente dentro de los workflows, con nombre, origen, área y estado del paso. Sus tarjetas se pueden colapsar y ofrecen **Run**, **Stop**, **Enable/Disable**, **Log**, **History** y **Edit Code**, también dentro de **WorkFlows**. **Run** ejecuta únicamente ese paso, con entrada y resultados previos vacíos; conserva el último resultado del workflow completo. **Stop** interrumpe el código y detiene la continuación de esa ejecución; no deshace efectos ni certifica que hayan terminado los comandos externos ya iniciados. Los intentos interrumpidos se pueden revisar desde **Review interrupted attempt**.
+
+El código se ejecuta en un proceso separado para que Obsidian y Stop sigan respondiendo. Requiere **Node.js 18 o posterior**, disponible en PATH o en una ubicación habitual de instalación; si falta, AutoOC lo indica sin ejecutar el paso. No deja scripts temporales en la bóveda. Desactivar un paso conserva código, resultados e historial y bloquea el workflow que lo necesita, igual que una tarea desactivada. **History** muestra los intentos del paso, tanto individuales como dentro del workflow. **Open workflow** abre el original para editarlo. Las vistas previas de código y salida se cargan al desplegarlas y se limitan a 12.000 caracteres. Los pasos conservan sus identidades; no se duplican como tareas de catálogo ni se incluyen en sus acciones múltiples.
+
+El filtro **Task source** permite mostrar **All items**, **Catalog tasks** o solo **Workflow code steps**.
+
+En **Tasks** y **WorkFlows**, pulsa **Select items** para mostrar las casillas y las acciones en lote. Marca las filas o usa **Select visible** para seleccionar los resultados del filtro actual. La selección se conserva al filtrar y cambiar de pestaña; el contador avisa de los elementos seleccionados fuera de la lista visible. **Clear selection** desmarca ambas pestañas. **Hide selection** oculta los controles y desmarca todo para no dejar selecciones invisibles.
+
+- **Change area** aplica un área existente o nueva; dejar el campo vacío elimina el área. No cambia el área de los pasos ni de otras tareas del workflow.
+- **Export selected** abre la exportación con esa selección. Los workflows incluyen automáticamente las tareas que necesitan.
+- **Disable selected / Enable selected** desactiva o reactiva los elementos tras revisar la lista. También puedes usar **Disable / Enable** en cada tarjeta.
+- **Delete selected** muestra la lista exacta antes de confirmar. Elimina solo los elementos seleccionados y sus datos guardados en el catálogo, conservando los registros de ejecución en disco. Exporta antes si quieres conservar las definiciones. Si un workflow necesita una tarea seleccionada, el diálogo lo identifica: selecciónalo también o quita esa referencia en su editor. Las ejecuciones activas o pendientes de revisión deben resolverse antes de modificar sus definiciones.
+
+Los cambios se guardan juntos. Si los elementos cambian desde que se abrió la confirmación, hay que revisar de nuevo la selección.
+
+Los elementos desactivados se muestran en gris con **Disabled**. Conservan configuración, programación, resultados e historial, pero no pueden iniciarse manualmente, por programación ni mediante la CLI. Un workflow que usa una tarea desactivada tampoco puede arrancar: hay que reactivarla; no se omiten pasos. Desactivar un workflow no desactiva sus tareas reutilizables. **Enable** vuelve a activar la programación guardada, que podría ejecutarse en la siguiente comprobación. Las ejecuciones activas o pendientes de revisión deben terminar o revisarse antes de cambiar esta opción. La desactivación se conserva al exportar e importar; los paquetes antiguos siguen activos por defecto.
+
 ## What It Does
+
+Desde 1.7.5, las tareas y los pasos Code muestran JavaScript con colores de sintaxis. El editor incluye números de línea, plegado, parejas de llaves, búsqueda y deshacer. **Indent code** ajusta la sangría del borrador; **Wrap lines** adapta las líneas al ancho disponible. Tab y Shift+Tab cambian la sangría, Ctrl/Cmd+F busca y Ctrl/Cmd+Z deshace. Los cambios solo se conservan al guardar el formulario. Ver o editar código no lo ejecuta.
 
 - Create OpenCode tasks with manual, one-time, daily, weekly, monthly, or interval schedules.
 - Run tasks manually, monitor their status and output, keep logs, configure timeouts, and stop running work.
-- Load available OpenCode models and agents, launch an OpenCode CLI session, and run a diagnostic from Obsidian.
-- Build workflows in the embedded Visual Builder or classic view. Workflows support task, delay, and JavaScript code steps; default, forced, conditional, and AI-evaluated transitions; and branching paths.
+- Load available OpenCode models and agents, open configured interactive CLIs from the shared CLI selector, and run a diagnostic from Obsidian.
+- Build workflows in the WorkFlows editor. Workflows support task, delay, and JavaScript code steps; default, forced, conditional, and AI-evaluated transitions; and branching paths.
 - Import and export task and workflow packages as JSON, and use the included library packages as examples.
 - Secrets se ha retirado: sin gestión ni inyección de valores. Se conserva el archivo histórico y el enmascaramiento de valores conocidos cuando está disponible.
 
 ## Ejecuciones independientes
 
-El editor clásico y Visual Builder permiten seleccionar `concurrency: "independent"` en una tarea o workflow. El valor ausente o `"exclusive"` conserva la ejecución exclusiva histórica. Un mismo host propietario admite hasta dos ejecuciones independientes; GUI y CLI delegada comparten ese límite, sin cola ni reintentos automáticos.
+El editor de AutoOC permite seleccionar `concurrency: "independent"` en una tarea o workflow. El valor ausente o `"exclusive"` conserva la ejecución exclusiva histórica. Un mismo host propietario admite hasta dos ejecuciones independientes; GUI y CLI delegada comparten ese límite, sin cola ni reintentos automáticos.
 
 Las definiciones no pueden compartir tareas, directorios iguales o anidados ni metadatos Git (incluidas worktrees). Code con permisos de bóveda, archivos o terminal, las modalidades interactivas y las evaluaciones con modelo requieren exclusividad. Los motores no interactivos requieren espacios de trabajo físicos disjuntos. Esta política coordina tareas de confianza y no aísla sus efectos ni amplía permisos.
 
@@ -69,8 +128,8 @@ AutoOC ejecuta OpenCode como proceso local. Obsidian guarda las tareas y workflo
 ### GitHub Copilot CLI
 
 1. Install [GitHub Copilot CLI](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli) and sign in from a terminal using `copilot login`. Your account and organization must permit Copilot CLI access.
-2. In AutoOC settings, use **Copilot executable path → Detect & test**. The default `copilot` detects the local installation, including the native executable bundled by npm on Windows. You can also specify an absolute executable path. This check verifies the installation; account access is checked when a task runs.
-3. Create a **GitHub Copilot CLI task** in the classic editor or Visual Builder. Enter its prompt, project folder and schedule. Optionally enter a model ID available to your account (`/model` in Copilot lists them). Empty uses AutoOC's **Default Copilot model**, then the CLI default.
+2. En **Interactive CLI launchers**, configura **GitHub Copilot CLI executable**, con `copilot` para detección automática o una ruta absoluta. **Auto-detect** guarda la ruta encontrada. En **GitHub Copilot task defaults → Test Copilot installation → Detect & test** puedes verificar la instalación; el acceso a la cuenta se comprueba cuando se ejecuta una tarea.
+3. Create a **GitHub Copilot CLI task** in the task editor. Enter its prompt, project folder and schedule. Optionally enter a model ID available to your account (`/model` in Copilot lists them). Empty uses AutoOC's **Default Copilot model**, then the CLI default.
 4. Tasks expose only file reading and search tools by default. Enable **Allow tools automatically** on a task to let Copilot edit files and run commands without asking. Folder and URL permissions still follow Copilot's policy. This permission is included in exported packages, so review it before running imported tasks.
 5. Run the task and follow its output in AutoOC. **Stop**, timeouts, recurring schedules, saved logs, and workflow output handoff are supported. Copilot tasks can share a workflow with OpenCode, Codex and JavaScript steps.
 
@@ -80,11 +139,9 @@ Exports containing Copilot tasks use schema `1.6.0` and `taskKind: "copilot"`; o
 
 If a task reports **Access denied by policy settings**, check your [Copilot account settings](https://github.com/settings/copilot) and organization policy. AutoOC cannot override GitHub's access restrictions.
 
-## Visual Builder
+## Edición de workflows
 
-Open the command palette and select `Open AutoOC Visual Builder`. The modal is titled `✨ WF Visual Builder`. Build workflows with task, delay, and JavaScript code steps, then connect them with transitions to create DAG branches. The embedded builder validates and applies workflow state to AutoOC; import and export workflow JSON remain in the classic AutoOC panel.
-
-The classic AutoOC view and Visual Builder edit the same tasks and workflows. Use either surface for the workflow that best fits the job.
+Crea y edita workflows desde **WorkFlows**. El WF Visual Builder se ha retirado; los workflows existentes, sus pasos y transiciones, historial e importación/exportación JSON se conservan. **Create with AI**, dentro de **New Task** y **New Workflow**, utiliza el prompt integrado para generar un borrador a partir de tu objetivo; ya no hay un botón separado **WF Builder Prompt**.
 
 ## Ralph Loop
 
@@ -100,7 +157,95 @@ El plugin mantiene un componente interno de solo lectura para enmascarar valores
 
 El puente MCP local se retira en 1.6.2 para eliminar su carrera de arranque y descarga. AutoOC no modifica configuraciones ni credenciales de otros clientes. La ejecución autónoma sigue disponible con la CLI y la [skill distribuida](skills/autooc-runtime/SKILL.md). El almacén de credenciales existente se conserva.
 
-## CLI con Obsidian abierto
+## Referencia completa de la CLI AutoOC
+
+La CLI distribuida con la extensión es **`autooc-cli.cjs`**. Esta referencia corresponde al candidato **1.7.10**. Consulta siempre `version` y `help` de la instalación que vayas a utilizar: una CLI antigua puede no admitir las opciones nuevas. No es la CLI del proveedor (OpenCode, Codex, Copilot o Claude); el botón **CLI** abre esos programas interactivos por separado.
+
+```powershell
+$cliPath = 'C:/ruta/vault/.obsidian/plugins/auto-oc/autooc-cli.cjs'
+$vaultPath = 'C:/ruta/vault'
+node $cliPath version
+node $cliPath help
+node $cliPath list --vault $vaultPath
+node $cliPath status --vault $vaultPath
+```
+
+Requiere Node.js 18 o posterior. En la tabla, `CLI` es la ruta absoluta del archivo anterior y `VAULT` la ruta absoluta de la bóveda. **Anteponer `node CLI` a cada llamada** y entrecomillar las rutas con espacios. La CLI selecciona `<VAULT>/.obsidian/plugins/auto-oc`; no busca carpetas de configuración alternativas ni ofrece un parámetro para elegirlas.
+
+### Todas las llamadas disponibles
+
+| Llamada y parámetros | Qué hace y qué necesita |
+| --- | --- |
+| `version` | Consulta versión, capacidades y compatibilidad. Sin parámetros. |
+| `help` | Consulta la sintaxis admitida. Sin parámetros; no es `--help`. |
+| `list --vault VAULT` | Lista tareas, workflows y `codeSteps`, incluyendo su desactivación. Solo lectura. |
+| `status --vault VAULT` | Añade estados guardados, ejecuciones, reservas y aprobaciones pendientes. Solo lectura; no certifica actividad real. |
+| `run --vault VAULT SELECTOR` | Inicia una ejecución **nueva**. Rechaza elementos desactivados y respeta las reservas, dependencias y permisos. |
+| `resume --vault VAULT SELECTOR --run RUN_ID` | Continúa la ejecución exacta; puede ejecutar pasos pendientes. También rechaza elementos desactivados. |
+| `reconcile --vault VAULT SELECTOR --run RUN_ID` | Revisa y persiste el resultado de la ejecución registrada sin lanzar el siguiente paso. No es una consulta ni repite un trabajo incierto. |
+| `stop --vault VAULT SELECTOR --run RUN_ID` | Solicita parar esa ejecución. Si ya es terminal, devuelve `requested: false`. No deshace efectos ni prueba que hayan terminado todos los procesos externos. |
+| `approve --vault VAULT --run RUN_ID --approval TOKEN` | Aprueba la solicitud pendiente identificada por su token exacto; puede permitir que continúe una operación. |
+| `deny --vault VAULT --run RUN_ID --approval TOKEN` | Rechaza esa solicitud pendiente. |
+| `export-workflow --vault VAULT --workflow WORKFLOW_ID --out ARCHIVO_JSON` | Exporta los campos editables y su `expectedHash` a un archivo nuevo. No exporta el paquete de importación completo. |
+| `edit-workflow --vault VAULT --workflow WORKFLOW_ID --patch ARCHIVO_JSON` | Aplica un parche compatible a través del plugin abierto, sin actividad pendiente. Exige el hash observado; no ejecuta el workflow. |
+| `inspect-terminal --vault VAULT --run RUN_ID` | Obtiene la inspección de un intento terminal para revisar sus efectos inciertos. Solo lectura. |
+| `dispose-terminal --vault VAULT --decision ARCHIVO_JSON` | Registra una decisión humana sobre ese intento terminal, conservando su estado y los efectos desconocidos. Plugin descargado y decisión basada en la inspección exacta. |
+| `abandon --vault VAULT --workflow WORKFLOW_ID --run RUN_ID --revision N --reason TEXTO --acknowledge-unknown-effects true` | Abandona explícitamente un intento no terminal sin inventar un resultado. Plugin descargado; autorización humana para aceptar efectos desconocidos. Para tareas independientes, `WORKFLOW_ID` es `@task:TASK_ID`. |
+| `recover-lease --vault VAULT --owner TOKEN` | Recupera la reserva del propietario observado únicamente si se demuestra su ausencia. No reanuda ejecuciones ni resuelve efectos inciertos. |
+| `inspect-settings-write --vault VAULT` | Inspecciona un guardado interrumpido, identidades y motivos que impiden recuperarlo. Solo lectura. |
+| `recover-settings-write --vault VAULT --decision ARCHIVO_JSON` | Recupera el guardado conforme a una decisión explícita vinculada a esa inspección. Conserva el catálogo; no recupera la reserva de ejecución ni reanuda tareas. |
+| `maintain-release --vault VAULT --inspect` | Inspecciona la actualización desde un paquete nuevo completo, separado de la instalación de destino. No instala. |
+| `maintain-release --vault VAULT --install` | Respalda e instala ese paquete con el plugin descargado y la reserva libre. Conserva históricos y no resuelve intentos por su cuenta. |
+| `maintain-release --vault VAULT --decisions ARCHIVO_JSON` | Aplica decisiones administrativas revisadas y después instala bajo la misma reserva. Las decisiones son un array; una decisión ya persistida no se deshace si falla la instalación posterior. |
+
+Las tres variantes de `maintain-release` son excluyentes. Todos los argumentos de la tabla son obligatorios; `SELECTOR` se sustituye por **una** de estas formas:
+
+| Selección | Parámetros |
+| --- | --- |
+| Tarea independiente, incluida una tarea de tipo Code | `--task TASK_ID` |
+| Workflow completo | `--workflow WORKFLOW_ID` |
+| Un paso Code del workflow | `--workflow WORKFLOW_ID --step STEP_ID` |
+
+`--step` requiere `codeStepSelection: true` en `version` y un plugin cargado compatible si hay delegación. Solo admite pasos Code, no pasos de espera o referencias a tareas. Los IDs proceden de `list`/`status`; los nombres pueden repetirse. No mezclar `--task` y `--workflow`.
+
+### Parámetros y archivos de decisión
+
+- `--vault`: ruta absoluta a la bóveda, no a la carpeta del plugin. `--out`, `--patch` y `--decision`/`--decisions` también usan rutas absolutas.
+- `--run`: `runId` exacto devuelto por la ejecución o por `status`. Es obligatorio para `resume`, `reconcile` y `stop`; no se admite en `run`.
+- `--owner`: token de la reserva observado en `status`, no el PID. `--approval`: token de la aprobación pendiente. No inventar ni reutilizar tokens de otra solicitud.
+- `--revision`: revisión entera no negativa observada en el intento. `--reason`: explicación de la decisión humana. `--acknowledge-unknown-effects` exige el literal `true`.
+- `--out`: archivo que todavía no exista. `--patch`: archivo JSON regular de hasta 60 KB, con `expectedHash` y `changes`. Los cambios admitidos son `name`, `description` y `stepChanges: [{id, name?, code?, evaluatePrompt?}]` para pasos existentes. No cambia estructura, tareas referenciadas, motores, modelos, permisos ni desactivación. Ante conflicto, exportar de nuevo antes de preparar otro parche.
+- `dispose-terminal --decision`: JSON con la inspección exacta de `inspect-terminal`, más `reason` y `acknowledgedUnknownEffects: true`. No convertir una incertidumbre en éxito.
+- `recover-settings-write --decision`: JSON con `schemaVersion: 1`, `action: "recover-settings-write"`, `vault`, `installationDirectory`, `inspectionHash`, `token` y `transactionId` de la inspección; además `reason`, `preserveCatalog: true` y `executionsResumed: false`. Si la inspección no autoriza recuperar, el comando rechaza la operación.
+- `maintain-release --decisions`: array de inspecciones individuales revisadas, cada una con `reason` y `acknowledgedUnknownEffects: true`. Consultar el procedimiento de mantenimiento y la [guía distribuida](skills/autooc-runtime/SKILL.md) antes de usarlo.
+
+Para `run`, `resume`, `reconcile` y `stop` se admite otro orden de parámetros, sin duplicados. **Para el resto, conservar el orden mostrado en la tabla.** No hay parámetros generales para sobrescribir motor, modelo, prompt, permisos o desactivación: se usan los de la definición instalada.
+
+### Elementos desactivados y pasos Code
+
+`list` y `status` conservan los elementos desactivados en sus resultados. `disabled` indica la desactivación del propio elemento; `blockedByDisabled` incluye el bloqueo por dependencias y `disabledReason` explica el motivo. Un workflow activo puede estar bloqueado por una tarea o un paso desactivado. `recordedStatus`, presente en `status`, es el estado guardado de ejecución y es independiente de la desactivación. `blockedByDisabled: false` **no certifica** que se pueda ejecutar: aún se comprueban propiedad, actividad, configuración y permisos.
+
+`codeSteps` identifica los pasos Code mediante `workflowId` e `id` del paso. Su disponibilidad corresponde a su ejecución aislada: requiere que el padre y ese paso estén activos, sin depender de otros pasos del workflow que no se van a ejecutar. El tamaño de burbujas y las opciones de colapso son preferencias visuales; no alteran esta disponibilidad.
+
+```powershell
+# Ejecutar únicamente el paso Code seleccionado, con entrada/resultados previos vacíos.
+node $cliPath run --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID
+
+# Conservar el runId devuelto; no lanzar otro run para continuar el anterior.
+node $cliPath resume --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID --run RUN_ID
+node $cliPath reconcile --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID --run RUN_ID
+node $cliPath stop --vault $vaultPath --workflow WORKFLOW_ID --step STEP_ID --run RUN_ID
+```
+
+La ejecución aislada no sigue las transiciones del paso ni sustituye el último resultado del workflow completo. `--step` verifica también la pertenencia del intento al detenerlo. La CLI no reactiva automáticamente elementos: **Enable/Disable** se gestiona en AutoOC. `reconcile` y `stop` siguen disponibles para el intento exacto de un elemento desactivado; las demás comprobaciones de identidad y recuperación continúan vigentes.
+
+### Salida y códigos de retorno
+
+Las llamadas completadas devuelven un único documento JSON por **stdout**. Las ejecuciones emiten progreso JSON por líneas en **stderr**, con `host: "obsidian"` o `"standalone"`. Los resúmenes incluyen `runId`, `workflowId`, `phase`, `revision`, `nextStepId` y, cuando están disponibles, `workflowName` y `executionKind`. Una ejecución aislada añade `stepId` y conserva `executionKind: "workflow"`. Los journals no incorporan estos campos de presentación.
+
+El código de salida es **0** al completar la llamada, **1** ante error o resultado `failed`, y **130** cuando la ejecución devuelve tras SIGINT/SIGTERM. Una interrupción durante la espera delegada puede devolver 1 con petición de cancelación y resultado incierto. Un código 0 de `stop`, `approve` o `reconcile` no significa que el workflow haya terminado correctamente: consultar el JSON. Un timeout tampoco autoriza repetir efectos. `activityVerified: false` en las consultas deja explícito que no son una prueba de actividad en vivo.
+
+### CLI con Obsidian abierto
 
 En un paquete que indique `pluginRequests: 1` al consultar `version`, la CLI puede pedir al plugin abierto que ejecute una tarea o workflow. Abre el Dashboard para ver su progreso y resultados. Se usan los mismos comandos:
 
@@ -134,6 +279,14 @@ Si la CLI ya tiene la reserva al abrir Obsidian, AutoOC espera y vuelve a cargar
 
 ## Diagnostics And Troubleshooting
 
+En el candidato 1.7.2, las tarjetas con un intento registrado incluyen **What can I do?**. La ayuda explica el estado y abre los detalles y opciones del elemento; si una tarea pertenece al intento actual de un workflow, lleva a ese workflow.
+
+- **Last run completed**: no necesita recuperar un propietario; su registro e historial siguen disponibles.
+- **Needs review** o **Activity not confirmed**: revisar el registro y comprobar el proceso original antes de continuar o repetir trabajo. La ausencia de control local no demuestra que el proceso haya terminado.
+- **Closed with unknown outcome**: conserva la decisión anterior y sus efectos desconocidos; no equivale a éxito.
+
+**Refresh information** vuelve a consultar el estado disponible en el panel. La ayuda no inicia, detiene ni recupera ejecuciones. **Support details → Copy diagnostics** copia solo versión, estado e identidad del intento, sin prompts, resultados, rutas, tokens ni secretos.
+
 Run `AutoOC: Diagnostic — test opencode command` from the command palette to check the configured OpenCode command. For setup failures, task launch problems, or timeouts, review the [architecture](docs/architecture.md) and verify the configured OpenCode command, task timeout, and plugin files under `.obsidian/plugins/auto-oc/`.
 
 ## Development
@@ -143,7 +296,7 @@ npm test
 npm run build
 ```
 
-`npm test` runs the repository's Node test suite. The build first inlines the Visual Builder, type-checks TypeScript, and bundles the Obsidian plugin. The primary source is `main.ts`; edit `util/ui_workflow_builder/index.html` for the standalone builder. Its generated embed is refreshed by the development and build scripts.
+`npm test` runs the repository's Node test suite. The build type-checks TypeScript and bundles the Obsidian plugin. The primary source is `main.ts`.
 
 The commands in this README are the authoritative command reference for implementation, contributor workflow, generated-file relationships, and quality gates.
 
@@ -162,9 +315,9 @@ El paquete se guarda en `release/auto-oc-<version>.zip` y el script imprime su S
 
 Contributions, bug reports, and workflow ideas are welcome. Preserve these invariants:
 
-- Keep the classic AutoOC UI and Visual Builder consistent.
+- Keep the workflow editor and JSON import/export consistent.
 - Preserve task and workflow import/export compatibility, migrations, and JSON round trips when changing persisted workflow data.
-- Regenerate Visual Builder output and release assets when their sources change.
+- Regenerate release assets when their sources change.
 - Run `npm test` and `npm run build` before submitting changes.
 
 Start with the [architecture](docs/architecture.md).

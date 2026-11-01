@@ -1,9 +1,10 @@
-import { catalogTransaction } from "./catalog-transaction";
+import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
 import { readExecutionCheckpoint, type RunCheckpoint } from "./execution-journal";
 import { projectWorkflowProgress, validateProgressBinding } from "./workflow-progress";
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { persistTaskHistory } from "./task-history";
+import { selectCodeStep } from "./workflow-code-step";
 
 export interface PersistedWorkflowCatalog {
   catalog: any;
@@ -23,12 +24,13 @@ export async function persistWorkflowProgress(options: {
   expectedRunId: string;
   replaceCompletedRunId?: string;
   taskId?: string;
+  stepId?: string;
   vaultBase?: string;
   writer?: SettingsWriter;
   baseline?: ()=>ObservedVersion;
-  onCommitted?: (catalog:PersistedWorkflowCatalog)=>Promise<void>;
+  onCommitted?: (catalog:PersistedWorkflowCatalog, transaction:CatalogTransaction)=>Promise<void>;
 }): Promise<PersistedWorkflowCatalog> {
-  return catalogTransaction(options.configurationFile,async()=>{
+  return catalogTransaction(options.configurationFile,async transaction=>{
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
@@ -50,6 +52,10 @@ export async function persistWorkflowProgress(options: {
   if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
   // Persist only observed progress, never an assertion of ongoing activity.
   let workflow = virtual ? {...virtual,runtimeExecution:config.tasks.find((task:any)=>task.id === options.taskId).runtimeExecution} : matches[0];
+  if (options.stepId) {
+    if (virtual) throw new Error("A code step requires its parent workflow identity");
+    workflow = selectCodeStep(workflow, options.stepId);
+  }
   if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
     const previous = readExecutionCheckpoint(options.runtimeDirectory,options.replaceCompletedRunId);
     const previousId=virtual && !previous.workflowId.startsWith('@task:') ? workflow.runtimeExecution.workflowId : workflow.id;
@@ -60,7 +66,7 @@ export async function persistWorkflowProgress(options: {
     workflow = {...workflow};
     delete workflow.runtimeExecution;
   }
-  const preserveLegacy = !virtual && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
+  const preserveLegacy = !virtual && !options.stepId && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
   if (preserveLegacy) {
     validateProgressBinding(matches[0], durable, options.expectedRunId);
     if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
@@ -99,12 +105,16 @@ export async function persistWorkflowProgress(options: {
         finishedAt:item.observed.finishedAt,
         phase:durable.phase,abandonment:durable.abandonment,requiresReconciliation:durable.phase !== "abandoned" && item.observed.status === "in_flight"}};
   });
-  const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? projected : workflow)};
+  const replacement = options.stepId ? {...matches[0], steps: matches[0].steps.map((step:any) => step.id === options.stepId ? {
+    ...step, codeExecution: {runtimeExecution:projected.runtimeExecution, status:projected.status,
+      output:projected.steps[0].output, lastRun:projected.steps[0].lastRun || durable.createdAt},
+  } : step)} : projected;
+  const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? replacement : workflow)};
   await writer.save(options.configurationFile, () => next);
   if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
   const confirmed={catalog:next,version:writer.confirmedVersion(options.configurationFile),
     runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};
-  await options.onCommitted?.(confirmed);
+  await options.onCommitted?.(confirmed,transaction);
   return confirmed;
   });
 }

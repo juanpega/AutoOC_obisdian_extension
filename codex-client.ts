@@ -124,8 +124,29 @@ export class JsonLineRpcPeer {
   }
 }
 
+function resolveCodexNativeBin(bin: string): string {
+  // A terminal can invoke npm's shim, but app-server requires a directly
+  // spawnable executable. Keep both clients on the same npm installation.
+  if (os.platform() !== "win32" || !path.isAbsolute(bin) || !/^codex\.(cmd|bat|ps1)$/i.test(path.basename(bin))) return bin;
+  try { if (!fs.statSync(bin).isFile()) return bin; } catch { return bin; }
+  const target = process.arch === "x64" ? "x86_64-pc-windows-msvc" : process.arch === "arm64" ? "aarch64-pc-windows-msvc" : undefined;
+  if (!target) return bin;
+  const scope = path.join(path.dirname(bin), "node_modules", "@openai");
+  const platformPackage = `codex-win32-${process.arch}`;
+  const vendors = [
+    path.join(scope, "codex", "node_modules", "@openai", platformPackage, "vendor"),
+    path.join(scope, platformPackage, "vendor"),
+    path.join(scope, "codex", "vendor"),
+  ];
+  for (const vendor of vendors) for (const directory of ["bin", "codex"]) {
+    const candidate = path.join(vendor, target, directory, "codex.exe");
+    try { if (fs.statSync(candidate).isFile()) return candidate; } catch { /* Another supported npm layout may exist. */ }
+  }
+  return bin;
+}
+
 export function resolveCodexBin(configured = "codex"): string {
-  if (configured.trim() && configured.trim() !== "codex") return configured.trim();
+  if (configured.trim() && configured.trim() !== "codex") return resolveCodexNativeBin(configured.trim());
   const candidates: string[] = [];
   if (os.platform() === "win32") {
     const localAppData = process.env.LOCALAPPDATA || "";
@@ -151,7 +172,7 @@ export function resolveCodexBin(configured = "codex"): string {
       "/usr/local/bin/codex",
     );
   }
-  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || configured || "codex";
+  return resolveCodexNativeBin(candidates.find((candidate) => candidate && fs.existsSync(candidate)) || configured || "codex");
 }
 
 export function openCodexApp(bin: string, cwd: string, onError?: (error: Error) => void): void {
@@ -327,8 +348,21 @@ export class CodexAppServerClient {
     model?: string,
     effort?: string,
     approvalPolicy: "on-request" | "never" = "on-request",
+    options: { sandbox?: "read-only"; ephemeral?: boolean; toolsDisabled?: boolean } = {},
   ): Promise<CodexRunResult> {
     await this.initialize();
+    let draftConfig: Record<string, unknown> | undefined;
+    if (options.toolsDisabled) {
+      // Per-thread overrides only. Keep provider authentication/configuration,
+      // but do not expose configured MCP servers or action tools to authoring.
+      const current = await this.peer!.request("config/read", { includeLayers: false });
+      if (!current?.config || typeof current.config !== "object") throw new Error("Codex could not verify draft-only configuration. Update its CLI and try again.");
+      draftConfig = {
+        "features.apps": false, "features.shell_tool": false, "features.unified_exec": false,
+        "features.multi_agent": false, "tools.view_image": false, web_search: "disabled",
+        mcp_servers: Object.fromEntries(Object.keys(current.config.mcp_servers || {}).map(name => [name, { enabled: false }])),
+      };
+    }
     this.output = "";
     this.agentMessages.clear();
     this.turnId = "";
@@ -336,8 +370,9 @@ export class CodexAppServerClient {
       cwd: this.cwd,
       model: model || null,
       approvalPolicy,
-      sandbox: "workspace-write",
-      ephemeral: false,
+      sandbox: options.sandbox || "workspace-write",
+      ephemeral: options.ephemeral === true,
+      ...(draftConfig ? { config: draftConfig } : {}),
       serviceName: "AutoOC",
     });
     this.threadId = threadResponse?.thread?.id || "";

@@ -12,6 +12,7 @@ export interface PluginCommand {
   command: "run" | "resume" | "reconcile";
   workflowId?: string;
   taskId?: string;
+  stepId?: string;
   runId?: string;
 }
 export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"revision"|"nextStepId"> & Partial<ExecutionPresentation>;
@@ -79,6 +80,7 @@ function validCommand(value:any):boolean {
   const id=(v:any)=>typeof v==="string" && v.length>0 && v.length<=256 && !/[\0\r\n]/.test(v);
   return value && ["run","resume","reconcile"].includes(value.command) &&
     (id(value.workflowId) && value.taskId===undefined || id(value.taskId) && value.workflowId===undefined) &&
+    (value.stepId===undefined || id(value.stepId) && id(value.workflowId) && value.taskId===undefined) &&
     (value.command==="run" ? value.runId===undefined : typeof value.runId==="string" && value.runId.length<=256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
 }
 
@@ -90,7 +92,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:2});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:2,codeStepSelection:true});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined;
@@ -227,6 +229,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
     const host=read(path.join(directory,"host"));
     if(host.protocol!==1 || host.owner!==owner.token || host.pid!==owner.pid)throw new Error("Invalid CLI request host");
     if(command.command==="edit-workflow" && host.workflowEditing!==true)throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");
+    if('stepId' in command && command.stepId!==undefined && host.codeStepSelection!==true)throw new Error("Loaded AutoOC does not support code step selection; reload the updated plugin before running this step");
     if(host.heartbeatAt!==undefined) {
       if(!Number.isFinite(host.heartbeatAt) || host.heartbeatAt>Date.now()+60000 || Date.now()-host.heartbeatAt>30000)
         throw new Error("CLI host heartbeat expired; terminal publication is uncertain");
@@ -268,6 +271,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
           if(observedPresentation !== undefined && serializedMetadata !== observedPresentation)throw new Error("CLI receipt presentation changed");
           observedPresentation=serializedMetadata;
           if(metadata.executionKind !== undefined && metadata.executionKind !== (command.taskId ? "task" : "workflow"))throw new Error("CLI receipt execution kind mismatch");
+          if(metadata.stepId !== ('stepId' in command ? command.stepId : undefined))throw new Error("CLI receipt code step identity mismatch");
         }
         if(result.checkpoint){
           runId=result.checkpoint.runId;

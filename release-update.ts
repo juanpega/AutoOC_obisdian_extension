@@ -2,7 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { createHash, randomUUID } from "crypto";
 import type { ExecutionLease } from "./execution-lease";
-import { assertIdleJournals } from "./execution-idle";
+import { assertPackageMaintenanceSafe } from "./package-maintenance";
 
 export const RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"] as const;
 export const RELEASE_DESCRIPTOR = "release-integrity.json";
@@ -87,7 +87,7 @@ export function installRelease(options: {
   lease.assertOwned();
   const marker = path.join(lease.directory, "update-pending.json");
   if (fs.existsSync(marker)) throw new Error("Previous update requires recovery");
-  assertIdleJournals(lease.directory);
+  assertPackageMaintenanceSafe(directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
   const backup = path.join(lease.directory, `update-backup-${randomUUID()}`);

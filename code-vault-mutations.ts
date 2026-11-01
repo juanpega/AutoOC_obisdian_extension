@@ -11,17 +11,17 @@ export interface VaultMutationBatch {
 
 export type VaultMutationBatchFactory = () => VaultMutationBatch;
 
-// Keep the interpreter synchronous, but settle durable mutations before a host
+// Settle synchronous or worker-based execution and its durable mutations before a host
 // reports completion (including scripts that throw after a successful write).
 export async function runWithVaultMutations<T>(
   factory: VaultMutationBatchFactory | undefined,
-  execute: (record: VaultMutationBatch["record"] | undefined) => T,
+  execute: (record: VaultMutationBatch["record"] | undefined) => T | Promise<T>,
 ): Promise<T> {
   const batch = factory?.();
   let result!: T;
   let failed = false;
   let original: unknown;
-  try { result = execute(batch?.record); }
+  try { result = await execute(batch?.record); }
   catch (error) { failed = true; original = error; }
   try { await batch?.flush(); }
   catch (refreshError) {

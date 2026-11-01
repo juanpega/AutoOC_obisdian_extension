@@ -18,6 +18,31 @@ function fixture(t,execute,edit){
 const state={runId:'aa11',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
 
+test('Code selection is preserved in mailbox progress and terminal identity',async t=>{
+  const f=fixture(t,async(command,signal,report)=>{
+    assert.equal(command.stepId,'code');
+    const metadata={executionKind:'workflow',stepId:'code'};
+    await report(state,metadata);return {...state,...metadata};
+  });
+  const running=requestPluginExecution(f.runtime,{command:'run',workflowId:'w',stepId:'code'});
+  await f.host.poll();assert.equal((await running).stepId,'code');
+});
+
+test('an old host cannot silently run the whole workflow for a Code selection',async t=>{
+  const f=fixture(t,async()=>{throw Error('must not execute');});
+  const file=path.join(f.directory,'host'),descriptor=JSON.parse(fs.readFileSync(file));delete descriptor.codeStepSelection;
+  fs.writeFileSync(file,JSON.stringify(descriptor));
+  await assert.rejects(requestPluginExecution(f.runtime,{command:'run',workflowId:'w',stepId:'code'}),/does not support code step selection/);
+  assert.equal(fs.readdirSync(f.directory).filter(n=>n.endsWith('.request')).length,0);
+});
+
+test('Code receipt mismatches and task/step combinations are rejected',async t=>{
+  const f=fixture(t,async()=>({...state,executionKind:'workflow',stepId:'different'}));
+  const running=requestPluginExecution(f.runtime,{command:'run',workflowId:'w',stepId:'code'});
+  const rejected=assert.rejects(running,/code step identity mismatch/);await f.host.poll();await rejected;
+  await assert.rejects(requestPluginExecution(f.runtime,{command:'run',taskId:'t',stepId:'code'}),/Invalid CLI command/);
+});
+
 test('presentation survives both mailbox projections before releasing execution; private fields are excluded',async t=>{
   const metadata={workflowName:'Prueba "ñ"\n第二行',executionKind:'workflow'};
   let release;const gate=new Promise(resolve=>release=resolve);t.after(()=>release());

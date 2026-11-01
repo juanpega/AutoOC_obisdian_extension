@@ -21,6 +21,7 @@ const admissionDiagnostics=new Set([
   'Catalog has unresolved running activity; verify its owner before execution',
 ]);
 export function executionAdmissionDiagnostic(error:unknown):string|undefined {
+  if ((error as {name?:unknown})?.name === 'DisabledExecutionError') return 'Selected task, workflow or step is disabled. Inspect list/status and enable it in AutoOC before running.';
   const message=(error as {message?:unknown})?.message;
   return typeof message==='string' && admissionDiagnostics.has(message) ? message : undefined;
 }

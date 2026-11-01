@@ -4,7 +4,10 @@ import type { PreparedWorkflow } from "./workflow-definition";
 import type { WorkflowTaskAdapter } from "./code-workflow-host";
 import { CopilotCliClient, resolveCopilotBin } from "./copilot-client";
 import { buildOpenCodeScript } from "./opencode-script";
+import { isOpenCodeTask, openCodeInteractiveArgs } from "./opencode-profile";
+import { assertOpenCode2 } from "./opencode-version";
 import { formatTaskOutput, decodeCommandBuffer } from "./command-output";
+import { createAuxiliaryDirectory, completeAuxiliaryDirectory } from './execution-files';
 import { resolveOpencodeBin, launchHidden, writeUtf8BomFile, scriptExt, openOpencodeCli, openOpencodeCliLongPromptWindows } from "./cli-launchers";
 
 export function createCopilotWorkflowAdapter(definition:PreparedWorkflow,vault:string):WorkflowTaskAdapter {
@@ -24,15 +27,22 @@ export function createCopilotWorkflowAdapter(definition:PreparedWorkflow,vault:s
 }
 
 export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:string):WorkflowTaskAdapter {
-  const supports=(task:Readonly<Record<string,any>>)=>(!task.taskKind || task.taskKind==='opencode');
+  const supports=(task:Readonly<Record<string,any>>)=>isOpenCodeTask(task.taskKind);
   return {supports,async execute(task,prompt,signal,_recordThread,interaction) {
     if(!supports(task)) throw new Error("Unsupported OpenCode task");
     if(signal?.aborted) throw new Error("OpenCode cancelled before launch");
     const taskCwd=task.workingDirectory || definition.settings.workingDirectory || vault;
-    const model=task.model || definition.settings.defaultModel;
+    const major=task.taskKind==='opencode2' ? 2 : 1;
+    const model=task.model || (major===2 ? definition.settings.defaultOpencode2Model : definition.settings.defaultModel);
     if(!prompt.trim() || !model?.trim()) return {succeeded:false,output:'[OpenCode requires a nonempty prompt and model]'};
-    const bin=resolveOpencodeBin(definition.settings.opencodePath);
-    const agent=task.agent || definition.settings.defaultAgent || 'build';
+    const bin=resolveOpencodeBin(major===2 ? definition.settings.opencode2Path || 'opencode' : definition.settings.opencodePath);
+    if(major===2) {
+      if(task.useRalphLoop) return {succeeded:false,output:'[Ralph Loop integration is only supported for OpenCode 1 tasks]'};
+      try { await assertOpenCode2(bin); }
+      catch(error) { return {succeeded:false,output:`[${(error as Error).message}]`}; }
+      if(signal?.aborted) throw new Error('OpenCode cancelled before launch');
+    }
+    const agent=task.agent || (major===2 ? definition.settings.defaultOpencode2Agent : definition.settings.defaultAgent) || 'build';
     if(task.useRalphLoop) prompt='/ralph-loop '+prompt;
     if(task.interactiveTerminal) {
       // A missing explicitly configured file is a known failure before any
@@ -42,29 +52,31 @@ export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:
       // Completion describes the OS launch acknowledgement, never the result
       // of the human's interactive session, matching the plugin's contract.
       await new Promise<void>((resolve,reject)=>{
-        const options={onLaunched:resolve,onError:reject,linuxTerminal:definition.settings.linuxTerminal};
+        const options={onLaunched:resolve,onError:reject,linuxTerminal:definition.settings.linuxTerminal,opencodeMajor:major as 1|2};
         if(process.platform==='win32') openOpencodeCliLongPromptWindows(bin,taskCwd,{},model,task.forceModel?'':agent,prompt,options);
-        else openOpencodeCli(bin,taskCwd,{},['-m',model,...(task.forceModel?[]:['--agent',agent]),'--prompt',prompt],options);
+        else openOpencodeCli(bin,taskCwd,{},openCodeInteractiveArgs(major,model,task.forceModel?'':agent,prompt),options);
       });
       return {succeeded:true,output:'[opened interactive OpenCode CLI with preloaded prompt; interactive task result is not observed]'};
     }
     // Exclusive task-local files preserve the complete input and avoid clashes
     // between clients/tasks. The launcher and script are shared with Obsidian.
-    const folder=fs.mkdtempSync(path.join(taskCwd,'.autooc-runtime-'));
+    const folder=createAuxiliaryDirectory(taskCwd,'runtime');
     const outFile=path.join(folder,'stdout.txt'),errFile=path.join(folder,'stderr.txt'),doneFile=path.join(folder,'done.txt');
     const pidFile=path.join(folder,'process.pid'),promptFile=path.join(folder,'instruction.txt'),full=path.join(folder,'input.txt');
     const scriptFile=path.join(folder,'launch'+scriptExt());
-    fs.writeFileSync(full,prompt,{encoding:'utf8',mode:0o600});
-    fs.writeFileSync(promptFile,`Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`,{encoding:'utf8',mode:0o600});
-    const script=buildOpenCodeScript({pidFile,secretEnv:{},safeCwd:taskCwd.replace(/'/g,"''"),gitCmds:'',bin,model,effectiveAgent:agent,effectiveTask:task,promptFile,outFile,errFile,doneFile,taskCwd});
-    if(process.platform==='win32') writeUtf8BomFile(scriptFile,script);else fs.writeFileSync(scriptFile,script,{mode:0o600});
-    const handle=launchHidden(scriptFile,pidFile);
-    let known=false;
+    let handle: ReturnType<typeof launchHidden> | undefined;
+    let known=false,launchAttempted=false;
     try {
+      fs.writeFileSync(full,prompt,{encoding:'utf8',mode:0o600});
+      fs.writeFileSync(promptFile,`Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`,{encoding:'utf8',mode:0o600});
+      const script=buildOpenCodeScript({pidFile,secretEnv:{},safeCwd:taskCwd.replace(/'/g,"''"),gitCmds:'',bin,model,effectiveAgent:agent,effectiveTask:task,promptFile,outFile,errFile,doneFile,taskCwd,major});
+      if(process.platform==='win32') writeUtf8BomFile(scriptFile,script);else fs.writeFileSync(scriptFile,script,{mode:0o600});
+      launchAttempted=true;
+      const launched=handle=launchHidden(scriptFile,pidFile);
       const result=await new Promise<{succeeded:boolean;output:string}>((resolve,reject)=>{
         let ended=false;
         const finish=(error?:Error)=>{if(ended)return;ended=true;clearInterval(timer);signal?.removeEventListener('abort',abort);if(error)reject(error);};
-        const abort=()=>{handle.kill();finish(new Error('OpenCode interrupted; effects require reconciliation'));};
+        const abort=()=>{launched.kill();finish(new Error('OpenCode interrupted; effects require reconciliation'));};
         const started=Date.now(),timeout=Number(definition.settings.taskTimeoutSeconds)*1000;
         const read=(file:string)=>fs.existsSync(file)?decodeCommandBuffer(fs.readFileSync(file)):'';
         let lastOutput='',nextOutputAt=0;
@@ -82,18 +94,15 @@ export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:
             known=true;finish();resolve({succeeded:exit==='0',output:output || '(no output)'});
           } catch(error) {finish(error as Error);}
         },100);
-        handle.onError(error=>finish(error));
+        launched.onError(error=>finish(error));
         signal?.addEventListener('abort',abort,{once:true});
         if(signal?.aborted)abort();
       });
       return result;
     } finally {
-      handle.cleanup(known);
+      handle?.cleanup(known);
       // Never erase uncertain process evidence or another execution's files.
-      if(known) {
-        for(const file of [outFile,errFile,doneFile,pidFile,promptFile,full,scriptFile]) {try {fs.unlinkSync(file);} catch(error) {if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}}
-        fs.rmdirSync(folder);
-      }
+      if(known || !launchAttempted) completeAuxiliaryDirectory(folder,'runtime');
     }
   }};
 }

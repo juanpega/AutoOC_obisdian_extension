@@ -211,6 +211,8 @@ test('Code task adapter matches plugin output, logging, aliases, failures and em
     {code:'console.log("observed", 3); result = input === "" ? "done" : "unexpected";',codeOutputVar:'result'},
     {prompt:'output="prompt fallback";'},
     {code:'console.log("before"); throw Error("intentional");'},
+    {code:'throw TypeError("invalid value");'},
+    {code:'throw "plain failure";'},
     {code:'   '},
   ]) {
     const task={id:'code-task',name:'fixture',taskKind:'code',scheduleType:'once',...definition};

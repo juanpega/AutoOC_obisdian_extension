@@ -193,7 +193,7 @@ test('Windows 8.3 plugin retains its reservation when the selected vault spellin
     assert.equal(resumed.runId,first.runId);assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'AB');
   } finally {plugin.releasePluginExecution(false);}
 }));
-test('Windows 8.3 public CLI stops and resumes across all alias directions', {skip:process.platform!=='win32'},async t=>{
+test('Windows 8.3 public CLI stops Code across alias directions without replay and resumes completed tasks', {skip:process.platform!=='win32'},async t=>{
   const {spawn,spawnSync}=require('node:child_process'),cli=path.resolve(__dirname,'../autooc-cli.cjs');
   const call=(...args)=>{
     const result=spawnSync(process.execPath,[cli,...args],{encoding:'utf8',timeout:15000,windowsHide:true});
@@ -211,19 +211,24 @@ test('Windows 8.3 public CLI stops and resumes across all alias directions', {sk
       const status=call('status','--vault',end),observed=status.executions[0];
       assert.equal(observed.phase,'in_flight');assert.equal(status.executionLockPresent,true);
       const stop=call('stop','--vault',end,'--workflow','w','--run',observed.runId);assert.equal(stop.requested,true);
-      fs.writeFileSync(path.join(root,'release.txt'),'continue');
-      assert.equal(await finished,0,stderr);
-      const first=JSON.parse(stdout);assert.equal(first.runId,observed.runId);assert.equal(first.phase,'in_flight');
-      const snapshot=JSON.parse(fs.readFileSync(path.join(data.runtime,first.runId+'.json')));
-      assert.equal(snapshot.steps[0].result.succeeded,true);
+      // Keep the gate closed: Code is interruptible now, so Stop must terminate
+      // this attempt rather than wait for the code to finish successfully.
+      assert.equal(await finished,1,stderr);
+      const first=JSON.parse(stdout);assert.equal(first.runId,observed.runId);
+      assert.equal(first.phase,'failed');
+      const journal=path.join(data.runtime,first.runId+'.json'),journalBefore=fs.readFileSync(journal,'utf8'),snapshot=JSON.parse(journalBefore);
+      assert.equal(snapshot.steps[0].result.succeeded,false);
+      assert.match(snapshot.steps[0].output,/Code execution stopped/);
+      assert.equal(snapshot.steps[0].result.cancelled,true);
+      assert.equal(JSON.parse(fs.readFileSync(data.file,'utf8')).workflows[0].runtimeExecution.terminalUncertainty,true);
+      assert.equal(snapshot.steps.length,1,'Stop must prevent the next step from starting');
+      assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A','Only the first step may have effects before resume');
       const branch=data.git('branch','--show-current');
-      const final=call('resume','--vault',end,'--workflow','w','--run',first.runId);
-      assert.equal(final.phase,'completed');assert.equal(final.runId,first.runId);
-      const checkpoint=JSON.parse(fs.readFileSync(path.join(data.runtime,first.runId+'.json')));
-      assert.equal(checkpoint.definitionHash,snapshot.definitionHash);assert.deepEqual(checkpoint.steps[0].branch,snapshot.steps[0].branch);
+      const resumed=spawnSync(process.execPath,[cli,'resume','--vault',end,'--workflow','w','--run',first.runId],{encoding:'utf8',timeout:15000,windowsHide:true});
+      assert.equal(resumed.status,1,'A cancelled Code attempt must not be replayed automatically');
+      assert.equal(fs.readFileSync(journal,'utf8'),journalBefore);
       assert.equal(data.git('branch','--show-current'),branch);
-      assert.equal(call('resume','--vault',start,'--workflow','w','--run',first.runId).phase,'completed');
-      assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'AB');
+      assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A');
     } finally {
       fs.writeFileSync(path.join(root,'release.txt'),'continue');await finished;
     }

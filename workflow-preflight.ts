@@ -5,6 +5,7 @@ import { physicalPath, isWithinPhysicalPath } from "./path-identity";
 import type { PreparedWorkflow } from "./workflow-definition";
 import { validateBranchOptions, branchRepository, preflightTaskBranch } from "./workflow-branch";
 import { assertWorkflowDependencies } from "./retired-dependency";
+import { isOpenCodeTask } from "./opencode-profile";
 
 // Validate all steps before the journal or first Code effect. The installed
 // catalog is trusted input, but an explicit vault does not authorize other roots.
@@ -34,6 +35,7 @@ export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:str
   for (const task of definition.tasks) {
     if(task.taskKind==='code') continue;
     if(typeof task.prompt!=='string' || !task.prompt.trim()) throw new Error("Task prompt must be nonempty before execution");
-    if((!task.taskKind || task.taskKind==='opencode') && !(task.model || definition.settings.defaultModel)?.trim()) throw new Error("OpenCode model must be selected before execution");
+    if(isOpenCodeTask(task.taskKind) && !(task.model || (task.taskKind==='opencode2' ? definition.settings.defaultOpencode2Model : definition.settings.defaultModel))?.trim()) throw new Error("OpenCode model must be selected before execution");
+    if(task.taskKind==='opencode2' && task.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks");
   }
 }

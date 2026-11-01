@@ -1,3 +1,4 @@
+import { assertWorkflowEnabled } from "./catalog-availability";
 import { catalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { assertWorkflowDependencies } from "./retired-dependency";
@@ -8,7 +9,7 @@ import { ExecutionJournal, checkpointUncertainties, type RunCheckpoint } from ".
 import { prepareWorkflowDefinition, type PreparedWorkflow } from "./workflow-definition";
 import { findWorkflowEntry } from "./workflow-routing";
 import { advanceWorkflowSession } from "./workflow-session";
-import { executeCode } from "./code-runtime";
+import { executeCodeAsync } from "./code-runtime";
 import { runWithVaultMutations, type VaultMutationBatchFactory } from "./code-vault-mutations";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { workflowTaskPrompt } from "./workflow-handoff";
@@ -63,6 +64,7 @@ export async function runCodeWorkflowHost(options: {
   admission?: ExecutionAdmission;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
+  if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks);
   assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, options.definition.settings);
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
@@ -182,9 +184,15 @@ export async function runCodeWorkflowHost(options: {
           return {succeeded:true, output:spec.output};
         }
         try {
-          const output = await runWithVaultMutations(options.vaultMutations, onVaultMutation => executeCode({...step,code:step.code || "",vaultBase:options.vaultBase,cwd:definition.settings.workingDirectory || options.vaultBase,input,outputs,onVaultMutation}));
+          let liveLog = "";
+          const output = await runWithVaultMutations(options.vaultMutations, onVaultMutation => executeCodeAsync({...step,code:step.code || "",vaultBase:options.vaultBase,cwd:definition.settings.workingDirectory || options.vaultBase,input,outputs,onVaultMutation,
+            log:(...args:unknown[])=>{
+              liveLog = (liveLog + args.map(String).join(" ") + "\n").slice(-12000);
+              const state = journal.snapshot();
+              if (!signal?.aborted) options.onTaskOutput?.({runId:state.runId,workflowId:state.workflowId,taskId:"",stepId:step.id,stepIndex:state.steps.length-1,output:options.redact(liveLog)});
+            }}, signal));
           return {succeeded:true,output};
-        } catch (error) { return {succeeded:false,output:`[code error: ${String(error)}]`}; }
+        } catch (error) { return {succeeded:false,cancelled:signal?.aborted || undefined,output:`[code error: ${String(error)}]`}; }
       },
       evaluate:options.evaluate || (async()=>{throw new Error("Model evaluation is not supported by this host");}),
       redact:options.redact,

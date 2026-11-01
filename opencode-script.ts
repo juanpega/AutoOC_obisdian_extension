@@ -1,4 +1,5 @@
 import { isWindows, psSingleQuoted, psUtf8Prelude, buildPowerShellEnvLines, buildShEnvLines, shSingleQuoted } from "./cli-launchers";
+import { openCodeRunArgs, type OpenCodeMajor } from "./opencode-profile";
 
 export interface OpenCodeScriptOptions {
   pidFile: string;
@@ -14,11 +15,13 @@ export interface OpenCodeScriptOptions {
   errFile: string;
   doneFile: string;
   taskCwd: string;
+  major?: OpenCodeMajor;
 }
 
 export function buildOpenCodeScript(options:OpenCodeScriptOptions):string {
   const {pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd}=options;
     let launchScript: string;
+    const runArgs = openCodeRunArgs(options.major || 1, model, effectiveAgent, !!effectiveTask.forceModel);
     if (isWindows()) {
       launchScript = [
         `try {`,
@@ -61,11 +64,8 @@ export function buildOpenCodeScript(options:OpenCodeScriptOptions):string {
         `if ($nodeScript) {`,
         `$opencodeArgs += $nodeScript`,
         `}`,
-        `$opencodeArgs += @('run', '--print-logs', '--log-level', 'INFO', '--auto', '-m', $model)`,
-        `if (-not $forceModel) {`,
-        `$opencodeArgs += @('--agent', $agent)`,
-        `}`,
-        `$opencodeArgs += @('--dangerously-skip-permissions', '--', $prompt)`,
+        `$opencodeArgs += @(${runArgs.map(psSingleQuoted).join(', ')})`,
+        `$opencodeArgs += @('--', $prompt)`,
          `& $bin @opencodeArgs 1>> $outFile 2>> $errFile`,
          `$exitCode = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }`,
          `[System.IO.File]::WriteAllText('${doneFile.replace(/'/g, "''")}', [string]$exitCode, [System.Text.Encoding]::UTF8)`,
@@ -81,7 +81,6 @@ export function buildOpenCodeScript(options:OpenCodeScriptOptions):string {
         HOME: process.env.HOME || process.env.USERPROFILE || "",
         PATH: process.env.PATH || "",
       };
-      const agentArg = effectiveTask.forceModel ? "" : ` --agent ${shSingleQuoted(effectiveAgent)}`;
       launchScript = [
         `echo $$ > ${shSingleQuoted(pidFile)}`,
         ...buildShEnvLines(shEnv),
@@ -89,8 +88,8 @@ export function buildOpenCodeScript(options:OpenCodeScriptOptions):string {
         gitCmds ? gitCmds : "",
         `bin=${shSingleQuoted(bin)}`,
         `prompt="$(cat ${shSingleQuoted(promptFile)} 2>/dev/null)"`,
-        `set -- --print-logs --log-level INFO --auto -m ${shSingleQuoted(model)}${agentArg} --dangerously-skip-permissions -- "$prompt"`,
-        `"$bin" run "$@" >> ${shSingleQuoted(outFile)} 2>> ${shSingleQuoted(errFile)}`,
+        `set -- ${runArgs.map(shSingleQuoted).join(' ')} -- "$prompt"`,
+        `"$bin" "$@" >> ${shSingleQuoted(outFile)} 2>> ${shSingleQuoted(errFile)}`,
         `exit_code=$?`,
         `printf '%s' "$exit_code" > ${shSingleQuoted(doneFile)}`,
       ].filter(line => line !== "").join("\n");

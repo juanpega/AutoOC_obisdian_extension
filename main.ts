@@ -1,5 +1,18 @@
+import { AreaDashboard, createAreaDashboardState, dashboardItems, type DashboardItem } from "./dashboard-areas";
+import { setupCodeTextarea, renderCodePreview } from "./code-editor";
+import { loadDashboardBubbleDiameter, saveDashboardBubbleDiameter, applyDashboardBubbleDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
+import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
+import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
+import type { InteractiveCliProvider } from "./interactive-cli";
 import type {ExecutionPresentation} from "./execution-presentation";
-import { catalogTransaction } from "./catalog-transaction";
+import { workflowCodeEntries, matchesWorkflowCodeEntry, type WorkflowCodeEntry } from "./workflow-code-entries";
+import { applyBulkCatalogAction, captureBulkSelection, type BulkAction, type BulkSelection, type CatalogKind } from "./catalog-bulk";
+import { BulkCatalogModal } from "./catalog-bulk-modal";
+import { AiDraftModal } from "./ai-draft-modal";
+import { generateDraftText } from "./ai-draft-runner";
+import { saveGeneratedDefinition, type DraftKind, type GeneratedDraft } from "./ai-draft";
+import { executionStatusHelp, ExecutionStatusHelpModal, type ExecutionHelpSnapshot } from "./execution-status-help";
+import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
 import { LegacyOutputRedaction } from "./legacy-output-redaction";
@@ -8,13 +21,18 @@ import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
 import {createPluginRequestHost} from "./cli-plugin-requests";
 import {applyWorkflowEdit} from "./workflow-edit";
 import { buildOpenCodeScript } from "./opencode-script";
+import { isOpenCodeTask, openCodeRunArgs, openCodeInteractiveArgs } from "./opencode-profile";
+import { assertOpenCode2 } from "./opencode-version";
+import { createOpenCodeWorkflowAdapter } from "./cli-workflow-adapters";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease, hasCompleteInstalledReleaseAsync } from "./release-update";
+import { assertPackageMaintenanceSafe } from "./package-maintenance";
+import { readPanelCatalog, type PanelCatalog } from "./panel-catalog";
 import { assertInstalledExecutionIdle, assertIdleCatalog, assertIdleJournals, waitForInstalledCatalog } from "./execution-idle";
 const PLUGIN_BUILD_VERSION: string = require("./manifest.json").version;
 // Survives CommonJS bundle reloads in the same Obsidian renderer. Only the
 // original stopped instance can relinquish its own reservation after rechecking
 // inactivity; a PID match alone never authorizes recovery.
-const stoppedLeaseOwners: Map<string, (runtime: string) => void> = (() => {
+const stoppedLeaseOwners: Map<string, (runtime: string, maintenance?: boolean) => void> = (() => {
   const key = Symbol.for('autooc.stoppedLeaseOwners.v1');
   if (!(globalThis as any)[key]) (globalThis as any)[key] = new Map();
   return (globalThis as any)[key];
@@ -41,7 +59,6 @@ import {
   type CodexApprovalRequest,
   type CodexModelOption,
   openCodexApp,
-  openCodexNewThread,
   resolveCodexBin,
 } from "./codex-client";
 import { CopilotCliClient, checkCopilotInstallation, resolveCopilotBin } from "./copilot-client";
@@ -61,6 +78,8 @@ import { prepareWorkflowDefinition } from "./workflow-definition";
 import { supportsSharedWorkflow, type WorkflowTaskOutput } from "./code-workflow-host";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, recoverWorkflowProgressAsync, validateProgressBinding } from "./workflow-progress";
+import { selectCodeStep, projectCodeStepRun, codeStepDisplay, readCodeStepCheckpoint } from "./workflow-code-step";
+import { CodeStepLogModal, CodeStepHistoryModal } from "./workflow-code-modals";
 import { taskElapsedSeconds } from "./task-history";
 import { readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { abandonInstalledExecution, inspectTerminalExecution, disposeTerminalExecution } from "./execution-abandonment";
@@ -72,66 +91,18 @@ import { setImmediate as yieldToInput } from "timers";
 import { performance as monotonicClock } from "perf_hooks";
 import type { PersistedWorkflowCatalog } from "./workflow-catalog-progress";
 import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
-// The visual builder is shipped as a self-contained HTML file under
-// `util/ui_workflow_builder/index.html`. A pre-build step
-// (scripts/inline-visual-builder.mjs) reads the file at build time and
-// emits `visualBuilderHtml.generated.ts` with the HTML as a string
-// constant. The extension then serves the builder from memory via an
-// iframe `srcdoc`, which avoids any file://, path-resolution, or
-// sandbox issues. The standalone HTML file is still kept in the repo
-// (under `util/`) so the builder can be opened directly in a browser
-// for development and testing.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const visualBuilderHtml: string = require("./visualBuilderHtml.generated").visualBuilderHtml;
-
 import { resolveOpencodeBin, psSingleQuoted, commandPreviewArg, shSingleQuoted, buildPowerShellEnvLines, SAFE_CLI_PROMPT_LENGTH, isWindows, scriptExt, buildShEnvLines, buildPosixLaunchCommand, appleScriptQuoted, LINUX_TERMINAL_CANDIDATES, commandExists, resolveLinuxTerminal, CliLaunchOptions, openOpencodeCli, openOpencodeCliLongPromptWindows, ProcessHandle, HiddenProcessHandle, launchHiddenPS, launchHiddenSh, launchHidden, writeUtf8BomFile, psUtf8Prelude } from "./cli-launchers";
 
-function setupCodeTextarea(textarea: HTMLTextAreaElement): void {
-  textarea.addClass("auto-oc-code-editor");
-  textarea.spellcheck = false;
-  textarea.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key !== "Tab") return;
-    e.preventDefault();
-    const start = textarea.selectionStart;
-    const end = textarea.selectionEnd;
-    textarea.value = textarea.value.slice(0, start) + "  " + textarea.value.slice(end);
-    textarea.selectionStart = textarea.selectionEnd = start + 2;
-    textarea.dispatchEvent(new Event("input"));
-  });
-}
-
-function renderCodePreview(parent: HTMLElement, code: string, maxChars = 600): void {
-  const pre = parent.createEl("pre", { cls: "auto-oc-code-preview" });
-  const codeEl = pre.createEl("code");
-  const src = (code || "// empty code").slice(0, maxChars);
-  const pattern = /(\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\.|[^`])*`|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|\b(?:const|let|var|return|if|else|for|while|await|async|function|new|try|catch|throw|true|false|null|undefined)\b|\b\d+(?:\.\d+)?\b)/g;
-  let last = 0;
-  for (const match of src.matchAll(pattern)) {
-    const text = match[0];
-    const index = match.index ?? 0;
-    if (index > last) codeEl.appendChild(document.createTextNode(src.slice(last, index)));
-    const span = codeEl.createSpan();
-    span.setText(text);
-    if (text.startsWith("//") || text.startsWith("/*")) span.addClass("auto-oc-code-token-comment");
-    else if (text.startsWith("'") || text.startsWith('"') || text.startsWith("`")) span.addClass("auto-oc-code-token-string");
-    else if (/^\d/.test(text)) span.addClass("auto-oc-code-token-number");
-    else span.addClass("auto-oc-code-token-keyword");
-    last = index + text.length;
-  }
-  if (last < src.length) codeEl.appendChild(document.createTextNode(src.slice(last)));
-  if ((code || "").length > maxChars) codeEl.appendChild(document.createTextNode("\n..."));
-}
-
-const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and visual workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
 Canonical complete export format:
 {
   "autoOCExport": {
-    "schemaVersion": "1.5.0",
+    "schemaVersion": "1.6.0",
     "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
-    "pluginVersion": "1.5.11",
+    "pluginVersion": "1.7.2",
     "name": "Package name",
     "description": "Short description"
   },
@@ -144,7 +115,7 @@ For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", or 
 Available modules:
 AutoOC supports DAG workflows with three step kinds:
 1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
-2. code: runs JavaScript in a sandbox.
+2. code: runs trusted JavaScript with explicitly enabled capabilities. Node vm is not a security boundary.
 3. delay: pauses the workflow.
 
 Tasks:
@@ -152,12 +123,12 @@ A task is reusable and can be referenced by workflows.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" by default, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
 - copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
-- interactiveTerminal: true opens the interactive client for an AI task: OpenCode CLI for taskKind "opencode", or the ChatGPT/Codex app for taskKind "codex".
+- interactiveTerminal: true opens the interactive client for an AI task: OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
 - reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
@@ -288,7 +259,7 @@ Task step example:
 taskExportId must match an existing task exportId.
 
 Transitions:
-The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The MCP validator validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
+The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The importer validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
 
 If transitions is missing, it is treated as legacy compatibility: the UI importer uses the legacy transitionMode, evaluatePrompt, and forceContinue fields and fills the missing links as a linear chain in input order.
 
@@ -343,7 +314,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.5.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.5.11",
+    "pluginVersion": "1.7.2",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -460,14 +431,14 @@ async function copyTextToClipboard(text: string): Promise<void> {
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 type IntervalUnit = "seconds" | "minutes" | "hours";
-type TaskKind = "opencode" | "codex" | "copilot" | "code";
+type TaskKind = "opencode" | "opencode2" | "codex" | "copilot" | "code";
 type LegacyOwner = { workflowId: string; stepId: string; stepIndex: number; context: object };
 type LegacyStopIdentity = { kind: "legacy"; token: string; taskId: string; workflowId?: string; stepId?: string; stepIndex?: number };
 type SharedStopIdentity = { kind: "shared"; taskId: string; runId: string; workflowId: string; stepId: string; stepIndex: number };
 type TaskStopIdentity = LegacyStopIdentity | SharedStopIdentity;
 type LegacyAttempt = { identity: LegacyStopIdentity; task: ScheduledTask; owner?: LegacyOwner; cancelled: boolean;
   handle?: { kill(): unknown }; stopPromise?: Promise<string>; releaseStart?: () => void };
-type DefaultAiEngine = "opencode" | "codex" | "copilot";
+type DefaultAiEngine = "opencode" | "opencode2" | "codex" | "copilot";
 
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
 // Workflows are no longer strictly linear — each step declares its outgoing
@@ -488,6 +459,8 @@ interface WorkflowTransition {
 }
 
 interface WorkflowStep {
+  disabled?: boolean;
+  codeExecution?: {runtimeExecution: any; status: string; output: string; lastRun: string};
   requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
@@ -515,11 +488,12 @@ interface WorkflowStep {
   output?: string;
   // DAG
   transitions?: WorkflowTransition[];
-  // visual position (used by the visual builder)
+  // legacy visual position retained for import/export compatibility
   position?: { x: number; y: number };
 }
 
 interface ScheduledTask {
+  disabled?: boolean;
   concurrency?: ConcurrencyPolicy;
   legacyExecution?: LegacyStopIdentity & { startedAt: string; finishedAt?: string; stopState?: "requested" | "unconfirmed" | "error"; stopError?: string };
   id: string;
@@ -568,6 +542,7 @@ interface ScheduledTask {
 type WorkflowStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 
 interface Workflow {
+  disabled?: boolean;
   concurrency?: ConcurrencyPolicy;
   requiresAutoOCSecrets?: boolean;
   legacyExecution?: { token: string };
@@ -595,8 +570,13 @@ interface AutoOCSettings {
   tasks: ScheduledTask[];
   workflows: Workflow[];
   opencodePath: string;
+  opencode2Path?: string;
+  defaultOpencode2Model?: string;
+  defaultOpencode2Agent?: string;
   codexPath: string;
   copilotPath: string;
+  claudePath?: string;
+  cliLauncherEnabled?: Partial<Record<InteractiveCliProvider, boolean>>;
   defaultCopilotModel: string;
   defaultAiEngine: DefaultAiEngine;
   defaultModel: string;
@@ -613,6 +593,7 @@ interface AutoOCSettings {
   libraryUrl: string;
   dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
   dashboardTaskBubbleSize: "sm" | "md" | "lg" | "xl";
+  dashboardTaskBubbleDiameter?: number;
   linuxTerminal?: string;
 }
 
@@ -663,6 +644,7 @@ function renderAreaSuggestions(
 //   - internal id, status, lastRun, output, createdAt
 //   - model (taken from the importer's system default)
 interface ExportTask {
+  disabled?: boolean;
   concurrency?: ConcurrencyPolicy;
   exportId: string;
   requiresAutoOCSecrets?: boolean;
@@ -728,12 +710,9 @@ function addCopilotTaskSettings(container: HTMLElement, draft: Partial<Scheduled
 }
 
 function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin): void {
-  container.createEl("h3", { text: "GitHub Copilot CLI" });
+  container.createEl("h3", { text: "GitHub Copilot task defaults" });
   new Setting(container)
-    .setName("Copilot executable path")
-    .setDesc("Use copilot for auto-detection, or the absolute executable path. Sign in with copilot login in your terminal first.")
-    .addText((text) => text.setPlaceholder("copilot").setValue(plugin.settings.copilotPath || "copilot")
-      .onChange(async (value) => { plugin.settings.copilotPath = value.trim() || "copilot"; await plugin.saveSettings(); }))
+    .setName("Test Copilot installation")
     .addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
       try {
         const bin = resolveCopilotBin(plugin.settings.copilotPath);
@@ -752,6 +731,7 @@ function addCopilotGlobalSettings(container: HTMLElement, plugin: AutoOCPlugin):
 }
 
 interface ExportWorkflowStep {
+  disabled?: boolean;
   requiresAutoOCSecrets?: boolean;
   id: string;
   stepKind: StepKind;
@@ -780,6 +760,7 @@ interface ExportWorkflowStep {
 }
 
 interface ExportWorkflow {
+  disabled?: boolean;
   concurrency?: ConcurrencyPolicy;
   requiresAutoOCSecrets?: boolean;
   exportId: string;
@@ -985,35 +966,6 @@ function setAutoOCModalSize(modal: Modal, widthPx: number): void {
   modal.contentEl.style.overflowY = "auto";
 }
 
-// Make a modal take nearly the full viewport, centered. Used by the
-// Visual Builder modal so it feels like a real editor rather than a
-// cramped sidebar leaf.
-function setAutoOCModalFullscreen(modal: Modal): void {
-  const modalEl = (modal as any).modalEl as HTMLElement | undefined;
-  if (!modalEl) return;
-  modalEl.style.width = "min(1400px, calc(100vw - 40px))";
-  modalEl.style.height = "calc(100vh - 80px)";
-  modalEl.style.maxWidth = "calc(100vw - 40px)";
-  modalEl.style.maxHeight = "calc(100vh - 40px)";
-  modalEl.style.overflow = "hidden";
-  modalEl.addClass("auto-oc-fullscreen-modal");
-  // The modal's content panel is a flex child of the modal. Make it grow
-  // to fill the modal's body and become a vertical flex container for
-  // the toolbar + iframe. Without `flex: 1` the content panel would
-  // collapse to its intrinsic height and the iframe (which is 100% of
-  // its parent) would render at a tiny default size.
-  modal.contentEl.style.flex = "1 1 auto";
-  modal.contentEl.style.minHeight = "0";
-  modal.contentEl.style.width = "100%";
-  modal.contentEl.style.height = "auto";
-  modal.contentEl.style.maxWidth = "100%";
-  modal.contentEl.style.padding = "0";
-  modal.contentEl.style.overflow = "hidden";
-  modal.contentEl.style.display = "flex";
-  modal.contentEl.style.flexDirection = "column";
-  modal.contentEl.style.boxSizing = "border-box";
-}
-
 // ─── Update / Version Check ───────────────────────────────────────────────────
 
 const GITHUB_REPO = "juanpega/AutoOC_obisdian_extension";
@@ -1070,18 +1022,12 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 }
 
-// Helper for the Visual Builder apply path: prefer the incoming value, fall
-// back to the existing one when the field was not sent. Avoids losing data
-// when the iframe payload is missing optional fields.
-function t_or_undef<T>(incoming: T | undefined, fallback: T): T {
-  return incoming === undefined ? fallback : incoming;
-}
-
 function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
   return {
     exportId,
     taskKind: task.taskKind,
     concurrency: task.concurrency,
+    disabled: task.disabled,
     copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : undefined,
     requiresAutoOCSecrets: task.requiresAutoOCSecrets,
     name: task.name,
@@ -1121,6 +1067,7 @@ function toExportWorkflow(
     exportId,
     requiresAutoOCSecrets: workflow.requiresAutoOCSecrets,
     concurrency: workflow.concurrency,
+    disabled: workflow.disabled,
     name: workflow.name,
     area: workflow.area,
     description: workflow.description,
@@ -1135,6 +1082,7 @@ function toExportWorkflow(
     handoffOutput: workflow.handoffOutput,
     steps: workflow.steps.map((step) => ({
       id: step.id,
+      disabled: step.disabled,
       requiresAutoOCSecrets: step.requiresAutoOCSecrets,
       stepKind: step.stepKind || "task",
       name: step.name,
@@ -1507,6 +1455,7 @@ function deleteSingleLogFile(filePath: string): void {
 }
 
 function isTaskDue(task: ScheduledTask): boolean {
+  if (task.disabled) return false;
   if (task.status === "running") return false;
   if (task.scheduleType === "manual") return false;
 
@@ -1545,6 +1494,7 @@ function isTaskDue(task: ScheduledTask): boolean {
 }
 
 function isWorkflowDue(wf: Workflow): boolean {
+  if (wf.disabled) return false;
   if (wf.status === "running") return false;
   if (wf.steps.length === 0) return false;
   if (wf.scheduleType === "manual") return false;
@@ -1587,6 +1537,74 @@ function isWorkflowDue(wf: Workflow): boolean {
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class AutoOCPlugin extends Plugin {
+  private bulkCatalogMutationInProgress = false;
+
+  async applyBulkSelection(selection: BulkSelection[], action: BulkAction): Promise<void> {
+    const save = async (transaction?:CatalogTransaction) => {
+      this.assertLifecycleOpen();
+      if (this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress) throw new Error("Catalog maintenance is in progress. Try again shortly.");
+      this.bulkCatalogMutationInProgress = true;
+      try {
+        await applyBulkCatalogAction(this.settings, selection, action,
+          (kind, id) => this.getDefinitionStartState(kind, id, true),
+          validate => this.saveSettings(false, validate, transaction));
+      } finally { this.bulkCatalogMutationInProgress = false; }
+    };
+    const basePath = (this.app.vault.adapter as any).basePath;
+    if (basePath) await this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile, save));
+    else await save();
+    // Publication succeeded even if a view cannot refresh.
+    try { this.refreshOpenViews(); } catch { console.warn("AutoOC: Catalog saved; panel refresh failed."); }
+  }
+
+  private draftControllers = new Set<AbortController>();
+  private draftModals = new Set<AiDraftModal>();
+
+  async saveGeneratedDefinitionDraft(tasks: ScheduledTask[], workflow?: Workflow): Promise<void> {
+    this.assertLifecycleOpen();
+    const save = async (transaction?:CatalogTransaction) => {
+      this.assertLifecycleOpen();
+      await saveGeneratedDefinition(this.settings, tasks, workflow, () => this.saveSettings(true, undefined, transaction));
+    };
+    const basePath = (this.app.vault.adapter as any).basePath;
+    if (!basePath) return save();
+    return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile, save));
+  }
+
+  openAiDraft(kind: DraftKind, objective: string, useDraft: (draft: GeneratedDraft) => void): AiDraftModal {
+    const modal = new AiDraftModal(this.app, {
+      kind, guide: AUTOOC_WORKFLOW_PROMPT, version: this.manifest.version,
+      engine: this.settings.defaultAiEngine, objective,
+      models: engine => [
+        ...(engine === "codex" ? this.availableCodexModels : engine === "opencode" ? this.availableModels : []),
+        ...this.settings.tasks.filter(task => (task.taskKind || "opencode") === engine && task.model?.trim())
+          .map(task => ({ value: task.model, label: task.model })),
+      ],
+      defaults: () => ({ engine: this.settings.defaultAiEngine, model: this.getEffectiveDefaultModel(), opencode2Model: this.settings.defaultOpencode2Model, opencode2Agent: this.settings.defaultOpencode2Agent,
+        codexModel: this.getEffectiveCodexModel(), copilotModel: this.settings.defaultCopilotModel,
+        agent: this.getEffectiveAgent(), reasoningEffort: this.settings.defaultCodexReasoningEffort }),
+      generate: async (prompt, engine, model, signal) => {
+        this.assertLifecycleOpen();
+        if (this.draftControllers.size) throw new Error("Another draft is being generated. Finish or cancel it first.");
+        const controller = new AbortController();
+        const cancel = () => controller.abort();
+        signal.addEventListener("abort", cancel, { once: true });
+        if (signal.aborted) cancel();
+        this.draftControllers.add(controller);
+        try {
+          return await generateDraftText({ engine, prompt, model, reasoningEffort: this.settings.defaultCodexReasoningEffort,
+            opencodePath: this.settings.opencodePath, opencode2Path: this.settings.opencode2Path, codexPath: this.settings.codexPath, copilotPath: this.settings.copilotPath }, controller.signal);
+        } catch (error) {
+          throw new Error(this.redactSecrets((error as Error).message));
+        } finally { this.draftControllers.delete(controller); signal.removeEventListener("abort", cancel); }
+      },
+      useDraft: draft => { this.assertLifecycleOpen(); useDraft(draft); },
+      onClosed: () => { this.draftModals.delete(modal); },
+    });
+    this.draftModals.add(modal);
+    modal.open();
+    return modal;
+  }
   private legacyAttempts = new Map<string, LegacyAttempt>();
   private settingsWriter = new SettingsWriter();
   private settingsLoadRevision = 0;
@@ -1600,7 +1618,6 @@ export default class AutoOCPlugin extends Plugin {
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
   availableCodexModels: CodexModelOption[] = [];
-  private visualBuilders = new Set<VisualBuilderModal>();
   private taskUpdatedCallbacks = new Set<(task: ScheduledTask) => void>();
   private workflowUpdatedCallbacks = new Set<(workflow: Workflow) => void>();
   // Map taskId -> child process, so we can kill running tasks
@@ -1860,26 +1877,31 @@ export default class AutoOCPlugin extends Plugin {
           }finally{this.settingsRecoveryPromise=undefined;}
         }
         this.reservePluginExecution();
+        const assertCatalog = await this.completeInstalledRelease();
+        this.assertLifecycleOpen();
+        // The cooperative load records the actual bytes it validated. Publication
+        // rejects local edits or unloads that occur during asynchronous work.
+        await assertCatalog();
+        await this.loadSettings();
+        this.assertLifecycleOpen();
+        this.observedJournalSnapshot = await this.journalSnapshotAsync();
+        // A durable, owner-bound proof covers renderer termination without any
+        // unload event. Every execution entry removes it before its first effect.
+        await this.recordObservationProof();
       }
       catch (error) {
+        if (this.startupRecoveryDisposed) throw error;
         this.startupPending = false;
+        // Engine admission failed before registering commands or scheduling work.
+        // Keep the panel independent; the observer never adopts a writable catalog.
+        if (this.pluginExecutionLease) await this.onunload();
+        this.startupRecoveryDisposed = false;
         this.lifecycleStopped = true;
         this.startupError = String(error);
         this.startupWaitingForOwner = this.waitForExecutionOwner();
         this.registerRecoveryInterface();
         return;
       }
-      const assertCatalog = await this.completeInstalledRelease();
-      this.assertLifecycleOpen();
-      // The cooperative load records the actual bytes it validated. Publication
-      // rejects local edits or unloads that occur during asynchronous work.
-      await assertCatalog();
-      await this.loadSettings();
-      this.assertLifecycleOpen();
-      this.observedJournalSnapshot = await this.journalSnapshotAsync();
-      // A durable, owner-bound proof covers renderer termination without any
-      // unload event. Every execution entry removes it before its first effect.
-      await this.recordObservationProof();
       // The MCP bridge is retired. CLI and the distributed skill remain available.
       // Load models asynchronously to avoid blocking startup
       this.lifecycleTimeout(() => {
@@ -1903,11 +1925,6 @@ export default class AutoOCPlugin extends Plugin {
         callback: () => this.activateView(),
       });
 
-      this.addCommand({
-        id: "open-visual-builder",
-        name: "Open AutoOC Visual Builder",
-        callback: () => this.openVisualBuilder(),
-      });
 
       this.addCommand({
         id: "create-task",
@@ -1916,9 +1933,15 @@ export default class AutoOCPlugin extends Plugin {
       });
 
       this.addCommand({
+        id: "open-cli",
+        name: "Open CLI",
+        callback: () => openCliLauncher(this.app, this),
+      });
+
+      this.addCommand({
         id: "open-chatgpt-codex",
-        name: "Open ChatGPT / Codex in project folder",
-        callback: () => new CodexAppModal(this.app, this).open(),
+        name: "Open Codex CLI",
+        callback: () => openCliLauncher(this.app, this, "codex"),
       });
 
       this.addCommand({
@@ -2024,6 +2047,10 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async onunload() {
+    for (const modal of this.draftModals || []) modal.close();
+    this.draftModals?.clear();
+    for (const controller of this.draftControllers || []) controller.abort();
+    this.draftControllers?.clear();
     const drainingSharedSessions=this.sharedCompletions.size>0;
     this.startupRecoveryDisposed = true;
     this.stopStartupWait();
@@ -2085,11 +2112,12 @@ export default class AutoOCPlugin extends Plugin {
     if (closingRequestHost && !closingRequestHost.hasPendingWork && this.cliRequestHost === closingRequestHost) this.cliRequestHost = undefined;
     if (this.pluginExecutionLease) {
       const lease = this.pluginExecutionLease;
-      stoppedLeaseOwners.set(lease.token, runtime => {
+      stoppedLeaseOwners.set(lease.token, (runtime, maintenance = false) => {
         if (!samePhysicalPath(lease.directory, runtime)) throw new Error('Previous AutoOC installation changed');
         if (!this.lifecycleStopped || this.startupPending || this.sharedCompletions.size || this.pluginExecutionLease !== lease) throw new Error('Previous AutoOC instance is still stopping');
         lease.assertOwned();
-        this.assertPluginCanRelease();
+        if (maintenance) this.assertPackageUpdateIdle(true);
+        else this.assertPluginCanRelease();
         this.releasePluginExecution(false);
       });
     }
@@ -2162,7 +2190,10 @@ export default class AutoOCPlugin extends Plugin {
 
   private registerRecoveryInterface(): void {
     let sameProcessOwner = false;
-    try { sameProcessOwner = readExecutionLeaseOwner(this.selectedExecutionLocation(false).runtimeDirectory).pid === process.pid; } catch { /* Keep the original recovery diagnosis. */ }
+    try {
+      const owner = readExecutionLeaseOwner(this.selectedExecutionLocation(false).runtimeDirectory);
+      sameProcessOwner = owner.pid === process.pid && owner.token !== this.pluginExecutionLease?.token;
+    } catch { /* Keep the original recovery diagnosis. */ }
     const open = async () => {
       const existing = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
       const leaf = existing || this.app.workspace.getLeaf(true);
@@ -2170,12 +2201,18 @@ export default class AutoOCPlugin extends Plugin {
       await this.app.workspace.revealLeaf(leaf);
     };
     this.registerView(VIEW_TYPE, leaf => new AutoOCRecoveryView(leaf, this.startupError!,
-      () => this.retryLoadingAutoOC(), this.closedSessionRecovery(), this.startupWaitingForOwner, sameProcessOwner));
-    this.addRibbonIcon("workflow", this.startupWaitingForOwner ? "AutoOC — waiting for execution" : "AutoOC — recovery required", () => { void open(); });
-    this.addCommand({id: "open-auto-oc", name: "Open AutoOC recovery", callback: () => { void open(); }});
+      () => this.retryLoadingAutoOC(), this.closedSessionRecovery(), this.startupWaitingForOwner, sameProcessOwner,
+      () => readPanelCatalog(this.selectedExecutionLocation(false).configurationFile), async () => {
+        await this.checkForUpdates(true);
+        if (this.updateCheckError) throw new Error(this.updateCheckError);
+        if (this.updateAvailable) await this.updatePlugin();
+        else new Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
+      }));
+    this.addRibbonIcon("workflow", "Open AutoOC", () => { void open(); });
+    this.addCommand({id: "open-auto-oc", name: "Open AutoOC", callback: () => { void open(); }});
     new Notice(this.startupWaitingForOwner
-      ? "AutoOC is waiting for the active execution. Loading will retry automatically; you can keep editing notes."
-      : "AutoOC: execution is unavailable. Open AutoOC for recovery details.", 10000);
+      ? "AutoOC is open for consultation while another execution owns the engine."
+      : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 10000);
   }
 
   private closedSessionRecovery(): (() => void) | undefined {
@@ -2183,6 +2220,9 @@ export default class AutoOCPlugin extends Plugin {
       const location = this.selectedExecutionLocation(false);
       if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) ||
           fs.existsSync(path.join(location.runtimeDirectory, 'update-pending.json'))) return;
+      // Releasing a dead execution owner cannot repair an unrelated save.
+      // Keep consultation available without offering a misleading retry loop.
+      assertPackageMaintenanceSafe(location.installationDirectory);
       const owner = readExecutionLeaseOwner(location.runtimeDirectory);
       try { process.kill(owner.pid, 0); return; }
       catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') return; }
@@ -2193,6 +2233,7 @@ export default class AutoOCPlugin extends Plugin {
         if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) ||
             !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) ||
             fs.existsSync(path.join(current.runtimeDirectory, 'update-pending.json'))) throw new Error('Installation changed; retry loading AutoOC');
+        assertPackageMaintenanceSafe(current.installationDirectory);
         recoverExecutionLease(current.runtimeDirectory, owner.token);
       };
     } catch { return; }
@@ -2288,7 +2329,7 @@ export default class AutoOCPlugin extends Plugin {
       this.assertLifecycleOpen();
       try {
         return await this.runSharedWorkflow(request.taskId ? standaloneTaskWorkflow(request.taskId).id : request.workflowId!,
-          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress});
+          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress}, request.stepId);
       } catch (error) {
         if (!this.lifecycleStopped) new Notice(`AutoOC: CLI request failed — ${this.redactSecrets(String(error))}`);
         throw error;
@@ -2308,21 +2349,25 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, stepId?:string) {
     const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
     if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
     const pending = this.withDefinitionStart(kind, id,
-      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release));
+      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release, stepId));
     this.sharedCompletions.add(pending);
     try { return (await pending)!; }
     finally { this.sharedCompletions.delete(pending); }
   }
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void, stepId?:string) {
     if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
-    const selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
-    if (selected) assertWorkflowDependencies(selected, this.settings.tasks);
+    let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
+    if (stepId && selected) selected = selectCodeStep(selected, stepId);
+    if (selected) {
+      assertWorkflowDependencies(selected, this.settings.tasks);
+      if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks);
+    }
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -2346,7 +2391,7 @@ export default class AutoOCPlugin extends Plugin {
       expectedSettings = captureJsonStructure(this.settings);
       this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
-        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,resumeRunId,reconcile,newExecution,
+        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,stepId,resumeRunId,reconcile,newExecution,
         lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
@@ -2357,7 +2402,7 @@ export default class AutoOCPlugin extends Plugin {
               event.runId !== execution.runId || event.workflowId !== workflowId) return;
           execution.liveOutput = event;
         },
-        onCheckpoint:async (checkpoint,catalog,presentation)=>{
+        onCheckpoint:async (checkpoint,catalog,presentation,transaction)=>{
           if(this.lifecycleStopped) {
             if(catalog)await this.settingsWriter.adoptConfirmed(location.configurationFile,catalog.version,()=>true);
             return;
@@ -2372,8 +2417,8 @@ export default class AutoOCPlugin extends Plugin {
           }
           execution.runId = checkpoint.runId;
           execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
-          if (catalog) await this.loadSettingsSnapshot(catalog);
-          else await this.loadSettings();
+          if (catalog) await this.loadSettingsSnapshot(catalog,transaction);
+          else await this.loadSettings(transaction);
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
           this.sharedSettingsBaseline = expectedSettings;
@@ -2392,9 +2437,9 @@ export default class AutoOCPlugin extends Plugin {
       // overwrite a local edit or mask the original execution/storage error.
       if (stillOwned && !this.lifecycleStopped && expectedSettings && matchesJsonStructure(this.settings,this.sharedSettingsBaseline || expectedSettings)) {
         try {
-          await catalogTransaction(location.configurationFile,async()=>{
-            if(lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog);
-            else await this.loadSettings();
+          await catalogTransaction(location.configurationFile,async transaction=>{
+            if(lastCatalog && !this.sharedWorkflowExecutions.size && this.sharedSettingsBaseline === expectedSettings) await this.loadSettingsSnapshot(lastCatalog,transaction);
+            else await this.loadSettings(transaction);
             this.sharedSettingsBaseline=captureJsonStructure(this.settings);
             this.refreshOpenViews();
           });
@@ -2407,6 +2452,76 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   ownsExecution(workflowId:string,runId:string):boolean {return this.ownsSharedRun(workflowId,runId);}
+
+  codeStepState(workflowId:string, stepId:string) {
+    const workflow = this.settings.workflows.find(item => item.id === workflowId);
+    const step = workflow?.steps.find(item => item.id === stepId && item.stepKind === "code");
+    if (!workflow || !step) throw new Error("Code step no longer exists. Refresh the panel.");
+    const execution = this.sharedExecution(workflowId), checkpoint = execution?.checkpoint;
+    const active = checkpoint?.phase === "in_flight" && checkpoint.nextStepId === stepId && this.ownsSharedRun(workflowId, checkpoint.runId);
+    const live = active && execution?.liveOutput?.stepId === stepId ? execution.liveOutput.output : undefined;
+    return {workflow, step, ...codeStepDisplay(step), ...(active ? {status:"running"} : {}),
+      log: live ?? codeStepDisplay(step).output,
+      stop: active ? {runId:checkpoint!.runId, stepIndex:checkpoint!.steps.length-1} : undefined};
+  }
+
+  openCodeStepHistory(workflowId:string, stepId:string) {
+    const {step} = this.codeStepState(workflowId, stepId);
+    new CodeStepHistoryModal(this.app, this.selectedExecutionLocation().runtimeDirectory, workflowId, stepId, step.name || "Code step",
+      (title, output) => new TextPreviewModal(this.app, title, output).open()).open();
+  }
+
+  async runCodeStepOnly(workflowId:string, stepId:string) {
+    this.codeStepState(workflowId, stepId);
+    return this.runSharedWorkflow(workflowId, undefined, false, true, undefined, undefined, stepId);
+  }
+
+  async stopCodeStep(workflowId:string, stepId:string, observed:{runId:string;stepIndex:number}) {
+    const state = this.codeStepState(workflowId, stepId);
+    if (!state.stop || state.stop.runId !== observed.runId || state.stop.stepIndex !== observed.stepIndex) {
+      throw new Error("Step execution changed; refresh before stopping.");
+    }
+    this.sharedExecution(workflowId, undefined, observed.runId)!.controller.abort();
+    new Notice("Stop requested. Commands already started may still have effects.");
+  }
+
+  async setCodeStepDisabled(workflowId:string, stepId:string, disabled:boolean) {
+    const save = async (transaction?:CatalogTransaction) => {
+      this.assertLifecycleOpen();
+      if (this.updateInProgress || this.workflowEditPending || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.definitionStarts.size) throw new Error("Wait for active work or saving to finish.");
+      const {step} = this.codeStepState(workflowId, stepId);
+      if (this.getDefinitionStartState("workflow", workflowId) !== "available") throw new Error("Wait for the workflow to finish or resolve its interrupted attempt.");
+      this.bulkCatalogMutationInProgress = true;
+      const previous = step.disabled;
+      try { step.disabled = disabled; await this.saveSettings(false, undefined, transaction); }
+      catch(error) { step.disabled = previous; throw error; }
+      finally { this.bulkCatalogMutationInProgress = false; }
+    };
+    if ((this.app.vault.adapter as any).basePath) await this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile, save));
+    else await save();
+    this.refreshOpenViews();
+  }
+
+  async resolveCodeStepAttempt(workflowId:string, stepId:string) {
+    const location = this.selectedExecutionLocation();
+    const {workflow} = this.codeStepState(workflowId, stepId);
+    const observed = readCodeStepCheckpoint(location.runtimeDirectory, workflow, stepId);
+    if (!observed) return;
+    if (["completed", "failed"].includes(observed.phase)) return this.confirmTerminalDisposition(workflowId, observed.runId);
+    if (observed.phase === "abandoned") return;
+    const modal = new ConfirmModal(this.app, "Close interrupted step attempt?",
+      "This keeps the history and records any effects as unknown. It does not repeat the step or undo changes. Verify that external commands have stopped, then enter your reason.", true);
+    if (!await modal.openAndWait()) return;
+    this.assertLifecycleOpen();
+    if (!this.pluginExecutionLease || this.sharedWorkflowExecution || this.definitionStarts.size || this.runningProcesses.size || this.legacyAttempts.size || this.updateInProgress) throw new Error("Wait for active work to finish.");
+    const reservation = {workflowId, runId:observed.runId, controller:new AbortController()};
+    this.sharedWorkflowExecution = reservation;
+    try {
+      await this.saveSettings(false);
+      await abandonInstalledExecution({vault:location.vault, installationDirectory:location.installationDirectory, workflowId, runId:observed.runId,
+        revision:observed.revision, reason:modal.reason, acknowledgedUnknownEffects:true, lease:this.pluginExecutionLease});
+    } finally { if (this.sharedWorkflowExecution === reservation) this.sharedWorkflowExecution = undefined; await this.loadSettings(); this.refreshOpenViews(); }
+  }
 
   private ownsSharedRun(workflowId:string, runId:string):boolean {
     if (!this.sharedExecution(workflowId,undefined,runId) || !this.pluginExecutionLease) return false;
@@ -2426,15 +2541,26 @@ export default class AutoOCPlugin extends Plugin {
   // Ephemeral ownership is keyed by canonical identity, never persisted.
   private definitionStarts = new Map<string, symbol>();
 
-  getDefinitionStartState(kind: "task" | "workflow", id: string): "available" | "starting" | "active" | "blocked" {
+  getDefinitionStartState(kind: "task" | "workflow", id: string, ignoreCatalogMutation = false): "available" | "starting" | "active" | "blocked" {
+    if (this.bulkCatalogMutationInProgress && !ignoreCatalogMutation) return "starting";
     if (this.definitionStarts?.has(`${kind}:${id}`)) return "starting";
     const item = kind === "task" ? this.settings.tasks.find(t => t.id === id) : this.settings.workflows.find(w => w.id === id);
     if (!item) return "blocked";
     if (kind === "task" ? this.isTaskActive(item as ScheduledTask) : this.isWorkflowExecuting(id)) return "active";
     const binding = (item as any).runtimeExecution;
+    if (kind === "workflow" && (item as Workflow).steps.some(step => {
+      const run = step.codeExecution?.runtimeExecution;
+      return run && run.phase !== "abandoned" && (run.requiresReconciliation || !["completed","failed"].includes(run.phase) || run.terminalUncertainty && !run.disposition);
+    })) return "blocked";
     if ((item as ScheduledTask).legacyExecution?.stopState || kind === "workflow" && this.hasUncertainLegacyTask(id) || binding && (binding.requiresReconciliation ||
         !["completed", "failed", "abandoned"].includes(binding.phase) || binding.phase !== "abandoned" && binding.terminalUncertainty && !binding.disposition)) return "blocked";
     return "available";
+  }
+
+  definitionDisabledReason(kind: CatalogKind, id: string): string | undefined {
+    if (kind === "task") return taskDisabledReason(this.settings.tasks.find(item => item.id === id));
+    const workflow = this.settings.workflows.find(item => item.id === id);
+    return workflow ? workflowDisabledReason(workflow, this.settings.tasks) : undefined;
   }
 
   private hasUncertainLegacyTask(workflowId: string): boolean {
@@ -2448,9 +2574,10 @@ export default class AutoOCPlugin extends Plugin {
     button.setAttr("data-autooc-start-id", id);
     button.setAttr("data-autooc-start-compact", String(compact));
     const state = this.getDefinitionStartState(kind, id);
-    const label = state === "starting" ? "Iniciando…" : state === "active" ? "Running…" : state === "blocked" ? "Recovery required" : kind === "task" ? "Run" : "Run Workflow";
-    button.disabled = state !== "available";
-    button.textContent = state === "starting" ? "⏳ Iniciando…" : compact ? "▶" : `▶ ${label}`;
+    const disabledReason = this.definitionDisabledReason(kind, id);
+    const label = disabledReason || (state === "starting" ? "Iniciando…" : state === "active" ? "Running…" : state === "blocked" ? "Recovery required" : kind === "task" ? "Run" : "Run Workflow");
+    button.disabled = !!disabledReason || state !== "available";
+    button.textContent = disabledReason ? (compact ? "▶" : "Disabled") : state === "starting" ? "⏳ Iniciando…" : compact ? "▶" : `▶ ${label}`;
     button.title = label;
     button.setAttr("aria-label", label);
     button.setAttr("aria-busy", String(state === "starting"));
@@ -2468,6 +2595,7 @@ export default class AutoOCPlugin extends Plugin {
 
   private async withDefinitionStart<T>(kind: "task" | "workflow", id: string, execute: (release: () => void) => Promise<T>, onBusy?: () => Promise<T>): Promise<T | undefined> {
     this.assertLifecycleOpen();
+    if (this.bulkCatalogMutationInProgress) throw new Error("Catalog changes are being saved. Try again shortly.");
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const key = `${kind}:${id}`;
     this.definitionStarts ||= new Map();
@@ -2492,6 +2620,21 @@ export default class AutoOCPlugin extends Plugin {
   private refreshOpenViews():void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view instanceof AutoOCView) leaf.view.refresh();
+    }
+  }
+
+  getDashboardBubbleDiameter(): number {
+    return loadDashboardBubbleDiameter(this.app, this.manifest.id, this.settings);
+  }
+
+  saveDashboardBubbleDiameter(diameter: number): void {
+    this.assertLifecycleOpen();
+    saveDashboardBubbleDiameter(this.app, this.manifest.id, diameter);
+  }
+
+  applyDashboardBubbleDiameter(diameter: number): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      if (leaf.view instanceof AutoOCView) applyDashboardBubbleDiameter(leaf.view.containerEl, diameter);
     }
   }
 
@@ -2566,7 +2709,7 @@ export default class AutoOCPlugin extends Plugin {
   private getMcpRawTaskPayloadError(payload: Record<string, unknown>): string | null {
     if ("steps" in payload) return "Raw task payloads must not include workflow steps; use kind \"workflow\".";
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (!["opencode", "codex", "copilot", "code"].includes(taskKind)) return "payload.taskKind must be opencode, codex, copilot, or code.";
+    if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(taskKind)) return "payload.taskKind must be opencode, opencode2, codex, copilot, or code.";
     const copilotError = getCopilotTaskValidationError(payload);
     if (copilotError) return copilotError;
     if (payload.reasoningEffort !== undefined && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
@@ -2848,7 +2991,6 @@ export default class AutoOCPlugin extends Plugin {
       }
       await this.saveSettings(false);
       this.view?.refresh();
-      this.syncVisualBuilders();
       if (showNotice) new Notice(`AutoOC: ${models.length} Codex models loaded.`);
     } catch (error) {
       if (showNotice) new Notice(`AutoOC: could not connect to Codex — ${String(error)}`);
@@ -2918,26 +3060,6 @@ export default class AutoOCPlugin extends Plugin {
     this.activateView();
   }
 
-  // Open the visual builder as a centered, near-fullscreen modal. The
-  // visual builder is a standalone HTML/JS app that we host in an
-  // iframe; it communicates with the plugin through postMessage so the
-  // user can edit visually and apply changes back to the settings.
-  openVisualBuilder(): void {
-    new VisualBuilderModal(this.app, this).open();
-  }
-
-  registerVisualBuilder(modal: VisualBuilderModal): void {
-    this.visualBuilders.add(modal);
-  }
-
-  unregisterVisualBuilder(modal: VisualBuilderModal): void {
-    this.visualBuilders.delete(modal);
-  }
-
-  syncVisualBuilders(): void {
-    for (const modal of this.visualBuilders) modal.sendState();
-  }
-
   onTaskUpdated(callback: (task: ScheduledTask) => void): () => void {
     this.taskUpdatedCallbacks.add(callback);
     return () => this.taskUpdatedCallbacks.delete(callback);
@@ -2950,22 +3072,20 @@ export default class AutoOCPlugin extends Plugin {
 
   emitTaskUpdated(task: ScheduledTask): void {
     for (const callback of this.taskUpdatedCallbacks) callback(task);
-    this.syncVisualBuilders();
   }
 
   emitWorkflowUpdated(workflow: Workflow): void {
     for (const callback of this.workflowUpdatedCallbacks) callback(workflow);
-    this.syncVisualBuilders();
   }
 
-  async loadSettings() { return this.loadSettingsSnapshot(); }
+  async loadSettings(transaction?:CatalogTransaction) { return this.loadSettingsSnapshot(undefined,transaction); }
 
-  private async loadSettingsSnapshot(confirmed?: PersistedWorkflowCatalog) {
+  private async loadSettingsSnapshot(confirmed?: PersistedWorkflowCatalog, transaction?:CatalogTransaction) {
     this.assertLifecycleOpen();
     const revision = ++this.settingsLoadRevision;
     this.settingsPublicationState = "loading";
     let observed = false;
-    try { return await this.prepareSettingsSnapshot(revision,confirmed,()=>{observed=true;}); }
+    try { return await this.prepareSettingsSnapshot(revision,confirmed,()=>{observed=true;},transaction); }
     finally {
       if (revision === this.settingsLoadRevision && this.settingsPublicationState === "loading") {
         this.settingsPublicationState = !observed && this.hasWritableCatalogVersion() ? "ready" : "conflict";
@@ -2982,7 +3102,7 @@ export default class AutoOCPlugin extends Plugin {
     } catch { return false; }
   }
 
-  private async prepareSettingsSnapshot(revision:number, confirmed?: PersistedWorkflowCatalog, observed:()=>void=()=>{}) {
+  private async prepareSettingsSnapshot(revision:number, confirmed?: PersistedWorkflowCatalog, observed:()=>void=()=>{}, transaction?:CatalogTransaction) {
     const priorSettings = this.settings && captureJsonStructure(this.settings);
     const lease = this.pluginExecutionLease;
     let ownedAtEntry = false;
@@ -3031,7 +3151,7 @@ export default class AutoOCPlugin extends Plugin {
     });
     // Bound executions are recovered read-only before legacy migrations can
     // change their definition or turn an unobserved run into a failure.
-    if (nextSettings.workflows?.some(wf => (wf as any).runtimeExecution) || nextSettings.tasks?.some(task=>(task as any).runtimeExecution)) {
+    if (nextSettings.workflows?.some(wf => (wf as any).runtimeExecution || wf.steps.some(step => step.codeExecution)) || nextSettings.tasks?.some(task=>(task as any).runtimeExecution)) {
       const runtime = (location || this.selectedExecutionLocation()).runtimeDirectory;
       const observations = new Map<string, Awaited<ReturnType<typeof observeCheckpoint>>>();
       validateRecovery = () => { for (const observed of observations.values()) observed.assertCurrent(); };
@@ -3057,6 +3177,14 @@ export default class AutoOCPlugin extends Plugin {
         })());
       }
       nextSettings.workflows = recovered;
+      for (const wf of recovered) {
+        for (const step of wf.steps) {
+          if (!step.codeExecution) continue;
+          const checkpoint = await checkpointFor(step.codeExecution.runtimeExecution.runId);
+          step.codeExecution = projectCodeStepRun(wf, step.id, nextSettings.tasks, nextSettings, checkpoint,
+            this.ownsSharedRun(wf.id, checkpoint.runId), true).codeExecution;
+        }
+      }
       const recoveredTasks: ScheduledTask[] = [];
       for (const task of nextSettings.tasks) {
         recoveredTasks.push(await (async () => {
@@ -3184,7 +3312,7 @@ export default class AutoOCPlugin extends Plugin {
       nextSettings.defaultModel = this.availableModels[0]?.value ?? "";
       changed = true;
     }
-    if (!["codex", "opencode", "copilot"].includes(nextSettings.defaultAiEngine)) {
+    if (!["codex", "opencode", "opencode2", "copilot"].includes(nextSettings.defaultAiEngine)) {
       nextSettings.defaultAiEngine = "opencode";
       changed = true;
     }
@@ -3202,7 +3330,7 @@ export default class AutoOCPlugin extends Plugin {
     }
     await publish();
     if (changed) {
-      await this.saveSettings(false);
+      await this.saveSettings(false,undefined,transaction);
     }
   }
 
@@ -3305,13 +3433,13 @@ export default class AutoOCPlugin extends Plugin {
     return { changed, configPath, mcpPath };
   }
 
-  async saveSettings(refreshView = true, validate?:()=>void) {
+  async saveSettings(refreshView = true, validate?:()=>void, transaction?:CatalogTransaction) {
     this.assertLifecycleOpen();
     const basePath=(this.app.vault.adapter as any).basePath;
     if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate);
     return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile,async()=>{
       await this.saveSettingsWithinTransaction(refreshView,validate);
-    }));
+    },transaction));
   }
 
   private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void) {
@@ -3347,20 +3475,20 @@ export default class AutoOCPlugin extends Plugin {
   // ── Version / update helpers ────────────────────────────────────────────────
 
   async checkForUpdates(silent = false): Promise<void> {
-    if (this.lifecycleStopped) return;
+    if (this.lifecycleStopped && (!this.startupError || this.startupRecoveryDisposed)) return;
     try {
       this.updateCheckError = null;
       const res = await fetch(noCacheUrl(REMOTE_MANIFEST_URL), { cache: "reload" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      if (this.lifecycleStopped) return;
+      if (this.lifecycleStopped && (!this.startupError || this.startupRecoveryDisposed)) return;
       const remoteVersion = data?.version;
       if (!remoteVersion || typeof remoteVersion !== "string") {
         throw new Error("Remote manifest has no version");
       }
       this.latestVersion = remoteVersion;
       const comparison = compareVersions(remoteVersion, this.manifest.version);
-      const incomplete = this.pluginExecutionLease && !hasCompleteInstalledRelease(path.dirname(this.pluginExecutionLease.directory), this.manifest.version);
+      const incomplete = !hasCompleteInstalledRelease(this.selectedExecutionLocation(false).installationDirectory, this.manifest.version);
       this.updateAvailable = comparison > 0 || comparison === 0 && !!incomplete;
       this.view?.refresh();
       if (!silent) {
@@ -3377,31 +3505,60 @@ export default class AutoOCPlugin extends Plugin {
     }
   }
 
+  get panelAvailable(): boolean { return this.ready || !!this.startupError && !this.startupRecoveryDisposed; }
+
+  private assertPackageUpdateIdle(stoppedOwner = false): void {
+    if (!stoppedOwner && this.lifecycleStopped && (!this.startupError || this.startupRecoveryDisposed)) throw new Error("AutoOC instance is stopped");
+    if (this.startupPending || this.sharedWorkflowExecution || this.sharedCompletions.size || this.runningProcesses.size ||
+        this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.workflowEditPending ||
+        this.settingsWriter.hasPendingWrites || this.cliRequestHost?.hasPendingWork) {
+      throw new Error("An active execution or save must finish before updating AutoOC");
+    }
+    const location = this.selectedExecutionLocation(false);
+    this.pluginExecutionLease?.assertOwned();
+    assertPackageMaintenanceSafe(location.installationDirectory);
+  }
+
   async updatePlugin(): Promise<void> {
-    this.assertLifecycleOpen();
     if (this.updateInProgress || !this.latestVersion) return;
     const targetVersion = this.latestVersion;
-    // Block new executions before waiting for this instance's legitimate UI
-    // saves. A save is not an active workflow and must not force reinstallation.
     this.updateInProgress = true;
+    let maintenanceLease = false;
     try {
       await this.settingsWriter.drain();
-      this.assertLifecycleOpen();
-      this.assertExecutionIdle();
-      if (!this.pluginExecutionLease) throw new Error("Plugin execution reservation is required");
-      const shouldUpdate = confirm(
-        "AutoOC will download v" + targetVersion + " and reload the plugin. Tasks, workflows and settings will be preserved.\n\nContinue?"
-      );
-      if (!shouldUpdate) return;
+      this.assertPackageUpdateIdle();
+      if (!confirm("AutoOC will download v" + targetVersion + " and reload the plugin. Tasks, workflows and settings will be preserved.\n\nContinue?")) return;
+      if (!this.pluginExecutionLease) {
+        const location = this.selectedExecutionLocation(false);
+        try { this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory); }
+        catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+          const owner = readExecutionLeaseOwner(location.runtimeDirectory);
+          // Maintenance archives an exact absent reservation, never a run or its
+          // unknown effects. A live/unverifiable owner remains exclusive.
+          const relinquish = owner.pid === process.pid ? stoppedLeaseOwners.get(owner.token) : undefined;
+          if (relinquish) relinquish(location.runtimeDirectory, true);
+          else recoverExecutionLease(location.runtimeDirectory, owner.token, () => assertPackageMaintenanceSafe(location.installationDirectory));
+          this.pluginExecutionLease = acquireExecutionLease(location.runtimeDirectory);
+        }
+        this.pluginExecutionLocation = location;
+        maintenanceLease = true;
+      }
       this.view?.refresh();
       new Notice("AutoOC: downloading update…");
       const files = await downloadRelease("https://raw.githubusercontent.com/" + GITHUB_REPO + "/" + GITHUB_BRANCH, targetVersion);
-      // Dashboard layout writes can also finish while the download is in flight.
       await this.settingsWriter.drain();
-      this.assertLifecycleOpen();
-      this.assertExecutionIdle();
+      this.assertPackageUpdateIdle();
       const pluginDir = path.dirname(this.pluginExecutionLease.directory);
       installRelease({ directory: pluginDir, version: targetVersion, files, lease: this.pluginExecutionLease });
+      // No local work can start while updateInProgress is set. Release this
+      // maintenance reservation without treating old journals as live work.
+      this.lifecycleStopped = true;
+      this.ready = false;
+      this.startupRecoveryDisposed = true;
+      this.stopStartupWait();
+      this.cliRequestHost?.close();
+      this.releasePluginExecution(false);
       new Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin…");
       try {
         // @ts-ignore — internal Obsidian API
@@ -3409,7 +3566,8 @@ export default class AutoOCPlugin extends Plugin {
         // @ts-ignore — internal Obsidian API
         await this.app.plugins.enablePlugin(this.manifest.id);
         // @ts-ignore — internal Obsidian API
-        if (!this.app.plugins.plugins?.[this.manifest.id]?.ready) throw new Error("New plugin instance did not become ready");
+        const loaded = this.app.plugins.plugins?.[this.manifest.id];
+        if (!loaded?.panelAvailable && !loaded?.ready) throw new Error("New plugin panel did not open");
         new Notice("AutoOC: plugin reloaded.");
       } catch {
         new Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12000);
@@ -3418,12 +3576,19 @@ export default class AutoOCPlugin extends Plugin {
       new Notice("AutoOC: update could not finish — " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12000);
     } finally {
       this.updateInProgress = !!this.pluginExecutionLease && fs.existsSync(path.join(this.pluginExecutionLease.directory, "update-pending.json"));
+      if (maintenanceLease && this.pluginExecutionLease && !this.updateInProgress) {
+        try { this.releasePluginExecution(false); } catch { /* Preserve a changed owner. */ }
+      }
       if (!this.lifecycleStopped) this.view?.refresh();
     }
   }
 
   // Keep CLI options before "--" so prompt text cannot be parsed as opencode flags.
   buildArgs(task: ScheduledTask): string[] {
+    if (task.taskKind === "opencode2" && task.interactiveTerminal) return [resolveOpencodeBin(this.settings.opencode2Path || "opencode"),
+      ...openCodeInteractiveArgs(2, task.model || this.settings.defaultOpencode2Model || "", task.forceModel ? "" : task.agent || this.settings.defaultOpencode2Agent || "build", task.prompt)];
+    if (task.taskKind === "opencode2") return [resolveOpencodeBin(this.settings.opencode2Path || "opencode"),
+      ...openCodeRunArgs(2, task.model || this.settings.defaultOpencode2Model || "", task.agent || this.settings.defaultOpencode2Agent || "build", task.forceModel), "--", task.prompt];
     let prompt = task.prompt;
     if (task.useRalphLoop) {
       prompt = `/ralph-loop ${prompt}`;
@@ -3446,6 +3611,12 @@ export default class AutoOCPlugin extends Plugin {
   // Quick evaluation via same detached PS + polling mechanism. Used for workflow
   // transition validation prompts.
   async evaluateWithOpencode(prompt: string, model: string, cwd: string): Promise<{ output: string; exitCode: number }> {
+    if (this.settings.defaultAiEngine === "opencode2") {
+      const task = { id: "autooc-evaluation", taskKind: "opencode2", model, agent: this.settings.defaultOpencode2Agent || "build", workingDirectory: cwd };
+      const definition = prepareWorkflowDefinition(standaloneTaskWorkflow(task.id), [task], this.settings);
+      const result = await createOpenCodeWorkflowAdapter(definition, cwd).execute(task, prompt);
+      return { output: this.redactSecrets(result.output), exitCode: result.succeeded ? 0 : -1 };
+    }
     return new Promise((resolve) => {
       const fs = require("fs");
       const path = require("path");
@@ -3686,12 +3857,15 @@ export default class AutoOCPlugin extends Plugin {
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     assertNoRetiredDependency(this.settings.tasks[idx]);
+    const disabledReason = taskDisabledReason(this.settings.tasks[idx]);
+    if (disabledReason) throw new Error(disabledReason);
     if (this.isTaskActive(this.settings.tasks[idx])) {
       new Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
       if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
-    const effectiveTask: ScheduledTask = { ...this.settings.tasks[idx], ...overrides };
+    const selectedTask = this.settings.tasks[idx];
+    const effectiveTask: ScheduledTask = { ...selectedTask, ...overrides };
     assertNoRetiredDependency(effectiveTask);
 
     const binding=(effectiveTask as any).runtimeExecution;
@@ -3713,6 +3887,17 @@ export default class AutoOCPlugin extends Plugin {
     }
 
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
+    const checkedOpenCode2Bin = effectiveTask.taskKind === "opencode2" ? resolveOpencodeBin(this.settings.opencode2Path || "opencode") : undefined;
+    if (checkedOpenCode2Bin) {
+      if (effectiveTask.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks.");
+      effectiveTask.model ||= this.settings.defaultOpencode2Model || "";
+      effectiveTask.agent ||= this.settings.defaultOpencode2Agent || "build";
+      await assertOpenCode2(checkedOpenCode2Bin);
+      this.assertLifecycleOpen();
+      if (this.updateInProgress || this.sharedWorkflowExecution || this.settings.tasks[idx] !== selectedTask || taskDisabledReason(selectedTask) || this.isTaskActive(selectedTask)) {
+        throw new Error("Task or execution availability changed while checking the CLI version. Nothing was launched; review the task before trying again.");
+      }
+    }
     const attempt = this.beginLegacyAttempt(effectiveTask, owner);
     attempt.releaseStart = releaseStart;
 
@@ -3826,19 +4011,19 @@ export default class AutoOCPlugin extends Plugin {
         if (effectiveTask.useRalphLoop) {
           prompt = `/ralph-loop ${prompt}`;
         }
-        const bin = resolveOpencodeBin(this.settings.opencodePath);
-        const agent = this.getEffectiveAgent(effectiveTask.agent);
+        const major = effectiveTask.taskKind === "opencode2" ? 2 : 1;
+        const bin = checkedOpenCode2Bin || resolveOpencodeBin(this.settings.opencodePath);
+        const agent = major === 2 ? effectiveTask.agent || this.settings.defaultOpencode2Agent || "build" : this.getEffectiveAgent(effectiveTask.agent);
         const launchOptions = {
           onError: (error: Error) => { void finish(error); },
           onLaunched: () => { void finish(); },
           linuxTerminal: this.settings.linuxTerminal,
+          opencodeMajor: major as 1 | 2,
         };
         if (process.platform === "win32") {
           openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt, launchOptions);
         } else {
-          const args = ["-m", effectiveTask.model];
-          if (!effectiveTask.forceModel) args.push("--agent", agent);
-          args.push("--prompt", prompt);
+          const args = openCodeInteractiveArgs(major, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt);
           openOpencodeCli(bin, taskCwd, secretEnv, args, launchOptions);
         }
       } catch (e) {
@@ -3858,7 +4043,7 @@ export default class AutoOCPlugin extends Plugin {
     new Notice(`AutoOC: running "${task.name}"…`);
 
     const args = this.buildArgs(effectiveTask);
-    const bin = args[0]; // opencode.cmd full path
+    const bin = checkedOpenCode2Bin || args[0];
     let prompt = effectiveTask.prompt;
     if (effectiveTask.useRalphLoop) {
       prompt = `/ralph-loop ${prompt}`;
@@ -3929,9 +4114,9 @@ export default class AutoOCPlugin extends Plugin {
       }
     }
 
-    const effectiveAgent = this.getEffectiveAgent(effectiveTask.agent);
+    const effectiveAgent = effectiveTask.taskKind === "opencode2" ? effectiveTask.agent || this.settings.defaultOpencode2Agent || "build" : this.getEffectiveAgent(effectiveTask.agent);
 
-    const launchScript = buildOpenCodeScript({pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd});
+    const launchScript = buildOpenCodeScript({pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd, major: effectiveTask.taskKind === "opencode2" ? 2 : 1});
 
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
@@ -4591,7 +4776,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDueAll() {
-    if (this.lifecycleStopped || this.startupPending || this.updateInProgress) return;
+    if (this.lifecycleStopped || this.startupPending || this.updateInProgress || this.bulkCatalogMutationInProgress) return;
     if (this.dueCheckInProgress) return;
     this.dueCheckInProgress = true;
     try {
@@ -4605,6 +4790,8 @@ export default class AutoOCPlugin extends Plugin {
   async runDueTasks() {
     const dueTasks = this.settings.tasks.filter((task) => isTaskDue(task));
     for (let i = 0; i < dueTasks.length; i++) {
+      if (this.bulkCatalogMutationInProgress) return;
+      if (this.definitionDisabledReason("task", dueTasks[i].id)) continue;
       const error = autoOCDependencyError(dueTasks[i]);
       if (error) { new Notice(error); continue; }
       await this.runTask(dueTasks[i]);
@@ -4615,6 +4802,8 @@ export default class AutoOCPlugin extends Plugin {
   async runDueWorkflows() {
     const dueWorkflows = this.settings.workflows.filter((wf) => isWorkflowDue(wf));
     for (let i = 0; i < dueWorkflows.length; i++) {
+      if (this.bulkCatalogMutationInProgress) return;
+      if (this.definitionDisabledReason("workflow", dueWorkflows[i].id)) continue;
       try { assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks); }
       catch (error) { new Notice(String(error)); continue; }
       await this.runWorkflow(dueWorkflows[i]);
@@ -4625,7 +4814,6 @@ export default class AutoOCPlugin extends Plugin {
   async deleteTask(id: string) {
     this.settings.tasks = this.settings.tasks.filter((t) => t.id !== id);
     await this.saveSettings();
-    this.syncVisualBuilders();
   }
 
   async duplicateTask(task: ScheduledTask) {
@@ -4679,7 +4867,6 @@ export default class AutoOCPlugin extends Plugin {
     }
     this.settings.workflows = this.settings.workflows.filter((w) => w.id !== id);
     await this.saveSettings();
-    this.syncVisualBuilders();
   }
 
   async duplicateWorkflow(workflow: Workflow) {
@@ -4690,6 +4877,7 @@ export default class AutoOCPlugin extends Plugin {
       name: `${workflow.name} (copy)`,
       steps: workflow.steps.map((step) => ({
         ...step,
+        codeExecution: undefined,
         transitions: step.transitions?.map((transition) => ({ ...transition })),
         position: step.position ? { ...step.position } : undefined,
         status: "pending",
@@ -4838,13 +5026,15 @@ export default class AutoOCPlugin extends Plugin {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
-    for(const item of [...(data.tasks || []),...(data.workflows || [])])validateConcurrency(item);
+    for(const item of [...(data.tasks || []),...(data.workflows || [])]) { validateConcurrency(item); validateDisabled(item); }
+    for (const workflow of data.workflows || []) for (const step of workflow.steps || []) validateDisabled(step);
     const exportIdToTaskId = new Map<string, string>();
     let tasksImported = 0;
 
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
-      if (!["opencode", "codex", "copilot", "code"].includes(importedTaskKind)) {
+      if (importedTaskKind === "opencode2" && et.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks.");
+      if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(importedTaskKind)) {
         throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
       }
       const copilotError = getCopilotTaskValidationError(et);
@@ -4862,12 +5052,12 @@ export default class AutoOCPlugin extends Plugin {
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
         prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
-        model: importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : this.getEffectiveDefaultModel(),
+        model: importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : importedTaskKind === "opencode2" ? this.settings.defaultOpencode2Model || "" : this.getEffectiveDefaultModel(),
         copilotAllowAllTools: importedTaskKind === "copilot" ? et.copilotAllowAllTools === true : undefined,
-        agent: importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
+        agent: importedTaskKind === "opencode2" ? et.agent || this.settings.defaultOpencode2Agent || "build" : importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
         reasoningEffort: importedTaskKind === "codex" ? (et.reasoningEffort || this.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
-        forceModel: importedTaskKind === "opencode" ? (et.forceModel ?? false) : false,
+        forceModel: isOpenCodeTask(importedTaskKind) ? (et.forceModel ?? false) : false,
         scheduleType: et.scheduleType ?? "manual",
         scheduleTime: et.scheduleTime ?? nowTimeString(),
         scheduleDate: et.scheduleDate ?? "",
@@ -4880,12 +5070,13 @@ export default class AutoOCPlugin extends Plugin {
         output: "",
         createdAt: new Date().toISOString(),
         concurrency: et.concurrency,
+        disabled: et.disabled,
         workingDirectory: et.workingDirectory,
-        branch: importedTaskKind === "opencode" ? et.branch : "",
-        createBranch: importedTaskKind === "opencode" ? et.createBranch : false,
+        branch: isOpenCodeTask(importedTaskKind) ? et.branch : "",
+        createBranch: isOpenCodeTask(importedTaskKind) ? et.createBranch : false,
         interactiveTerminal: importedTaskKind === "code"
           ? undefined
-          : (et.interactiveTerminal ?? (importedTaskKind === "opencode" ? this.settings.defaultInteractiveTerminal : false)),
+          : (et.interactiveTerminal ?? (isOpenCodeTask(importedTaskKind) ? this.settings.defaultInteractiveTerminal : false)),
         code: et.code,
         codeLang: et.codeLang,
         codeInputVar: et.codeInputVar,
@@ -4912,6 +5103,7 @@ export default class AutoOCPlugin extends Plugin {
         const hasImportedTransitions = Object.prototype.hasOwnProperty.call(s, "transitions");
         const step: WorkflowStep = {
           id: (s as any).id || generateId(),
+          disabled: s.disabled,
           stepKind,
           requiresAutoOCSecrets: s.requiresAutoOCSecrets,
           name: (s as any).name,
@@ -4961,6 +5153,7 @@ export default class AutoOCPlugin extends Plugin {
         createdAt: new Date().toISOString(),
         handoffBranch: ew.handoffBranch ?? false,
         concurrency: ew.concurrency,
+        disabled: ew.disabled,
         handoffOutput: ew.handoffOutput ?? true,
         scheduleType: ew.scheduleType ?? "manual",
         scheduleTime: ew.scheduleTime ?? nowTimeString(),
@@ -4995,6 +5188,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async executeWorkflow(workflow: Workflow, releaseStart?: () => void) {
+    assertWorkflowEnabled(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks);
     assertWorkflowDependencies(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
@@ -5124,7 +5318,7 @@ export default class AutoOCPlugin extends Plugin {
       evaluate: async (transition, target, input) => {
         new Notice(`AutoOC: Evaluating transition for "${wf.name}" → ${target.id}...`);
         const cwd = this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-        const model = this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
+        const model = this.settings.defaultAiEngine === "opencode2" ? this.settings.defaultOpencode2Model || "" : this.availableModels[0]?.value || this.settings.defaultModel || "opencode/default";
         const prompt = transition.evaluatePrompt?.trim() || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
         const result = await this.evaluateWithOpencode(`${prompt}\n\nPrevious step output:\n---\n${input}\n---\n\nReply ONLY with YES or NO.`, model, cwd);
         return result.output;
@@ -5381,12 +5575,106 @@ export default class AutoOCPlugin extends Plugin {
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
 class AutoOCView extends ItemView {
+  private selectionMode = false;
+  private selectedTaskIds = new Set<string>();
+  private selectedWorkflowIds = new Set<string>();
+  private updateBulkToolbar?: () => void;
+
+  private renderBulkToolbar(root: HTMLElement, kind: CatalogKind, visibleIds: string[]) {
+    const toggle = root.createEl("button", { text: this.selectionMode ? "Hide selection" : "Select items", cls: "auto-oc-selection-toggle" });
+    toggle.title = this.selectionMode ? "Hide selection controls and clear selected items" : "Show checkboxes and bulk actions";
+    toggle.setAttr("aria-expanded", String(this.selectionMode));
+    toggle.onclick = () => {
+      this.selectionMode = !this.selectionMode;
+      if (!this.selectionMode) { this.selectedTaskIds.clear(); this.selectedWorkflowIds.clear(); }
+      this.render();
+    };
+    this.updateBulkToolbar = undefined;
+    if (!this.selectionMode) return;
+    // Keep selections across filters and tabs; remove identities no longer in the catalog.
+    this.selectedTaskIds ||= new Set();
+    this.selectedWorkflowIds ||= new Set();
+    const tasks = new Set(this.plugin.settings.tasks.map(item => item.id));
+    const workflows = new Set(this.plugin.settings.workflows.map(item => item.id));
+    for (const id of this.selectedTaskIds) if (!tasks.has(id)) this.selectedTaskIds.delete(id);
+    for (const id of this.selectedWorkflowIds) if (!workflows.has(id)) this.selectedWorkflowIds.delete(id);
+    const selected = kind === "task" ? this.selectedTaskIds : this.selectedWorkflowIds;
+    const bar = root.createDiv("auto-oc-bulk-toolbar");
+    const all = bar.createEl("button", { text: "Select visible" });
+    all.disabled = !visibleIds.length;
+    all.onclick = () => { for (const id of visibleIds) selected.add(id); this.render(); };
+    const clear = bar.createEl("button", { text: "Clear selection" });
+    clear.onclick = () => { this.selectedTaskIds.clear(); this.selectedWorkflowIds.clear(); this.render(); };
+    const count = bar.createEl("span", { cls: "auto-oc-bulk-count", attr: { "aria-live": "polite" } });
+    const area = bar.createEl("button", { text: "Change area" });
+    const enable = bar.createEl("button", { text: "Enable selected" });
+    const disable = bar.createEl("button", { text: "Disable selected" });
+    const remove = bar.createEl("button", { text: "Delete selected", cls: "mod-warning" });
+    const exportButton = bar.createEl("button", { text: "Export selected" });
+    const open = (action: BulkAction) => {
+      const selection = captureBulkSelection(this.plugin.settings, this.selectedTaskIds, this.selectedWorkflowIds);
+      new BulkCatalogModal(this.app, this.plugin, selection, action, () => {
+        for (const item of selection) (item.kind === "task" ? this.selectedTaskIds : this.selectedWorkflowIds).delete(item.id);
+        this.render();
+      }).open();
+    };
+    area.onclick = () => open({ type: "area", area: "" });
+    enable.onclick = () => open({ type: "availability", disabled: false });
+    disable.onclick = () => open({ type: "availability", disabled: true });
+    remove.onclick = () => open({ type: "delete" });
+    exportButton.onclick = () => new ExportModal(this.app, this.plugin, this.selectedTaskIds, this.selectedWorkflowIds).open();
+    this.updateBulkToolbar = () => {
+      const total = this.selectedTaskIds.size + this.selectedWorkflowIds.size;
+      const hidden = total - visibleIds.filter(id => selected.has(id)).length;
+      count.setText(`${this.selectedTaskIds.size} tasks + ${this.selectedWorkflowIds.size} workflows selected${hidden ? ` (${hidden} outside this list)` : ""}`);
+      enable.disabled = disable.disabled = clear.disabled = area.disabled = remove.disabled = exportButton.disabled = total === 0;
+    };
+    this.updateBulkToolbar();
+  }
+
+  private renderSelectionCheckbox(summary: HTMLElement, kind: CatalogKind, item: { id: string; name: string }) {
+    if (!this.selectionMode) return;
+    const selected = kind === "task" ? (this.selectedTaskIds ||= new Set()) : (this.selectedWorkflowIds ||= new Set());
+    const checkbox = summary.createEl("input", { type: "checkbox", cls: "auto-oc-select-item" });
+    checkbox.setAttr("aria-label", `Select ${kind}: ${item.name}`);
+    checkbox.checked = selected.has(item.id);
+    checkbox.onclick = event => event.stopPropagation();
+    checkbox.onchange = () => {
+      if (checkbox.checked) selected.add(item.id); else selected.delete(item.id);
+      this.updateBulkToolbar?.();
+    };
+  }
+
+  private renderAvailabilityButton(parent: HTMLElement, kind: CatalogKind, item: ScheduledTask | Workflow) {
+    const button = parent.createEl("button", { text: item.disabled ? "Enable" : "Disable", cls: "auto-oc-availability-toggle" });
+    button.title = item.disabled ? "Enable this item and its saved schedule" : "Disable without deleting configuration or history";
+    button.setAttr("aria-label", `${item.disabled ? "Enable" : "Disable"} ${kind}: ${item.name}`);
+    button.disabled = this.plugin.getDefinitionStartState(kind, item.id) !== "available";
+    button.onclick = async event => {
+      event.stopPropagation();
+      const selection = captureBulkSelection(this.plugin.settings,
+        new Set(kind === "task" ? [item.id] : []), new Set(kind === "workflow" ? [item.id] : []));
+      button.disabled = true;
+      try {
+        await this.plugin.applyBulkSelection(selection, { type: "availability", disabled: !item.disabled });
+        this.render();
+      } catch (error) {
+        button.disabled = false;
+        new Notice(`AutoOC: Could not change availability. ${String(error)}`);
+      }
+    };
+  }
+
   private plugin: AutoOCPlugin;
   private filterText: string = "";
   private filterStatus: string = "all";
   private filterArea: string = "all";
+  private taskSource: "all" | "catalog" | "workflow-code" = "all";
+  private areaDashboard?: AreaDashboard;
+  private areaDashboardState = createAreaDashboardState();
   private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
+  private expandedCodeSteps: Set<string> = new Set();
   private expandedWorkflows: Set<string> = new Set();
   private dashboardPositions: Map<string, { x: number; y: number; size?: number; sizePx?: number }> = new Map();
   // Accumulated drift per task, in physical px relative to the map's own
@@ -5473,9 +5761,13 @@ class AutoOCView extends ItemView {
     // Stop callbacks synchronously, before waiting for an active instance's write.
     await this.persistDashboardPositionsSafely();
   }
-  refresh() { this.render(); }
+  refresh() {
+    if (this.currentTab === "dashboard" && this.areaDashboard?.root.isConnected) this.areaDashboard.update();
+    else this.render();
+  }
 
   private updateTaskNameDom(task: ScheduledTask) {
+    this.areaDashboard?.update();
     const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
       return count + workflow.steps.filter((step) => step.taskId === task.id).length;
     }, 0);
@@ -5490,6 +5782,7 @@ class AutoOCView extends ItemView {
   }
 
   private updateWorkflowNameDom(workflow: Workflow) {
+    this.areaDashboard?.update();
     const area = workflow.area?.trim() || "No area";
     this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
       el.querySelector<HTMLElement>(".auto-oc-task-name")?.setText(workflow.name);
@@ -5835,11 +6128,7 @@ class AutoOCView extends ItemView {
   }
 
   private openCli() {
-    new OpenCodeCliModal(this.app, this.plugin).open();
-  }
-
-  private openCodex() {
-    new CodexAppModal(this.app, this.plugin).open();
+    openCliLauncher(this.app, this.plugin);
   }
 
   private openTaskInList(task: ScheduledTask) {
@@ -5863,6 +6152,7 @@ class AutoOCView extends ItemView {
   }
 
   render() {
+    this.areaDashboard = undefined;
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
@@ -5873,7 +6163,7 @@ class AutoOCView extends ItemView {
     // ── Tab bar ──
     // The tab bar is split into multiple rows:
     //   Row 1 (left-aligned): the navigation tabs (Dashboard / Tasks /
-    //                         WorkFlows / Visual Builder / OpenCode CLI)
+    //                         WorkFlows / CLI)
     //   Row 2: creation button on the left, Export/Import on the right.
     //          The creation button is contextual to the active tab:
     //          "+ New Task" for Tasks, "+ New Workflow" for WorkFlows.
@@ -5899,39 +6189,11 @@ class AutoOCView extends ItemView {
     });
     btnWorkflows.onclick = () => { this.currentTab = "workflows"; this.render(); };
 
-    const btnVisualBuilder = navRow.createEl("button", {
-      text: "✨ WF Visual Builder",
-      cls: "auto-oc-tab-btn",
-    });
-    btnVisualBuilder.title = "Open the n8n-style visual workflow builder (loads and saves to this extension)";
-    btnVisualBuilder.onclick = () => this.plugin.openVisualBuilder();
-
-    const btnPrompt = navRow.createEl("button", {
-      text: "📝 WF Builder Prompt",
-      cls: "auto-oc-tab-btn",
-    });
-    btnPrompt.title = "Copy this prompt to create your workflow";
-    btnPrompt.onclick = async () => {
-      try {
-        await copyTextToClipboard(AUTOOC_WORKFLOW_PROMPT);
-        new Notice("AutoOC: workflow creation prompt copied to clipboard.");
-      } catch (err) {
-        new Notice(`AutoOC: could not copy prompt — ${String(err)}`);
-      }
-    };
-
     const btnCli = navRow.createEl("button", {
-      text: "💻 OpenCode CLI",
+      text: "💻 CLI",
       cls: "auto-oc-tab-btn",
     });
     btnCli.onclick = () => this.openCli();
-
-    const btnCodex = navRow.createEl("button", {
-      text: "✦ ChatGPT / Codex",
-      cls: "auto-oc-tab-btn",
-    });
-    btnCodex.title = "Open ChatGPT/Codex in the project or a selected folder";
-    btnCodex.onclick = () => this.openCodex();
 
     // Row 2: creation button (left) + spacer + import/export (right).
     // The creation button is contextual to the active tab.
@@ -6061,652 +6323,40 @@ class AutoOCView extends ItemView {
   }
 
   private renderDashboard(containerEl: HTMLElement) {
-    const statuses: TaskStatus[] = ["pending", "running", "completed", "failed", "abandoned"];
-    const tasks = this.plugin.settings.tasks;
-    const workflows = this.plugin.settings.workflows;
-
-    if (tasks.length === 0 && workflows.length === 0) {
-      const empty = containerEl.createDiv("auto-oc-empty auto-oc-dashboard-empty");
-      empty.createEl("div", { text: "No activity yet", cls: "auto-oc-dashboard-empty-title" });
-      empty.createEl("div", { text: "Create tasks and workflows to see scheduler KPIs here." });
-      return;
-    }
-
-    const taskCounts = Object.fromEntries(statuses.map((status) => [status, tasks.filter((task) => task.status === status).length])) as Record<TaskStatus, number>;
-    const workflowCounts = Object.fromEntries(statuses.map((status) => [status, workflows.filter((workflow) => workflow.status === status).length])) as Record<WorkflowStatus, number>;
-    const taskUsage = new Map<string, number>();
-    workflows.forEach((workflow) => {
-      workflow.steps.forEach((step) => {
-        if (step.taskId) taskUsage.set(step.taskId, (taskUsage.get(step.taskId) || 0) + 1);
-      });
-    });
-    const totalReferences = Array.from(taskUsage.values()).reduce((sum, count) => sum + count, 0);
-    const mostUsed = tasks.reduce<{ name: string; count: number } | null>((best, task) => {
-      const count = taskUsage.get(task.id) || 0;
-      if (!best || count > best.count) return { name: task.name, count };
-      return best;
-    }, null);
-    const unusedTasks = tasks.filter((task) => !taskUsage.has(task.id)).length;
-
-    const taskFailCounts = new Map<string, number>();
-    tasks.forEach((task) => {
-      let fails = 0;
-      const out = task.output || "";
-      const exitMatch = out.match(/\[exit code:\s*(-?\d+)\]/g);
-      if (exitMatch) fails = exitMatch.length;
-      if (task.status === "failed") fails = Math.max(fails, 1);
-      if (fails > 0) taskFailCounts.set(task.id, fails);
-    });
-
-    const dashboard = containerEl.createDiv("auto-oc-dashboard");
-    const kpis = dashboard.createDiv(this.showDashboardKpis ? "auto-oc-dashboard-kpis" : "auto-oc-dashboard-kpis auto-oc-dashboard-kpis-hidden");
-    const addKpi = (label: string, value: string | number, cls?: string) => {
-      const kpi = kpis.createDiv("auto-oc-dashboard-kpi");
-      kpi.createEl("span", { text: label, cls: "auto-oc-dashboard-kpi-label" });
-      kpi.createEl("strong", { text: String(value), cls });
+    const locate = (item: DashboardItem) => {
+      const workflow = this.plugin.settings.workflows.find(wf => wf.id === (item.workflowId || (item.kind === "workflow" ? item.id : "")));
+      const step = workflow?.steps.find(entry => entry.id === item.id);
+      const task = this.plugin.settings.tasks.find(entry => entry.id === item.taskId);
+      return { workflow, step, task };
     };
-
-    addKpi("Tasks", tasks.length);
-    statuses.forEach((status) => addKpi(`Tasks ${status}`, taskCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : undefined));
-    addKpi("Workflows", workflows.length);
-    statuses.forEach((status) => addKpi(`Workflows ${status}`, workflowCounts[status], status === "running" ? "auto-oc-stat-running" : status === "failed" ? "auto-oc-stat-failed" : undefined));
-    addKpi("Task refs", totalReferences);
-    addKpi("Most used", mostUsed && mostUsed.count > 0 ? `${mostUsed.name} (${mostUsed.count})` : "None");
-    addKpi("Unused tasks", unusedTasks);
-
-    const map = dashboard.createDiv("auto-oc-dashboard-map");
-    this.createDashboardAmbientLayer(map);
-    this.watchDashboardMapResize(map);
-    const btnToggleKpis = map.createEl("button", {
-      text: this.showDashboardKpis ? "Hide metrics" : "Show metrics",
-      cls: "auto-oc-dashboard-kpi-toggle",
-    });
-    btnToggleKpis.onclick = () => {
-      this.showDashboardKpis = !this.showDashboardKpis;
-      this.render();
+    const open = (item: DashboardItem) => {
+      const { workflow, step, task } = locate(item);
+      this.filterText = ""; this.filterArea = this.filterStatus = "all"; this.taskSource = "all";
+      if (workflow && step?.stepKind === "code") this.openWorkflowCodeEntry(workflow.id, step.id);
+      else if (task) this.openTaskInList(task);
+      else if (workflow) this.openWorkflowInList(workflow);
+      else { new Notice("This item was removed. Refresh the Dashboard."); this.refresh(); }
     };
-    const areaName = (value?: string) => value?.trim() || "No area";
-    const layoutSignature = JSON.stringify({
-      tasks: tasks.map((task) => ({ id: task.id, area: areaName(task.area) })).sort((a, b) => a.id.localeCompare(b.id)),
-      workflows: workflows.map((workflow) => ({
-        id: workflow.id,
-        area: areaName(workflow.area),
-        steps: workflow.steps.map((step) => step.taskId || step.id),
-      })).sort((a, b) => a.id.localeCompare(b.id)),
-    });
-    const layoutChanged = layoutSignature !== this.dashboardLayoutSignature;
-    if (layoutChanged) this.dashboardLayoutSignature = layoutSignature;
-    const areaNames = Array.from(new Set([
-      ...workflows.map((workflow) => areaName(workflow.area)),
-      ...tasks.map((task) => areaName(task.area)),
-    ])).sort((a, b) => a.localeCompare(b));
-    const taskById = new Map(tasks.map((task) => [task.id, task]));
-    const mapRect = map.getBoundingClientRect();
-    const mapWidthPx = Math.max(mapRect.width || 0, 520);
-    const pctFromPx = (px: number, parentPx: number, minPct: number, maxPct: number) => {
-      const pct = (px / Math.max(parentPx, 1)) * 100;
-      return Math.max(minPct, Math.min(maxPct, pct));
-    };
-    const areaSizeForContent = (contentWeight: number) => {
-      const px = Math.min(260, Math.max(120, 92 + Math.sqrt(Math.max(contentWeight, 1)) * 42));
-      return { px, pct: pctFromPx(px, mapWidthPx, 1, 36) };
-    };
-    const workflowSizePxForTasks = (taskCount: number) => {
-      return Math.min(190, Math.max(92, 72 + Math.sqrt(Math.max(taskCount, 1)) * 34));
-    };
-    const workflowSizePctForParent = (taskCount: number, parent: HTMLElement) => {
-      const parentWidth = parent.getBoundingClientRect().width || mapWidthPx;
-      return pctFromPx(workflowSizePxForTasks(taskCount), parentWidth, 1, 78);
-    };
-    // Every task/step bubble renders at the same physical diameter,
-    // regardless of usage, status, or nesting depth. Containers must adapt
-    // around tasks; tasks should not shrink based on the current container.
-    const TASK_BUBBLE_PX = { sm: 24, md: 30, lg: 38, xl: 48 }[this.plugin.settings.dashboardTaskBubbleSize];
-    const taskBubbleSizeForParent = (parent: HTMLElement) => {
-      const rect = parent.getBoundingClientRect();
-      const parentDiameter = rect.height || rect.width || 0;
-      if (parentDiameter <= 0) return { px: TASK_BUBBLE_PX, pct: 12 };
-      const px = TASK_BUBBLE_PX;
-      return { px, pct: (px / parentDiameter) * 100 };
-    };
-    const setBubbleRect = (el: HTMLElement, x: number, y: number, size: number) => {
-      el.style.left = `${x}%`;
-      el.style.top = `${y}%`;
-      el.style.width = `${size}%`;
-      el.style.height = "";
-    };
-    const saveBubblePosition = (bubble: HTMLElement) => {
-      const key = bubble.getAttribute("data-dashboard-key");
-      if (!key) return;
-      this.dashboardPositions.set(key, {
-        x: parseFloat(bubble.style.left || "0"),
-        y: parseFloat(bubble.style.top || "0"),
-        size: this.parseBubbleSizeForSave(bubble),
-        sizePx: this.parseBubbleSizePxForSave(bubble),
-      });
-    };
-    const saveBubbleTreePositions = (parent: HTMLElement) => {
-      const bubbles = Array.from(parent.querySelectorAll<HTMLElement>(".auto-oc-dashboard-area-bubble, .auto-oc-dashboard-workflow-bubble, .auto-oc-dashboard-task-bubble"));
-      bubbles.forEach(saveBubblePosition);
-    };
-    const addLabel = (el: HTMLElement, name: string, ariaLabel = name) => {
-      el.tabIndex = 0;
-      el.setAttr("aria-label", ariaLabel);
-      el.createDiv("auto-oc-dashboard-hover-label").setText(name);
-    };
-    const addBubbleVisual = (el: HTMLElement) => {
-      el.createDiv("auto-oc-dashboard-bubble-visual");
-    };
-    const isDashboardBubble = (el: HTMLElement) => {
-      return el.classList.contains("auto-oc-dashboard-area-bubble")
-        || el.classList.contains("auto-oc-dashboard-workflow-bubble")
-        || el.classList.contains("auto-oc-dashboard-task-bubble");
-    };
-    const withDashboardMeasuring = <T>(fn: () => T): T => {
-      map.addClass("auto-oc-dashboard-measuring");
-      try {
-        return fn();
-      } finally {
-        map.removeClass("auto-oc-dashboard-measuring");
+    const showLog = (item: DashboardItem, history: boolean) => {
+      let { workflow, step, task } = locate(item);
+      if (workflow && item.kind === "workflow") {
+        step = workflow.steps[workflow.currentStep];
+        task = this.plugin.settings.tasks.find(entry => entry.id === step?.taskId);
       }
+      if (workflow && step?.stepKind === "code") {
+        if (history) this.plugin.openCodeStepHistory(workflow.id, step.id);
+        else new CodeStepLogModal(this.app, step.name || "Code step", () => this.plugin.codeStepState(workflow!.id, step!.id)).open();
+      } else if (task) {
+        if (history) new LogHistoryModal(this.app, task, this.plugin).open();
+        else new LiveLogModal(this.app, task, this.plugin).open();
+      } else new Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
-    const clampBubbleToParent = (bubble: HTMLElement) => {
-      const parent = bubble.offsetParent as HTMLElement | null;
-      if (!parent) return;
-      const bounds = parent.getBoundingClientRect();
-      const rect = bubble.getBoundingClientRect();
-      const widthPct = (rect.width / bounds.width) * 100;
-      const heightPct = (rect.height / bounds.height) * 100;
-      let leftPct = ((rect.left - bounds.left) / bounds.width) * 100;
-      let topPct = ((rect.top - bounds.top) / bounds.height) * 100;
-
-      if (isDashboardBubble(parent)) {
-        const parentRadius = Math.min(bounds.width, bounds.height) / 2;
-        const bubbleRadius = rect.width / 2;
-        const parentCenterX = bounds.left + bounds.width / 2;
-        const parentCenterY = bounds.top + bounds.height / 2;
-        const bubbleCenterX = rect.left + rect.width / 2;
-        const bubbleCenterY = rect.top + rect.height / 2;
-        let dx = bubbleCenterX - parentCenterX;
-        let dy = bubbleCenterY - parentCenterY;
-        let distance = Math.hypot(dx, dy);
-        const maxDistance = Math.max(0, parentRadius - bubbleRadius * 0.88);
-        if (distance > maxDistance) {
-          if (distance < 0.01) {
-            dx = 1;
-            dy = 0;
-            distance = 1;
-          }
-          const nextCenterX = parentCenterX + (dx / distance) * maxDistance;
-          const nextCenterY = parentCenterY + (dy / distance) * maxDistance;
-          leftPct = ((nextCenterX - bubbleRadius - bounds.left) / bounds.width) * 100;
-          topPct = ((nextCenterY - bubbleRadius - bounds.top) / bounds.height) * 100;
-        }
-      }
-
-      bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, leftPct))}%`;
-      bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, topPct))}%`;
-    };
-    const fitContainerToChildren = (container: HTMLElement) => {
-      return withDashboardMeasuring(() => {
-      if (!isDashboardBubble(container)) return;
-      const parent = container.offsetParent as HTMLElement | null;
-      if (!parent) return;
-      const children = Array.from(container.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
-      if (children.length === 0) return;
-
-      const parentRect = parent.getBoundingClientRect();
-      const childRects = children.map((child) => ({ child, rect: child.getBoundingClientRect() }));
-      const padding = 12;
-      const minX = Math.min(...childRects.map(({ rect }) => rect.left)) - padding;
-      const maxX = Math.max(...childRects.map(({ rect }) => rect.right)) + padding;
-      const minY = Math.min(...childRects.map(({ rect }) => rect.top)) - padding;
-      const maxY = Math.max(...childRects.map(({ rect }) => rect.bottom)) + padding;
-      const diameterPx = Math.max(maxX - minX, maxY - minY, ...childRects.map(({ rect }) => rect.width + padding * 2));
-      const oldCenters = childRects.map(({ child, rect }) => ({
-        child,
-        centerX: rect.left + rect.width / 2,
-        centerY: rect.top + rect.height / 2,
-        width: rect.width,
-        height: rect.height,
-      }));
-      const centerX = (minX + maxX) / 2;
-      const centerY = (minY + maxY) / 2;
-      const sizePx = Math.min(parentRect.width * 0.96, Math.max(44, diameterPx));
-      container.style.left = `${((centerX - sizePx / 2 - parentRect.left) / parentRect.width) * 100}%`;
-      container.style.top = `${((centerY - sizePx / 2 - parentRect.top) / parentRect.height) * 100}%`;
-      container.style.width = `${sizePx}px`;
-      clampBubbleToParent(container);
-
-      const nextRect = container.getBoundingClientRect();
-      oldCenters.forEach(({ child, centerX: childCenterX, centerY: childCenterY, width, height }) => {
-        child.style.left = `${((childCenterX - width / 2 - nextRect.left) / nextRect.width) * 100}%`;
-        child.style.top = `${((childCenterY - height / 2 - nextRect.top) / nextRect.height) * 100}%`;
-        clampBubbleToParent(child);
-      });
-      saveBubbleTreePositions(parent);
-      void this.persistDashboardPositionsSafely();
-      });
-    };
-    const settleBubbleCollisions = (parent: HTMLElement, passes = 10) => {
-      return withDashboardMeasuring(() => {
-      const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
-      const bounds = parent.getBoundingClientRect();
-      if (bubbles.length < 2 || bounds.width === 0 || bounds.height === 0) return;
-
-      for (let pass = 0; pass < passes; pass++) {
-        let movedAny = false;
-        for (let i = 0; i < bubbles.length; i++) {
-          for (let j = i + 1; j < bubbles.length; j++) {
-            const a = bubbles[i];
-            const b = bubbles[j];
-            const aRect = a.getBoundingClientRect();
-            const bRect = b.getBoundingClientRect();
-            const aRadius = aRect.width / 2;
-            const bRadius = bRect.width / 2;
-            const aCenterX = aRect.left + aRadius;
-            const aCenterY = aRect.top + aRect.height / 2;
-            const bCenterX = bRect.left + bRadius;
-            const bCenterY = bRect.top + bRect.height / 2;
-            let dx = bCenterX - aCenterX;
-            let dy = bCenterY - aCenterY;
-            let distance = Math.hypot(dx, dy);
-            const minDistance = aRadius + bRadius + 2;
-            if (distance >= minDistance) continue;
-            if (distance < 0.01) {
-              const angle = ((i + j + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
-              dx = Math.cos(angle);
-              dy = Math.sin(angle);
-              distance = 1;
-            }
-            const push = (minDistance - distance) * 0.75;
-            const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
-              const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
-              const nextTopPx = rect.top - bounds.top + (dy / distance) * amount;
-              const nextLeftPct = (nextLeftPx / bounds.width) * 100;
-              const nextTopPct = (nextTopPx / bounds.height) * 100;
-              const widthPct = (rect.width / bounds.width) * 100;
-              const heightPct = (rect.height / bounds.height) * 100;
-              bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
-              bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
-              clampBubbleToParent(bubble);
-            };
-            moveBubble(a, aRect, -push);
-            moveBubble(b, bRect, push);
-            movedAny = true;
-          }
-        }
-        if (!movedAny) break;
-      }
-      saveBubbleTreePositions(parent);
-      void this.persistDashboardPositionsSafely();
-      });
-    };
-    const hasBubbleOverlap = (parent: HTMLElement) => {
-      const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => child instanceof HTMLElement && isDashboardBubble(child));
-      for (let i = 0; i < bubbles.length; i++) {
-        for (let j = i + 1; j < bubbles.length; j++) {
-          const aRect = bubbles[i].getBoundingClientRect();
-          const bRect = bubbles[j].getBoundingClientRect();
-          const aRadius = aRect.width / 2;
-          const bRadius = bRect.width / 2;
-          const distance = Math.hypot(
-            bRect.left + bRadius - (aRect.left + aRadius),
-            bRect.top + bRect.height / 2 - (aRect.top + aRect.height / 2),
-          );
-          if (distance < aRadius + bRadius + 2) return true;
-        }
-      }
-      return false;
-    };
-    const attachBubbleDrag = (el: HTMLElement, onClick?: () => void) => {
-      let startX = 0;
-      let startY = 0;
-      let startLeft = 0;
-      let startTop = 0;
-      let moved = false;
-      let parentRect: DOMRect | null = null;
-      let pointerId: number | null = null;
-
-      const resolveSiblingCollisions = () => {
-        const parent = el.offsetParent as HTMLElement | null;
-        if (!parent) return;
-        const bounds = parent.getBoundingClientRect();
-        const bubbles = Array.from(parent.children).filter((child): child is HTMLElement => {
-          return child instanceof HTMLElement && isDashboardBubble(child);
-        });
-        let frontier = new Set<HTMLElement>([el]);
-
-        for (let pass = 0; pass < 5 && frontier.size > 0; pass++) {
-          const nextFrontier = new Set<HTMLElement>();
-          for (const a of frontier) {
-            for (const b of bubbles) {
-              if (a === b) continue;
-              const aRect = a.getBoundingClientRect();
-              const bRect = b.getBoundingClientRect();
-              const aRadius = aRect.width / 2;
-              const bRadius = bRect.width / 2;
-              const aCenterX = aRect.left + aRadius;
-              const aCenterY = aRect.top + aRect.height / 2;
-              const bCenterX = bRect.left + bRadius;
-              const bCenterY = bRect.top + bRect.height / 2;
-              let dx = bCenterX - aCenterX;
-              let dy = bCenterY - aCenterY;
-              let distance = Math.hypot(dx, dy);
-              const minDistance = aRadius + bRadius + 4;
-              if (distance >= minDistance) continue;
-              if (distance < 0.01) {
-                const angle = ((bubbles.indexOf(a) + bubbles.indexOf(b) + pass) / Math.max(bubbles.length, 1)) * Math.PI * 2;
-                dx = Math.cos(angle);
-                dy = Math.sin(angle);
-                distance = 1;
-              }
-
-              const push = (minDistance - distance) * 1.05;
-              const moveBubble = (bubble: HTMLElement, rect: DOMRect, amount: number) => {
-                if (amount === 0) return;
-                const nextLeftPx = rect.left - bounds.left + (dx / distance) * amount;
-                const nextTopPx = rect.top - bounds.top + (dy / distance) * amount;
-                const nextLeftPct = (nextLeftPx / bounds.width) * 100;
-                const nextTopPct = (nextTopPx / bounds.height) * 100;
-                const widthPct = (rect.width / bounds.width) * 100;
-                const heightPct = (rect.height / bounds.height) * 100;
-                bubble.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeftPct))}%`;
-                bubble.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTopPct))}%`;
-              };
-              moveBubble(b, bRect, push);
-              clampBubbleToParent(b);
-              nextFrontier.add(b);
-            }
-          }
-          frontier = nextFrontier;
-        }
-      };
-
-      el.onpointerdown = (event: PointerEvent) => {
-        if (event.button !== 0) return;
-        event.preventDefault();
-        event.stopPropagation();
-        pointerId = event.pointerId;
-        startX = event.clientX;
-        startY = event.clientY;
-        startLeft = parseFloat(el.style.left || "0");
-        startTop = parseFloat(el.style.top || "0");
-        parentRect = (el.offsetParent as HTMLElement | null)?.getBoundingClientRect() || null;
-        moved = false;
-        el.addClass("auto-oc-dashboard-dragging");
-        (el.offsetParent as HTMLElement | null)?.addClass("auto-oc-dashboard-colliding");
-        el.style.zIndex = "30";
-        el.setPointerCapture(event.pointerId);
-      };
-      el.onpointermove = (event: PointerEvent) => {
-        if (pointerId !== event.pointerId || !parentRect) return;
-        const dx = event.clientX - startX;
-        const dy = event.clientY - startY;
-        if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
-        const bubbleRect = el.getBoundingClientRect();
-        const widthPct = (bubbleRect.width / parentRect.width) * 100;
-        const heightPct = (bubbleRect.height / parentRect.height) * 100;
-        const nextLeft = startLeft + (dx / parentRect.width) * 100;
-        const nextTop = startTop + (dy / parentRect.height) * 100;
-        el.style.left = `${Math.max(0, Math.min(100 - widthPct, nextLeft))}%`;
-        el.style.top = `${Math.max(0, Math.min(100 - heightPct, nextTop))}%`;
-        resolveSiblingCollisions();
-      };
-      el.onpointerup = (event: PointerEvent) => {
-        if (pointerId !== event.pointerId) return;
-        const parent = el.offsetParent as HTMLElement | null;
-        event.preventDefault();
-        event.stopPropagation();
-        el.releasePointerCapture(event.pointerId);
-        el.removeClass("auto-oc-dashboard-dragging");
-        parent?.removeClass("auto-oc-dashboard-colliding");
-        el.style.zIndex = "";
-        pointerId = null;
-        parentRect = null;
-        if (parent) {
-          settleBubbleCollisions(parent, 24);
-          if (isDashboardBubble(parent)) {
-            fitContainerToChildren(parent);
-            const grandParent = parent.offsetParent as HTMLElement | null;
-            if (grandParent && isDashboardBubble(grandParent)) fitContainerToChildren(grandParent);
-          }
-        }
-        if (!moved && onClick) onClick();
-      };
-      el.onpointercancel = (event: PointerEvent) => {
-        if (pointerId !== event.pointerId) return;
-        el.removeClass("auto-oc-dashboard-dragging");
-        (el.offsetParent as HTMLElement | null)?.removeClass("auto-oc-dashboard-colliding");
-        el.style.zIndex = "";
-        pointerId = null;
-        parentRect = null;
-      };
-      el.onkeydown = (event: KeyboardEvent) => {
-        if (event.key !== "Enter" || !onClick) return;
-        event.preventDefault();
-        event.stopPropagation();
-        onClick();
-      };
-    };
-    const layoutTopLevel = (items: { key: string; size: number; maxPx?: number }[]) => {
-      const jitterForKey = (key: string, axis: number) => {
-        let hash = 0;
-        for (let i = 0; i < key.length; i++) hash = ((hash << 5) - hash + key.charCodeAt(i) + axis * 131) | 0;
-        return ((Math.abs(hash) % 1000) / 1000 - 0.5) * 10;
-      };
-      const count = Math.max(items.length, 1);
-      const cols = count <= 1 ? 1 : count <= 4 ? 2 : Math.ceil(Math.sqrt(count));
-      const rows = Math.ceil(count / cols);
-      const gap = 4;
-      const cellWidth = (100 - gap * (cols + 1)) / cols;
-      const cellHeight = (100 - gap * (rows + 1)) / rows;
-      return items.map((item, index) => {
-        const col = index % cols;
-        const row = Math.floor(index / cols);
-        const size = Math.min(item.size, cellWidth, cellHeight);
-        const saved = this.dashboardPositions.get(item.key);
-        if (saved) {
-          return {
-            ...item,
-            size,
-            x: Math.max(0, Math.min(100 - size, saved.x)),
-            y: Math.max(0, Math.min(100 - size, saved.y)),
-          };
-        }
-        const jitterX = Math.max(-cellWidth * 0.18, Math.min(cellWidth * 0.18, jitterForKey(item.key, 0)));
-        const jitterY = Math.max(-cellHeight * 0.18, Math.min(cellHeight * 0.18, jitterForKey(item.key, 1)));
-        return {
-          ...item,
-          size,
-          x: Math.max(0, Math.min(100 - size, gap + col * (cellWidth + gap) + (cellWidth - size) / 2 + jitterX)),
-          y: Math.max(0, Math.min(100 - size, gap + row * (cellHeight + gap) + (cellHeight - size) / 2 + jitterY)),
-        };
-      });
-    };
-    const createAreaBubble = (name: string, x: number, y: number, size: number, maxPx?: number) => {
-      const areaBubble = map.createDiv("auto-oc-dashboard-area-bubble");
-      areaBubble.setAttr("data-dashboard-key", `area:${name}`);
-      setBubbleRect(areaBubble, x, y, size);
-      const saved = this.dashboardPositions.get(`area:${name}`);
-      const widthPx = saved?.sizePx ?? maxPx;
-      if (widthPx) areaBubble.style.width = `${widthPx}px`;
-      addBubbleVisual(areaBubble);
-      areaBubble.setAttr("aria-label", `Area: ${name}`);
-      areaBubble.tabIndex = 0;
-
-      const areaLabel = areaBubble.createDiv("auto-oc-dashboard-area-label");
-      areaLabel.setText(name);
-      areaBubble.createDiv("auto-oc-dashboard-hover-label").setText(name);
-      attachBubbleDrag(areaBubble);
-      clampBubbleToParent(areaBubble);
-      return areaBubble;
-    };
-
-    const createTaskBubble = (parent: HTMLElement, task: ScheduledTask, x: number, y: number, size: number, extraCls = "", positionKey = `task:${task.id}`) => {
-      // All task bubbles render at the same size regardless of usage/failure
-      // history — only their position drifts based on activity, not their size.
-      const taskBubble = parent.createDiv(`auto-oc-dashboard-task-bubble auto-oc-dashboard-task-${task.status} auto-oc-dashboard-task-${this.plugin.settings.dashboardTaskBubbleSize} ${extraCls}`.trim());
-      taskBubble.setAttr("data-auto-oc-task-id", task.id);
-      taskBubble.setAttr("data-dashboard-key", positionKey);
-      taskBubble.setAttr("data-usage-count", String(taskUsage.get(task.id) || 0));
-      addBubbleVisual(taskBubble);
-      const saved = this.dashboardPositions.get(positionKey);
-      let posX = saved?.x ?? x;
-      let posY = saved?.y ?? y;
-      if (!saved) {
-        const usage = taskUsage.get(task.id) || 0;
-        const fails = taskFailCounts.get(task.id) || 0;
-        const usageLift = Math.min(usage * 1.2, 14);
-        const failDrop = Math.min(fails * 1.5, 12);
-        posY = Math.max(0, Math.min(100 - size, posY - usageLift + failDrop));
-      }
-      setBubbleRect(taskBubble, posX, posY, size);
-      // Hard-override to a fixed physical diameter regardless of what % the
-      // caller's radial-layout math assumed, and regardless of any later
-      // parent resize (fitContainerToChildren changes container size but
-      // never touches child width%, which would otherwise make % sizing
-      // drift away from "uniform" after the container grows/shrinks).
-      // Capped to the immediate parent's own real size — a task bubble
-      // bigger than its own workflow/area ring would overflow past its
-      // border and visually bleed into whatever neighboring bubble happens
-      // to be nearby, looking like it belongs to the wrong container.
-      const finalPx = taskBubbleSizeForParent(parent).px;
-      taskBubble.style.width = `${finalPx}px`;
-      taskBubble.style.height = `${finalPx}px`;
-      const usageCount = taskUsage.get(task.id) || 0;
-      addLabel(taskBubble, task.name, `Task: ${task.name}. Status: ${task.status}. Usage count: ${usageCount}. Press Enter to open in Tasks.`);
-      attachBubbleDrag(taskBubble, () => this.openTaskInList(task));
-      clampBubbleToParent(taskBubble);
-    };
-
-    const configuredAreaNames = areaNames.filter((name) => name !== "No area");
-    const areaContentWeight = (areaWorkflows: Workflow[], looseTasks: ScheduledTask[]) => {
-      return looseTasks.length + areaWorkflows.reduce((sum, workflow) => {
-        return sum + workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId)).length;
-      }, 0);
-    };
-    const topLevelItems: { key: string; size: number; maxPx?: number }[] = [];
-    configuredAreaNames.forEach((name) => {
-      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
-      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
-      if (contentWeight === 0) return;
-      const areaSize = areaSizeForContent(contentWeight);
-      topLevelItems.push({ key: `area:${name}`, size: areaSize.pct, maxPx: areaSize.px });
+    this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
+      items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows,
+        (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)),
+      diameter: () => this.plugin.getDashboardBubbleDiameter(), open,
+      log: item => showLog(item, false), history: item => showLog(item, true),
     });
-    const noAreaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === "No area");
-    const noAreaLooseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === "No area");
-    noAreaWorkflows.forEach((workflow) => {
-      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowPx = workflowSizePxForTasks(taskSteps.length);
-      topLevelItems.push({ key: `workflow:${workflow.id}`, size: pctFromPx(workflowPx, mapWidthPx, 1, 30), maxPx: workflowPx });
-    });
-    noAreaLooseTasks.forEach((task) => topLevelItems.push({ key: `task:${task.id}`, size: taskBubbleSizeForParent(map).pct }));
-    const topLevelLayout = new Map(layoutTopLevel(topLevelItems).map((item) => [item.key, item]));
-
-    configuredAreaNames.forEach((name) => {
-      const areaLayout = topLevelLayout.get(`area:${name}`);
-      if (!areaLayout) return;
-      const areaWorkflows = workflows.filter((workflow) => areaName(workflow.area) === name);
-      const looseTasks = tasks.filter((task) => !taskUsage.has(task.id) && areaName(task.area) === name);
-      const contentWeight = areaContentWeight(areaWorkflows, looseTasks);
-      if (contentWeight === 0) return;
-      const areaBubble = createAreaBubble(name, areaLayout.x, areaLayout.y, areaLayout.size, areaLayout.maxPx);
-      if (looseTasks.some((task) => task.status === "running") || areaWorkflows.some((workflow) => workflow.status === "running" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "running"))) {
-        areaBubble.addClass("auto-oc-dashboard-has-running");
-      }
-      if (looseTasks.some((task) => task.status === "failed") || areaWorkflows.some((workflow) => workflow.status === "failed" || workflow.steps.some((step) => taskById.get(step.taskId || "")?.status === "failed"))) {
-        areaBubble.addClass("auto-oc-dashboard-has-failed");
-      }
-      const areaWorkflowCount = Math.max(areaWorkflows.length, 1);
-      areaWorkflows.forEach((workflow, workflowIndex) => {
-        const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-        const angle = -Math.PI / 2 + (workflowIndex * Math.PI * 2) / areaWorkflowCount;
-        const workflowSize = workflowSizePctForParent(taskSteps.length, areaBubble);
-        const workflowRadius = areaWorkflowCount === 1 ? 0 : Math.max(0, 46 - workflowSize / 2);
-        const workflowX = 50 + Math.cos(angle) * workflowRadius - workflowSize / 2;
-        const workflowY = 50 + Math.sin(angle) * workflowRadius - workflowSize / 2;
-        const workflowBubble = areaBubble.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
-        workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
-        addBubbleVisual(workflowBubble);
-        if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
-        if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
-        const workflowKey = `area:${name}:workflow:${workflow.id}`;
-        workflowBubble.setAttr("data-dashboard-key", workflowKey);
-        const savedWorkflow = this.dashboardPositions.get(workflowKey);
-        setBubbleRect(workflowBubble, savedWorkflow?.x ?? workflowX, savedWorkflow?.y ?? workflowY, workflowSize);
-        workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowSizePxForTasks(taskSteps.length)}px`;
-        addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: ${name}. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
-        attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
-        clampBubbleToParent(workflowBubble);
-
-        const taskCount = Math.max(taskSteps.length, 1);
-        taskSteps.forEach((step, stepIndex) => {
-          const task = taskById.get(step.taskId!);
-          if (!task) return;
-          const taskAngle = -Math.PI / 2 + (stepIndex * Math.PI * 2) / taskCount;
-          const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
-          const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
-          const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
-          const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
-          createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `${workflowKey}:task:${task.id}:${stepIndex}`);
-        });
-      });
-
-      const looseCount = Math.max(looseTasks.length, 1);
-      looseTasks.forEach((task, taskIndex) => {
-        const angle = -Math.PI / 2 + (taskIndex * Math.PI * 2) / looseCount;
-        const taskSize = taskBubbleSizeForParent(areaBubble).pct;
-        const radius = looseCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
-        const taskX = 50 + Math.cos(angle) * radius - taskSize / 2;
-        const taskY = 50 + Math.sin(angle) * radius - taskSize / 2;
-        createTaskBubble(areaBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-loose", `area:${name}:task:${task.id}`);
-      });
-    });
-
-    noAreaWorkflows.forEach((workflow) => {
-      const taskSteps = workflow.steps.filter((step) => step.taskId && taskById.has(step.taskId));
-      const workflowSize = pctFromPx(workflowSizePxForTasks(taskSteps.length), mapWidthPx, 1, 30);
-      const workflowLayout = topLevelLayout.get(`workflow:${workflow.id}`);
-      if (!workflowLayout) return;
-      const workflowBubble = map.createDiv(`auto-oc-dashboard-workflow-bubble auto-oc-dashboard-workflow-${workflow.status}`);
-      workflowBubble.setAttr("data-auto-oc-workflow-id", workflow.id);
-      addBubbleVisual(workflowBubble);
-      if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "running")) workflowBubble.addClass("auto-oc-dashboard-has-running");
-      if (taskSteps.some((step) => taskById.get(step.taskId || "")?.status === "failed")) workflowBubble.addClass("auto-oc-dashboard-has-failed");
-      workflowBubble.setAttr("data-dashboard-key", `workflow:${workflow.id}`);
-      const savedWorkflow = this.dashboardPositions.get(`workflow:${workflow.id}`);
-      setBubbleRect(workflowBubble, workflowLayout.x, workflowLayout.y, workflowSize);
-      workflowBubble.style.width = `${savedWorkflow?.sizePx ?? workflowLayout.maxPx ?? workflowSizePxForTasks(taskSteps.length)}px`;
-      addLabel(workflowBubble, workflow.name, `Workflow: ${workflow.name}. Area: No area. Status: ${workflow.status}. Press Enter to open in WorkFlows.`);
-      attachBubbleDrag(workflowBubble, () => this.openWorkflowInList(workflow));
-      clampBubbleToParent(workflowBubble);
-
-      const taskCount = Math.max(taskSteps.length, 1);
-      taskSteps.forEach((step, stepIndex) => {
-        const task = taskById.get(step.taskId!);
-        if (!task) return;
-        const taskAngle = -Math.PI / 2 + (stepIndex * Math.PI * 2) / taskCount;
-        const taskSize = taskBubbleSizeForParent(workflowBubble).pct;
-        const radius = taskCount === 1 ? 0 : Math.max(0, 45 - taskSize / 2);
-        const taskX = 50 + Math.cos(taskAngle) * radius - taskSize / 2;
-        const taskY = 50 + Math.sin(taskAngle) * radius - taskSize / 2;
-        createTaskBubble(workflowBubble, task, taskX, taskY, taskSize, "auto-oc-dashboard-task-used", `workflow:${workflow.id}:task:${task.id}:${stepIndex}`);
-      });
-    });
-
-    noAreaLooseTasks.forEach((task) => {
-      const taskLayout = topLevelLayout.get(`task:${task.id}`);
-      if (!taskLayout) return;
-      const taskSize = taskBubbleSizeForParent(map).pct;
-      createTaskBubble(map, task, taskLayout.x, taskLayout.y, taskSize, "auto-oc-dashboard-task-loose");
-    });
-
-    this.syncDashboardTaskDrift(tasks);
-
-    this.forceDashboardFitOnNextRender = false;
-    return;
   }
 
   private renderTasks(containerEl: HTMLElement) {
@@ -6715,15 +6365,17 @@ class AutoOCView extends ItemView {
     // the top of the panel, not duplicated per tab.
 
     const tasks = this.plugin.settings.tasks;
+    const codeEntries = workflowCodeEntries(this.plugin.settings.workflows);
     const renderTaskResults = (root: HTMLElement) => {
       root.empty();
 
       // ── Stats bar ──
       const stats = root.createDiv("auto-oc-stats");
-      const running = tasks.filter((t) => t.status === "running").length;
-      const completed = tasks.filter((t) => t.status === "completed").length;
-      const failed = tasks.filter((t) => t.status === "failed").length;
+      const running = [...tasks, ...codeEntries].filter((t) => t.status === "running").length;
+      const completed = [...tasks, ...codeEntries].filter((t) => t.status === "completed").length;
+      const failed = [...tasks, ...codeEntries].filter((t) => t.status === "failed").length;
       stats.createEl("span", { text: `${tasks.length} tasks` });
+      if (codeEntries.length) stats.createEl("span", { text: `${codeEntries.length} workflow code steps` });
       if (running > 0) stats.createEl("span", { text: `🟡 ${running} running`, cls: "auto-oc-stat-running" });
       if (failed > 0) stats.createEl("span", { text: `🔴 ${failed} failed`, cls: "auto-oc-stat-failed" });
       if (completed > 0) stats.createEl("span", { text: `🟢 ${completed} completed` });
@@ -6732,18 +6384,23 @@ class AutoOCView extends ItemView {
       const filteredTasks = tasks.filter(t => {
         const area = t.area?.trim() || "No area";
         const matchesText = t.name.toLowerCase().includes(this.filterText) ||
-                            t.prompt.toLowerCase().includes(this.filterText) ||
+                            (t.prompt || "").toLowerCase().includes(this.filterText) ||
+                            (t.taskKind === "code" && (t.code || "").toLowerCase().includes(this.filterText)) ||
                             area.toLowerCase().includes(this.filterText);
         const matchesStatus = this.filterStatus === "all" || t.status === this.filterStatus;
         const matchesArea = this.filterArea === "all" || area === this.filterArea;
-        return matchesText && matchesStatus && matchesArea;
+        return this.taskSource !== "workflow-code" && matchesText && matchesStatus && matchesArea;
       });
 
-      if (filteredTasks.length === 0) {
+      const filteredCodeEntries = codeEntries.filter(entry => this.taskSource !== "catalog" && matchesWorkflowCodeEntry(entry, {
+        text: this.filterText, status: this.filterStatus, area: this.filterArea,
+      }));
+      this.renderBulkToolbar(root, "task", filteredTasks.map(item => item.id));
+      if (filteredTasks.length === 0 && filteredCodeEntries.length === 0) {
         root.createEl("p", {
-          text: this.filterText || this.filterStatus !== "all" || this.filterArea !== "all"
-                ? "No tasks match your filters."
-                : "No tasks scheduled. Create one with \"+New Task\".",
+          text: this.filterText || this.filterStatus !== "all" || this.filterArea !== "all" || this.taskSource !== "all"
+                ? "No tasks or workflow code steps match your filters."
+                : "No tasks or workflow code steps yet. Create one with \"+ New Task\" or \"+ New Workflow\".",
           cls: "auto-oc-empty",
         });
         return;
@@ -6753,6 +6410,15 @@ class AutoOCView extends ItemView {
       for (const task of [...filteredTasks].reverse()) {
         this.renderTaskCard(list, task);
       }
+      if (filteredCodeEntries.length) {
+        root.createEl("h3", { text: "Workflow code steps" });
+        root.createEl("p", {
+          text: "Run, stop, disable and inspect each code step here. Run executes only that step with empty input and outputs. Bulk selection applies to catalog tasks.",
+          cls: "setting-item-description",
+        });
+        const stepList = root.createDiv("auto-oc-list");
+        for (const entry of filteredCodeEntries) this.renderWorkflowCodeEntry(stepList, entry);
+      }
     };
 
     // ── Filters Bar ──
@@ -6760,12 +6426,23 @@ class AutoOCView extends ItemView {
 
     const searchInput = filterBar.createEl("input", {
       type: "text",
-      placeholder: "🔍 Search name or prompt...",
+      placeholder: "🔍 Search tasks, workflows or code...",
       cls: "auto-oc-search-input",
     });
     searchInput.value = this.filterText;
     searchInput.oninput = () => {
       this.filterText = searchInput.value.toLowerCase();
+      renderTaskResults(resultsRoot);
+    };
+
+    const sourceSelect = filterBar.createEl("select", { cls: "auto-oc-status-select", attr: { "aria-label": "Task source" } });
+    for (const [value, label] of [["all", "All items"], ["catalog", "Catalog tasks"], ["workflow-code", "Workflow code steps"]]) {
+      const option = sourceSelect.createEl("option", { text: label });
+      option.value = value;
+    }
+    sourceSelect.value = this.taskSource;
+    sourceSelect.onchange = () => {
+      this.taskSource = sourceSelect.value as "all" | "catalog" | "workflow-code";
       renderTaskResults(resultsRoot);
     };
 
@@ -6787,7 +6464,7 @@ class AutoOCView extends ItemView {
     const areaSelect = filterBar.createEl("select", {
       cls: "auto-oc-status-select",
     });
-    const areaOptions = ["all", ...getConfiguredAreaNames(this.plugin.settings), "No area"];
+    const areaOptions = ["all", ...new Set([...getConfiguredAreaNames(this.plugin.settings), ...codeEntries.map(entry => entry.area).filter(area => area !== "No area")]), "No area"];
     Array.from(new Set(areaOptions)).forEach((area) => {
       const opt = areaSelect.createEl("option");
       opt.value = area;
@@ -6802,6 +6479,171 @@ class AutoOCView extends ItemView {
 
     const resultsRoot = containerEl.createDiv("auto-oc-filter-results");
     renderTaskResults(resultsRoot);
+  }
+
+  private renderWorkflowCodeEntry(parent: HTMLElement, entry: WorkflowCodeEntry<Workflow>) {
+    const { workflow, step, stepIndex } = entry;
+    const state = this.plugin.codeStepState(workflow.id, step.id);
+    const card = parent.createDiv(`auto-oc-card auto-oc-status-${state.status}`);
+    // Keep workflow/step identities separate: step IDs may repeat in other workflows.
+    card.setAttr("data-auto-oc-code-workflow-id", workflow.id);
+    card.setAttr("data-auto-oc-code-step-id", step.id);
+    card.addClass("auto-oc-workflow-task-detail");
+    card.setAttr("data-auto-oc-owner-workflow-id", workflow.id);
+    card.setAttr("data-auto-oc-step-id", step.id);
+    const summary = card.createDiv("auto-oc-card-summary");
+    if (workflow.disabled || step.disabled) {
+      card.addClass("auto-oc-disabled");
+      summary.createEl("span", { text: workflow.disabled ? "Workflow disabled" : "Disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
+    }
+    summary.createEl("span", { text: entry.name, cls: "auto-oc-task-name" });
+    summary.createEl("span", { text: "Code", cls: "auto-oc-task-engine auto-oc-task-engine-code" });
+    summary.createEl("span", { text: state.status, cls: `auto-oc-badge auto-oc-badge-${state.status}` });
+    const controls = summary.createDiv("auto-oc-card-quick-actions");
+    const action = (text:string, label:string, callback:()=>unknown, cls="", target:HTMLElement=controls) => {
+      const button = target.createEl("button", {text, cls});
+      button.title = label; button.setAttr("aria-label", label);
+      button.onclick = async event => {
+        event.stopPropagation(); button.disabled = true;
+        try { await callback(); }
+        catch(error) { new Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12000); }
+        finally { if (button.isConnected) button.disabled = false; }
+      };
+      return button;
+    };
+    const availability = action(step.disabled ? "Enable" : "Disable", step.disabled ? "Enable this code step" : "Disable this code step without deleting it",
+      () => this.plugin.setCodeStepDisabled(workflow.id, step.id, !step.disabled), "auto-oc-availability-toggle");
+    availability.disabled = this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
+    const run = action("▶", "Run only this code step (empty input and outputs)",
+      () => this.plugin.runCodeStepOnly(workflow.id, step.id), "auto-oc-btn-run");
+    run.disabled = !!workflow.disabled || !!step.disabled || this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
+    if (state.stop) action("⏹", "Stop this step and its current execution",
+      () => this.plugin.stopCodeStep(workflow.id, step.id, state.stop!), "auto-oc-btn-stop");
+    action("📄", state.stop ? "Live log" : "Log", () => new CodeStepLogModal(this.app, entry.name,
+      () => this.plugin.codeStepState(workflow.id, step.id)).open(), "auto-oc-btn-output");
+    action("📜", "History", () => this.plugin.openCodeStepHistory(workflow.id, step.id), "auto-oc-btn-history");
+    const details = card.createDiv("auto-oc-card-details");
+    const key = JSON.stringify([workflow.id, step.id]);
+    details.style.display = this.expandedCodeSteps.has(key) ? "block" : "none";
+    summary.setAttr("tabindex", "0");
+    summary.setAttr("aria-expanded", String(this.expandedCodeSteps.has(key)));
+    const toggle = () => {
+      if (this.expandedCodeSteps.has(key)) this.expandedCodeSteps.delete(key); else this.expandedCodeSteps.add(key);
+      details.style.display = this.expandedCodeSteps.has(key) ? "block" : "none";
+      summary.setAttr("aria-expanded", String(this.expandedCodeSteps.has(key)));
+    };
+    summary.onclick = toggle;
+    summary.onkeydown = event => { if (event.target === summary && ["Enter", " "].includes(event.key)) { event.preventDefault(); toggle(); } };
+    const meta = details.createDiv("auto-oc-card-meta");
+    meta.createEl("span", {text:`🗂 ${entry.area}`});
+    meta.createEl("span", {text:`{ } Code · ${workflow.name} · Step ${stepIndex + 1}`});
+    meta.createEl("span", {text:"▶ Runs only this step, with empty input and outputs."});
+    if (state.lastRun) meta.createEl("span", {text:`⏱ Last: ${formatDateTime(state.lastRun)}`});
+    const binding = step.codeExecution?.runtimeExecution;
+    if (binding && !state.stop && binding.phase !== "abandoned" && (binding.requiresReconciliation ||
+        !["completed","failed"].includes(binding.phase) || binding.terminalUncertainty && !binding.disposition)) {
+      details.createEl("p", {text:"This step has an interrupted attempt or unconfirmed effects. Review its log and history before closing the attempt."});
+      const resolve = details.createEl("button", {text:"Review interrupted attempt"});
+      resolve.onclick = async () => { try { await this.plugin.resolveCodeStepAttempt(workflow.id, step.id); } catch(error) { new Notice(this.plugin.redactSecrets(String(error))); } };
+    }
+    const addPreview = (label: string, text: string, code = false) => {
+      const preview = details.createEl("details", {cls:"auto-oc-card-preview"});
+      preview.createEl("summary", { text: label });
+      let populated = false;
+      preview.ontoggle = () => {
+        if (!preview.open || populated) return;
+        populated = true;
+        // Keep large historical outputs out of the initial list DOM. Use text,
+        // never HTML, and direct the user to the workflow for the full content.
+        if (code) renderCodePreview(preview, text, 12000);
+        else preview.createEl("pre", { text: text.slice(0, 12000), cls: "auto-oc-inline-code-source" });
+        if (text.length > 12000) preview.createEl("p", { text: "Preview limited to 12,000 characters. Open the workflow to view the full content." });
+      };
+    };
+    addPreview("View code", step.code || "// Empty code step", true);
+    addPreview("View output", state.output || "No output recorded for this step.");
+    const actions = details.createDiv("auto-oc-card-actions");
+    const detailRun = action("▶ Run", "Run only this code step (empty input and outputs)",
+      () => this.plugin.runCodeStepOnly(workflow.id, step.id), "auto-oc-btn-run", actions);
+    detailRun.disabled = run.disabled;
+    if (state.stop) action("⏹ Stop", "Stop this step and its current execution",
+      () => this.plugin.stopCodeStep(workflow.id, step.id, state.stop!), "auto-oc-btn-stop", actions);
+    action(state.stop ? "📡 Live Log" : "📄 Log", state.stop ? "Live log" : "Log", () => new CodeStepLogModal(this.app, entry.name,
+      () => this.plugin.codeStepState(workflow.id, step.id)).open(), "auto-oc-btn-output", actions);
+    action("📜 History", "History", () => this.plugin.openCodeStepHistory(workflow.id, step.id), "auto-oc-btn-history", actions);
+    const edit = actions.createEl("button", {text:"Edit Code", cls:"auto-oc-btn-edit"});
+    edit.disabled = this.plugin.getDefinitionStartState("workflow", workflow.id) !== "available";
+    edit.onclick = () => new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
+    const open = actions.createEl("button", { text: "Open workflow" });
+    open.onclick = () => this.openWorkflowCodeEntry(workflow.id, step.id);
+  }
+
+  private openWorkflowCodeEntry(workflowId: string, stepId: string) {
+    const workflow = this.plugin.settings.workflows.find(item => item.id === workflowId);
+    if (!workflow?.steps.some(step => step.id === stepId && step.stepKind === "code")) {
+      new Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
+      this.render();
+      return;
+    }
+    this.currentTab = "workflows";
+    this.filterText = workflow.name.toLowerCase();
+    this.filterArea = this.filterStatus = "all";
+    this.expandedWorkflows.add(workflowId);
+    this.expandedCodeSteps.add(JSON.stringify([workflowId, stepId]));
+    this.render();
+    // Match identities without interpolating user-controlled IDs into selectors.
+    const steps = this.containerEl?.querySelectorAll<HTMLElement>(".auto-oc-workflow-task-detail");
+    const target = steps && Array.from(steps).find(element =>
+      element.getAttribute("data-auto-oc-owner-workflow-id") === workflowId && element.getAttribute("data-auto-oc-step-id") === stepId);
+    target?.scrollIntoView({ block: "center" });
+  }
+
+  private renderExecutionStatus(parent: HTMLElement, item: ScheduledTask | Workflow, kind: "task" | "workflow") {
+    if (!(item as any).runtimeExecution) return;
+    const currentItem = () => kind === "task"
+      ? this.plugin.settings.tasks.find(entry => entry.id === item.id)
+      : this.plugin.settings.workflows.find(entry => entry.id === item.id);
+    const relatedWorkflow = (current: ScheduledTask | Workflow) => {
+      const binding = (current as any).runtimeExecution;
+      return kind === "task" && binding ? this.plugin.settings.workflows.find(workflow =>
+        workflow.id === binding.workflowId && (workflow as any).runtimeExecution?.runId === binding.runId) : undefined;
+    };
+    const snapshot = (): ExecutionHelpSnapshot | undefined => {
+      const current = currentItem();
+      if (!current) return;
+      const binding = (current as any).runtimeExecution;
+      const workflow = relatedWorkflow(current);
+      const attempt = (workflow as any)?.runtimeExecution || binding;
+      return { name: current.name, status: current.status, runId: binding?.runId, phase: attempt?.phase,
+        owned: !!binding && this.plugin.ownsExecution(kind === "workflow" ? current.id : binding.workflowId, binding.runId),
+        requiresReconciliation: !!(binding?.requiresReconciliation || attempt?.requiresReconciliation),
+        terminalUncertainty: !!(binding?.terminalUncertainty || attempt?.terminalUncertainty),
+        disposition: !!attempt?.disposition, workflowName: workflow?.name,
+        waitingApproval: !!(current as ScheduledTask).pendingCodexApproval,
+        stopUnconfirmed: !!(current as ScheduledTask).legacyExecution?.stopState };
+    };
+    const current = snapshot();
+    if (!current) return;
+    const help = executionStatusHelp(current);
+    if (!help.attention) return;
+    const status = parent.createDiv("auto-oc-execution-status");
+    status.createEl("span", { text: help.label, cls: help.attention ? "mod-warning" : "auto-oc-task-meta" });
+    const button = status.createEl("button", { text: "What can I do?" });
+    button.setAttr("aria-label", `Execution help for ${item.name}`);
+    button.onclick = event => {
+      event.stopPropagation();
+      new ExecutionStatusHelpModal(this.app, snapshot, () => {
+        const latest = currentItem();
+        if (!latest) return;
+        this.filterText = "";
+        this.filterStatus = "all";
+        this.filterArea = "all";
+        const workflow = relatedWorkflow(latest);
+        if (workflow) this.openWorkflowInList(workflow);
+        else if (kind === "task") this.openTaskInList(latest as ScheduledTask);
+        else this.openWorkflowInList(latest as Workflow);
+      }, this.plugin.manifest.version).open();
+    };
   }
 
   private renderTaskCard(parent: HTMLElement, task: ScheduledTask) {
@@ -6822,16 +6664,19 @@ class AutoOCView extends ItemView {
     };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
     card.setAttr("data-auto-oc-task-id", task.id);
+    if (task.disabled) card.addClass("auto-oc-disabled");
     
     // Summary Bar (Always Visible)
     const summary = card.createDiv("auto-oc-card-summary");
+    this.renderSelectionCheckbox(summary, "task", task);
+    if (task.disabled) summary.createEl("span", { text: "Disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
     const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
     summary.createEl("span", {
       text: (task.taskKind || "opencode") === "code"
         ? "Code"
         : task.taskKind === "codex"
           ? (task.interactiveTerminal ? "ChatGPT / Codex" : "Codex")
-          : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.interactiveTerminal ? "OpenCode CLI" : "OpenCode",
+          : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.taskKind === "opencode2" ? "OpenCode 2 CLI" : task.interactiveTerminal ? "OpenCode 1 CLI" : "OpenCode 1",
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`,
     });
     
@@ -6839,9 +6684,9 @@ class AutoOCView extends ItemView {
       text: (task as any).runtimeExecution?.disposition ? `${task.status} · human disposition ${(task as any).runtimeExecution.disposition.at} · external outcome unknown` : task.status === "abandoned" ? "abandoned · outcome unknown" : task.legacyExecution?.stopState ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && (task as any).runtimeExecution?.requiresReconciliation ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`,
     });
-    const bound=(task as any).runtimeExecution;
-    if(bound)summary.createEl("span",{text:`${bound.runId} · ${this.plugin.ownsExecution(bound.workflowId,bound.runId) ? "propietario local verificado" : "propiedad no verificada"}`,cls:"auto-oc-task-meta"});
+    this.renderExecutionStatus(summary, task, "task");
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
+    this.renderAvailabilityButton(quickActions, "task", task);
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = task.status === "running" ? "Running" : "Run now";
     this.plugin.configureStartButton(btnQuickRun, "task", task.id, true);
@@ -6917,7 +6762,7 @@ class AutoOCView extends ItemView {
       meta.createEl("span", { text: task.copilotAllowAllTools ? "Tools allowed automatically" : "Read-only tools" });
     } else {
       if (task.interactiveTerminal) meta.createEl("span", { text: "CLI task" });
-      else meta.createEl("span", { text: "OpenCode" });
+      else meta.createEl("span", { text: task.taskKind === "opencode2" ? "OpenCode 2" : "OpenCode 1" });
       meta.createEl("span", { text: `🤖 ${modelLabel}` });
       meta.createEl("span", { text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
     }
@@ -7129,6 +6974,7 @@ class AutoOCView extends ItemView {
         return matchesText && matchesStatus && matchesArea;
       });
 
+      this.renderBulkToolbar(root, "workflow", filteredWorkflows.map(item => item.id));
       if (filteredWorkflows.length === 0) {
         root.createEl("p", {
           text: this.filterText || this.filterStatus !== "all" || this.filterArea !== "all"
@@ -7197,7 +7043,10 @@ class AutoOCView extends ItemView {
     catch (error) { parent.createEl("p", {text: String(error), cls: "mod-warning"}); }
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     card.setAttr("data-auto-oc-workflow-id", workflow.id);
+    if (workflow.disabled) card.addClass("auto-oc-disabled");
     const summary = card.createDiv("auto-oc-card-summary");
+    this.renderSelectionCheckbox(summary, "workflow", workflow);
+    if (workflow.disabled) summary.createEl("span", { text: "Disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
 
     const nameEl = summary.createEl("span", {
       text: workflow.name,
@@ -7208,9 +7057,9 @@ class AutoOCView extends ItemView {
       text: (workflow as any).runtimeExecution?.disposition ? `${workflow.status} · human disposition ${(workflow as any).runtimeExecution.disposition.at} · external outcome unknown` : workflow.status === "abandoned" ? "abandoned · outcome unknown" : workflow.status,
       cls: `auto-oc-badge auto-oc-badge-${workflow.status}`,
     });
+    this.renderExecutionStatus(summary, workflow, "workflow");
     const quickActions = summary.createDiv("auto-oc-card-quick-actions");
-    const bound=(workflow as any).runtimeExecution;
-    if(bound)summary.createEl("span",{text:`${bound.runId} · ${this.plugin.ownsExecution(workflow.id,bound.runId) ? "propietario local verificado" : "propiedad no verificada"}`,cls:"auto-oc-task-meta"});
+    this.renderAvailabilityButton(quickActions, "workflow", workflow);
     const btnQuickRun = quickActions.createEl("button", { text: "▶", cls: "auto-oc-btn-run" });
     btnQuickRun.title = this.plugin.isWorkflowExecuting(workflow.id) ? "Running" : "Run workflow";
     this.plugin.configureStartButton(btnQuickRun, "workflow", workflow.id, true);
@@ -7285,9 +7134,15 @@ class AutoOCView extends ItemView {
     };
     for (let i = 0; i < workflow.steps.length; i++) {
       const step = workflow.steps[i];
+      if (step.stepKind === "code") {
+        this.renderWorkflowCodeEntry(stepsDiv, {workflow, step, stepIndex:i, name:stepLabel(step), area:step.area?.trim() || workflow.area?.trim() || "No area", status:codeStepDisplay(step).status});
+        continue;
+      }
       const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
       const stepName = stepLabel(step);
       const stepItem = stepsDiv.createDiv("auto-oc-workflow-task-detail");
+      stepItem.setAttr("data-auto-oc-owner-workflow-id", workflow.id);
+      stepItem.setAttr("data-auto-oc-step-id", step.id);
       const isCurrent = this.plugin.isWorkflowExecuting(workflow.id) && workflow.currentStep === i;
       const isDone = workflow.currentStep > i || (workflow.status === "completed" && workflow.currentStep >= i);
       const icon = isDone ? "✅" : isCurrent ? "⏳" : "⬜";
@@ -7336,28 +7191,7 @@ class AutoOCView extends ItemView {
       }
 
       if (!task) {
-        if (step.stepKind === "code") {
-          const codePreview = stepItem.createDiv("auto-oc-code-preview-wrap");
-          renderCodePreview(codePreview, step.code || "// empty code step", 500);
-          const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
-          const btnCodeLog = stepActions.createEl("button", {
-            text: "📄 Log",
-            cls: "auto-oc-btn-output",
-          });
-          btnCodeLog.disabled = !step.output;
-          btnCodeLog.onclick = (e) => {
-            e.stopPropagation();
-            new TextPreviewModal(this.app, `Code step ${i + 1} output`, step.output || "").open();
-          };
-          const btnEditCode = stepActions.createEl("button", {
-            text: "✏️ Edit Code",
-            cls: "auto-oc-btn-edit",
-          });
-          btnEditCode.onclick = (e) => {
-            e.stopPropagation();
-            new EditWorkflowStepModal(this.app, this.plugin, workflow, step).open();
-          };
-        } else if (step.stepKind === "delay") {
+        if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
           stepMeta.createSpan({ text: `Pauses for ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}` });
           const stepActions = stepItem.createDiv("auto-oc-workflow-task-actions");
@@ -7598,338 +7432,6 @@ class AutoOCView extends ItemView {
   }
 }
 
-// ─── Visual Builder View ──────────────────────────────────────────────────────
-//
-// Hosts the standalone HTML visual builder (util/ui_workflow_builder) inside
-// an iframe. The iframe talks to the extension through `postMessage`:
-//   1. On load, the iframe posts {type:"ready"}.
-//   2. The view responds with {type:"load", state: {tasks, workflows}}.
-//   3. The user edits and posts {type:"apply", state: {...}}.
-//   4. The view merges the state into the plugin's settings.
-//
-// We intentionally run the visual builder as an iframe (rather than inlining
-// its HTML/JS) so the same code can be opened in a regular browser and remain
-// fully self-contained — useful for designing on machines without Obsidian.
-
-class VisualBuilderModal extends Modal {
-  private plugin: AutoOCPlugin;
-  private iframe: HTMLIFrameElement | null = null;
-  private ready: boolean = false;
-  private isDirty: boolean = false;
-  // Tracks the in-flight settings mutation; the modal closes on success
-  // if the user clicked "Apply and close".
-  private closeAfterApply: boolean = false;
-
-  constructor(app: App, plugin: AutoOCPlugin) {
-    super(app);
-    this.plugin = plugin;
-  }
-
-  onOpen() {
-    const { contentEl, modalEl, titleEl } = this;
-    this.plugin.registerVisualBuilder(this);
-    contentEl.empty();
-    // Hide the default Obsidian modal title — we render our own
-    // toolbar at the top of the content area instead. Hiding the title
-    // gives the visual builder more vertical space.
-    if (titleEl && (titleEl as HTMLElement).style) {
-      (titleEl as HTMLElement).style.display = "none";
-    }
-    // Resize the modal to be a near-fullscreen, centered window. This
-    // gives the visual builder a comfortable working area, unlike the
-    // cramped sidebar leaf it lived in before.
-    setAutoOCModalFullscreen(this);
-    preventBackdropClose(this);
-
-    // ── Toolbar ──
-    const toolbar = contentEl.createDiv("auto-oc-visual-toolbar");
-    const titleSpan = toolbar.createSpan("toolbar-title");
-    titleSpan.textContent = "✨ WF Visual Builder";
-    titleSpan.style.fontSize = "13px";
-    const btnReload = toolbar.createEl("button", { text: "Reload state" });
-    btnReload.onclick = () => this.sendState();
-    const btnSave = toolbar.createEl("button", { text: "Apply" });
-    btnSave.title = "Apply the changes from the visual builder back to AutoOC without closing this window";
-    btnSave.onclick = () => {
-      this.closeAfterApply = false;
-      this.requestApply();
-    };
-    const btnApply = toolbar.createEl("button", { text: "Apply and close" });
-    btnApply.title = "Apply the changes from the visual builder back to AutoOC and close this window";
-    btnApply.addClass("mod-cta");
-    btnApply.onclick = () => {
-      this.closeAfterApply = true;
-      this.requestApply();
-    };
-    const spacer = toolbar.createDiv("toolbar-spacer");
-    const hint = toolbar.createSpan("toolbar-hint");
-    hint.textContent = "Drag a Task / Delay / Code from the left, connect ports to wire transitions, click an edge to change its mode (Default / Force / AI / Conditional), then Apply.";
-    contentEl.appendChild(toolbar);
-
-    // ── iframe ──
-    const iframeWrap = contentEl.createDiv("auto-oc-visual-iframe-wrap");
-    const iframe = iframeWrap.createEl("iframe");
-    // Explicit dimensions in case the stylesheet didn't load yet
-    // (e.g. when the modal is first opened) so the iframe doesn't
-    // render at its default 300x150 placeholder size.
-    iframe.style.width = "100%";
-    iframe.style.height = "100%";
-    iframe.style.border = "0";
-    iframe.style.display = "block";
-    iframe.style.flex = "1 1 auto";
-    iframe.srcdoc = visualBuilderHtml;
-    this.iframe = iframe;
-
-    // Listen for postMessage from the iframe. We register a `this`-bound
-    // handler so we can unregister it in onClose.
-    this.messageHandler = (ev: MessageEvent) => {
-      const data = ev.data;
-      if (!data || typeof data !== "object") return;
-      if (data.type === "ready") {
-        this.ready = true;
-        this.sendState();
-      } else if (data.type === "apply") {
-        this.applyExternalState(data.state).then(() => {
-          if (this.closeAfterApply) this.close();
-        });
-      } else if (data.type === "refresh-agents") {
-        const cwd = this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
-        this.plugin.refreshAgents(cwd);
-        new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
-        this.sendMeta();
-      } else if (data.type === "refresh-models") {
-        this.plugin.refreshModels();
-        new Notice("AutoOC: models updated.");
-        this.sendMeta();
-      } else if (data.type === "refresh-codex-models") {
-        void this.plugin.refreshCodexModels(true).then(() => this.sendMeta());
-      } else if (data.type === "log") {
-        // eslint-disable-next-line no-console
-        console.log("[VisualBuilder]", data.message);
-      }
-    };
-    window.addEventListener("message", this.messageHandler);
-  }
-
-  // Stored so we can unregister it in onClose.
-  private messageHandler?: (ev: MessageEvent) => void;
-
-  onClose() {
-    this.plugin.unregisterVisualBuilder(this);
-    if (this.messageHandler) {
-      window.removeEventListener("message", this.messageHandler);
-      this.messageHandler = undefined;
-    }
-    this.iframe = null;
-    this.ready = false;
-    // Refresh the underlying AutoOC view so changes appear immediately.
-    this.plugin.view?.refresh();
-  }
-
-  // Send the current tasks/workflows to the iframe.
-  sendState() {
-    if (!this.iframe || !this.iframe.contentWindow) return;
-    const payload = {
-      type: "load",
-      state: {
-        tasks: this.plugin.settings.tasks,
-        workflows: this.plugin.settings.workflows,
-        meta: {
-          availableAgents: this.plugin.availableAgents,
-          availableModels: this.plugin.availableModels,
-          availableCodexModels: this.plugin.availableCodexModels,
-          defaultAiEngine: this.plugin.settings.defaultAiEngine,
-          defaultCopilotModel: this.plugin.settings.defaultCopilotModel,
-          defaultCodexModel: this.plugin.settings.defaultCodexModel,
-          defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
-          pluginVersion: this.plugin.manifest.version,
-        },
-      },
-    };
-    try {
-      this.iframe.contentWindow.postMessage(payload, "*");
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("VisualBuilder postMessage failed:", e);
-    }
-  }
-
-  sendMeta() {
-    if (!this.iframe || !this.iframe.contentWindow) return;
-    const payload = {
-      type: "meta",
-      meta: {
-        availableAgents: this.plugin.availableAgents,
-        availableModels: this.plugin.availableModels,
-        availableCodexModels: this.plugin.availableCodexModels,
-        defaultAiEngine: this.plugin.settings.defaultAiEngine,
-        defaultCopilotModel: this.plugin.settings.defaultCopilotModel,
-        defaultCodexModel: this.plugin.settings.defaultCodexModel,
-        defaultCodexReasoningEffort: this.plugin.settings.defaultCodexReasoningEffort,
-        pluginVersion: this.plugin.manifest.version,
-      },
-    };
-    try {
-      this.iframe.contentWindow.postMessage(payload, "*");
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.error("VisualBuilder postMessage failed:", e);
-    }
-  }
-
-  // Ask the iframe to send back the current state.
-  requestApply() {
-    if (!this.iframe || !this.iframe.contentWindow) return;
-    this.iframe.contentWindow.postMessage({ type: "request-apply" }, "*");
-  }
-
-  // Replace tasks/workflows with the values provided by the iframe. Smart-merge:
-  // for tasks/workflows that already exist in the extension, keep runtime state
-  // (status, lastRun, output) and any field the iframe did not send (workingDirectory
-  // and the Git branch fields live in the classic modal, not the VB property panel).
-  // This means editing a task in the visual builder no longer wipes the last
-  // execution log or the "currently running" indicator.
-  async applyExternalState(state: any) {
-    if (!state || !Array.isArray(state.tasks) || !Array.isArray(state.workflows)) {
-      new Notice("Visual Builder: invalid state payload.");
-      return;
-    }
-    for (const task of state.tasks) {
-      const error = getCopilotTaskValidationError(task);
-      if (error) { new Notice(`Visual Builder: ${error}`); return; }
-    }
-    for(const item of [...state.tasks,...state.workflows])validateConcurrency(item);
-    const oldTasks = this.plugin.settings.tasks;
-    const oldWorkflows = this.plugin.settings.workflows;
-    const oldTaskById = new Map(oldTasks.map((task) => [task.id, task]));
-    const oldWorkflowById = new Map(oldWorkflows.map((workflow) => [workflow.id, workflow]));
-    const newTasks: ScheduledTask[] = state.tasks.map((t: any) => {
-      const existing = oldTasks.find((x) => x.id === t.id);
-      const id = (existing ? t.id : t.id || generateId());
-      const taskKind = (t.taskKind || existing?.taskKind || "opencode") as TaskKind;
-      // Editing should never launch a task by making an already-completed
-      // one-shot item pending again. Preserve runtime state; Play or the next
-      // real schedule tick is responsible for execution.
-      const status = existing?.status || "pending";
-      const lastRun = existing?.lastRun || "";
-      const output = existing?.output || "";
-      return {
-        ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
-        id,
-        taskKind,
-        concurrency: t.concurrency ?? existing?.concurrency,
-        name: t.name || "Unnamed",
-        area: t.area !== undefined ? (t.area || "") : (existing?.area || ""),
-        prompt: t.prompt || "",
-        model: t.model !== undefined ? t.model : taskKind === "copilot" ? existing?.model ?? this.plugin.settings.defaultCopilotModel ?? "" : taskKind === "codex" ? this.plugin.getEffectiveCodexModel(existing?.model) : this.plugin.getEffectiveDefaultModel(),
-        copilotAllowAllTools: taskKind === "copilot" ? (t.copilotAllowAllTools ?? existing?.copilotAllowAllTools) === true : undefined,
-        requiresAutoOCSecrets: existing && Object.prototype.hasOwnProperty.call(existing, "requiresAutoOCSecrets") ? existing.requiresAutoOCSecrets : t.requiresAutoOCSecrets,
-        agent: taskKind === "opencode" ? (t.agent || this.plugin.getEffectiveAgent()) : "",
-        reasoningEffort: taskKind === "codex" ? (t.reasoningEffort || existing?.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
-        useRalphLoop: taskKind === "opencode" && (t.useRalphLoop !== undefined ? !!t.useRalphLoop : (existing?.useRalphLoop ?? false)),
-        forceModel: taskKind === "opencode" && (t.forceModel !== undefined ? !!t.forceModel : (existing?.forceModel ?? false)),
-        scheduleType: t.scheduleType || "manual",
-        scheduleTime: t.scheduleTime || "09:00",
-        scheduleDate: t.scheduleDate || "",
-        scheduleDays: Array.isArray(t.scheduleDays) ? t.scheduleDays : [],
-        scheduleMonthDays: Array.isArray(t.scheduleMonthDays) ? t.scheduleMonthDays : [],
-        scheduleIntervalValue: typeof t.scheduleIntervalValue === "number" ? t.scheduleIntervalValue : (existing?.scheduleIntervalValue ?? 10),
-        scheduleIntervalUnit: t.scheduleIntervalUnit || existing?.scheduleIntervalUnit || "minutes",
-        status,
-        lastRun,
-        output,
-        lastCodexThreadId: existing?.lastCodexThreadId,
-        lastCodexTurnId: existing?.lastCodexTurnId,
-        pendingCodexApproval: existing?.pendingCodexApproval,
-        createdAt: existing?.createdAt || t.createdAt || new Date().toISOString(),
-        // Preserve classic-only fields when older Visual Builder payloads do
-        // not send them.
-        workingDirectory: t.workingDirectory !== undefined ? t.workingDirectory : (existing?.workingDirectory ?? ""),
-        branch: t.branch !== undefined ? (t.branch || "") : (existing?.branch || ""),
-        createBranch: t.createBranch !== undefined ? !!t.createBranch : (existing?.createBranch ?? false),
-        interactiveTerminal: t.interactiveTerminal !== undefined ? !!t.interactiveTerminal : existing?.interactiveTerminal,
-        code: t.code !== undefined ? t.code : existing?.code,
-        codeLang: t.codeLang !== undefined ? t.codeLang : existing?.codeLang,
-        codeInputVar: t.codeInputVar !== undefined ? t.codeInputVar : existing?.codeInputVar,
-        codeOutputVar: t.codeOutputVar !== undefined ? t.codeOutputVar : existing?.codeOutputVar,
-        codeAllowVault: t.codeAllowVault !== undefined ? !!t.codeAllowVault : existing?.codeAllowVault,
-        codeAllowFiles: t.codeAllowFiles !== undefined ? !!t.codeAllowFiles : existing?.codeAllowFiles,
-        codeAllowTerminal: t.codeAllowTerminal !== undefined ? !!t.codeAllowTerminal : existing?.codeAllowTerminal,
-      };
-    });
-    const newWorkflows: Workflow[] = state.workflows.map((w: any) => {
-      const existing = oldWorkflows.find((x) => x.id === w.id);
-      const id = (existing ? w.id : w.id || generateId());
-      // Editing should not make a completed one-shot workflow pending again.
-      // Preserve runtime state; Play or the next real schedule tick launches it.
-      const status = existing?.status || "pending";
-      const currentStep = existing?.currentStep ?? -1;
-      return {
-        ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
-        id,
-        requiresAutoOCSecrets: existing && Object.prototype.hasOwnProperty.call(existing, "requiresAutoOCSecrets") ? existing.requiresAutoOCSecrets : w.requiresAutoOCSecrets,
-        concurrency: w.concurrency ?? existing?.concurrency,
-        name: w.name || "Unnamed",
-        area: w.area !== undefined ? (w.area || "") : (existing?.area || ""),
-        description: w.description || "",
-        steps: (w.steps || []).map((s: any, i: number) => {
-          const oldStep = existing?.steps.find((x) => x.id === s.id);
-          return {
-            id: s.id || generateId(),
-            requiresAutoOCSecrets: oldStep && Object.prototype.hasOwnProperty.call(oldStep, "requiresAutoOCSecrets") ? oldStep.requiresAutoOCSecrets : s.requiresAutoOCSecrets,
-            stepKind: s.stepKind || "task",
-            name: s.name,
-            area: s.area || w.area || existing?.area || "",
-            taskId: s.taskId,
-            transitionMode: s.transitionMode,
-            evaluatePrompt: s.evaluatePrompt,
-            forceContinue: s.forceContinue,
-            delayValue: s.delayValue,
-            delayUnit: s.delayUnit,
-            code: s.code,
-            codeLang: s.codeLang,
-            codeInputVar: s.codeInputVar,
-            codeOutputVar: s.codeOutputVar,
-            codeAllowVault: s.codeAllowVault,
-            codeAllowFiles: s.codeAllowFiles,
-            codeAllowTerminal: s.codeAllowTerminal,
-            // Preserve per-step runtime state (lastRun, output, status) so
-            // a user editing a non-running step in the VB does not lose
-            // its captured log/output.
-            status: oldStep?.status,
-            lastRun: oldStep?.lastRun,
-            output: oldStep?.output,
-            transitions: s.transitions,
-            position: s.position || { x: 40 + i * 280, y: 60 },
-          };
-        }),
-        status,
-        currentStep,
-        createdAt: existing?.createdAt || w.createdAt || new Date().toISOString(),
-        lastRun: existing?.lastRun,
-        handoffBranch: t_or_undef(w.handoffBranch, existing?.handoffBranch ?? false),
-        handoffOutput: t_or_undef(w.handoffOutput, existing?.handoffOutput ?? true) !== false,
-        scheduleType: w.scheduleType || "manual",
-        scheduleTime: w.scheduleTime || "09:00",
-        scheduleDate: w.scheduleDate || "",
-        scheduleDays: Array.isArray(w.scheduleDays) ? w.scheduleDays : [],
-        scheduleMonthDays: Array.isArray(w.scheduleMonthDays) ? w.scheduleMonthDays : [],
-        scheduleIntervalValue: typeof w.scheduleIntervalValue === "number" ? w.scheduleIntervalValue : (existing?.scheduleIntervalValue ?? 10),
-        scheduleIntervalUnit: w.scheduleIntervalUnit || existing?.scheduleIntervalUnit || "minutes",
-      };
-    });
-    const renamedTasks = newTasks.filter((task) => oldTaskById.get(task.id)?.name !== undefined && oldTaskById.get(task.id)?.name !== task.name);
-    const renamedWorkflows = newWorkflows.filter((workflow) => oldWorkflowById.get(workflow.id)?.name !== undefined && oldWorkflowById.get(workflow.id)?.name !== workflow.name);
-    this.plugin.settings.tasks = newTasks;
-    this.plugin.settings.workflows = newWorkflows;
-    await this.plugin.saveSettings(false);
-    this.plugin.view?.refresh();
-    renamedTasks.forEach((task) => this.plugin.emitTaskUpdated(task));
-    renamedWorkflows.forEach((workflow) => this.plugin.emitWorkflowUpdated(workflow));
-    new Notice(`AutoOC: applied ${newTasks.length} task(s) and ${newWorkflows.length} workflow(s) from Visual Builder.`);
-  }
-}
-
 class ConfirmModal extends Modal {
   private resolve?: (value: boolean) => void;
   reason = '';
@@ -7966,28 +7468,44 @@ class ConfirmModal extends Modal {
 // ─── Create / Edit Task Modal ─────────────────────────────────────────────────
 
 class AutoOCRecoveryView extends ItemView {
-  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void, private waitingForOwner = false, private sameProcessOwner = false) { super(leaf); }
+  private renderGeneration = 0;
+  constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void, private waitingForOwner = false, private sameProcessOwner = false,
+    private readCatalog?: () => Promise<PanelCatalog>, private updatePackage?: () => Promise<void>) { super(leaf); }
   getViewType() { return VIEW_TYPE; }
-  getDisplayText() { return "AutoOC — recovery"; }
+  getDisplayText() { return "AutoOC"; }
   getIcon() { return "workflow"; }
   async onOpen() {
+    const generation = ++this.renderGeneration;
     this.contentEl.empty();
-    this.contentEl.createEl("h2", {text: this.waitingForOwner ? "AutoOC is waiting" : "AutoOC needs attention"});
+    this.contentEl.createEl("h2", {text: "AutoOC"});
+    this.contentEl.createEl("p", {text: "Consultation mode — browse the saved catalog while execution is unavailable. Editing and scheduling remain paused."});
+    if (this.updatePackage) {
+      const update = this.contentEl.createEl('button', {text: 'Check for updates'});
+      update.onclick = async () => {
+        update.disabled = true;
+        try { await this.updatePackage!(); }
+        catch (error) { new Notice('AutoOC: ' + String(error)); }
+        finally { update.disabled = false; }
+      };
+    }
+    const refresh = this.contentEl.createEl('button', {text: 'Refresh saved catalog'});
+    refresh.onclick = () => this.onOpen();
+    this.contentEl.createEl("h3", {text: "Execution status"});
     this.contentEl.createEl("p", {text: this.waitingForOwner
-      ? "Another AutoOC execution is active. Loading will retry automatically after its reservation is released. You can keep editing notes."
+      ? "Another AutoOC execution owns the engine. Execution availability will be checked automatically when it releases its reservation."
       : this.recoverClosedSession
-      ? "A previous session has closed but left its reservation behind. You can recover access to AutoOC here. Your tasks, workflows and history are preserved."
-      : "Another execution or an unfinished operation is preventing AutoOC from starting. Your tasks and workflows are preserved."});
+      ? "A previous session left its execution reservation behind. You can recover the engine here; saved tasks, workflows and history are preserved."
+      : "Another execution or an unfinished operation prevents engine activation. The panel remains available; saved tasks and workflows are preserved."});
     const details = this.contentEl.createEl("pre", {text: this.reason});
     details.style.whiteSpace = 'pre-wrap';
     details.style.overflowWrap = 'anywhere';
     this.contentEl.createEl("p", {text: this.waitingForOwner
       ? "The active execution keeps its reservation. No task will be resumed or repeated when this panel loads."
       : this.recoverClosedSession
-      ? "Recovery opens the panel without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
+      ? "Recovery enables the engine without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
       : this.sameProcessOwner
       ? "This Obsidian window still holds a previous AutoOC reservation. Retrying cannot release it while its state is unconfirmed. Let any active task finish, then close and reopen this vault window. If recovery is offered after reopening, use Recover closed session and open AutoOC. Do not delete runtime files; unfinished runs must still be reviewed."
-      : "Finish or stop the CLI execution before retrying. If an execution was interrupted, reconcile that same run with the AutoOC CLI. Do not delete runtime files to unlock it."});
+      : "Resolve the execution or save reported above before enabling editing and scheduling. Refreshing the catalog and checking for updates do not resume tasks."});
     if (this.recoverClosedSession) {
       const recover = this.contentEl.createEl('button', {text: 'Recover closed session and open AutoOC'});
       recover.onclick = async () => {
@@ -7997,14 +7515,31 @@ class AutoOCRecoveryView extends ItemView {
         catch (error) { new Notice('AutoOC: ' + String(error)); recover.disabled = false; }
       };
     }
-    const button = this.contentEl.createEl("button", {text: "Retry loading AutoOC"});
+    const button = this.contentEl.createEl("button", {text: "Retry execution connection"});
     button.onclick = async () => {
       button.disabled = true;
       try { await this.retry(); }
       catch (error) { new Notice('AutoOC: ' + String(error)); button.disabled = false; }
     };
+    this.contentEl.createEl('h3', {text: 'Saved catalog'});
+    const status = this.contentEl.createEl('p', {text: 'Reading the saved catalog…'});
+    try {
+      if (!this.readCatalog) throw new Error('Catalog consultation is unavailable');
+      const catalog = await this.readCatalog();
+      if (generation !== this.renderGeneration) return;
+      status.textContent = 'Snapshot of the last saved state. A recorded running or failed status does not prove current activity.';
+      for (const [kind, title] of [['tasks', 'Tasks'], ['workflows', 'Workflows']] as const) {
+        this.contentEl.createEl('h3', {text: `${title} (${catalog[kind].length})`});
+        for (const entry of catalog[kind]) {
+          this.contentEl.createEl('p', {text: `${entry.name} — ${entry.status} [${entry.id}]`});
+          if (entry.runId) this.contentEl.createEl('small', {text: `Recorded run: ${entry.runId} · ${entry.phase || 'unknown'}`});
+        }
+      }
+    } catch {
+      if (generation === this.renderGeneration) status.textContent = 'The saved catalog could not be read safely. No data was changed. Refresh to try again; execution details above remain available.';
+    }
   }
-  async onClose() { this.contentEl.empty(); }
+  async onClose() { this.renderGeneration++; this.contentEl.empty(); }
 }
 
 class CreateTaskModal extends Modal {
@@ -8012,25 +7547,29 @@ class CreateTaskModal extends Modal {
   private editTask?: ScheduledTask;
   private draft: Partial<ScheduledTask>;
   private focusNameOnNextOpen = true;
+  private aiDraftModal?: AiDraftModal;
+  private editorClosed = false;
+  private generatedDraft = false;
+  private savingGeneratedDraft = false;
 
-  constructor(app: App, plugin: AutoOCPlugin, editTask?: ScheduledTask) {
+  constructor(app: App, plugin: AutoOCPlugin, editTask?: ScheduledTask, private readonly saveDraft?: (task: ScheduledTask) => void) {
     super(app);
     this.plugin = plugin;
     this.editTask = editTask;
     this.draft = editTask
-      ? { ...editTask }
+      ? (saveDraft ? JSON.parse(JSON.stringify(editTask)) : { ...editTask })
       : {
             name: "",
             taskKind: plugin.settings.defaultAiEngine,
             prompt: "",
             model: plugin.settings.defaultAiEngine === "codex"
               ? plugin.getEffectiveCodexModel()
-              : plugin.settings.defaultAiEngine === "copilot" ? plugin.settings.defaultCopilotModel || "" : plugin.getEffectiveDefaultModel(),
-            agent: plugin.getEffectiveAgent(),
+              : plugin.settings.defaultAiEngine === "copilot" ? plugin.settings.defaultCopilotModel || "" : plugin.settings.defaultAiEngine === "opencode2" ? plugin.settings.defaultOpencode2Model || "" : plugin.getEffectiveDefaultModel(),
+            agent: plugin.settings.defaultAiEngine === "opencode2" ? plugin.settings.defaultOpencode2Agent || "build" : plugin.getEffectiveAgent(),
             reasoningEffort: plugin.settings.defaultCodexReasoningEffort,
             useRalphLoop: false,
             forceModel: false,
-            interactiveTerminal: plugin.settings.defaultAiEngine === "opencode" && plugin.settings.defaultInteractiveTerminal,
+            interactiveTerminal: isOpenCodeTask(plugin.settings.defaultAiEngine) && plugin.settings.defaultInteractiveTerminal,
             scheduleType: "manual",
             scheduleTime: nowTimeString(),
             scheduleDate: todayString(),
@@ -8055,7 +7594,7 @@ class CreateTaskModal extends Modal {
     // Header with X button
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = (this.draft.taskKind || "opencode") as TaskKind;
-    const taskType = taskKind === "opencode" && this.draft.interactiveTerminal
+    const taskType = taskKind === "opencode2" && this.draft.interactiveTerminal ? "cli2" : taskKind === "opencode" && this.draft.interactiveTerminal
       ? "cli"
       : taskKind === "codex" && this.draft.interactiveTerminal
         ? "codex-app"
@@ -8063,21 +7602,35 @@ class CreateTaskModal extends Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task",
     });
+    if (!this.editTask) new Setting(contentEl).setName("Start from a description")
+      .setDesc("AI prepares a draft. Review and edit it here before creating the task.")
+      .addButton(button => button.setButtonText("Create with AI").onClick(() => {
+        this.aiDraftModal = this.plugin.openAiDraft("task", this.draft.prompt || this.draft.name || "", generated => {
+          if (this.editorClosed) return;
+          this.draft = generated.tasks[0] as ScheduledTask;
+          this.generatedDraft = true;
+          this.focusNameOnNextOpen = true;
+          this.onOpen();
+        });
+      }));
+    if (this.saveDraft) contentEl.createEl("p", { text: "This task is part of an unsaved workflow draft. Changes stay in the editor until you create the workflow." });
 
     new Setting(contentEl)
       .setName("Task type")
-      .setDesc("Choose OpenCode, Codex in ChatGPT, GitHub Copilot CLI, an interactive OpenCode CLI, or local JavaScript.")
+      .setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.")
       .addDropdown((dd) => {
-        dd.addOption("opencode", "OpenCode task");
+        dd.addOption("opencode", "OpenCode 1 task");
+        dd.addOption("opencode2", "OpenCode 2 task");
         dd.addOption("codex", "Codex task");
         dd.addOption("codex-app", "ChatGPT / Codex task");
         dd.addOption("copilot", "GitHub Copilot CLI task");
         dd.addOption("code", "Code task");
-        dd.addOption("cli", "OpenCode CLI task");
+        dd.addOption("cli", "OpenCode 1 CLI task (interactive)");
+        dd.addOption("cli2", "OpenCode 2 CLI task (interactive)");
         dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v === "code" ? "code" : v === "copilot" ? "copilot" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
-          this.draft.interactiveTerminal = v === "cli" || v === "codex-app";
+          this.draft.taskKind = v === "opencode2" || v === "cli2" ? "opencode2" : v === "code" ? "code" : v === "copilot" ? "copilot" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
+          this.draft.interactiveTerminal = v === "cli" || v === "cli2" || v === "codex-app";
           if (v === "codex" || v === "codex-app") {
             this.draft.model = "";
             this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
@@ -8089,6 +7642,10 @@ class CreateTaskModal extends Modal {
             this.draft.forceModel = false;
             this.draft.branch = "";
             this.draft.createBranch = false;
+          } else if (v === "opencode2" || v === "cli2") {
+            this.draft.model = this.plugin.settings.defaultOpencode2Model || "";
+            this.draft.agent = this.plugin.settings.defaultOpencode2Agent || "build";
+            this.draft.useRalphLoop = false;
           } else if (v === "opencode" || v === "cli") {
             this.draft.model = this.plugin.getEffectiveDefaultModel();
           }
@@ -8100,9 +7657,13 @@ class CreateTaskModal extends Modal {
       });
 
     new Setting(contentEl)
-      .setName("Concurrencia")
-      .setDesc("Máximo dos ejecuciones independientes con recursos compatibles. No amplía permisos; por defecto exclusiva.")
-      .addDropdown(dd=>dd.addOption("exclusive","Exclusiva").addOption("independent","Independiente")
+      .setName("Concurrency")
+      .setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. " +
+        "Run alone (default): no other task or workflow can run at the same time. " +
+        "Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. " +
+        "For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. " +
+        "When this task is a workflow step, the workflow's concurrency setting applies.")
+      .addDropdown(dd=>dd.addOption("exclusive","Run alone (default)").addOption("independent","Allow alongside other work")
         .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
@@ -8138,7 +7699,7 @@ class CreateTaskModal extends Modal {
         .addTextArea((ta) => {
           ta.setValue(initialCode).onChange((v) => (this.draft.code = v));
           ta.inputEl.addClass("auto-oc-modal-textarea");
-          setupCodeTextarea(ta.inputEl);
+          setupCodeTextarea(ta.inputEl, this.app);
           ta.inputEl.rows = 12;
           ta.inputEl.style.width = "100%";
         });
@@ -8186,7 +7747,7 @@ class CreateTaskModal extends Modal {
         });
     }
 
-    contentEl.createDiv("auto-oc-modal-section-title").setText(taskKind === "opencode" ? "📂 Workspace & Git" : "📂 Workspace");
+    contentEl.createDiv("auto-oc-modal-section-title").setText(isOpenCodeTask(taskKind) ? "📂 Workspace & Git" : "📂 Workspace");
 
     new Setting(contentEl)
       .setName("Project Path")
@@ -8200,7 +7761,7 @@ class CreateTaskModal extends Modal {
       });
 
     let branchInput: HTMLInputElement | null = null;
-    if (taskKind === "opencode") {
+    if (isOpenCodeTask(taskKind)) {
       new Setting(contentEl)
         .setName("Git Branch")
         .setDesc("Branch to work on")
@@ -8326,6 +7887,21 @@ class CreateTaskModal extends Modal {
             }
           })
         );
+    } else if (taskKind === "opencode2") {
+      this.draft.model ||= this.plugin.settings.defaultOpencode2Model || "";
+      this.draft.agent ||= this.plugin.settings.defaultOpencode2Agent || "build";
+      new Setting(contentEl).setName("OpenCode 2 model")
+        .setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.")
+        .addText(text => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "")
+          .onChange(value => { this.draft.model = value.trim(); }));
+      new Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.")
+        .addText(text => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build")
+          .onChange(value => { this.draft.agent = value.trim(); }));
+      new Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.")
+        .addToggle(toggle => toggle.setValue(!!this.draft.forceModel).onChange(value => { this.draft.forceModel = value; }));
+      contentEl.createEl("p", { text: this.draft.interactiveTerminal
+        ? "Opens OpenCode 2 mini with your model, agent and prompt. AutoOC confirms startup; the terminal session remains under your control."
+        : "Runs OpenCode 2 with a private server. AutoOC captures the result and waits for completion. Explicitly denied permissions remain denied.", cls: "setting-item-description" });
     } else if (taskKind === "codex") {
       new Setting(contentEl)
         .setName("Codex model")
@@ -8500,7 +8076,7 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl).addButton((btn) =>
       btn
-        .setButtonText(this.editTask ? "Save Changes" : "Create Task")
+        .setButtonText(this.saveDraft ? "Apply to workflow draft" : this.editTask ? "Save Changes" : "Create Task")
         .setCta()
         .onClick(async () => {
           if (!this.draft.name?.trim()) {
@@ -8516,7 +8092,7 @@ class CreateTaskModal extends Modal {
             new Notice("Code is required.");
             return;
           }
-          if (savingTaskKind === "opencode" && !(this.draft.model ?? "").trim()) {
+          if (isOpenCodeTask(savingTaskKind) && !(this.draft.model ?? "").trim()) {
             new Notice("You must select a model.");
             return;
           }
@@ -8543,6 +8119,14 @@ class CreateTaskModal extends Modal {
             return;
           }
 
+          if (this.saveDraft) {
+            this.saveDraft({ ...this.draft, id: this.editTask?.id || generateId(), name: this.draft.name!,
+              status: "pending", lastRun: "", output: "", createdAt: this.draft.createdAt || new Date().toISOString(), taskKind: savingTaskKind,
+              prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt || "",
+            } as ScheduledTask);
+            this.close();
+            return;
+          }
           let updatedTask: ScheduledTask | null = null;
           let areaChanged = false;
           if (this.editTask) {
@@ -8555,6 +8139,7 @@ class CreateTaskModal extends Modal {
               this.plugin.settings.tasks[idx] = {
                 ...this.editTask,
                 ...(this.draft as ScheduledTask),
+                disabled: existing.disabled,
                 prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
                 concurrency: this.draft.concurrency,
                 taskKind: savingTaskKind,
@@ -8578,11 +8163,11 @@ class CreateTaskModal extends Modal {
               prompt: savingTaskKind === "code" ? (this.draft.code || "") : this.draft.prompt!,
               model: savingTaskKind === "code" ? "" : this.draft.model!,
               area: this.draft.area ?? "",
-              agent: savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
+              agent: savingTaskKind === "opencode2" ? this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build" : savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
               reasoningEffort: savingTaskKind === "codex" ? (this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
               copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
-              forceModel: savingTaskKind === "opencode" ? (this.draft.forceModel ?? false) : false,
+              forceModel: isOpenCodeTask(savingTaskKind) ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? "",
@@ -8595,8 +8180,8 @@ class CreateTaskModal extends Modal {
               output: "",
               createdAt: new Date().toISOString(),
               workingDirectory: this.draft.workingDirectory,
-              branch: savingTaskKind === "opencode" ? this.draft.branch : "",
-              createBranch: savingTaskKind === "opencode" ? this.draft.createBranch : false,
+              branch: isOpenCodeTask(savingTaskKind) ? this.draft.branch : "",
+              createBranch: isOpenCodeTask(savingTaskKind) ? this.draft.createBranch : false,
               interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
               code: savingTaskKind === "code" ? this.draft.code : undefined,
               codeLang: savingTaskKind === "code" ? "javascript" : undefined,
@@ -8606,6 +8191,16 @@ class CreateTaskModal extends Modal {
               codeAllowFiles: savingTaskKind === "code" ? !!this.draft.codeAllowFiles : undefined,
               codeAllowTerminal: savingTaskKind === "code" ? !!this.draft.codeAllowTerminal : undefined,
             };
+            if (this.generatedDraft) {
+              if (this.savingGeneratedDraft) return;
+              this.savingGeneratedDraft = true; btn.setDisabled(true);
+              try {
+                await this.plugin.saveGeneratedDefinitionDraft([task]);
+                new Notice(`Task "${task.name}" saved.`); this.close();
+              } catch (error) { new Notice(`Could not save the task: ${(error as Error).message}. Your draft is still available.`); }
+              finally { this.savingGeneratedDraft = false; btn.setDisabled(false); }
+              return;
+            }
             this.plugin.settings.tasks.push(task);
 
           }
@@ -8622,6 +8217,8 @@ class CreateTaskModal extends Modal {
   }
 
   onClose() {
+    this.editorClosed = true;
+    this.aiDraftModal?.close();
     this.contentEl.empty();
   }
 }
@@ -8704,9 +8301,9 @@ class EditWorkflowStepModal extends Modal {
         .setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.")
         .addTextArea((text) => {
           text.inputEl.addClass("auto-oc-modal-textarea");
-          setupCodeTextarea(text.inputEl);
           text.inputEl.rows = 12;
           text.setValue(initialCode).onChange((v) => (this.draft.code = v));
+          setupCodeTextarea(text.inputEl, this.app);
         });
 
       new Setting(contentEl)
@@ -8781,6 +8378,14 @@ class EditWorkflowStepModal extends Modal {
 }
 
 class CreateWorkflowModal extends Modal {
+  private draftTasks: ScheduledTask[] = [];
+  private generatedDraft = false;
+  private savingGeneratedDraft = false;
+  private editorClosed = false;
+  private aiDraftModal?: AiDraftModal;
+  private draftTaskModal?: CreateTaskModal;
+
+  private availableTasks(): ScheduledTask[] { return [...this.plugin.settings.tasks, ...this.draftTasks]; }
   private plugin: AutoOCPlugin;
   private editWorkflow?: Workflow;
   private draft: Partial<Workflow>;
@@ -8830,6 +8435,26 @@ class CreateWorkflowModal extends Modal {
     headerBar.createEl("h3", {
       text: this.editWorkflow ? "Edit Workflow" : "New Workflow",
     });
+    if (!this.editWorkflow) new Setting(contentEl).setName("Start from a description")
+      .setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.")
+      .addButton(button => button.setButtonText("Create with AI").onClick(() => {
+        this.aiDraftModal = this.plugin.openAiDraft("workflow", this.draft.description || this.draft.name || "", generated => {
+          if (this.editorClosed) return;
+          this.draft = generated.workflow as Workflow;
+          this.selectedSteps = this.draft.steps || [];
+          this.draftTasks = generated.tasks as ScheduledTask[];
+          this.generatedDraft = true;
+          this.stepConfigs = {};
+          for (const step of this.selectedSteps) this.stepConfigs[step.id!] = {
+            transitionMode: step.transitionMode as "default" | "force" | "eval", evaluatePrompt: step.evaluatePrompt,
+          };
+          this.onOpen();
+        });
+      }));
+    if (this.generatedDraft) contentEl.createEl("p", {
+      text: "AI draft — review each step. Use Edit draft task to change its prompt, model or permissions. Tasks and workflow are saved together only when you click Create Workflow; cancelling discards this draft.",
+      cls: "auto-oc-ai-draft-note",
+    });
 
     const guide = contentEl.createDiv("auto-oc-workflow-guide");
     guide.createEl("h4", { text: "How workflows work" });
@@ -8844,9 +8469,13 @@ class CreateWorkflowModal extends Modal {
     });
 
     new Setting(contentEl)
-      .setName("Concurrencia")
-      .setDesc("Máximo dos ejecuciones independientes con recursos compatibles. No amplía permisos; por defecto exclusiva.")
-      .addDropdown(dd=>dd.addOption("exclusive","Exclusiva").addOption("independent","Independiente")
+      .setName("Concurrency")
+      .setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. " +
+        "Run alone (default): no other task or workflow can run at the same time. " +
+        "Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. " +
+        "For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. " +
+        "This does not run the steps inside this workflow in parallel.")
+      .addDropdown(dd=>dd.addOption("exclusive","Run alone (default)").addOption("independent","Allow alongside other work")
         .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
@@ -9113,6 +8742,7 @@ class CreateWorkflowModal extends Modal {
               const previousArea = existing.area?.trim() || "";
               this.plugin.settings.workflows[idx] = {
                 ...this.editWorkflow,
+                disabled: existing.disabled,
                 concurrency: this.draft.concurrency,
                 name: this.draft.name!,
                 area: this.draft.area ?? "",
@@ -9155,6 +8785,17 @@ class CreateWorkflowModal extends Modal {
               scheduleIntervalValue: this.draft.scheduleIntervalValue ?? 10,
               scheduleIntervalUnit: this.draft.scheduleIntervalUnit ?? "minutes",
             };
+            if (this.generatedDraft) {
+              if (this.savingGeneratedDraft) return;
+              this.savingGeneratedDraft = true; btn.setDisabled(true);
+              try {
+                await this.plugin.saveGeneratedDefinitionDraft(this.draftTasks, workflow);
+                new Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
+                this.close();
+              } catch (error) { new Notice(`Could not save the workflow: ${(error as Error).message}. Your draft is still available.`); }
+              finally { this.savingGeneratedDraft = false; btn.setDisabled(false); }
+              return;
+            }
             this.plugin.settings.workflows.push(workflow);
           }
 
@@ -9177,7 +8818,7 @@ class CreateWorkflowModal extends Modal {
   private defaultWorkflowStepName(step: WorkflowStep, index?: number): string {
     if (step.stepKind === "code") return "{ } Code";
     if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
-    const task = this.plugin.settings.tasks.find((t) => t.id === step.taskId);
+    const task = this.availableTasks().find((t) => t.id === step.taskId);
     return task ? `${(task.taskKind || "opencode") === "code" ? "{ }" : "📌"} ${task.name}` : "❌ Deleted task";
   }
 
@@ -9194,10 +8835,22 @@ class CreateWorkflowModal extends Modal {
     for (let i = 0; i < this.selectedSteps.length; i++) {
       const step = this.selectedSteps[i];
       if (!step.id) step.id = generateId();
-      const task = step.stepKind === "task" ? this.plugin.settings.tasks.find((t) => t.id === step.taskId) : undefined;
+      const task = step.stepKind === "task" ? this.availableTasks().find((t) => t.id === step.taskId) : undefined;
       const config = this.stepConfigs[step.id] || {};
 
       const stepEl = container.createDiv("auto-oc-workflow-step-item");
+      if (task && this.draftTasks.some(draft => draft.id === task.id)) {
+        const edit = stepEl.createEl("button", { text: "Edit draft task" });
+        edit.onclick = () => {
+          this.draftTaskModal = new CreateTaskModal(this.app, this.plugin, task, updated => {
+            if (this.editorClosed) return;
+            this.draftTasks = this.draftTasks.map(draft => draft.id === updated.id ? updated : draft);
+            this.renderStepsList(container);
+          });
+          this.draftTaskModal.open();
+        };
+        stepEl.createEl("p", { text: task.prompt, cls: "auto-oc-ai-draft-prompt" });
+      }
       const isLast = i === this.selectedSteps.length - 1;
 
       // Header row
@@ -9263,9 +8916,9 @@ class CreateWorkflowModal extends Modal {
           .setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.")
           .addTextArea((text) => {
             text.inputEl.addClass("auto-oc-modal-textarea");
-            setupCodeTextarea(text.inputEl);
             text.inputEl.rows = 6;
             text.setValue(initialCode).onChange((v) => (step.code = v));
+            setupCodeTextarea(text.inputEl, this.app);
           });
         new Setting(stepEl)
           .setName("Variables")
@@ -9470,7 +9123,7 @@ class CreateWorkflowModal extends Modal {
     // Add step buttons
     const addDiv = container.createDiv("auto-oc-workflow-add-step");
     const selectedTaskIds = this.selectedSteps.map((s) => s.taskId).filter(Boolean) as string[];
-    const tasks = this.plugin.settings.tasks.filter(
+    const tasks = this.availableTasks().filter(
       (t) => !selectedTaskIds.includes(t.id)
     );
 
@@ -9481,6 +9134,16 @@ class CreateWorkflowModal extends Modal {
     });
     btnCreateTask.title = "Create a fresh task and auto-add it to this chain";
     btnCreateTask.onclick = async () => {
+      if (this.generatedDraft) {
+        this.draftTaskModal = new CreateTaskModal(this.app, this.plugin, undefined, task => {
+          if (this.editorClosed) return;
+          this.draftTasks.push(task);
+          this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: task.id, area: this.draft.area || task.area || "", transitions: [] });
+          this.renderStepsList(container);
+        });
+        this.draftTaskModal.open();
+        return;
+      }
       const prevCount = this.plugin.settings.tasks.length;
       const prevIds = new Set(this.plugin.settings.tasks.map((t) => t.id));
 
@@ -9494,7 +9157,7 @@ class CreateWorkflowModal extends Modal {
         origClose();
         // After modal closes, find the new task
         setTimeout(() => {
-          const newTasks = this.plugin.settings.tasks.filter(
+          const newTasks = this.availableTasks().filter(
             (t) => !prevIds.has(t.id) && !selectedTaskIds.includes(t.id)
           );
           if (newTasks.length > 0) {
@@ -9529,7 +9192,7 @@ class CreateWorkflowModal extends Modal {
       addBtn.style.marginLeft = "4px";
       addBtn.onclick = () => {
         if (sel.value) {
-          const task = this.plugin.settings.tasks.find((t) => t.id === sel.value);
+          const task = this.availableTasks().find((t) => t.id === sel.value);
           this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: sel.value, area: this.draft.area || task?.area || "", transitions: [], position: { x: 0, y: 0 } });
           this.renderStepsList(container);
         }
@@ -9578,6 +9241,9 @@ class CreateWorkflowModal extends Modal {
   }
 
   onClose() {
+    this.editorClosed = true;
+    this.aiDraftModal?.close();
+    this.draftTaskModal?.close();
     this.contentEl.empty();
   }
 }
@@ -9591,12 +9257,12 @@ class ExportModal extends Modal {
   private name = "";
   private description = "";
 
-  constructor(app: App, plugin: AutoOCPlugin) {
+  constructor(app: App, plugin: AutoOCPlugin, taskIds?: Set<string>, workflowIds?: Set<string>) {
     super(app);
     this.plugin = plugin;
-    // Default to selecting everything
-    for (const t of plugin.settings.tasks) this.selectedTaskIds.add(t.id);
-    for (const w of plugin.settings.workflows) this.selectedWorkflowIds.add(w.id);
+    // Header export still selects everything; bulk export starts from the exact selection.
+    for (const t of plugin.settings.tasks) if (!taskIds || taskIds.has(t.id)) this.selectedTaskIds.add(t.id);
+    for (const w of plugin.settings.workflows) if (!workflowIds || workflowIds.has(w.id)) this.selectedWorkflowIds.add(w.id);
   }
 
   onOpen() {
@@ -10227,8 +9893,8 @@ class ImportModal extends Modal {
           errors.push(where + ".prompt is missing or empty.");
         }
         const taskKind = t.taskKind || "opencode";
-        if (!["opencode", "codex", "copilot", "code"].includes(taskKind)) {
-          errors.push(where + ".taskKind is invalid. Expected opencode, codex, copilot, or code.");
+        if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, opencode2, codex, copilot, or code.");
         }
         const copilotError = getCopilotTaskValidationError(t);
         if (copilotError) errors.push(where + ": " + copilotError);
@@ -10824,170 +10490,6 @@ class CommandPreviewModal extends Modal {
   }
 }
 
-// ─── OpenCode CLI Launcher Modal ──────────────────────────────────────────────
-
-class OpenCodeCliModal extends Modal {
-  private plugin: AutoOCPlugin;
-
-  constructor(app: App, plugin: AutoOCPlugin) {
-    super(app);
-    this.plugin = plugin;
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.addClass("auto-oc-cli-modal");
-    setupModalX(this);
-
-    contentEl.createEl("h3", { text: "OpenCode CLI Launcher" });
-    contentEl.createEl("p", {
-      text: "Choose where to open the OpenCode terminal.",
-      cls: "setting-item-description",
-    });
-
-    const vaultCwd = (this.app.vault.adapter as any).basePath || ".";
-    const defaultCwd = this.plugin.settings.workingDirectory || vaultCwd;
-
-    const buttons = contentEl.createDiv("auto-oc-cli-modal-buttons");
-
-    const btnDefault = buttons.createEl("button", {
-      text: "📂 Open in project / vault",
-      cls: "auto-oc-btn-primary",
-    });
-    btnDefault.onclick = () => this.launch(defaultCwd);
-
-    contentEl.createEl("p", {
-      text: defaultCwd,
-      cls: "setting-item-description auto-oc-cli-path",
-    });
-
-    const btnChoose = buttons.createEl("button", {
-      text: "🗀 Choose folder…",
-      cls: "auto-oc-btn-secondary",
-    });
-    btnChoose.onclick = async () => {
-      const chosen = await this.chooseFolder();
-      if (chosen) this.launch(chosen);
-    };
-
-    const btnCancel = buttons.createEl("button", {
-      text: "Cancel",
-      cls: "auto-oc-btn-secondary",
-    });
-    btnCancel.onclick = () => this.close();
-  }
-
-  private launch(cwd: string) {
-    try {
-      const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
-      openOpencodeCli(bin, cwd, {}, [], {
-        onError: (error) => new Notice(`AutoOC: could not open OpenCode CLI: ${String(error)}`),
-        linuxTerminal: this.plugin.settings.linuxTerminal,
-      });
-      new Notice(`AutoOC: opened OpenCode CLI in ${cwd}`);
-      this.close();
-    } catch (e) {
-      new Notice(`AutoOC: could not open OpenCode CLI: ${String(e)}`);
-    }
-  }
-
-  private async chooseFolder(): Promise<string | null> {
-    try {
-      // @ts-ignore — Electron API available on desktop Obsidian
-      const electron = window.require("electron");
-      const result = await electron.remote.dialog.showOpenDialog({
-        properties: ["openDirectory"],
-        title: "Select folder for OpenCode CLI",
-      });
-      if (!result.canceled && result.filePaths.length > 0) {
-        return result.filePaths[0];
-      }
-    } catch (e) {
-      new Notice(`AutoOC: folder picker failed — ${String(e)}`);
-    }
-    return null;
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
-// ─── ChatGPT / Codex Launcher Modal ─────────────────────────────────────────
-
-class CodexAppModal extends Modal {
-  constructor(app: App, private readonly plugin: AutoOCPlugin) {
-    super(app);
-  }
-
-  onOpen() {
-    const { contentEl } = this;
-    contentEl.addClass("auto-oc-cli-modal");
-    setupModalX(this);
-    contentEl.createEl("h3", { text: "ChatGPT / Codex" });
-    contentEl.createEl("p", {
-      text: "Choose the project folder to open in the ChatGPT Codex workspace.",
-      cls: "setting-item-description",
-    });
-    const vaultCwd = (this.app.vault.adapter as any).basePath || ".";
-    const defaultCwd = this.plugin.settings.workingDirectory || vaultCwd;
-    const buttons = contentEl.createDiv("auto-oc-cli-modal-buttons");
-    const openDefault = buttons.createEl("button", { text: "📂 Open project / vault", cls: "auto-oc-btn-primary" });
-    openDefault.onclick = () => this.launch(defaultCwd);
-    contentEl.createEl("p", { text: defaultCwd, cls: "setting-item-description auto-oc-cli-path" });
-    const choose = buttons.createEl("button", { text: "🗀 Choose folder…", cls: "auto-oc-btn-secondary" });
-    choose.onclick = async () => {
-      const cwd = await this.chooseFolder();
-      if (cwd) this.launch(cwd);
-    };
-    const cancel = buttons.createEl("button", { text: "Cancel", cls: "auto-oc-btn-secondary" });
-    cancel.onclick = () => this.close();
-  }
-
-  private async launch(cwd: string): Promise<void> {
-    try {
-      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error(`Folder does not exist: ${cwd}`);
-      openCodexNewThread(cwd, (error) => void this.fallbackOpen(error, cwd));
-      new Notice(`AutoOC: opening a new ChatGPT / Codex conversation in ${cwd}`);
-      this.close();
-    } catch (error) {
-      void this.fallbackOpen(error as Error, cwd);
-    }
-  }
-
-  private async fallbackOpen(error: Error, cwd: string): Promise<void> {
-    try { await copyTextToClipboard(cwd); } catch { /* clipboard is best effort */ }
-    if (isWindows()) {
-      try {
-        const script = "$app = Get-StartApps | Where-Object { $_.Name -match 'ChatGPT|Codex' } | Select-Object -First 1; if ($app) { Start-Process ('shell:AppsFolder\\' + $app.AppID) } else { exit 1 }";
-        const launcher = spawn("powershell.exe", ["-NoLogo", "-NonInteractive", "-Command", script], { detached: true, stdio: "ignore", windowsHide: true });
-        launcher.unref();
-      } catch { /* notice below remains actionable */ }
-    }
-    new Notice(`AutoOC: could not open the selected folder directly (${String(error)}). ChatGPT was opened when possible and the path was copied: ${cwd}`, 10_000);
-    this.close();
-  }
-
-  private async chooseFolder(): Promise<string | null> {
-    try {
-      // @ts-ignore — Electron API available on desktop Obsidian
-      const electron = window.require("electron");
-      const result = await electron.remote.dialog.showOpenDialog({
-        properties: ["openDirectory"],
-        title: "Select folder for ChatGPT / Codex",
-      });
-      return !result.canceled && result.filePaths.length > 0 ? result.filePaths[0] : null;
-    } catch (error) {
-      new Notice(`AutoOC: folder picker failed — ${String(error)}`);
-      return null;
-    }
-  }
-
-  onClose() {
-    this.contentEl.empty();
-  }
-}
-
 // ─── Diagnostic Modal ─────────────────────────────────────────────────────────
 
 class DiagnosticModal extends Modal {
@@ -11156,54 +10658,42 @@ class AutoOCSettingTab extends PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
 
-    new Setting(containerEl)
-      .setName("Dashboard task bubble size")
-      .setDesc("Fixed task bubble diameter in pixels.")
-      .addDropdown((dropdown) => dropdown
-        .addOptions({ sm: "Small (24px)", md: "Medium (30px)", lg: "Large (38px)", xl: "Extra large (48px)" })
-        .setValue(this.plugin.settings.dashboardTaskBubbleSize)
-        .onChange(async (value) => {
-          if (value === "sm" || value === "md" || value === "lg" || value === "xl") {
-            this.plugin.settings.dashboardTaskBubbleSize = value;
-            await this.plugin.saveSettings();
-          }
-        }));
+    addDashboardBubbleSizeSetting(containerEl, {
+      getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
+      saveDiameter: diameter => this.plugin.saveDashboardBubbleDiameter(diameter),
+      applyDiameter: diameter => this.plugin.applyDashboardBubbleDiameter(diameter),
+    });
 
     new Setting(containerEl)
       .setName("Default AI engine")
-      .setDesc("Engine selected for new AI tasks.")
+      .setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.")
       .addDropdown((dropdown) => dropdown
-        .addOption("opencode", "OpenCode")
+        .addOption("opencode", "OpenCode 1")
+        .addOption("opencode2", "OpenCode 2")
         .addOption("codex", "Codex / ChatGPT")
         .addOption("copilot", "GitHub Copilot CLI")
         .setValue(this.plugin.settings.defaultAiEngine)
         .onChange(async (value) => {
-          if (value === "opencode" || value === "codex" || value === "copilot") {
+          if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
             this.plugin.settings.defaultAiEngine = value;
             await this.plugin.saveSettings();
           }
         }));
 
+    addInteractiveCliSettings(containerEl, this.plugin);
+    containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
+    containerEl.createEl("p", { text: "Select OpenCode 2 in a task's Task type to use these settings. Existing OpenCode 1 tasks keep their engine. The executable path is configured under OpenCode 2 CLI above.", cls: "setting-item-description" });
+    new Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.")
+      .addText(text => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async value => {
+        this.plugin.settings.defaultOpencode2Model = value.trim(); await this.plugin.saveSettings(false);
+      }));
+    new Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.")
+      .addText(text => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async value => {
+        this.plugin.settings.defaultOpencode2Agent = value.trim() || "build"; await this.plugin.saveSettings(false);
+      }));
     addCopilotGlobalSettings(containerEl, this.plugin);
 
-    containerEl.createEl("h3", { text: "Codex / ChatGPT" });
-    new Setting(containerEl)
-      .setName("Codex executable path")
-      .setDesc(`Absolute path or \"codex\" for auto-detection. Detected: ${resolveCodexBin(this.plugin.settings.codexPath)}`)
-      .addText((text) => text
-        .setPlaceholder("codex")
-        .setValue(this.plugin.settings.codexPath)
-        .onChange(async (value) => {
-          this.plugin.settings.codexPath = value.trim() || "codex";
-          await this.plugin.saveSettings();
-        }))
-      .addButton((button) => button.setButtonText("🔍 Detect & test").onClick(async () => {
-        this.plugin.settings.codexPath = resolveCodexBin("codex");
-        await this.plugin.saveSettings(false);
-        await this.plugin.refreshCodexModels(true);
-        this.display();
-      }));
-
+    containerEl.createEl("h3", { text: "Codex task defaults" });
     new Setting(containerEl)
       .setName("Default Codex model")
       .setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`)
@@ -11240,49 +10730,12 @@ class AutoOCSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "OpenCode" });
-
-    new Setting(containerEl)
-      .setName("OpenCode CLI Path")
-      .setDesc(
-        `Absolute path to executable. Empty = auto-detect.\nDetected now: ${resolveOpencodeBin(this.plugin.settings.opencodePath)}`
-      )
-      .addText((text) => {
-        text
-          .setPlaceholder("auto-detect")
-          .setValue(this.plugin.settings.opencodePath)
-          .onChange(async (v) => {
-            this.plugin.settings.opencodePath = v.trim();
-            await this.plugin.saveSettings();
-          });
-        return text;
-      })
-      .addButton((btn) =>
-        btn.setButtonText("🔍 Auto-detect").onClick(async () => {
-          // Search for opencode.cmd / opencode.exe in typical npm paths
-          const { existsSync } = require("fs");
-          const candidates = [
-            `${process.env.APPDATA}\\npm\\opencode.cmd`,
-            `${process.env.APPDATA}\\npm\\opencode`,
-            `${process.env.LOCALAPPDATA}\\npm\\opencode.cmd`,
-            `${process.env.ProgramFiles}\\nodejs\\opencode.cmd`,
-          ].filter(Boolean);
-          const found = candidates.find((c) => existsSync(c));
-          if (found) {
-            this.plugin.settings.opencodePath = found;
-            await this.plugin.saveSettings();
-            new Notice(`AutoOC: path configured → ${found}`);
-            this.display(); // re-render to show new value
-          } else {
-            new Notice("AutoOC: opencode not found automatically. Enter the path manually.");
-          }
-        })
-      );
+    containerEl.createEl("h3", { text: "CLI folders and terminals" });
 
     new Setting(containerEl)
       .setName("Working Directory")
       .setDesc(
-        "Directory from which to launch OpenCode, Codex or GitHub Copilot CLI (empty = vault's current directory)"
+        "Default folder for interactive CLI sessions and supported tasks. Empty = vault folder."
       )
       .addText((text) =>
         text
@@ -11310,7 +10763,7 @@ class AutoOCSettingTab extends PluginSettingTab {
       new Setting(containerEl)
         .setName("Linux terminal emulator")
         .setDesc(
-          "Command used to open the interactive OpenCode CLI. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
+          "Command used to open interactive CLI sessions. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
         )
         .addText((text) =>
           text

@@ -443,3 +443,26 @@ test('cold app-server recovery loads only the existing thread and validates the 
  client.peer={request:async m=>{if(m==='thread/read')throw Error('thread not loaded: saved');return {thread:{id:'other',turns:[]}};}};
  await assert.rejects(client.readExistingTurn('saved','turn'),/mismatch/);
 });
+
+
+test("draft generation uses an ephemeral read-only thread with action tools disabled", async () => {
+  const requests = [];
+  const client = new CodexAppServerClient("codex", process.cwd());
+  client.initialized = true;
+  client.peer = { request: async (method, params) => {
+    requests.push({method, params});
+    if (method === "config/read") return {config: {mcp_servers: {external: {command: "never-launch", env: {PRIVATE: "not-copied"}}}}};
+    if (method === "thread/start") return {thread: {id: "draft"}};
+    if (method === "turn/start") return {turn: {id: "draft-turn"}};
+    return {};
+  }};
+  const pending = client.run("Create JSON only", "model", "medium", "never", {sandbox: "read-only", ephemeral: true, toolsDisabled: true});
+  await new Promise(resolve => setImmediate(resolve));
+  client.handleMessage({method: "turn/completed", params: {turn: {id: "draft-turn", status: "completed"}}});
+  await pending;
+  const start = requests.find(request => request.method === "thread/start").params;
+  assert.equal(start.sandbox, "read-only"); assert.equal(start.ephemeral, true);
+  assert.equal(start.config["features.shell_tool"], false); assert.equal(start.config["features.apps"], false);
+  assert.deepEqual(start.config.mcp_servers, {external: {enabled: false}});
+  assert.ok(!JSON.stringify(requests).includes("not-copied"));
+});

@@ -5,7 +5,8 @@ import { captureJsonStructure, encodeCapturedJson } from "./cooperative-json";
 import { setImmediate } from "timers";
 import { performance } from "perf_hooks";
 
-const runtimeFields = new Set(["status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
+// Availability gates new execution, but must not invalidate historical checkpoints.
+const runtimeFields = new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 
 function withoutRuntime(value: Record<string, unknown>) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));
@@ -37,7 +38,22 @@ function definitionPayload(workflow: {id:string;steps:RoutingStep[]}, tasks: Arr
     if (!id || matches.length !== 1) throw new Error("Missing or ambiguous referenced task");
     return withoutRuntime(matches[0]);
   });
-  return canonical({workflow:{...withoutRuntime(workflow),steps:workflow.steps.map(s => withoutRuntime(s as any))},tasks:selected,settings:effectiveExecutionSettings(settings)});
+  const usesOpenCode2 = selected.some(task => task.taskKind === 'opencode2') || settings.defaultAiEngine === 'opencode2';
+  return canonical({workflow:{...withoutRuntime(workflow),steps:workflow.steps.map(s => withoutRuntime(s as any))},tasks:selected,settings:effectiveExecutionSettings(settings, usesOpenCode2)});
+}
+
+// Retain availability for execution guards while keeping historical hashes stable.
+function withAvailability(payload: any, workflow: { id: string; disabled?: boolean }, tasks: Array<{ id: string; disabled?: boolean }>) {
+  return {...payload,
+    workflow: {...payload.workflow, ...(workflow.disabled !== undefined ? {disabled: workflow.disabled} : {}),
+      steps: payload.workflow.steps.map((step: any) => {
+        const source = (workflow as any).steps.find((item: any) => item.id === step.id);
+        return {...step, ...(source?.disabled !== undefined ? {disabled: source.disabled} : {})};
+      })},
+    tasks: payload.tasks.map((task: any) => {
+      const source = tasks.find(item => item.id === task.id);
+      return {...task, ...(source?.disabled !== undefined ? {disabled: source.disabled} : {})};
+    })};
 }
 
 export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep[]}, tasks: Array<{id:string}>, settings: Record<string, any>): PreparedWorkflow {
@@ -47,7 +63,7 @@ export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep
   const digest = createHash("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash = digest.digest("hex");
-  return freeze({...payload,hash});
+  return freeze({...withAvailability(payload,workflow,tasks),hash});
 }
 
 // Capture and detach the effective structure before the first yield. Strings
@@ -55,6 +71,7 @@ export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep
 // editable catalog. The compact byte stream is EXACTLY the historical hash.
 export async function prepareWorkflowDefinitionAsync(workflow: {id:string;steps:RoutingStep[]}, tasks: Array<{id:string}>, settings: Record<string,any>): Promise<PreparedWorkflow> {
   const payload = freeze(definitionPayload(workflow,tasks,settings));
+  const availablePayload = freeze(withAvailability(payload,workflow,tasks));
   const captured = captureJsonStructure(payload,0), digest = createHash("sha256");
   // Also yield for many small definitions whose aggregate would monopolize a
   // turn even though no individual definition exhausts the slice budget.
@@ -67,5 +84,5 @@ export async function prepareWorkflowDefinitionAsync(workflow: {id:string;steps:
       deadline=performance.now()+4;
     }
   }
-  return Object.freeze({...payload,hash:digest.digest("hex")});
+  return Object.freeze({...availablePayload,hash:digest.digest("hex")});
 }

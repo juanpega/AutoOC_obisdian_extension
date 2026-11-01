@@ -7,14 +7,25 @@ const root=path.resolve(__dirname,'..');
 const names=['main.js','manifest.json','styles.css','autooc-cli.cjs','autooc-runtime.cjs','skills/autooc-runtime/SKILL.md','release-integrity.json'];
 function loadPlugin(file=path.join(root,'main.js')) {
   const original=Module._load;
+  const resolved=require.resolve(file);
   try {
     Module._load=function(name,...args){
       if(name==='obsidian')return {Plugin:class{},Notice:class{},Modal:class{},Setting:class{},ItemView:class{},PluginSettingTab:class{},WorkspaceLeaf:class{}};
       return original.call(this,name,...args);
     };
-    delete require.cache[require.resolve(file)];
-    return require(file).default;
-  }finally{Module._load=original;}
+    delete require.cache[resolved];
+    return require(resolved).default;
+  }finally{
+    Module._load=original;
+    // Each fixture copies the bundle to a unique vault. Retaining every module
+    // also retains the entire bundled editor/runtime after the fixture ends.
+    const loaded=require.cache[resolved];
+    delete require.cache[resolved];
+    if(loaded?.parent){
+      const index=loaded.parent.children.indexOf(loaded);
+      if(index!==-1)loaded.parent.children.splice(index,1);
+    }
+  }
 }
 function fixture(t) {
   const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-lifecycle-'));
@@ -36,6 +47,13 @@ function fixture(t) {
     return p;
   };
   return {vault,directory,runtime,create};
+}
+async function engineUnavailable(p, loading, expected) {
+  await loading;
+  assert.equal(p.ready, false);
+  assert.equal(p.panelAvailable, true);
+  if(expected)assert.match(p.startupError, expected);
+  else assert.equal(typeof p.startupError, 'string');
 }
 function timers(t){
   const old=global.window,st=global.setTimeout;const callbacks=[];
@@ -505,7 +523,7 @@ test('single SettingsWriter completes lock, temporary file and atomic rename dur
   assert.equal(JSON.parse(fs.readFileSync(file)).nextWrite,true);await successor.onunload();
 });
 
-for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`historical 1.6.1 Dashboard drains ${writes} queued saves, pace ${pace}, gap ${gap}`,async t=>{
+for(const [writes,pace,gap,readDelay=0] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50],[5,0,0,2300]]) test(`historical 1.6.1 Dashboard drains ${writes} queued saves, pace ${pace}, gap ${gap}, read delay ${readDelay}`,{timeout:20000},async t=>{
   timers(t);const {create,directory}=fixture(t),successor=create(),file=path.join(directory,'data.json');
   const legacy=require('./fixtures/legacy-settings-1.6.1.cjs');
   const outgoing={...legacy.plugin,settingsWriter:new legacy.SettingsWriter(),app:successor.app,manifest:{id:'auto-oc'},
@@ -527,10 +545,13 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
   });
   const waitForObservation=async from=>{
     const key=temporaryKey(from);if(observedTemporaries.has(key))return;
-    const controller=new AbortController();
+    // This is a handover fixture, not a second startup deadline. The product
+    // already bounds the whole observed queue at 10s, tested below. Surface a
+    // failed/finished startup immediately instead of racing it against 2s of
+    // arbitrary fixture wall time while the observer performs legitimate I/O.
     try{await Promise.race([new Promise(resolve=>temporaryWaiters.set(key,resolve)),
-      delay(2000,undefined,{signal:controller.signal}).then(()=>{throw Error('Catalog observer did not inspect the queued temporary before commit');})]);}
-    finally{controller.abort();temporaryWaiters.delete(key);}
+      loading.then(error=>{throw error||new Error(successor.startupError||'Startup ended before observing the queued temporary');})]);}
+    finally{temporaryWaiters.delete(key);}
   };
   const firstRename=new Promise(resolve=>entered=resolve),allowFirst=new Promise(resolve=>finish=resolve);
   fs.promises.rename=async function(from,to){
@@ -549,6 +570,14 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
     return originalMkdir.call(this,target,...args);
   };
   t.after(()=>{fs.promises.rename=originalRename;fs.promises.mkdir=originalMkdir;});
+  let delayedRead=false;
+  const readFile=fs.promises.readFile;
+  t.mock.method(fs.promises,'readFile',async function(target,...args){
+    if(readDelay&&!delayedRead&&path.basename(String(target))==='main.js'&&fs.realpathSync.native(path.dirname(String(target)))===physicalDirectory){
+      delayedRead=true;await delay(readDelay);
+    }
+    return readFile.call(this,target,...args);
+  });
   const jobs=Array.from({length:writes-1},()=>view.persistDashboardPositions());jobs.push(view.onClose());
   await firstRename;
   successor.loadSettings=async()=>{successor.settings=successor.settingsWriter.load(file);};
@@ -556,10 +585,14 @@ for(const [writes,pace,gap] of [[2,65,0],[5,65,0],[5,0,0],[2,65,50]]) test(`hist
   // commit blocked until the successor actually observes the outgoing queue.
   const watching=startupWatching(t,directory);
   const loading=successor.onload().then(()=>null,error=>error);
-  await Promise.race([watching,loading]);await delay(60);finish();await Promise.all(jobs);
+  // Slow package verification precedes the observer's startup budget. The
+  // first rename still waits for its exact temporary to be observed.
+  if(readDelay)finish();
+  await Promise.race([watching,loading]);await delay(60);if(!readDelay)finish();await Promise.all(jobs);
   const error=await loading;
   try {
     assert.equal(error,null);assert.equal(successor.ready,true);assert.equal(tokens.size,writes);assert.equal(observedTemporaries.size,writes);
+    assert.equal(delayedRead,readDelay>0);
     assert.deepEqual(successor.settings.dashboardPositions,{history:{x:11,y:22}});
     assert.equal(fs.existsSync(file+'.write-lock'),false);
     await successor.settingsWriter.save(file,()=>({...successor.settings,successorSaved:true}));
@@ -582,7 +615,7 @@ for(const finishes of [true,false,'late']) test(`startup monotonic budget ${fini
     return observer;
   });
   const tick=async value=>{now=value;notify();await require('node:timers/promises').setImmediate();};
-  const loading=p.onload().then(()=>{outcome='loaded';},error=>{outcome=error;});
+  const loading=p.onload().then(()=>{outcome=p.ready?'loaded':new Error(p.startupError);},error=>{outcome=error;});
   try {
     await Promise.race([watching,loading]);
     assert.equal(typeof notify,'function');
@@ -650,7 +683,7 @@ for(const scenario of ['persistent','token-replaced','lock-replaced','unobserved
     const watch=fs.watch;t.mock.method(fs,'watch',function(target,callback){
       const observer=watch.call(this,target,callback);watchEntered();return observer;
     });
-    const rejected=assert.rejects(p.onload(),expected);
+    const rejected=scenario==='cancel'?assert.rejects(p.onload(),expected):engineUnavailable(p,p.onload(),expected);
     await Promise.race([watching,rejected]);
     await delay(40);
     if(scenario==='token-replaced')fs.writeFileSync(lock,require('crypto').randomUUID());
@@ -668,7 +701,7 @@ for(const scenario of ['persistent','token-replaced','lock-replaced','unobserved
     if(scenario==='directory-replaced'){
       replacedDirectory=true;
     }
-    await rejected;assert.equal(p.ready,false);assert.equal(effects,0);
+    await rejected;assert.equal(p.ready,false);assert.equal(effects,scenario==='cancel'?0:1);
     if(!['corrupt','uncertain-catalog'].includes(scenario))assert.deepEqual(fs.readFileSync(file),before);
     assert.equal(fs.existsSync(lock),scenario!=='orphan-temporary');
   });
@@ -679,7 +712,7 @@ test('after atomic writer completes, even a byte-identical external catalog repl
   const lock=file+'.write-lock',before=fs.readFileSync(file),delay=require('node:timers/promises').setTimeout;
   fs.writeFileSync(lock,require('crypto').randomUUID());
   const watching=startupWatching(t,directory);
-  const rejected=assert.rejects(p.onload(),/identity changed/);
+  const rejected=engineUnavailable(p,p.onload(),/identity changed/);
   await Promise.race([watching,rejected]);
   await delay(40);fs.unlinkSync(lock);await delay(50);
   fs.renameSync(file,file+'.external-backup');fs.writeFileSync(file,before);
@@ -699,7 +732,7 @@ for(const failure of [false,true]) test(`startup directory observer closes after
     return observer;
   };
   try {
-    if(failure)await assert.rejects(p.onload(),/injected observer failure/);
+    if(failure)await engineUnavailable(p,p.onload(),/injected observer failure/);
     else await p.onload();
     assert.equal(opened,1);assert.equal(closed,1);
   }finally{fs.watch=watch;await p.onunload();}
@@ -760,7 +793,7 @@ for(const scenario of ['corrupt','invalid-catalog','journal','live-owner','owner
     const expected={corrupt:/valid and stable/, 'invalid-catalog':/Invalid execution catalog/,journal:/uncertain effect/,
       'live-owner':/live or cannot/, 'owner-changed':/lease|ownership/i,'file-replaced':/identity changed/,'manifest-changed':/identity changed/,cancel:/stopped/}[scenario];
     // Attach rejection handler before yielding to the host.
-    const rejected=scenario==='live-owner' ? loading.then(()=>assert.match(p.startupError,expected)) : assert.rejects(loading,expected);
+    const rejected=scenario==='cancel' ? assert.rejects(loading,expected) : engineUnavailable(p,loading,expected);
     if(['owner-changed','file-replaced','manifest-changed','cancel'].includes(scenario))mutation=(async()=>{
       await Promise.race([watching,rejected]);
       await delay(30);
@@ -776,7 +809,7 @@ for(const scenario of ['corrupt','invalid-catalog','journal','live-owner','owner
       if(scenario==='cancel')await p.onunload();
     })();
     await rejected;await mutation;
-    assert.equal(p.ready,false);assert.equal(effects,scenario==='live-owner'?1:0);assert.equal(requests,0);
+    assert.equal(p.ready,false);assert.equal(effects,scenario==='cancel'?0:1);assert.equal(requests,0);
     assert.equal(fs.existsSync(path.join(directory,'autooc-cli.cjs')),false);
     assert.deepEqual(fs.readFileSync(path.join(directory,'main.js')),files['main.js']);
     if(owner)assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),owner);
@@ -794,7 +827,7 @@ test('catalog change during bootstrap is preserved and rejected before installat
     if(!changed){changed=true;fs.writeFileSync(file,final);}
     const name=names.find(n=>url.includes('/'+n+'?'));return {ok:true,arrayBuffer:async()=>files[name]};
   };t.after(()=>{global.fetch=prior;});
-  await assert.rejects(p.onload(),/Configuration changed after startup validation/);
+  await engineUnavailable(p,p.onload(),/Configuration changed after startup validation/);
   assert.equal(p.ready,false);assert.equal(fs.readFileSync(file,'utf8'),final);
   assert.equal(fs.existsSync(path.join(directory,'autooc-cli.cjs')),false);
   assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),false);
@@ -810,7 +843,7 @@ for(const mismatch of ['version','id']) {
     physical[mismatch]=mismatch==='version'?'99.0.0':'another-plugin';
     fs.writeFileSync(file,JSON.stringify(physical));const before=fs.readFileSync(file);
     let requests=0;const prior=global.fetch;global.fetch=async()=>{requests++;throw Error('unexpected network');};t.after(()=>{global.fetch=prior;});
-    await assert.rejects(p.onload(),/manifest.*(identity|version)/i);
+    await engineUnavailable(p,p.onload(),/manifest.*(identity|version)/i);
     assert.equal(requests,0);assert.equal(p.ready,false);assert.equal(p.manifest.version,'1.6.0');
     assert.deepEqual(fs.readFileSync(file),before);assert.equal(fs.existsSync(path.join(runtime,'execution.lock')),false);
   });
@@ -846,7 +879,7 @@ for(const failure of ['loadSettings','close']) {
     timers(t);const {create,runtime}=fixture(t),p=create();
     if(failure==='loadSettings'){
       p.loadSettings=async()=>{throw Error('original load failure');};
-      await assert.rejects(p.onload(),/original load failure/);
+      await engineUnavailable(p,p.onload(),/original load failure/);
     }else{
       p.reservePluginExecution();p.stopMcpBridge=async()=>{throw Error('close failure');};
       await assert.rejects(p.onunload(),/close failure/);
@@ -879,7 +912,7 @@ test('hardlinked bundle cannot trigger bootstrap writes outside the installation
   timers(t);const {create,directory,vault}=fixture(t),p=create(),external=path.join(vault,'external-main.js');
   const bytes=fs.readFileSync(path.join(directory,'main.js'));
   fs.linkSync(path.join(directory,'main.js'),external);
-  await assert.rejects(p.onload(),/Unsafe installed plugin bundle/);
+  await engineUnavailable(p,p.onload(),/Unsafe installed plugin bundle/);
   assert.deepEqual(fs.readFileSync(external),bytes);
 });
 
@@ -922,7 +955,7 @@ for(const failure of ['404','timeout','descriptor','version','hash','revision','
     try{
       const expected=failure==='write'?/injected install write/:failure==='rollback'?/injected rollback/:
         failure==='revision'?/Bootstrap revision differs/:failure==='manifest-revision'?/Bootstrap manifest differs/:undefined;
-      await assert.rejects(p.onload(),expected);assert.equal(p.ready,false);assert.equal(p.manifest.version,'1.6.0');
+      await engineUnavailable(p,p.onload(),expected);assert.equal(p.ready,false);assert.equal(p.manifest.version,'1.6.0');
     }finally{global.fetch=prior;fs.writeFileSync=write;}
     assert.equal(writesFailed,['write','rollback'].includes(failure));
     assert.equal(rollbackFailed,failure==='rollback');
@@ -945,7 +978,7 @@ test('live CLI owner leaves a visible recovery view without scheduling or catalo
   assert.equal(ribbon,1);assert.equal(commands,1);assert.equal(loads,0);assert.equal(intervals,0);
   const view=p.createDashboard({}),elements=[];
   view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};
-  await view.onOpen();assert.ok(elements.some(e=>e.text==='Retry loading AutoOC'));
+  await view.onOpen();assert.ok(elements.some(e=>e.text==='Retry execution connection'));
   assert.ok(elements.some(e=>e.text?.includes('This Obsidian window still holds a previous AutoOC reservation')));
   assert.equal(elements.some(e=>e.text==='Recover closed session and open AutoOC'),false);
   await assert.rejects(p.saveSettings(),/stopped/);
@@ -998,10 +1031,10 @@ for(const mode of ['released','manual-race','replaced-owner','unloaded'])test('s
    const wait=intervals.find(x=>x.ms===1000);assert.ok(wait,'external owner must leave a bounded lightweight startup watcher');
    let now=Date.now();t.mock.method(Date,'now',()=>now);const tick=async()=>{now+=1000;await wait.fn();};
    const view=p.createDashboard({}),elements=[];view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};await view.onOpen();
-   assert.ok(elements.some(e=>e.text==='AutoOC is waiting'));
+   assert.ok(elements.some(e=>e.text==='AutoOC'));assert.ok(elements.some(e=>e.text?.startsWith('Consultation mode')));
    await tick();assert.equal(enables,0);assert.deepEqual(fs.readFileSync(file),Buffer.from(JSON.stringify(foreign)));
    if(mode==='replaced-owner'){const replacement={...foreign,token:require('node:crypto').randomUUID()};fs.writeFileSync(file,JSON.stringify(replacement));await tick();await tick();assert.equal(enables,0);assert.equal(JSON.parse(fs.readFileSync(file)).token,replacement.token);fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);}
-   else {if(mode==='unloaded')await p.onunload();fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);await tick();if(mode==='manual-race')await Promise.all([tick(),elements.find(e=>e.text==='Retry loading AutoOC').onclick()]);else await tick();await tick();if(mode==='released'||mode==='manual-race'){assert.equal(enables,1);assert.equal(disables,1);assert.equal(next.ready,true);}else assert.equal(enables,0);}
+   else {if(mode==='unloaded')await p.onunload();fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);await tick();if(mode==='manual-race')await Promise.all([tick(),elements.find(e=>e.text==='Retry execution connection').onclick()]);else await tick();await tick();if(mode==='released'||mode==='manual-race'){assert.equal(enables,1);assert.equal(disables,1);assert.equal(next.ready,true);}else assert.equal(enables,0);}
    assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),before);
  }finally{await p.onunload();if(next)await next.onunload();if(fs.existsSync(file)){fs.writeFileSync(file,JSON.stringify(original));owner.releasePluginExecution(false);}}
 });
@@ -1014,12 +1047,105 @@ test('failed pending settings write cannot release an uncertain reservation',asy
 });
 
 
-test('complete package opens with a preserved unfinished journal but cannot update it away',async t=>{
+test('complete package opens with a preserved unfinished journal while execution recovery remains guarded',async t=>{
  timers(t);const {create,runtime}=fixture(t),p=create();
  const file=path.join(runtime,'proof.json'),journal=JSON.stringify({schemaVersion:1,runId:'proof',workflowId:'w',definitionHash:'a'.repeat(64),revision:1,phase:'in_flight',nextStepId:'s',steps:[{stepId:'s',status:'in_flight'}]});
  fs.writeFileSync(file,journal);await p.onload();assert.equal(p.ready,true);
  assert.throws(()=>p.assertExecutionIdle(),/uncertain effect/);assert.equal(fs.readFileSync(file,'utf8'),journal);await p.onunload();
  assert.equal(fs.readFileSync(file,'utf8'),journal);
+});
+
+for (const condition of ['live-owner','interrupted-save','invalid-catalog','invalid-journal']) test('panel consultation is independent of engine admission: '+condition,async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),p=create(),file=path.join(directory,'data.json');
+  const catalog={tasks:[{id:'task',name:'Visible task',status:'failed',output:'private output'}],workflows:[{id:'wf',name:'Visible workflow',status:'running',runtimeExecution:{runId:'pending-run',phase:'in_flight'}}]};
+  fs.writeFileSync(file,condition==='invalid-catalog'?'broken JSON':JSON.stringify(catalog));
+  let owner;
+  if(condition==='live-owner'){owner=create();owner.reservePluginExecution();}
+  if(condition==='interrupted-save')fs.writeFileSync(file+'.write-lock','preserve this old write');
+  if(condition==='invalid-journal')fs.writeFileSync(path.join(runtime,'broken.json'),'broken journal');
+  const before=fs.readFileSync(file),oldOwner=owner && fs.readFileSync(path.join(runtime,'execution.lock/owner.json'));
+  let launches=0;p.runDueAll=()=>{launches++;};
+  await p.onload();assert.equal(p.ready,false);assert.equal(p.panelAvailable,true);
+  assert.equal(p.cliRequestHost,undefined);assert.equal(p.schedulerTimer,undefined);
+  const view=p.createDashboard({}),elements=[];
+  view.contentEl={empty(){elements.length=0;},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};
+  assert.equal(view.getDisplayText(),'AutoOC');await view.onOpen();
+  assert.ok(elements.some(e=>e.text==='Check for updates'));
+  if(condition==='interrupted-save')assert.ok(!elements.some(e=>e.text?.includes('previous AutoOC reservation')));
+  if(condition==='invalid-catalog')assert.ok(elements.some(e=>e.textContent?.includes('could not be read safely')));
+  else {
+    assert.ok(elements.some(e=>e.text?.includes('Visible task')));assert.ok(elements.some(e=>e.text?.includes('Visible workflow')));
+    assert.ok(!JSON.stringify(elements).includes('private output'));
+    assert.ok(elements.some(e=>e.text?.includes('pending-run')));
+  }
+  await assert.rejects(p.runTask({id:'task'}),/stopped/);
+  await assert.rejects(p.saveSettings(),/stopped/);
+  assert.equal(launches,0);assert.deepEqual(fs.readFileSync(file),before);
+  if(oldOwner)assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),oldOwner);
+  await view.onClose();await p.onunload();owner?.releasePluginExecution(false);
+});
+
+for(const [historicalPhase,closedOwner] of [['failed',false],['in_flight',false],['in_flight',true],['failed','stopped-instance']]) test('updater preserves '+historicalPhase+' history without administrative resolution, closed owner='+closedOwner,async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),p=create(),file=path.join(runtime,'history.json');
+  const journal=JSON.stringify({schemaVersion:1,runId:'history',workflowId:'w',definitionHash:'a'.repeat(64),revision:3,phase:historicalPhase,nextStepId:historicalPhase==='failed'?null:'s',steps:[{stepId:'s',status:historicalPhase==='failed'?'failed':'in_flight',...(historicalPhase==='failed'?{output:'unknown effects',result:{succeeded:false,cancelled:true,output:'unknown effects'}}:{})}]});
+  fs.writeFileSync(file,journal);const catalog=fs.readFileSync(path.join(directory,'data.json'));
+  let oldToken,previous;
+  if(closedOwner==='stopped-instance'){
+    previous=create();await previous.onload();previous.executionAttempted=true;
+    await previous.onunload();assert.ok(previous.pluginExecutionLease);
+  }
+  if(closedOwner===true){
+    const owner=spawnSync(process.execPath,['-e','const lease=require(process.argv[1]).acquireExecutionLease(process.argv[2]);process.stdout.write(lease.token);',path.join(directory,'autooc-runtime.cjs'),runtime],{encoding:'utf8',windowsHide:true});
+    assert.equal(owner.status,0,owner.stderr);oldToken=owner.stdout;
+  }
+  await p.onload();assert.equal(p.ready,!closedOwner);assert.equal(p.panelAvailable,true);
+  p.executionAttempted=true; // A previously completed local attempt must not poison maintenance.
+  p.latestVersion=p.manifest.version;
+  const files=Object.fromEntries(names.map(n=>[n,fs.readFileSync(path.join(directory,n))]));
+  const fetch=global.fetch,confirm=global.confirm;let next;
+  global.confirm=()=>true;global.fetch=async url=>({ok:true,arrayBuffer:async()=>files[names.find(n=>url.includes('/'+n+'?'))]});
+  p.app.plugins={plugins:{'auto-oc':p},disablePlugin:async()=>p.onunload(),enablePlugin:async()=>{next=create();await next.onload();p.app.plugins.plugins['auto-oc']=next;}};
+  try {
+    await p.updatePlugin();assert.equal(next?.ready,true);
+    assert.equal(fs.readFileSync(file,'utf8'),journal);assert.deepEqual(fs.readFileSync(path.join(directory,'data.json')),catalog);
+    assert.throws(()=>next.assertExecutionIdle(),/uncertain/);
+    assert.ok(!fs.readdirSync(runtime).some(n=>n.startsWith('disposition-')));
+    if(oldToken)assert.equal(JSON.parse(fs.readFileSync(path.join(runtime,'abandoned-lease-'+oldToken,'owner.json'))).token,oldToken);
+    if(previous)assert.equal(previous.pluginExecutionLease,undefined);
+  } finally {global.fetch=fetch;global.confirm=confirm;await p.onunload();if(next)await next.onunload();}
+});
+
+test('maintenance handoff cannot take a stopped predecessor with unfinished local work',async t=>{
+  timers(t);const {create,directory,runtime}=fixture(t),previous=create(),p=create();await previous.onload();
+  previous.legacyAttempts.set('unfinished',{});await previous.onunload();
+  const owner=fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),bundle=fs.readFileSync(path.join(directory,'main.js'));
+  await p.onload();assert.equal(p.panelAvailable,true);assert.equal(p.ready,false);p.latestVersion=p.manifest.version;
+  const fetch=global.fetch,confirm=global.confirm;let downloads=0;
+  global.confirm=()=>true;global.fetch=async()=>{downloads++;throw Error('must not download');};
+  try {
+    await p.updatePlugin();assert.equal(downloads,0);assert.equal(p.ready,false);
+    assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),owner);
+    assert.deepEqual(fs.readFileSync(path.join(directory,'main.js')),bundle);
+  } finally {global.fetch=fetch;global.confirm=confirm;await p.onunload();previous.legacyAttempts.clear();previous.releasePluginExecution(false);}
+});
+
+for(const activity of ['shared','completion','process','codex','delay','legacy','edit','cli','write']) test('package maintenance excludes real host activity: '+activity,async t=>{
+  timers(t);const {create,directory}=fixture(t),p=create();await p.onload();
+  const before=fs.readFileSync(path.join(directory,'main.js'));
+  if(activity==='shared')p.sharedWorkflowExecution={controller:new AbortController()};
+  if(activity==='completion')p.sharedCompletions.add(Promise.resolve());
+  if(activity==='process')p.runningProcesses.set('p',{kill(){}});
+  if(activity==='codex')p.runningCodexClients.set('c',{dispose(){}});
+  if(activity==='delay')p.workflowDelayControllers.set('w',new AbortController());
+  if(activity==='legacy')p.legacyAttempts.set('old',{});
+  if(activity==='edit')p.workflowEditPending=true;
+  if(activity==='cli')Object.defineProperty(p.cliRequestHost,'hasPendingWork',{get:()=>true,configurable:true});
+  if(activity==='write')fs.writeFileSync(path.join(directory,'data.json.write-lock'),'pending');
+  assert.throws(()=>p.assertPackageUpdateIdle(),/active|Unfinished/i);
+  assert.deepEqual(fs.readFileSync(path.join(directory,'main.js')),before);
+  p.sharedWorkflowExecution=undefined;p.sharedCompletions.clear();p.runningProcesses.clear();p.runningCodexClients.clear();p.workflowDelayControllers.clear();p.legacyAttempts.clear();p.workflowEditPending=false;
+  if(activity==='cli')Object.defineProperty(p.cliRequestHost,'hasPendingWork',{get:()=>false});
+  await p.onunload();
 });
 
 for (const change of ['none','journal','attempt','pending-write']) test('observed historical run unload: '+change, async t=>{
@@ -1047,7 +1173,7 @@ test('Obsidian quit awaits a pending settings save before releasing an observed 
 
 test('complete package is reverified after asynchronous catalog stabilization',async t=>{
  timers(t);const {create,directory}=fixture(t),p=create();const watching=startupWatching(t,directory),loading=p.onload();
- const rejected=assert.rejects(loading,/package changed/);
+ const rejected=engineUnavailable(p,loading,/package changed/);
  await Promise.race([watching,rejected]);
  fs.appendFileSync(path.join(directory,'autooc-runtime.cjs'),'\n// changed during startup');
  await rejected;assert.equal(p.ready,false);
@@ -1074,6 +1200,19 @@ for(const timing of ['before-click','during-download']) test('Update preserves a
    assert.equal(next.settings.tasks[0].output,'keep-result');assert.equal(fs.existsSync(file+'.write-lock'),false);
    for(const name of names)assert.deepEqual(fs.readFileSync(path.join(directory,name)),files[name]);
  } finally {global.fetch=priorFetch;global.confirm=priorConfirm;await p.onunload();if(next)await next.onunload();}
+});
+
+for(const marker of ['data.json.write-lock','data.json.write-intent','data.json.1.x.tmp','runtime/run.write-lock'])test('closed session recovery is not offered for an unrelated pending save: '+marker,async t=>{
+  timers(t);const {create,runtime,directory}=fixture(t),p=create();
+  const child=spawnSync(process.execPath,['-e','require(process.argv[1]).acquireExecutionLease(process.argv[2]);',path.join(directory,'autooc-runtime.cjs'),runtime],{encoding:'utf8',windowsHide:true});
+  assert.equal(child.status,0,child.stderr);
+  const owner=fs.readFileSync(path.join(runtime,'execution.lock/owner.json'));
+  fs.writeFileSync(path.join(directory,marker),'preserve pending save');
+  await p.onload();assert.equal(p.panelAvailable,true);assert.equal(p.ready,false);
+  assert.equal(p.closedSessionRecovery(),undefined);
+  assert.deepEqual(fs.readFileSync(path.join(runtime,'execution.lock/owner.json')),owner);
+  assert.equal(fs.readFileSync(path.join(directory,marker),'utf8'),'preserve pending save');
+  await p.onunload();
 });
 
 test('closed session can be recovered explicitly from the UI without replaying an unfinished run',async t=>{
