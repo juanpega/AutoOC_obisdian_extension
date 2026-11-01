@@ -10,7 +10,8 @@ La preferencia numérica es opcional. Si no existe o no es válida, se conserva 
 
 - Pruebas focales: 2/2 correctas; compatibilidad, valor exacto, entradas inválidas, vista previa sin guardar, Apply, fallo de persistencia, Reset y conservación del catálogo sintético.
 - `npm run build` y `npm run pack:release`: correctos; ZIP 1.7.8 generado.
-- `codegraph affected`: inspeccionados los consumidores de Settings y Dashboard; el índice incluye también copias temporales históricas. Suite general en ejecución al escribir esta nota.
+- `codegraph affected`: inspeccionados los consumidores de Settings y Dashboard; el índice incluye también copias temporales históricas. `codegraph status` confirma el índice actualizado.
+- `npm test`: 876 pruebas; 872 correctas, 1 fallo, 0 canceladas y 3 omitidas; duración 15 min 4 s. Se omiten la comprobación opcional del binario oficial OpenCode v2 y dos pruebas exclusivas de POSIX. El único fallo es la prueba CLI detallada abajo, que pasó al repetirse aisladamente. La suite general no se considera completamente aprobada.
 - Instalación oficial mediante `maintain-release --install` en `C:\Dev\AutoOC`, después de desactivar el plugin. Recibo: versión 1.7.8, ninguna decisión administrativa aplicada.
 - Siete artefactos instalados verificados contra el descriptor y el paquete construido. `data.json` idéntico por SHA-256 al respaldo previo del mantenimiento.
 - GUI Obsidian: lista de plugins muestra 1.7.8. Campo inicial de 24 px, muestra de 37 px, Apply confirmado con `Saved: 37 px` y valor 37 persistido; Reset confirmado con `Saved: 30 px` y valor 30 persistido. Después se restaura 24 px usando Enter.
