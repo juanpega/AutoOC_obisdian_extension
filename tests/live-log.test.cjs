@@ -12,7 +12,11 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
   const configFile=path.join(installation,'data.json');
   fs.writeFileSync(configFile,JSON.stringify({logsEnabled:true,tasks:[{id:'t',name:'Stream task',taskKind:'opencode',model:'fixture/model',prompt:'stream',status:'pending'}],
     workflows:[{id:'w',name:'Stream workflow',steps:[{id:'a',stepKind:'task',taskId:'t'}]}]}));
-  const rendered=[],children=[];let folder,job,p,modal,receiver,settled=false,closing=false;
+  const rendered=[],children=[],childClosures=[];let folder,job,p,modal,receiver,settled=false,closing=false;
+  const trackChild=child=>{
+    children.push(child);
+    childClosures.push(new Promise(resolve=>child.once('close',resolve)));
+  };
   class Stub{}
   const obsidian={Plugin:Stub,Notice:Stub,Modal:class{constructor(app){this.app=app;}},ItemView:Stub,PluginSettingTab:Stub,Setting:Stub,
     MarkdownRenderer:{render(_app,text){rendered.push(text);}}};
@@ -26,7 +30,7 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
     // failed. Its fixture must still finish so finally can report that failure.
     if(closing)fs.writeFileSync(path.join(folder,'finish-test'),'');
     const child=spawn(process.execPath,['-e',`const fs=require('fs'),path=require('path');const dir=process.argv[1];fs.writeFileSync(path.join(dir,'stdout.txt'),'Primera salida TOKEN_PRIVADO');fs.writeFileSync(path.join(dir,'stderr.txt'),'Primera traza');const timer=setInterval(()=>{if(fs.existsSync(path.join(dir,'finish-test'))){clearInterval(timer);fs.unlinkSync(path.join(dir,'finish-test'));fs.appendFileSync(path.join(dir,'stdout.txt'),'\\nResultado final');fs.writeFileSync(path.join(dir,'done.txt'),'0');}},20);`,folder],{windowsHide:true,stdio:'ignore'});
-    children.push(child);
+    trackChild(child);
     return {onError(fn){child.once('error',fn);},kill(){child.kill();},cleanup(){}};
   });
   try{
@@ -35,8 +39,8 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
     modal=new bundle.exports.LiveLog(p.app,p.settings.tasks[0],p);modal.renderEl={empty(){},scrollTop:0,scrollHeight:1};modal.statusEl={};
     if(entry.endsWith('CLI')){
       p.startCliRequests();receiver=setInterval(()=>p.cliRequestHost.poll(),10);
-      const child=spawn(process.execPath,[path.join(root,'autooc-cli.cjs'),'run','--vault',vault,entry.startsWith('task')?'--task':'--workflow',entry.startsWith('task')?'t':'w'],{windowsHide:true});children.push(child);
-      job=new Promise((resolve,reject)=>{let stdout='',stderr='';child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);child.on('error',reject);child.on('exit',code=>{try{assert.equal(code,0,stderr);resolve(JSON.parse(stdout));}catch(error){reject(error);}});});
+      const child=spawn(process.execPath,[path.join(root,'autooc-cli.cjs'),'run','--vault',vault,entry.startsWith('task')?'--task':'--workflow',entry.startsWith('task')?'t':'w'],{windowsHide:true});trackChild(child);
+      job=new Promise((resolve,reject)=>{let stdout='',stderr='';child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);child.on('error',reject);child.on('close',code=>{try{assert.equal(code,0,stderr);resolve(JSON.parse(stdout));}catch(error){reject(error);}});});
     }else job=entry.startsWith('task')?p.runTask(p.settings.tasks[0]):p.runWorkflow(p.settings.workflows[0]);
     job=job.finally(()=>{settled=true;});void job.catch(()=>{});
     await until(()=>folder&&fs.existsSync(path.join(folder,'stdout.txt')),'fixture must produce output while task is running');
@@ -59,9 +63,16 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
     closing=true;
     if(folder&&fs.existsSync(folder)&&!settled)fs.writeFileSync(path.join(folder,'finish-test'),'');
     if(job)await job.catch(()=>{});
-    clearInterval(receiver);p?.cliRequestHost?.close();p?.releasePluginExecution(false);
-    for(const child of children)if(child.exitCode===null)child.kill();
-    assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(vault).startsWith('autooc-live-log-'));fs.rmSync(vault,{recursive:true,force:true});
+    clearInterval(receiver);
+    try {
+      // close prevents new requests; drain waits for an in-flight heartbeat or
+      // receipt write before the fixture releases its lease and removes files.
+      p?.cliRequestHost?.close();await p?.cliRequestHost?.drain();p?.releasePluginExecution(false);
+    } finally {
+      for(const child of children)if(child.exitCode===null&&child.signalCode===null)child.kill();
+      await Promise.all(childClosures);
+      assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(vault).startsWith('autooc-live-log-'));fs.rmSync(vault,{recursive:true,force:true});
+    }
   }
 });
 

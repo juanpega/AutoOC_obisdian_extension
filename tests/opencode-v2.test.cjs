@@ -76,7 +76,9 @@ test('real scripts preserve v2 input, cwd and failure without falling back to v1
   const result=await adapter.execute({taskKind:'opencode2'},prompt);
   assert.equal(result.succeeded,false);assert.match(result.output,/fixture-2-result/);assert.equal(fs.existsSync(legacy.record),false);
   const records=fs.readFileSync(modern.record,'utf8').trim().split('\n').map(JSON.parse);
-  assert.equal(records.length,1);assert.equal(records[0].prompt,prompt);assert.equal(records[0].cwd,root);
+  assert.equal(records.length,1);assert.equal(records[0].prompt,prompt);
+  // macOS /var and Windows 8.3 temp paths can name the same physical folder.
+  assert.equal(fs.realpathSync.native(records[0].cwd),fs.realpathSync.native(root));
   assert.deepEqual(records[0].args.slice(0,-2),openCodeRunArgs(2,'fixture/new','review'));
   assert.equal(records[0].args.at(-2),'--');
 }));

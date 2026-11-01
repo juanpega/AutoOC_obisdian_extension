@@ -196,10 +196,10 @@ test("runTask launches non-interactive tasks via detached /bin/sh on POSIX", asy
   assert.equal(shSpawn[2].detached, true);
   assert.equal(shSpawn[2].stdio, "ignore");
 
-  const script = scripts.find((candidate) => candidate.includes('"$bin" run "$@"'));
+  const script = scripts.find((candidate) => candidate.includes('"$bin" "$@"'));
   assert.ok(script, "expected a POSIX launch script");
   assert.match(script, /echo \$\$ > '.*\.pid'/);
-  assert.match(script, /set -- --print-logs --log-level INFO --auto -m 'test-model' --agent 'build' --dangerously-skip-permissions -- "\$prompt"/);
+  assert.match(script, /set -- 'run' '--print-logs' '--log-level' 'INFO' '--auto' '-m' 'test-model' '--agent' 'build' '--dangerously-skip-permissions' -- "\$prompt"/);
   assert.match(script, /printf '%s' "\$exit_code" > '.*\.done\.txt'/);
 });
 

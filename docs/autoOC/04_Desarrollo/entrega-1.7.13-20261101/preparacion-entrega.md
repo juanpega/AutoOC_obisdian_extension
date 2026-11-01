@@ -8,6 +8,8 @@ Descripción del PR y notas de release preparadas en este expediente. No se cons
 
 Actualización de preparación: commit `d274f67` subido y [PR #51](https://github.com/juanpega/AutoOC_obisdian_extension/pull/51) abierto en **borrador**. GitHub confirma que no hay conflicto de merge. La [CI inicial](https://github.com/juanpega/AutoOC_obisdian_extension/actions/runs/41300136412) está en ejecución; no se considera aprobada. La decisión de merge y la publicación permanecen pendientes.
 
+Revisión posterior: la CI de `f023b1b` terminó con fallos en las tres plataformas. Se identificaron tres problemas del arnés (identidad física de rutas, expectativa del script POSIX y drenaje antes de limpiar Live Log). [Informe y correcciones](revision-pr51.md). No se usa la ausencia de conflictos como aprobación para mergear; se exige la nueva matriz completa.
+
 ## Antes del merge
 
 - [x] Contrastar conversación, diff completo y contratos de los módulos cambiados.
