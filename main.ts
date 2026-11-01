@@ -121,6 +121,7 @@ AutoOC supports DAG workflows with three step kinds:
 
 Tasks:
 A task is reusable and can be referenced by workflows.
+Concurrency for tasks and workflows is optional: omit it to inherit the vault setting; "exclusive" runs alone, "independent" requires separate folders and Git repositories, and "parallel" allows shared-vault execution. Parallel runs must use different outputs to avoid overwriting one another. The workflow's policy applies to its steps; shared reusable tasks still cannot run twice at the same time. Concurrency never grants Code or provider permissions. Do not set it unless the user explicitly requests a policy.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
@@ -588,6 +589,8 @@ interface AutoOCSettings {
   cmdTemplate: string;
   taskTimeoutSeconds: number;
   defaultInteractiveTerminal: boolean;
+  defaultConcurrency?: ConcurrencyPolicy;
+  maxConcurrentExecutions?: number;
   logsEnabled: boolean;
   maxLogsPerTask: number;
   logRetentionDays: number;
@@ -2352,7 +2355,7 @@ export default class AutoOCPlugin extends Plugin {
         const result=await applyWorkflowEdit({settings:this.settings,assertIdle,save:validate=>this.saveSettings(false,validate)},request);
         this.refreshOpenViews();return result;
       } finally {this.workflowEditPending=false;}
-    });
+    },()=>this.settings);
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
@@ -3923,7 +3926,6 @@ export default class AutoOCPlugin extends Plugin {
   ) {
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if(this.sharedWorkflowExecution && this.settings.tasks.find(t=>t.id===task.id)?.concurrency!=="independent")throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     assertNoRetiredDependency(this.settings.tasks[idx]);
@@ -5263,7 +5265,6 @@ export default class AutoOCPlugin extends Plugin {
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if(this.sharedWorkflowExecution && this.settings.workflows.find(w=>w.id===workflow.id)?.concurrency!=="independent")throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
@@ -7791,13 +7792,11 @@ class CreateTaskModal extends Modal {
 
     new Setting(contentEl)
       .setName("Concurrency")
-      .setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. " +
-        "Run alone (default): no other task or workflow can run at the same time. " +
-        "Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. " +
-        "For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. " +
-        "When this task is a workflow step, the workflow's concurrency setting applies.")
-      .addDropdown(dd=>dd.addOption("exclusive","Run alone (default)").addOption("independent","Allow alongside other work")
-        .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
+      .setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. " +
+        "Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. " +
+        "The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.")
+      .addDropdown(dd=>dd.addOption("inherit","Use vault default").addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
+        .setValue(this.draft.concurrency || "inherit").onChange(v=>{this.draft.concurrency=v==="inherit" ? undefined : v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
       .setName("Name")
@@ -8603,13 +8602,11 @@ class CreateWorkflowModal extends Modal {
 
     new Setting(contentEl)
       .setName("Concurrency")
-      .setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. " +
-        "Run alone (default): no other task or workflow can run at the same time. " +
-        "Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. " +
-        "For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. " +
-        "This does not run the steps inside this workflow in parallel.")
-      .addDropdown(dd=>dd.addOption("exclusive","Run alone (default)").addOption("independent","Allow alongside other work")
-        .setValue(this.draft.concurrency || "exclusive").onChange(v=>{this.draft.concurrency=v as ConcurrencyPolicy;}));
+      .setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. " +
+        "Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. " +
+        "Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.")
+      .addDropdown(dd=>dd.addOption("inherit","Use vault default").addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
+        .setValue(this.draft.concurrency || "inherit").onChange(v=>{this.draft.concurrency=v==="inherit" ? undefined : v as ConcurrencyPolicy;}));
 
     new Setting(contentEl)
       .setName("Name")
@@ -10805,6 +10802,35 @@ class AutoOCSettingTab extends PluginSettingTab {
       saveDiameter: diameter => this.plugin.saveDashboardBubbleDiameter(diameter),
       applyDiameter: diameter => this.plugin.applyDashboardBubbleDiameter(diameter),
     });
+
+    new Setting(containerEl).setName("Default concurrency")
+      .setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.")
+      .addDropdown(dropdown=>dropdown.addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
+        .setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async value=>{
+          this.plugin.settings.defaultConcurrency=value as ConcurrencyPolicy;
+          try {await this.plugin.saveSettings(false);}
+          catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
+        }));
+    let requestedLimit=String(this.plugin.settings.maxConcurrentExecutions ?? 0);
+    new Setting(containerEl).setName("Maximum simultaneous runs")
+      .setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.")
+      .addText(text=>{
+        text.inputEl.type="number";text.inputEl.min="0";text.inputEl.step="1";
+        text.setValue(requestedLimit).onChange(value=>{requestedLimit=value;});
+      })
+      .addButton(button=>button.setButtonText("Apply").onClick(async()=>{
+        const limit=Number(requestedLimit);
+        if(!/^\d+$/.test(requestedLimit) || !Number.isSafeInteger(limit)) {
+          new Notice("Enter a whole number of zero or more. Zero means Unlimited.");return;
+        }
+        button.setDisabled(true);
+        try {
+          this.plugin.settings.maxConcurrentExecutions=limit;
+          await this.plugin.saveSettings(false);
+          new Notice(`Maximum simultaneous runs: ${limit===0 ? "Unlimited" : limit}.`);
+        } catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
+        finally {button.setDisabled(false);}
+      }));
 
     new Setting(containerEl)
       .setName("Default AI engine")

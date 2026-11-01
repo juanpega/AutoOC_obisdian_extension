@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.16] - Candidato
+
+- Tareas y workflows pueden ejecutarse en paralelo dentro de la misma bóveda por defecto, sin límite impuesto por AutoOC. Las elecciones explícitas anteriores se conservan; ningún trabajo se inicia al actualizar.
+- Ajustes `Default concurrency` y `Maximum simultaneous runs`, con `0` para Unlimited y botón Apply. Los editores permiten heredar la bóveda, compartirla en paralelo, exigir ejecución en solitario o conservar la comprobación de proyectos separados.
+- GUI, horarios y CLI delegada comparten la admisión. Se conservan identidades, resultados, historial y parada separados, y se impide ejecutar dos veces una tarea o compartirla entre workflows activos. Las sesiones interactivas y cambios de rama declarados siguen siendo exclusivos.
+- Un intento paralelo retenido dentro del mismo propietario conserva su evidencia y tareas reservadas, sin impedir otras tareas paralelas distintas. Los intentos antiguos sin contexto verificable siguen usando la recuperación existente. Las preferencias de admisión no alteran hashes históricos ni permisos.
+- Actualizados los prompts de creación, README, skill distribuida y expediente de requisitos/contratos de paralelismo.
+
 ## [1.7.15] - Candidato
 
 - Añade `Review older attempts` en los ajustes de AutoOC y en la paleta de comandos, para revisar intentos pendientes que ya no están vinculados a la tarea o workflow actual.

@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.15",
+      version: "1.7.16",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -1969,6 +1969,24 @@ function effectiveExecutionSettings(settings, includeOpenCode2 = false) {
 // workflow-definition.ts
 var import_timers3 = require("timers");
 var import_perf_hooks3 = require("perf_hooks");
+
+// execution-concurrency-settings.ts
+function validateConcurrency(item) {
+  if (item.concurrency !== void 0 && !["exclusive", "independent", "parallel"].includes(item.concurrency)) {
+    throw new Error("Invalid concurrency policy");
+  }
+}
+function concurrencySettings(settings) {
+  const defaultConcurrency = settings.defaultConcurrency === void 0 ? "parallel" : settings.defaultConcurrency;
+  validateConcurrency({ concurrency: defaultConcurrency });
+  const maxConcurrentExecutions = settings.maxConcurrentExecutions === void 0 ? 0 : settings.maxConcurrentExecutions;
+  if (!Number.isSafeInteger(maxConcurrentExecutions) || maxConcurrentExecutions < 0) {
+    throw new Error("Maximum simultaneous runs must be a whole number of zero or more");
+  }
+  return { defaultConcurrency, maxConcurrentExecutions };
+}
+
+// workflow-definition.ts
 var runtimeFields = /* @__PURE__ */ new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 function withoutRuntime(value) {
   return Object.fromEntries(Object.entries(value).filter(([key]) => !runtimeFields.has(key)));
@@ -2018,11 +2036,12 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
   const digest = (0, import_crypto4.createHash)("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash = digest.digest("hex");
-  return freeze({ ...withAvailability(payload, workflow, tasks), hash });
+  return freeze({ ...withAvailability(payload, workflow, tasks), hash, admissionSettings: concurrencySettings(settings) });
 }
 async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
   const payload = freeze(definitionPayload(workflow, tasks, settings));
   const availablePayload = freeze(withAvailability(payload, workflow, tasks));
+  const admissionSettings = Object.freeze(concurrencySettings(settings));
   const captured = captureJsonStructure(payload, 0), digest = (0, import_crypto4.createHash)("sha256");
   await new Promise((resolve9) => (0, import_timers3.setImmediate)(resolve9));
   let deadline = import_perf_hooks3.performance.now() + 4;
@@ -2033,7 +2052,7 @@ async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
       deadline = import_perf_hooks3.performance.now() + 4;
     }
   }
-  return Object.freeze({ ...availablePayload, hash: digest.digest("hex") });
+  return Object.freeze({ ...availablePayload, hash: digest.digest("hex"), admissionSettings });
 }
 
 // workflow-progress.ts
@@ -4534,7 +4553,7 @@ function buildDraftPrompt(guide, kind, goal, engine, version) {
 IN-APP DRAFT REQUEST
 Produce a definition only. Do not perform the requested task, inspect files, call tools or execute code.
 Return one JSON object, without Markdown or commentary. Use schemaVersion "1.6.0", pluginVersion ${JSON.stringify(version)} and exportedAt ${JSON.stringify((/* @__PURE__ */ new Date()).toISOString())}.
-` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops or conditional transitions.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
+` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops or conditional transitions.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
 AutoOC applies the model selected in the creator to tasks using that engine. Do not include model IDs in the JSON.
 CREATOR EXAMPLE (replace its content with the requested objective):
 ${JSON.stringify(example, null, 2)}
@@ -5266,21 +5285,20 @@ var admissionDiagnostics = /* @__PURE__ */ new Set([
 function executionAdmissionDiagnostic(error) {
   if ((error == null ? void 0 : error.name) === "DisabledExecutionError") return "Selected task, workflow or step is disabled. Inspect list/status and enable it in AutoOC before running.";
   const message = error == null ? void 0 : error.message;
-  return typeof message === "string" && admissionDiagnostics.has(message) ? message : void 0;
-}
-function validateConcurrency(item) {
-  if (item.concurrency !== void 0 && item.concurrency !== "exclusive" && item.concurrency !== "independent") throw new Error("Invalid concurrency policy");
+  return typeof message === "string" && (admissionDiagnostics.has(message) || /^Concurrent execution limit reached \([1-9][0-9]{0,15}\)$/.test(message)) ? message : void 0;
 }
 function resources(definition, vault) {
-  var _a;
+  var _a, _b;
   const { workflow, tasks, settings } = definition;
   for (const item of [workflow, ...tasks]) validateConcurrency(item);
   const standalone = workflow.id.startsWith("@task:");
-  const result = { exclusive: (standalone ? (_a = tasks[0]) == null ? void 0 : _a.concurrency : workflow.concurrency) !== "independent", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
+  const policy = (_b = standalone ? (_a = tasks[0]) == null ? void 0 : _a.concurrency : workflow.concurrency) != null ? _b : concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
+  const result = { exclusive: policy === "exclusive" || !!workflow.handoffBranch, sharedWorkspace: policy === "parallel", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
   for (const item of [...workflow.steps.filter((s) => s.stepKind === "code"), ...tasks]) {
+    if (item.branch || workflow.handoffBranch) result.exclusive = true;
     if (item.interactiveTerminal || item.taskKind === void 0 && item.stepKind !== "code" && settings.defaultInteractiveTerminal) result.exclusive = true;
     if (item.stepKind === "code" || item.taskKind === "code") {
-      if (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal || item.branch || workflow.handoffBranch) result.exclusive = true;
+      if (!result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal)) result.exclusive = true;
       continue;
     }
     const directory = physicalPath(item.workingDirectory || settings.workingDirectory || vault);
@@ -5300,11 +5318,14 @@ function resources(definition, vault) {
       result.repositories.add(physicalPath(path12.resolve(gitRoot, common)));
     }
   }
-  if (workflow.steps.some((s) => {
+  if (!result.sharedWorkspace && workflow.steps.some((s) => {
     var _a2;
     return s.transitionMode === "eval" || ((_a2 = s.transitions) == null ? void 0 : _a2.some((t) => t.mode === "eval"));
   })) result.exclusive = true;
   return result;
+}
+function canShareWorkspace(a, b) {
+  return !a.exclusive && !b.exclusive && a.sharedWorkspace && b.sharedWorkspace;
 }
 var coordinators = /* @__PURE__ */ new WeakMap();
 function executionCoordinator(lease) {
@@ -5338,6 +5359,9 @@ var ExecutionAdmission = class {
   knows(runId) {
     return this.coordinator.knows(runId);
   }
+  permitsPending(checkpoint) {
+    return this.coordinator.permitsPending(this, checkpoint);
+  }
   confirm(checkpoint) {
     this.bind(checkpoint);
     this.confirmedTerminal = ["completed", "failed", "abandoned"].includes(checkpoint.phase) && !checkpointUncertainties(checkpoint).length;
@@ -5358,6 +5382,13 @@ var ExecutionCoordinator = class {
   knows(runId) {
     return [...this.sessions].some((s) => s.runId === runId && s.advancing);
   }
+  permitsPending(admission, checkpoint) {
+    this.assertOwned(admission, this.lease);
+    const known = [...this.sessions].find((s) => s.runId === checkpoint.runId && s.definition.workflow.id === checkpoint.workflowId && s.definition.hash === checkpoint.definitionHash);
+    if (!known) return false;
+    if (known.advancing) return true;
+    return canShareWorkspace(admission.resources, known.resources) && admission.definition.workflow.id !== known.definition.workflow.id && ![...admission.resources.tasks].some((id) => known.resources.tasks.has(id));
+  }
   admit(definition, vault, resumeRunId) {
     this.lease.assertOwned();
     const requested = resources(definition, vault);
@@ -5377,11 +5408,12 @@ var ExecutionCoordinator = class {
     }
     for (const current of this.sessions) {
       if (current.definition.workflow.id === definition.workflow.id || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
-      if (!current.advancing) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
+      if (!current.advancing && !canShareWorkspace(requested, current.resources)) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
       if (requested.exclusive || current.resources.exclusive) throw new Error("Exclusive execution must finish before shared execution");
-      if (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b)))) throw new Error("Execution resource is occupied (workspace or Git repository)");
+      if (!canShareWorkspace(requested, current.resources) && (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b))))) throw new Error("Execution resource is occupied (workspace or Git repository)");
     }
-    if (this.sessions.size >= 2) throw new Error("Concurrent execution limit reached (2)");
+    const limit = concurrencySettings(definition.admissionSettings || {}).maxConcurrentExecutions;
+    if (limit > 0 && this.sessions.size >= limit) throw new Error(`Concurrent execution limit reached (${limit})`);
     const session = new ExecutionAdmission(this, definition, requested, vault);
     this.sessions.add(session);
     return session;
@@ -6178,14 +6210,15 @@ function validCommand(value) {
   const id = (v) => typeof v === "string" && v.length > 0 && v.length <= 256 && !/[\0\r\n]/.test(v);
   return value && ["run", "resume", "reconcile"].includes(value.command) && (id(value.workflowId) && value.taskId === void 0 || id(value.taskId) && value.workflowId === void 0) && (value.stepId === void 0 || id(value.stepId) && id(value.workflowId) && value.taskId === void 0) && (value.command === "run" ? value.runId === void 0 : typeof value.runId === "string" && value.runId.length <= 256 && /^[a-zA-Z0-9-]+$/.test(value.runId));
 }
-function createPluginRequestHost(lease, execute, edit) {
+function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({})) {
   lease.assertOwned();
   const root = fs15.realpathSync(lease.directory), directory = path16.join(root, "cli-" + lease.token);
   fs15.mkdirSync(directory, { mode: 448 });
   regularDirectory(directory);
   const descriptor = path16.join(directory, "host");
   let heartbeatAt = Date.now();
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: 2, codeStepSelection: true });
+  let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling;
@@ -6230,8 +6263,10 @@ function createPluginRequestHost(lease, execute, edit) {
   const pollOnce = async () => {
     if (closed) return;
     check();
-    if (Date.now() - heartbeatAt >= 1e3) {
+    const nextLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+    if (Date.now() - heartbeatAt >= 1e3 || publishedLimit !== nextLimit) {
       heartbeatAt = Date.now();
+      publishedLimit = nextLimit;
       try {
         await replace(descriptor, hostDescriptor(), () => {
           checkDescriptor();
@@ -6266,7 +6301,8 @@ function createPluginRequestHost(lease, execute, edit) {
       }
       if (closed) return;
       const duplicate = [...active.values()].some((e) => e.definition === `${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`);
-      const busy = duplicate ? "AutoOC is already executing this CLI definition" : active.size >= 2 ? "Concurrent execution limit reached (2)" : [...active.values()].some((e) => e.editing) || request.command === "edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : void 0;
+      const limit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+      const busy = duplicate ? "AutoOC is already executing this CLI definition" : limit > 0 && active.size >= limit ? `Concurrent execution limit reached (${limit})` : [...active.values()].some((e) => e.editing) || request.command === "edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : void 0;
       if (busy) {
         await receipt(id, { status: "rejected", error: busy });
         continue;
@@ -7948,7 +7984,7 @@ async function runCodeWorkflowHost(options) {
         const prior = JSON.parse(fs22.readFileSync(lease.directory + "/" + file, "utf8"));
         ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
         const resolved = prior.phase === "abandoned" || prior.disposition || ["completed", "failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
-        if (prior.runId !== options.resumeRunId && !admission.knows(prior.runId) && !resolved) {
+        if (prior.runId !== options.resumeRunId && !resolved && !admission.permitsPending(prior)) {
           throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
         }
       }
@@ -8831,6 +8867,7 @@ AutoOC supports DAG workflows with three step kinds:
 
 Tasks:
 A task is reusable and can be referenced by workflows.
+Concurrency for tasks and workflows is optional: omit it to inherit the vault setting; "exclusive" runs alone, "independent" requires separate folders and Git repositories, and "parallel" allows shared-vault execution. Parallel runs must use different outputs to avoid overwriting one another. The workflow's policy applies to its steps; shared reusable tasks still cannot run twice at the same time. Concurrency never grants Code or provider permissions. Do not set it unless the user explicitly requests a policy.
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
@@ -10691,7 +10728,7 @@ var AutoOCPlugin = class extends import_obsidian8.Plugin {
       } finally {
         this.workflowEditPending = false;
       }
-    });
+    }, () => this.settings);
   }
   async runSharedWorkflow(workflowId, resumeRunId, reconcile = false, newExecution = false, taskId, external, stepId) {
     var _a;
@@ -12314,10 +12351,9 @@ DONE:%s
     return result;
   }
   async executeTask(task, onComplete, overrides = {}, owner, releaseStart) {
-    var _a, _b, _c, _d, _e, _f, _g, _h;
+    var _a, _b, _c, _d, _e, _f, _g;
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if (this.sharedWorkflowExecution && ((_a = this.settings.tasks.find((t) => t.id === task.id)) == null ? void 0 : _a.concurrency) !== "independent") throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.tasks.findIndex((t) => t.id === task.id);
     if (idx === -1) return;
     assertNoRetiredDependency(this.settings.tasks[idx]);
@@ -12333,7 +12369,7 @@ DONE:%s
     assertNoRetiredDependency(effectiveTask);
     const binding = effectiveTask.runtimeExecution;
     if (!owner && (binding == null ? void 0 : binding.requiresReconciliation)) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
-    if (((_b = effectiveTask.legacyExecution) == null ? void 0 : _b.stopState) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
+    if (((_a = effectiveTask.legacyExecution) == null ? void 0 : _a.stopState) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
       throw new Error("Previous task outcome is unconfirmed; recovery is required before starting a new attempt.");
     }
     if (this.pluginExecutionLease && !onComplete && Object.keys(overrides).length === 0) {
@@ -12397,7 +12433,7 @@ DONE:%s
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_c = effectiveTask.branch) == null ? void 0 : _c.trim())) delete effectiveTask.branch;
+    if (!((_b = effectiveTask.branch) == null ? void 0 : _b.trim())) delete effectiveTask.branch;
     if (effectiveTask.branch) {
       const { isValidGitBranchName } = require_import_utils();
       if (!isValidGitBranchName(effectiveTask.branch)) {
@@ -12410,7 +12446,7 @@ DONE:%s
         return;
       }
     }
-    if (!((_d = effectiveTask.prompt) == null ? void 0 : _d.trim())) {
+    if (!((_c = effectiveTask.prompt) == null ? void 0 : _c.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
@@ -12419,7 +12455,7 @@ DONE:%s
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_e = effectiveTask.model) == null ? void 0 : _e.trim())) {
+    if (!((_d = effectiveTask.model) == null ? void 0 : _d.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
@@ -12458,7 +12494,7 @@ DONE:%s
       current.status = "running";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[opening interactive OpenCode CLI...]";
-      (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
+      (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
       this.finishLegacyStart(attempt);
@@ -12494,7 +12530,7 @@ DONE:%s
     this.settings.tasks[idx].status = "running";
     this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
     this.settings.tasks[idx].output = "[starting detached process\u2026]\n";
-    (_g = this.view) == null ? void 0 : _g.resetDashboardTaskShift(task.id);
+    (_f = this.view) == null ? void 0 : _f.resetDashboardTaskShift(task.id);
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.finishLegacyStart(attempt);
@@ -12663,7 +12699,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       new import_obsidian8.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
-    const timeoutSeconds = (_h = this.settings.taskTimeoutSeconds) != null ? _h : DEFAULT_TASK_TIMEOUT_SECONDS;
+    const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
     const timeoutEnabled = timeoutSeconds > 0;
     const timeoutMs = timeoutSeconds * 1e3;
     const startedAt = Date.now();
@@ -13601,13 +13637,11 @@ ${current.output}`;
     return this.withDefinitionStart("workflow", workflow.id, (release) => this.executeWorkflow(workflow, release));
   }
   async executeWorkflow(workflow, releaseStart) {
-    var _a;
     assertWorkflowEnabled(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks);
     assertWorkflowDependencies(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
-    if (this.sharedWorkflowExecution && ((_a = this.settings.workflows.find((w) => w.id === workflow.id)) == null ? void 0 : _a.concurrency) !== "independent") throw new Error("Shared workflow owns the execution reservation");
     const idx = this.settings.workflows.findIndex((w) => w.id === workflow.id);
     if (idx === -1) return;
     const wf = this.settings.workflows[idx];
@@ -16082,8 +16116,8 @@ var CreateTaskModal = class extends import_obsidian8.Modal {
         this.onOpen();
       });
     });
-    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this task can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background tasks in two separate projects may run together. AutoOC still checks compatibility before starting; some task types must run alone. When this task is a workflow step, the workflow's concurrency setting applies.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
-      this.draft.concurrency = v;
+    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+      this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
     new import_obsidian8.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
@@ -16707,8 +16741,8 @@ var CreateWorkflowModal = class extends import_obsidian8.Modal {
       text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
       cls: "auto-oc-workflow-guide-tip"
     });
-    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Choose whether this workflow can run alongside another task or workflow in this AutoOC installation. Run alone (default): no other task or workflow can run at the same time. Allow alongside other work: up to two runs can overlap when both allow it and do not share tasks, project folders, or a Git repository. For example, background workflows in two separate projects may run together. AutoOC still checks compatibility before starting; some step types must run alone. This does not run the steps inside this workflow in parallel.").addDropdown((dd) => dd.addOption("exclusive", "Run alone (default)").addOption("independent", "Allow alongside other work").setValue(this.draft.concurrency || "exclusive").onChange((v) => {
-      this.draft.concurrency = v;
+    new import_obsidian8.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+      this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
     new import_obsidian8.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
       var _a;
@@ -18625,6 +18659,7 @@ var AutoOCSettingTab = class extends import_obsidian8.PluginSettingTab {
     this.plugin = plugin;
   }
   display() {
+    var _a;
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
@@ -18643,6 +18678,39 @@ var AutoOCSettingTab = class extends import_obsidian8.PluginSettingTab {
       saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
       applyDiameter: (diameter) => this.plugin.applyDashboardBubbleDiameter(diameter)
     });
+    new import_obsidian8.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
+      this.plugin.settings.defaultConcurrency = value;
+      try {
+        await this.plugin.saveSettings(false);
+      } catch (error) {
+        new import_obsidian8.Notice(this.plugin.redactSecrets(String(error)));
+      }
+    }));
+    let requestedLimit = String((_a = this.plugin.settings.maxConcurrentExecutions) != null ? _a : 0);
+    new import_obsidian8.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
+      text.inputEl.type = "number";
+      text.inputEl.min = "0";
+      text.inputEl.step = "1";
+      text.setValue(requestedLimit).onChange((value) => {
+        requestedLimit = value;
+      });
+    }).addButton((button) => button.setButtonText("Apply").onClick(async () => {
+      const limit = Number(requestedLimit);
+      if (!/^\d+$/.test(requestedLimit) || !Number.isSafeInteger(limit)) {
+        new import_obsidian8.Notice("Enter a whole number of zero or more. Zero means Unlimited.");
+        return;
+      }
+      button.setDisabled(true);
+      try {
+        this.plugin.settings.maxConcurrentExecutions = limit;
+        await this.plugin.saveSettings(false);
+        new import_obsidian8.Notice(`Maximum simultaneous runs: ${limit === 0 ? "Unlimited" : limit}.`);
+      } catch (error) {
+        new import_obsidian8.Notice(this.plugin.redactSecrets(String(error)));
+      } finally {
+        button.setDisabled(false);
+      }
+    }));
     new import_obsidian8.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;
@@ -18727,8 +18795,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     );
     new import_obsidian8.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
       (text) => {
-        var _a;
-        return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a = this.plugin.settings.taskTimeoutSeconds) != null ? _a : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
+        var _a2;
+        return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a2 = this.plugin.settings.taskTimeoutSeconds) != null ? _a2 : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.taskTimeoutSeconds = n;
@@ -18750,8 +18818,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     );
     new import_obsidian8.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
       (text) => {
-        var _a;
-        return text.setPlaceholder("50").setValue(String((_a = this.plugin.settings.maxLogsPerTask) != null ? _a : 50)).onChange(async (v) => {
+        var _a2;
+        return text.setPlaceholder("50").setValue(String((_a2 = this.plugin.settings.maxLogsPerTask) != null ? _a2 : 50)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.maxLogsPerTask = n;
@@ -18762,8 +18830,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     );
     new import_obsidian8.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
       (text) => {
-        var _a;
-        return text.setPlaceholder("30").setValue(String((_a = this.plugin.settings.logRetentionDays) != null ? _a : 30)).onChange(async (v) => {
+        var _a2;
+        return text.setPlaceholder("30").setValue(String((_a2 = this.plugin.settings.logRetentionDays) != null ? _a2 : 30)).onChange(async (v) => {
           const n = parseInt(v, 10);
           if (!isNaN(n) && n >= 0) {
             this.plugin.settings.logRetentionDays = n;

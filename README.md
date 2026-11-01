@@ -74,13 +74,26 @@ Since 1.7.5, Code tasks and steps display JavaScript with syntax highlighting. T
 - Import and export task and workflow packages as JSON, and use the included library packages as examples.
 - Secrets has been removed: no secret management or value injection. The historical file is preserved, along with masking of known values when available.
 
-## Independent executions
+## Parallel tasks and workflows
 
-The AutoOC editor lets you select `concurrency: "independent"` for a task or workflow. An absent value or `"exclusive"` preserves the historical exclusive behavior. A single owner host supports up to two independent runs; the GUI and delegated CLI share that limit, without a queue or automatic retries.
+Starting with the **1.7.16 development candidate**, tasks and workflows run in parallel by default, including within the same vault and using the same AI engine. There is no AutoOC limit by default. Existing items without an explicit concurrency choice inherit this behavior; saved explicit choices are preserved. Installing the update does not start any task.
 
-Definitions must not share tasks, equal or nested directories, or Git metadata (including worktrees). Code with vault, filesystem, or terminal permissions, interactive modes, and model-based evaluations require exclusivity. Non-interactive engines require separate physical workspaces. This policy coordinates trusted tasks; it neither isolates their effects nor expands permissions.
+In **Settings → AutoOC**, use **Default concurrency → Parallel in this vault** and **Maximum simultaneous runs → 0 → Apply** for unlimited parallel work. Enter a positive whole number to set your own limit. The limit counts tasks and workflows together across Play, schedules and delegated CLI requests; lowering it does not stop existing runs. Your computer and AI provider still impose their own capacity limits. At capacity, a new request is rejected; there is no automatic queue or retry.
 
-Each run keeps its own `runId`, output, and stop control. Cards indicate whether the local owner is verified. An uncertain lease remains blocked pending official continuation or reconciliation; age does not prove abandonment. If a standalone CLI owns the installation, opening Obsidian preserves the waiting view and original owner without starting tasks or transferring the run.
+Each task/workflow editor offers these choices:
+
+| Choice | JSON field | Behavior |
+| --- | --- | --- |
+| Use vault default | Omit `concurrency` | Inherit `defaultConcurrency`; its default is `"parallel"`. |
+| Parallel in this vault | `"parallel"` | Allow other parallel runs in the same folder or Git repository. |
+| Run alone | `"exclusive"` | Reserve the installation until the run finishes. |
+| Separate projects only | `"independent"` | Allow overlap only without shared folders, nested directories or common Git metadata. |
+
+Parallel work coordinates trusted tasks: it does not isolate files or expand Code/provider permissions. Give concurrent tasks different output files to avoid overwriting each other's work. The same task cannot run twice, and workflows that reference the same reusable task cannot overlap. The workflow's policy applies to its steps; steps still follow their transitions in order. Interactive sessions and declared Git branch changes continue to require exclusive execution. Older releases do not understand `"parallel"`.
+
+Each run keeps its own `runId`, output, history and stop control. Stopping one does not stop the others. A retained parallel attempt from the same owner still reserves its own tasks, but permits different parallel tasks; it retains its evidence and counts toward a finite capacity limit. After an owner restart, an unresolved attempt without verified admission context still needs the recovery controls described below. An uncertain lease remains blocked; age does not prove abandonment.
+
+The plugin host accepts multiple delegated CLI requests. Separate standalone CLI processes still cannot take ownership of the same installation simultaneously. If a standalone CLI owns it, opening Obsidian preserves the waiting view and original owner without starting tasks or transferring the run. The local host descriptor advertises `sharedWorkspaceConcurrency: true` and `concurrentExecutions` (`0` means Unlimited). Vault preferences `defaultConcurrency` and `maxConcurrentExecutions` affect admission only and do not invalidate historical definition fingerprints. No CLI commands or parameters have been added.
 
 ## Requirements
 

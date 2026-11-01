@@ -354,6 +354,22 @@ async function hashTextCooperatively(text) {
   return hash.digest("hex");
 }
 
+// execution-concurrency-settings.ts
+function validateConcurrency(item) {
+  if (item.concurrency !== void 0 && !["exclusive", "independent", "parallel"].includes(item.concurrency)) {
+    throw new Error("Invalid concurrency policy");
+  }
+}
+function concurrencySettings(settings) {
+  const defaultConcurrency = settings.defaultConcurrency === void 0 ? "parallel" : settings.defaultConcurrency;
+  validateConcurrency({ concurrency: defaultConcurrency });
+  const maxConcurrentExecutions = settings.maxConcurrentExecutions === void 0 ? 0 : settings.maxConcurrentExecutions;
+  if (!Number.isSafeInteger(maxConcurrentExecutions) || maxConcurrentExecutions < 0) {
+    throw new Error("Maximum simultaneous runs must be a whole number of zero or more");
+  }
+  return { defaultConcurrency, maxConcurrentExecutions };
+}
+
 // workflow-definition.ts
 var runtimeFields = /* @__PURE__ */ new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
 function withoutRuntime(value) {
@@ -404,7 +420,7 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
   const digest = (0, import_crypto2.createHash)("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash = digest.digest("hex");
-  return freeze({ ...withAvailability(payload, workflow, tasks), hash });
+  return freeze({ ...withAvailability(payload, workflow, tasks), hash, admissionSettings: concurrencySettings(settings) });
 }
 
 // catalog-availability.ts
@@ -1335,18 +1351,17 @@ var ExecutionJournal = class _ExecutionJournal {
 };
 
 // execution-coordinator.ts
-function validateConcurrency(item) {
-  if (item.concurrency !== void 0 && item.concurrency !== "exclusive" && item.concurrency !== "independent") throw new Error("Invalid concurrency policy");
-}
 function resources(definition, vault) {
   const { workflow, tasks, settings } = definition;
   for (const item of [workflow, ...tasks]) validateConcurrency(item);
   const standalone = workflow.id.startsWith("@task:");
-  const result = { exclusive: (standalone ? tasks[0]?.concurrency : workflow.concurrency) !== "independent", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
+  const policy = (standalone ? tasks[0]?.concurrency : workflow.concurrency) ?? concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
+  const result = { exclusive: policy === "exclusive" || !!workflow.handoffBranch, sharedWorkspace: policy === "parallel", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
   for (const item of [...workflow.steps.filter((s) => s.stepKind === "code"), ...tasks]) {
+    if (item.branch || workflow.handoffBranch) result.exclusive = true;
     if (item.interactiveTerminal || item.taskKind === void 0 && item.stepKind !== "code" && settings.defaultInteractiveTerminal) result.exclusive = true;
     if (item.stepKind === "code" || item.taskKind === "code") {
-      if (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal || item.branch || workflow.handoffBranch) result.exclusive = true;
+      if (!result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal)) result.exclusive = true;
       continue;
     }
     const directory = physicalPath(item.workingDirectory || settings.workingDirectory || vault);
@@ -1366,8 +1381,11 @@ function resources(definition, vault) {
       result.repositories.add(physicalPath(path5.resolve(gitRoot, common)));
     }
   }
-  if (workflow.steps.some((s) => s.transitionMode === "eval" || s.transitions?.some((t) => t.mode === "eval"))) result.exclusive = true;
+  if (!result.sharedWorkspace && workflow.steps.some((s) => s.transitionMode === "eval" || s.transitions?.some((t) => t.mode === "eval"))) result.exclusive = true;
   return result;
+}
+function canShareWorkspace(a, b) {
+  return !a.exclusive && !b.exclusive && a.sharedWorkspace && b.sharedWorkspace;
 }
 var coordinators = /* @__PURE__ */ new WeakMap();
 function executionCoordinator(lease) {
@@ -1401,6 +1419,9 @@ var ExecutionAdmission = class {
   knows(runId) {
     return this.coordinator.knows(runId);
   }
+  permitsPending(checkpoint) {
+    return this.coordinator.permitsPending(this, checkpoint);
+  }
   confirm(checkpoint) {
     this.bind(checkpoint);
     this.confirmedTerminal = ["completed", "failed", "abandoned"].includes(checkpoint.phase) && !checkpointUncertainties(checkpoint).length;
@@ -1421,6 +1442,13 @@ var ExecutionCoordinator = class {
   knows(runId) {
     return [...this.sessions].some((s) => s.runId === runId && s.advancing);
   }
+  permitsPending(admission, checkpoint) {
+    this.assertOwned(admission, this.lease);
+    const known = [...this.sessions].find((s) => s.runId === checkpoint.runId && s.definition.workflow.id === checkpoint.workflowId && s.definition.hash === checkpoint.definitionHash);
+    if (!known) return false;
+    if (known.advancing) return true;
+    return canShareWorkspace(admission.resources, known.resources) && admission.definition.workflow.id !== known.definition.workflow.id && ![...admission.resources.tasks].some((id) => known.resources.tasks.has(id));
+  }
   admit(definition, vault, resumeRunId) {
     this.lease.assertOwned();
     const requested = resources(definition, vault);
@@ -1440,11 +1468,12 @@ var ExecutionCoordinator = class {
     }
     for (const current of this.sessions) {
       if (current.definition.workflow.id === definition.workflow.id || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
-      if (!current.advancing) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
+      if (!current.advancing && !canShareWorkspace(requested, current.resources)) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
       if (requested.exclusive || current.resources.exclusive) throw new Error("Exclusive execution must finish before shared execution");
-      if (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b)))) throw new Error("Execution resource is occupied (workspace or Git repository)");
+      if (!canShareWorkspace(requested, current.resources) && (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b))))) throw new Error("Execution resource is occupied (workspace or Git repository)");
     }
-    if (this.sessions.size >= 2) throw new Error("Concurrent execution limit reached (2)");
+    const limit = concurrencySettings(definition.admissionSettings || {}).maxConcurrentExecutions;
+    if (limit > 0 && this.sessions.size >= limit) throw new Error(`Concurrent execution limit reached (${limit})`);
     const session = new ExecutionAdmission(this, definition, requested, vault);
     this.sessions.add(session);
     return session;
@@ -2323,7 +2352,7 @@ async function runCodeWorkflowHost(options) {
         const prior = JSON.parse(fs7.readFileSync(lease.directory + "/" + file, "utf8"));
         ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
         const resolved = prior.phase === "abandoned" || prior.disposition || ["completed", "failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
-        if (prior.runId !== options.resumeRunId && !admission.knows(prior.runId) && !resolved) {
+        if (prior.runId !== options.resumeRunId && !resolved && !admission.permitsPending(prior)) {
           throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
         }
       }

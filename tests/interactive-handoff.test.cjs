@@ -1255,7 +1255,9 @@ for (const kind of ['task', 'workflow']) test(`Play blocks delegates and direct 
   await checkpoint(state); p.refreshStartControls();
   assert.equal(p.getDefinitionStartState(kind,id), 'active');
   for (const buttons of views) for (const b of buttons) assert.equal(b.disabled,true);
-  await assert.rejects(run(), /Shared workflow owns/); assert.equal(runs,1);
+  if(kind==='task')await run(); // Active-task notice; no second launch.
+  else await assert.rejects(run(), /already executing/);
+  assert.equal(runs,1);
   finish({...state,phase:'completed'}); await first;
   assert.equal(p.getDefinitionStartState(kind,id),'available');
 });

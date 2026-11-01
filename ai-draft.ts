@@ -38,6 +38,7 @@ export function buildDraftPrompt(guide: string, kind: DraftKind, goal: string, e
       "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops or conditional transitions.\n") +
     `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. ` +
     `Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. ` +
+    `Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. ` +
     `Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.\n` +
     `AutoOC applies the model selected in the creator to tasks using that engine. Do not include model IDs in the JSON.\n` +
     `CREATOR EXAMPLE (replace its content with the requested objective):\n${JSON.stringify(example, null, 2)}\n\n` +

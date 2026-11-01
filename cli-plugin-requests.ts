@@ -7,6 +7,7 @@ import {readExecutionLeaseOwner, type ExecutionLease} from "./execution-lease";
 import type {RunCheckpoint} from "./execution-journal";
 import {validWorkflowEdit, type WorkflowEditCommand, type WorkflowEditResult} from "./workflow-edit";
 import {executionAdmissionDiagnostic} from "./execution-coordinator";
+import {concurrencySettings} from "./execution-concurrency-settings";
 
 export interface PluginCommand {
   command: "run" | "resume" | "reconcile";
@@ -86,13 +87,14 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // The files carry only IDs/progress, never executable payloads or configuration.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({})) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:2,codeStepSelection:true});
+  let publishedLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined;
@@ -127,8 +129,10 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
   const pollOnce=async()=>{
     if(closed)return;
     check();
-    if(Date.now()-heartbeatAt>=1000){
+    const nextLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+    if(Date.now()-heartbeatAt>=1000 || publishedLimit!==nextLimit){
       heartbeatAt=Date.now();
+      publishedLimit=nextLimit;
       try {await replace(descriptor,hostDescriptor(),()=>{checkDescriptor();if(closed)throw new Error("CLI host is closed");});}
       catch(error){if(closed)return;throw error;}
     }
@@ -148,7 +152,8 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
       }
       if(closed)return;
       const duplicate=[...active.values()].some(e=>e.definition===`${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`);
-      const busy=duplicate ? "AutoOC is already executing this CLI definition" : active.size>=2 ? "Concurrent execution limit reached (2)" :
+      const limit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
+      const busy=duplicate ? "AutoOC is already executing this CLI definition" : limit>0 && active.size>=limit ? `Concurrent execution limit reached (${limit})` :
         [...active.values()].some(e=>e.editing) || request.command==="edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : undefined;
       if(busy){await receipt(id,{status:"rejected",error:busy});continue;}
       const execution={id,controller:new AbortController(),editing:request.command==="edit-workflow",definition:`${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`,done:undefined as Promise<void>|undefined};active.set(id,execution);
