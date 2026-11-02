@@ -972,13 +972,14 @@ test('live CLI owner leaves a visible recovery view without scheduling or catalo
   timers(t);const {create,directory,runtime}=fixture(t),owner=create(),p=create();
   owner.reservePluginExecution();const before=fs.readFileSync(path.join(directory,'data.json'));
   const lease=fs.readFileSync(path.join(runtime,'execution.lock/owner.json'));
-  let ribbon=0,commands=0,loads=0,intervals=0;
-  p.addRibbonIcon=()=>ribbon++;p.addCommand=()=>commands++;p.loadSettings=async()=>loads++;p.registerInterval=()=>intervals++;
+  let ribbon=0,loads=0,intervals=0;const commands=[];
+  p.addRibbonIcon=()=>ribbon++;p.addCommand=command=>commands.push(command.id);p.loadSettings=async()=>loads++;p.registerInterval=()=>intervals++;
   await p.onload();assert.equal(p.ready,false);assert.match(p.startupError,/live or cannot/);
-  assert.equal(ribbon,1);assert.equal(commands,1);assert.equal(loads,0);assert.equal(intervals,0);
+  assert.equal(ribbon,1);assert.deepEqual(commands,['open-auto-oc','resolve-blocked-executions']);assert.equal(loads,0);assert.equal(intervals,0);
   const view=p.createDashboard({}),elements=[];
   view.contentEl={empty(){},createEl(tag,options){const e={tag,style:{},...options};elements.push(e);return e;}};
   await view.onOpen();assert.ok(elements.some(e=>e.text==='Retry execution connection'));
+  assert.ok(elements.some(e=>e.text==='Resolve blocked executions'));
   assert.ok(elements.some(e=>e.text?.includes('This Obsidian window still holds a previous AutoOC reservation')));
   assert.equal(elements.some(e=>e.text==='Recover closed session and open AutoOC'),false);
   await assert.rejects(p.saveSettings(),/stopped/);

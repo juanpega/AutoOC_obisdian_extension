@@ -436,14 +436,14 @@ var require_dist2 = __commonJS({
     }
     function pathFor(read2, member, name) {
       var _a;
-      let path31 = [];
+      let path32 = [];
       for (; ; ) {
         let obj = member.firstChild, prop;
         if ((obj === null || obj === void 0 ? void 0 : obj.name) == "VariableName") {
-          path31.push(read2(obj));
-          return { path: path31.reverse(), name };
+          path32.push(read2(obj));
+          return { path: path32.reverse(), name };
         } else if ((obj === null || obj === void 0 ? void 0 : obj.name) == "MemberExpression" && ((_a = prop = obj.lastChild) === null || _a === void 0 ? void 0 : _a.name) == "PropertyName") {
-          path31.push(read2(prop));
+          path32.push(read2(prop));
           member = obj;
         } else {
           return null;
@@ -496,20 +496,20 @@ var require_dist2 = __commonJS({
     function scopeCompletionSource(scope) {
       let cache2 = /* @__PURE__ */ new Map();
       return (context) => {
-        let path31 = completionPath(context);
-        if (!path31)
+        let path32 = completionPath(context);
+        if (!path32)
           return null;
         let target = scope;
-        for (let step of path31.path) {
+        for (let step of path32.path) {
           target = target[step];
           if (!target)
             return null;
         }
         let options = cache2.get(target);
         if (!options)
-          cache2.set(target, options = enumeratePropertyCompletions(target, !path31.path.length));
+          cache2.set(target, options = enumeratePropertyCompletions(target, !path32.path.length));
         return {
-          from: context.pos - path31.name.length,
+          from: context.pos - path32.name.length,
           options,
           validFor: Identifier
         };
@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.17",
+      version: "1.7.18",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -2033,26 +2033,26 @@ function withAvailability(payload, workflow, tasks) {
 }
 function prepareWorkflowDefinition(workflow, tasks, settings) {
   const payload = definitionPayload(workflow, tasks, settings);
-  const digest2 = (0, import_crypto4.createHash)("sha256");
-  for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest2.update(part, "utf8");
-  const hash = digest2.digest("hex");
+  const digest3 = (0, import_crypto4.createHash)("sha256");
+  for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest3.update(part, "utf8");
+  const hash = digest3.digest("hex");
   return freeze({ ...withAvailability(payload, workflow, tasks), hash, admissionSettings: concurrencySettings(settings) });
 }
 async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
   const payload = freeze(definitionPayload(workflow, tasks, settings));
   const availablePayload = freeze(withAvailability(payload, workflow, tasks));
   const admissionSettings = Object.freeze(concurrencySettings(settings));
-  const captured = captureJsonStructure(payload, 0), digest2 = (0, import_crypto4.createHash)("sha256");
+  const captured = captureJsonStructure(payload, 0), digest3 = (0, import_crypto4.createHash)("sha256");
   await new Promise((resolve10) => (0, import_timers3.setImmediate)(resolve10));
   let deadline = import_perf_hooks3.performance.now() + 4;
   for (const part of encodeCapturedJson(captured)) {
-    digest2.update(part, "utf8");
+    digest3.update(part, "utf8");
     if (import_perf_hooks3.performance.now() >= deadline) {
       await new Promise((resolve10) => (0, import_timers3.setImmediate)(resolve10));
       deadline = import_perf_hooks3.performance.now() + 4;
     }
   }
-  return Object.freeze({ ...availablePayload, hash: digest2.digest("hex"), admissionSettings });
+  return Object.freeze({ ...availablePayload, hash: digest3.digest("hex"), admissionSettings });
 }
 
 // workflow-progress.ts
@@ -3314,26 +3314,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
-  const fs33 = require("fs");
+  const fs34 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs33.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs34.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn6 } = require("child_process");
   const child = spawn6("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs33.unlinkSync(launcherFile);
+      fs34.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs33.unlinkSync(psScriptFile);
+      fs34.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3341,12 +3341,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs33.unlinkSync(launcherFile);
+      fs34.unlinkSync(launcherFile);
     } catch (e) {
     }
     if (removeScript) {
       try {
-        fs33.unlinkSync(psScriptFile);
+        fs34.unlinkSync(psScriptFile);
       } catch (e) {
       }
     }
@@ -3368,7 +3368,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs33.existsSync(effectivePidFile) ? String(fs33.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs34.existsSync(effectivePidFile) ? String(fs34.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn6("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -3377,7 +3377,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs33.unlinkSync(effectivePidFile);
+      fs34.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -3399,18 +3399,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
 }
 function launchHiddenSh(shScriptFile, pidFile) {
   var _a;
-  const fs33 = require("fs");
+  const fs34 = require("fs");
   const { spawn: spawn6 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs33.chmodSync(shScriptFile, 448);
+    fs34.chmodSync(shScriptFile, 448);
   } catch (e) {
   }
   const child = spawn6("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs33.unlinkSync(shScriptFile);
+      fs34.unlinkSync(shScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3418,7 +3418,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs33.unlinkSync(shScriptFile);
+        fs34.unlinkSync(shScriptFile);
       } catch (e) {
       }
     }
@@ -3439,7 +3439,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs33.existsSync(effectivePidFile) ? String(fs33.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs34.existsSync(effectivePidFile) ? String(fs34.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -3454,7 +3454,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs33.unlinkSync(effectivePidFile);
+      fs34.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -5268,9 +5268,436 @@ function catalogTransaction(file, operation, transaction) {
   return result;
 }
 
-// execution-coordinator.ts
+// blocked-execution-recovery.ts
+var fs15 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
+var import_crypto8 = require("crypto");
+
+// installed-workflow-location.ts
 var fs10 = __toESM(require("fs"));
 var path12 = __toESM(require("path"));
+function regularDirectory(directory) {
+  const stat = fs10.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Installation must use regular directories");
+}
+function optionalStat(file) {
+  try {
+    return fs10.lstatSync(file);
+  } catch (error) {
+    if (error.code === "ENOENT") return void 0;
+    throw error;
+  }
+}
+function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
+  if (!path12.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
+  const vault = physicalPath(vaultPath);
+  regularDirectory(vault);
+  let relative6 = path12.join(".obsidian", "plugins", "auto-oc");
+  if (installationDirectory !== void 0) {
+    if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
+      throw new Error("Invalid installation location");
+    }
+    if (process.platform === "win32" && path12.isAbsolute(installationDirectory)) {
+      let inspected = path12.parse(installationDirectory).root;
+      for (const part of installationDirectory.slice(inspected.length).split(/[\\/]/)) {
+        if (!part || part.includes(":")) throw new Error("Invalid installation component");
+        inspected = path12.join(inspected, part);
+        regularDirectory(inspected);
+      }
+      relative6 = path12.relative(vault, physicalPath(inspected));
+    } else {
+      relative6 = path12.isAbsolute(installationDirectory) ? path12.relative(path12.resolve(vaultPath), installationDirectory) : installationDirectory;
+    }
+    if (!relative6 || path12.isAbsolute(relative6) || relative6.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
+      throw new Error("Installation must remain inside the vault");
+    }
+  }
+  let directory = vault;
+  for (const part of relative6.split(/[\\/]/)) {
+    if (!part) throw new Error("Invalid installation component");
+    directory = path12.join(directory, part);
+    regularDirectory(directory);
+  }
+  directory = physicalPath(directory);
+  if (!isWithinPhysicalPath(vault, directory)) throw new Error("Installation must remain inside the vault");
+  const configurationFile = path12.join(directory, "data.json");
+  const configStat = optionalStat(configurationFile);
+  if (configStat && (configStat.isSymbolicLink() || !configStat.isFile())) throw new Error("Configuration must be a regular file");
+  const runtimeDirectory = path12.join(directory, "runtime");
+  const runtimeStat = optionalStat(runtimeDirectory);
+  if (runtimeStat && (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory())) throw new Error("Invalid runtime directory");
+  return { vault, installationDirectory: directory, configurationFile, runtimeDirectory };
+}
+function ensureInstalledWorkflowRuntime(location) {
+  const current = resolveInstalledWorkflowLocation(location.vault, location.installationDirectory);
+  if (current.runtimeDirectory !== location.runtimeDirectory) throw new Error("Installation location changed");
+  try {
+    fs10.mkdirSync(current.runtimeDirectory);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+  regularDirectory(current.runtimeDirectory);
+}
+
+// execution-lease.ts
+var fs11 = __toESM(require("fs"));
+var path13 = __toESM(require("path"));
+var import_crypto7 = require("crypto");
+function acquireExecutionLease(runtimeDirectory) {
+  const root = fs11.realpathSync(runtimeDirectory);
+  if (fs11.existsSync(path13.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  const recovery = path13.join(root, "lease-recovery.lock");
+  if (fs11.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
+  const lock = path13.join(root, "execution.lock");
+  const ownerPath = path13.join(lock, "owner.json");
+  const token = (0, import_crypto7.randomUUID)();
+  fs11.mkdirSync(lock);
+  if (fs11.existsSync(recovery)) {
+    fs11.rmdirSync(lock);
+    throw new Error("Execution lease recovery is in progress");
+  }
+  try {
+    const fd = fs11.openSync(ownerPath, "wx", 384);
+    try {
+      fs11.writeFileSync(fd, JSON.stringify({ schemaVersion: 1, token, pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
+      fs11.fsyncSync(fd);
+    } finally {
+      fs11.closeSync(fd);
+    }
+  } catch (error) {
+    throw error;
+  }
+  let released = false;
+  const assertOwned = () => {
+    if (released) throw new Error("Execution lease already released");
+    if (fs11.lstatSync(lock).isSymbolicLink() || fs11.realpathSync(lock) !== lock) throw new Error("Execution lease directory changed");
+    if (fs11.lstatSync(ownerPath).isSymbolicLink()) throw new Error("Execution lease owner changed");
+    const owner = JSON.parse(fs11.readFileSync(ownerPath, "utf8"));
+    if (owner.token !== token || owner.pid !== process.pid || owner.schemaVersion !== 1) throw new Error("Execution lease ownership changed");
+  };
+  return {
+    directory: root,
+    token,
+    assertOwned,
+    release() {
+      assertOwned();
+      fs11.unlinkSync(ownerPath);
+      fs11.rmdirSync(lock);
+      released = true;
+    }
+  };
+}
+function readExecutionLeaseOwner(runtimeDirectory) {
+  const root = fs11.realpathSync(runtimeDirectory), lock = path13.join(root, "execution.lock"), file = path13.join(lock, "owner.json");
+  if (fs11.lstatSync(lock).isSymbolicLink() || fs11.realpathSync(lock) !== lock || fs11.lstatSync(file).isSymbolicLink()) throw new Error("Invalid execution lease paths");
+  let owner;
+  try {
+    owner = JSON.parse(fs11.readFileSync(file, "utf8"));
+  } catch (e) {
+    throw new Error("Incomplete execution lease owner; manual reconciliation required");
+  }
+  if ((owner == null ? void 0 : owner.schemaVersion) !== 1 || !/^[a-f0-9-]{36}$/.test(owner.token || "") || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !Number.isFinite(Date.parse(owner.createdAt))) throw new Error("Invalid execution lease owner");
+  return { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
+}
+function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
+  const root = fs11.realpathSync(runtimeDirectory), guard = path13.join(root, "lease-recovery.lock");
+  fs11.mkdirSync(guard);
+  try {
+    const owner = readExecutionLeaseOwner(root);
+    if (owner.token !== expectedToken) throw new Error("Execution lease recovery identity changed");
+    let absent = false;
+    try {
+      process.kill(owner.pid, 0);
+    } catch (error) {
+      absent = error.code === "ESRCH";
+    }
+    if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
+    assertSafe == null ? void 0 : assertSafe();
+    if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
+    const archived = `abandoned-lease-${owner.token}`;
+    if (fs11.existsSync(path13.join(root, archived))) throw new Error("Recovery archive already exists");
+    fs11.renameSync(path13.join(root, "execution.lock"), path13.join(root, archived));
+    return { recovered: true, archived, executionsResumed: false };
+  } finally {
+    fs11.rmdirSync(guard);
+  }
+}
+async function recoverExecutionLeaseAsync(runtimeDirectory, expectedToken, assertSafe) {
+  const root = fs11.realpathSync(runtimeDirectory), guard = path13.join(root, "lease-recovery.lock");
+  fs11.mkdirSync(guard);
+  try {
+    const owner = readExecutionLeaseOwner(root);
+    if (owner.token !== expectedToken) throw new Error("Execution lease recovery identity changed");
+    const assertAbsent = () => {
+      let absent = false;
+      try {
+        process.kill(owner.pid, 0);
+      } catch (e) {
+        absent = e.code === "ESRCH";
+      }
+      if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
+    };
+    assertAbsent();
+    await assertSafe(owner);
+    assertAbsent();
+    if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
+    const archived = "abandoned-lease-" + owner.token;
+    if (fs11.existsSync(path13.join(root, archived))) throw new Error("Recovery archive already exists");
+    fs11.renameSync(path13.join(root, "execution.lock"), path13.join(root, archived));
+    return { recovered: true, archived, executionsResumed: false };
+  } finally {
+    fs11.rmdirSync(guard);
+  }
+}
+
+// checkpoint-observation.ts
+var path14 = __toESM(require("path"));
+var fs12 = __toESM(require("fs"));
+async function observeCheckpoint(directory, runId) {
+  if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
+  const file = path14.join(directory, runId + ".json"), stat = fs12.lstatSync(file), text = await readSettingsTextAsync(file);
+  if (text === null) throw new Error("Execution checkpoint is absent");
+  let checkpoint;
+  try {
+    checkpoint = await parseCooperatively(text);
+  } catch (e) {
+    throw new Error("Cannot read valid execution checkpoint");
+  }
+  validateExecutionCheckpoint(checkpoint);
+  if (checkpoint.runId !== runId) throw new Error("Execution identity changed");
+  const hash = await hashTextCooperatively(text);
+  const assertCurrent = () => {
+    const current = fs12.lstatSync(file);
+    if (!current.isFile() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error("Execution checkpoint changed during observation");
+  };
+  assertCurrent();
+  return { checkpoint, text, assertCurrent, async assertUnchanged() {
+    if (await settingsFingerprint(file) !== hash) throw new Error("Execution checkpoint changed during observation");
+    assertCurrent();
+  } };
+}
+
+// package-maintenance.ts
+var fs13 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
+function assertPackageMaintenanceSafe(directory) {
+  const runtime = path15.join(directory, "runtime");
+  if (fs13.existsSync(path15.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery");
+  if (fs13.readdirSync(directory).some((name) => name === "data.json.write-lock" || name === "data.json.write-intent" || name.startsWith("data.json.") && name.endsWith(".tmp")) || fs13.readdirSync(runtime).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) {
+    throw new Error("Unfinished write requires reconciliation before package maintenance");
+  }
+}
+
+// execution-abandonment.ts
+var fs14 = __toESM(require("fs"));
+function inspectTerminalExecution(options) {
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const identity = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+  return {
+    ...identity,
+    runId: state.runId,
+    workflowId: state.workflowId,
+    definitionHash: state.definitionHash,
+    revision: state.revision,
+    phase: state.phase,
+    causes: checkpointUncertainties(state),
+    disposition: state.disposition
+  };
+}
+async function disposeTerminalExecution(options) {
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const lease = options.lease || acquireExecutionLease(location.runtimeDirectory);
+  try {
+    lease.assertOwned();
+    if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Disposition lease identity mismatch");
+    const observed = inspectTerminalExecution(options);
+    for (const key of ["vault", "installationDirectory", "runtimeDirectory", "vaultIdentity", "installationIdentity", "runtimeIdentity", "workflowId", "runId", "definitionHash"]) {
+      if (observed[key] !== options[key]) throw new Error("Disposition observed identity changed; inspect again");
+    }
+    if (observed.revision !== options.revision || JSON.stringify(observed.causes) !== JSON.stringify(options.causes)) throw new Error("Execution revision or uncertainty changed; inspect again");
+    const assertQuiescent = () => {
+      lease.assertOwned();
+      const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault, options.installationDirectory));
+      if (Object.entries(current).some(([key, value]) => options[key] !== value)) throw new Error("Disposition installation identity changed");
+      if (fs14.existsSync(location.configurationFile + ".write-lock") || fs14.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs14.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
+      const config = JSON.parse(fs14.readFileSync(location.configurationFile, "utf8"));
+      if (["tasks", "workflows"].some((kind) => !Array.isArray(config[kind]) || config[kind].some((entry) => entry.status === "running" || entry.pendingCodexApproval))) throw new Error("Active execution requires reconciliation");
+      for (const name of fs14.readdirSync(location.runtimeDirectory)) {
+        if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
+        const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
+        if (["ready", "in_flight"].includes(state.phase)) throw new Error("Active or unfinished execution requires reconciliation");
+      }
+    };
+    assertQuiescent();
+    const journal = ExecutionJournal.open(lease, options.runId, options.definitionHash);
+    await journal.disposeTerminal(options.revision, options.reason, options.acknowledgedUnknownEffects, location);
+    assertQuiescent();
+    return readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+  } finally {
+    if (!options.lease) lease.release();
+  }
+}
+async function abandonInstalledExecution(options) {
+  if (!Number.isSafeInteger(options.revision) || options.revision < 0) throw new Error("Exact observed revision is required");
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const lease = options.lease || acquireExecutionLease(location.runtimeDirectory);
+  try {
+    lease.assertOwned();
+    if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
+    const state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
+    if (state.workflowId !== options.workflowId) throw new Error("Execution belongs to another workflow or task");
+    const journal = ExecutionJournal.open(lease, state.runId, state.definitionHash);
+    await journal.abandon(options.revision, options.reason, options.acknowledgedUnknownEffects);
+    return journal.snapshot();
+  } finally {
+    if (!options.lease) lease.release();
+  }
+}
+
+// blocked-execution-recovery.ts
+var digest = (text) => (0, import_crypto8.createHash)("sha256").update(text).digest("hex");
+function ownerAt(location) {
+  return fs15.existsSync(path16.join(location.runtimeDirectory, "execution.lock")) ? readExecutionLeaseOwner(location.runtimeDirectory) : null;
+}
+async function inspectBlockedExecutions(location) {
+  assertPackageMaintenanceSafe(location.installationDirectory);
+  const identity = dispositionLocation(location), owner = ownerAt(location);
+  const text = await readSettingsTextAsync(location.configurationFile);
+  if (text === null) throw new Error("Saved catalog is unavailable");
+  const catalog = await parseCooperatively(text);
+  if (!Array.isArray(catalog == null ? void 0 : catalog.tasks) || !Array.isArray(catalog == null ? void 0 : catalog.workflows)) throw new Error("Saved catalog is invalid");
+  const attempts = [];
+  for (const file of fs15.readdirSync(location.runtimeDirectory).sort()) {
+    if (!/^[a-zA-Z0-9-]+\.json$/.test(file)) continue;
+    const observation = await observeCheckpoint(location.runtimeDirectory, file.slice(0, -5));
+    const state = observation.checkpoint;
+    if (state.phase === "abandoned" || state.disposition || !["ready", "in_flight"].includes(state.phase) && !checkpointUncertainties(state).length) continue;
+    const item = catalog.workflows.find((w) => w.id === state.workflowId) || catalog.tasks.find((t) => "@task:" + t.id === state.workflowId);
+    attempts.push({
+      name: typeof (item == null ? void 0 : item.name) === "string" ? item.name : "Earlier execution",
+      runId: state.runId,
+      workflowId: state.workflowId,
+      revision: state.revision,
+      phase: state.phase,
+      completedSteps: state.steps.filter((s) => s.status === "completed").length,
+      checkpointHash: digest(observation.text)
+    });
+  }
+  const result = { location: identity, catalogHash: digest(text), owner, attempts };
+  assertBlockedInspection(result, true);
+  return result;
+}
+function assertBlockedInspection(observed, checkOwner, attempt) {
+  const location = resolveInstalledWorkflowLocation(observed.location.vault, observed.location.installationDirectory);
+  if (JSON.stringify(dispositionLocation(location)) !== JSON.stringify(observed.location)) throw new Error("Installation changed; refresh the recovery review");
+  assertPackageMaintenanceSafe(location.installationDirectory);
+  if (digest(fs15.readFileSync(location.configurationFile, "utf8")) !== observed.catalogHash) throw new Error("Saved catalog changed; refresh the recovery review");
+  if (checkOwner && JSON.stringify(ownerAt(location)) !== JSON.stringify(observed.owner)) throw new Error("Execution owner changed; refresh the recovery review");
+  for (const selected of attempt ? [attempt] : observed.attempts) {
+    if (!observed.attempts.includes(selected)) throw new Error("Select an observed attempt");
+    const state = readExecutionCheckpoint(location.runtimeDirectory, selected.runId);
+    if (state.workflowId !== selected.workflowId || state.revision !== selected.revision || digest(fs15.readFileSync(path16.join(location.runtimeDirectory, selected.runId + ".json"), "utf8")) !== selected.checkpointHash) {
+      throw new Error("Attempt changed; refresh the recovery review");
+    }
+  }
+  return location;
+}
+async function resetBlockedAttempt(observed, attempt, lease, reason, acknowledgedUnknownEffects, assertHostIdle) {
+  if (acknowledgedUnknownEffects !== true || !reason.trim() || reason.length > 1e3) throw new Error("Confirm the unknown outcome and enter a reason of 1\u20131000 characters");
+  return catalogTransaction(path16.join(observed.location.installationDirectory, "data.json"), async () => {
+    assertHostIdle();
+    lease.assertOwned();
+    const location = assertBlockedInspection(observed, false, attempt);
+    if (fs15.realpathSync(lease.directory) !== location.runtimeDirectory) throw new Error("Recovery lease belongs to another installation");
+    const options = {
+      vault: location.vault,
+      installationDirectory: location.installationDirectory,
+      lease,
+      runId: attempt.runId,
+      workflowId: attempt.workflowId,
+      revision: attempt.revision,
+      reason,
+      acknowledgedUnknownEffects
+    };
+    if (["ready", "in_flight"].includes(attempt.phase)) return abandonInstalledExecution(options);
+    return disposeTerminalExecution({ ...inspectTerminalExecution(options), ...options });
+  });
+}
+
+// blocked-execution-modal.ts
+var import_obsidian7 = require("obsidian");
+var BlockedExecutionModal = class extends import_obsidian7.Modal {
+  constructor(app, inspect, reset, reconnect, describeError, selectedRunId) {
+    super(app);
+    this.inspect = inspect;
+    this.reset = reset;
+    this.reconnect = reconnect;
+    this.describeError = describeError;
+    this.selectedRunId = selectedRunId;
+    this.generation = 0;
+    this.busy = false;
+  }
+  async onOpen() {
+    const generation = ++this.generation, root = this.contentEl;
+    root.empty();
+    root.createEl("h3", { text: "Resolve blocked executions" });
+    root.createEl("p", { text: "Review the saved attempts below. Reset closes only the selected attempt and keeps its history and results. It does not stop external processes or start new work." });
+    const feedback = root.createEl("p", { text: "Reading saved execution information\u2026" });
+    const buttons = [];
+    const action = (parent, text, run2) => {
+      const button = parent.createEl("button", { text });
+      buttons.push(button);
+      button.onclick = async () => {
+        if (this.busy) return;
+        this.busy = true;
+        buttons.forEach((b) => b.disabled = true);
+        try {
+          if (await run2()) {
+            this.close();
+            return;
+          }
+        } catch (error) {
+          feedback.textContent = this.describeError(error);
+        } finally {
+          this.busy = false;
+          buttons.forEach((b) => b.disabled = false);
+        }
+      };
+    };
+    try {
+      const inspection = await this.inspect();
+      if (generation !== this.generation) return;
+      feedback.textContent = inspection.attempts.length ? "Check the original terminal and its effects before resetting an attempt." : "No blocked attempts found. You can refresh this review.";
+      if (this.reconnect) {
+        root.createEl("p", { text: "To keep the saved attempts and reach their continuation controls, reconnect AutoOC. No task runs automatically." });
+        action(root, "Reconnect execution controls", () => this.reconnect(inspection));
+      }
+      for (const attempt of inspection.attempts) {
+        const row = root.createDiv("auto-oc-card");
+        row.createEl("h4", { text: attempt.name });
+        row.createEl("p", { text: `${attempt.completedSteps} completed step(s) \xB7 ${attempt.phase === "ready" ? "Saved work pending" : attempt.phase === "in_flight" ? "Outcome needs review" : "Historical outcome needs review"}` });
+        row.createEl("p", { text: `Attempt: ${attempt.runId}` });
+        if (attempt.runId === this.selectedRunId) row.createEl("p", { text: "Selected attempt" });
+        if (attempt.phase === "ready") row.createEl("p", { text: "To keep this progress, use the workflow continuation controls. Continuation requires the original definition. Reset closes this attempt instead." });
+        action(row, attempt.phase === "ready" || attempt.phase === "in_flight" ? "Reset this attempt\u2026" : "Resolve this review\u2026", () => this.reset(inspection, attempt));
+      }
+    } catch (error) {
+      if (generation === this.generation) feedback.textContent = this.describeError(error);
+    }
+    action(root, "Refresh review", async () => {
+      await this.onOpen();
+      return false;
+    });
+  }
+  onClose() {
+    this.generation++;
+    this.contentEl.empty();
+  }
+};
+
+// execution-coordinator.ts
+var fs16 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
 var import_child_process8 = require("child_process");
 var admissionDiagnostics = /* @__PURE__ */ new Set([
   "A shared workflow is already executing",
@@ -5305,17 +5732,17 @@ function resources(definition, vault) {
     result.directories.push(directory);
     let parent = directory, gitRoot;
     for (; ; ) {
-      if (fs10.existsSync(path12.join(parent, ".git"))) {
+      if (fs16.existsSync(path17.join(parent, ".git"))) {
         gitRoot = parent;
         break;
       }
-      const next = path12.dirname(parent);
+      const next = path17.dirname(parent);
       if (next === parent) break;
       parent = next;
     }
     if (gitRoot) {
       const common = (0, import_child_process8.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
-      result.repositories.add(physicalPath(path12.resolve(gitRoot, common)));
+      result.repositories.add(physicalPath(path17.resolve(gitRoot, common)));
     }
   }
   if (!result.sharedWorkspace && workflow.steps.some((s) => {
@@ -5446,10 +5873,10 @@ function assertWorkflowDependencies(workflow, tasks) {
 }
 
 // legacy-output-redaction.ts
-var fs11 = __toESM(require("fs"));
-var path13 = __toESM(require("path"));
-var import_crypto7 = require("crypto");
-var digest = (value) => (0, import_crypto7.createHash)("sha256").update(value).digest("hex");
+var fs17 = __toESM(require("fs"));
+var path18 = __toESM(require("path"));
+var import_crypto9 = require("crypto");
+var digest2 = (value) => (0, import_crypto9.createHash)("sha256").update(value).digest("hex");
 var LegacyOutputRedaction = class {
   constructor(diagnostic, preferences) {
     this.diagnostic = diagnostic;
@@ -5458,7 +5885,7 @@ var LegacyOutputRedaction = class {
     this.file = "";
   }
   preferenceKey() {
-    return `autooc-legacy-masking-reviewed-v1:${digest(this.file)}`;
+    return `autooc-legacy-masking-reviewed-v1:${digest2(this.file)}`;
   }
   getIssue() {
     var _a;
@@ -5474,7 +5901,7 @@ var LegacyOutputRedaction = class {
     const issue = this.issue;
     if (!issue || issue.id !== id || !issue.contentHash) throw new Error("The legacy credential notice changed. Try reading again before dismissing it.");
     try {
-      if (digest(fs11.readFileSync(this.file)) !== issue.contentHash) throw new Error("changed");
+      if (digest2(fs17.readFileSync(this.file)) !== issue.contentHash) throw new Error("changed");
     } catch (e) {
       throw new Error("The historical file changed or cannot be read. Try reading again before dismissing this reminder.");
     }
@@ -5488,14 +5915,14 @@ var LegacyOutputRedaction = class {
   }
   report(reason, contentHash, notify) {
     var _a;
-    const id = digest(`${this.file}\0${reason}\0${contentHash || "unreadable"}`);
+    const id = digest2(`${this.file}\0${reason}\0${contentHash || "unreadable"}`);
     this.issue = { id, reason, contentHash };
     const first = this.lastNotified !== id;
     this.lastNotified = id;
     if (notify && first && !((_a = this.getIssue()) == null ? void 0 : _a.acknowledged)) this.diagnostic();
   }
   load(file, storage, notify = true) {
-    const identity = path13.resolve(file);
+    const identity = path18.resolve(file);
     if (identity !== this.file) {
       this.values = [];
       this.issue = void 0;
@@ -5504,7 +5931,7 @@ var LegacyOutputRedaction = class {
     }
     let raw;
     try {
-      raw = fs11.readFileSync(this.file);
+      raw = fs17.readFileSync(this.file);
     } catch (error) {
       if (error.code === "ENOENT") {
         this.values = [];
@@ -5515,7 +5942,7 @@ var LegacyOutputRedaction = class {
       this.report("unreadable-store", void 0, notify);
       return;
     }
-    const contentHash = digest(raw);
+    const contentHash = digest2(raw);
     const values = [];
     let failure;
     try {
@@ -5555,14 +5982,14 @@ var LegacyOutputRedaction = class {
 };
 
 // legacy-credential-notice.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 var explanations = {
   "storage-unavailable": "This device cannot currently access the secure storage used to read the old credentials.",
   "decryption-failed": "Some old credentials could not be decrypted with the secure storage available on this device.",
   "invalid-store": "The historical credential file is incomplete or has an unsupported structure.",
   "unreadable-store": "The historical credential file could not be read. Check that this operating-system account can access it, then retry."
 };
-var LegacyCredentialNoticeModal = class extends import_obsidian7.Modal {
+var LegacyCredentialNoticeModal = class extends import_obsidian8.Modal {
   constructor(app, host) {
     super(app);
     this.host = host;
@@ -5590,7 +6017,7 @@ var LegacyCredentialNoticeModal = class extends import_obsidian7.Modal {
       if (!issue.dismissible) root.createEl("p", { text: "The reminder cannot be saved until the file can be read and identified." });
     }
     if (this.message) root.createEl("p", { text: this.message });
-    const controls = new import_obsidian7.Setting(root);
+    const controls = new import_obsidian8.Setting(root);
     controls.settingEl.style.display = "block";
     controls.controlEl.style.flexWrap = "wrap";
     controls.addButton((button) => button.setButtonText("Try reading again").onClick(() => {
@@ -5619,130 +6046,19 @@ var LegacyCredentialNoticeModal = class extends import_obsidian7.Modal {
 };
 
 // settings-write-recovery.ts
-var fs14 = __toESM(require("fs"));
-var path16 = __toESM(require("path"));
-var import_crypto9 = require("crypto");
-
-// execution-lease.ts
-var fs12 = __toESM(require("fs"));
-var path14 = __toESM(require("path"));
-var import_crypto8 = require("crypto");
-function acquireExecutionLease(runtimeDirectory) {
-  const root = fs12.realpathSync(runtimeDirectory);
-  if (fs12.existsSync(path14.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
-  const recovery = path14.join(root, "lease-recovery.lock");
-  if (fs12.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
-  const lock = path14.join(root, "execution.lock");
-  const ownerPath = path14.join(lock, "owner.json");
-  const token = (0, import_crypto8.randomUUID)();
-  fs12.mkdirSync(lock);
-  if (fs12.existsSync(recovery)) {
-    fs12.rmdirSync(lock);
-    throw new Error("Execution lease recovery is in progress");
-  }
-  try {
-    const fd = fs12.openSync(ownerPath, "wx", 384);
-    try {
-      fs12.writeFileSync(fd, JSON.stringify({ schemaVersion: 1, token, pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
-      fs12.fsyncSync(fd);
-    } finally {
-      fs12.closeSync(fd);
-    }
-  } catch (error) {
-    throw error;
-  }
-  let released = false;
-  const assertOwned = () => {
-    if (released) throw new Error("Execution lease already released");
-    if (fs12.lstatSync(lock).isSymbolicLink() || fs12.realpathSync(lock) !== lock) throw new Error("Execution lease directory changed");
-    if (fs12.lstatSync(ownerPath).isSymbolicLink()) throw new Error("Execution lease owner changed");
-    const owner = JSON.parse(fs12.readFileSync(ownerPath, "utf8"));
-    if (owner.token !== token || owner.pid !== process.pid || owner.schemaVersion !== 1) throw new Error("Execution lease ownership changed");
-  };
-  return {
-    directory: root,
-    token,
-    assertOwned,
-    release() {
-      assertOwned();
-      fs12.unlinkSync(ownerPath);
-      fs12.rmdirSync(lock);
-      released = true;
-    }
-  };
-}
-function readExecutionLeaseOwner(runtimeDirectory) {
-  const root = fs12.realpathSync(runtimeDirectory), lock = path14.join(root, "execution.lock"), file = path14.join(lock, "owner.json");
-  if (fs12.lstatSync(lock).isSymbolicLink() || fs12.realpathSync(lock) !== lock || fs12.lstatSync(file).isSymbolicLink()) throw new Error("Invalid execution lease paths");
-  let owner;
-  try {
-    owner = JSON.parse(fs12.readFileSync(file, "utf8"));
-  } catch (e) {
-    throw new Error("Incomplete execution lease owner; manual reconciliation required");
-  }
-  if ((owner == null ? void 0 : owner.schemaVersion) !== 1 || !/^[a-f0-9-]{36}$/.test(owner.token || "") || !Number.isSafeInteger(owner.pid) || owner.pid <= 0 || !Number.isFinite(Date.parse(owner.createdAt))) throw new Error("Invalid execution lease owner");
-  return { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
-}
-function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
-  const root = fs12.realpathSync(runtimeDirectory), guard = path14.join(root, "lease-recovery.lock");
-  fs12.mkdirSync(guard);
-  try {
-    const owner = readExecutionLeaseOwner(root);
-    if (owner.token !== expectedToken) throw new Error("Execution lease recovery identity changed");
-    let absent = false;
-    try {
-      process.kill(owner.pid, 0);
-    } catch (error) {
-      absent = error.code === "ESRCH";
-    }
-    if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
-    assertSafe == null ? void 0 : assertSafe();
-    if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
-    const archived = `abandoned-lease-${owner.token}`;
-    if (fs12.existsSync(path14.join(root, archived))) throw new Error("Recovery archive already exists");
-    fs12.renameSync(path14.join(root, "execution.lock"), path14.join(root, archived));
-    return { recovered: true, archived, executionsResumed: false };
-  } finally {
-    fs12.rmdirSync(guard);
-  }
-}
-async function recoverExecutionLeaseAsync(runtimeDirectory, expectedToken, assertSafe) {
-  const root = fs12.realpathSync(runtimeDirectory), guard = path14.join(root, "lease-recovery.lock");
-  fs12.mkdirSync(guard);
-  try {
-    const owner = readExecutionLeaseOwner(root);
-    if (owner.token !== expectedToken) throw new Error("Execution lease recovery identity changed");
-    const assertAbsent = () => {
-      let absent = false;
-      try {
-        process.kill(owner.pid, 0);
-      } catch (e) {
-        absent = e.code === "ESRCH";
-      }
-      if (!absent) throw new Error("Execution lease owner is live or cannot be verified absent");
-    };
-    assertAbsent();
-    await assertSafe(owner);
-    assertAbsent();
-    if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
-    const archived = "abandoned-lease-" + owner.token;
-    if (fs12.existsSync(path14.join(root, archived))) throw new Error("Recovery archive already exists");
-    fs12.renameSync(path14.join(root, "execution.lock"), path14.join(root, archived));
-    return { recovered: true, archived, executionsResumed: false };
-  } finally {
-    fs12.rmdirSync(guard);
-  }
-}
+var fs19 = __toESM(require("fs"));
+var path20 = __toESM(require("path"));
+var import_crypto10 = require("crypto");
 
 // execution-idle.ts
-var fs13 = __toESM(require("fs"));
-var path15 = __toESM(require("path"));
+var fs18 = __toESM(require("fs"));
+var path19 = __toESM(require("path"));
 var import_promises = require("timers/promises");
 var import_perf_hooks4 = require("perf_hooks");
 function assertIdleJournals(runtime) {
-  if (fs13.existsSync(path15.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  if (fs18.existsSync(path19.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
   const checkpoints = /* @__PURE__ */ new Map();
-  for (const name of fs13.readdirSync(runtime)) {
+  for (const name of fs18.readdirSync(runtime)) {
     if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
     if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
@@ -5799,26 +6115,26 @@ function assertIdleCatalog(settings, checkpoints) {
   }
 }
 function assertInstalledExecutionIdle(directory, memorySettings) {
-  const checkpoints = assertIdleJournals(path15.join(directory, "runtime"));
-  const file = path15.join(directory, "data.json");
-  if (fs13.existsSync(file + ".write-lock") || fs13.existsSync(file + ".write-intent") || fs13.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+  const checkpoints = assertIdleJournals(path19.join(directory, "runtime"));
+  const file = path19.join(directory, "data.json");
+  if (fs18.existsSync(file + ".write-lock") || fs18.existsSync(file + ".write-intent") || fs18.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
     throw new Error("Unfinished configuration write requires reconciliation");
   }
   let stat;
   try {
-    stat = fs13.lstatSync(file);
+    stat = fs18.lstatSync(file);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   if (stat) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe execution configuration");
-    assertIdleCatalog(JSON.parse(fs13.readFileSync(file, "utf8")), checkpoints);
+    assertIdleCatalog(JSON.parse(fs18.readFileSync(file, "utf8")), checkpoints);
   }
   if (memorySettings !== void 0) assertIdleCatalog(memorySettings, checkpoints);
 }
 async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns = false, cooperative = false) {
   var _a;
-  const file = path15.join(directory, "data.json");
+  const file = path19.join(directory, "data.json");
   const checkCatalog = (settings, checkpoints) => {
     var _a2, _b;
     if (!allowPendingRuns) return assertIdleCatalog(settings, checkpoints);
@@ -5829,14 +6145,14 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const lock = file + ".write-lock";
   const identity = (stat) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-  const directoryIdentity2 = identity(fs13.lstatSync(directory));
+  const directoryIdentity2 = identity(fs18.lstatSync(directory));
   let fileIdentity;
   let initial = true, writer, writerFinished = false;
   const temporaryIdentities = /* @__PURE__ */ new Map();
   const regularStat = (target) => {
     let stat;
     try {
-      stat = fs13.lstatSync(target);
+      stat = fs18.lstatSync(target);
     } catch (error) {
       if (error.code === "ENOENT") return;
       throw error;
@@ -5846,20 +6162,20 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const asyncCatalog = cooperative && (((_a = regularStat(file)) == null ? void 0 : _a.size) || 0) > 256 * 1024;
   const checkContext = () => {
-    if (identity(fs13.lstatSync(directory)) !== directoryIdentity2) throw new Error("Installation identity changed during startup");
+    if (identity(fs18.lstatSync(directory)) !== directoryIdentity2) throw new Error("Installation identity changed during startup");
     assertOwner();
   };
   const pendingWriter = () => {
     checkContext();
     const stat = regularStat(lock);
-    const temporaries = fs13.readdirSync(directory).filter((name) => name.startsWith("data.json.") && name.endsWith(".tmp"));
+    const temporaries = fs18.readdirSync(directory).filter((name) => name.startsWith("data.json.") && name.endsWith(".tmp"));
     if (stat) {
       if (stat.size > 16384) throw new Error("Unsafe configuration write lock size");
-      const token = parseSettingsWriteLock(fs13.readFileSync(lock, "utf8")).token;
+      const token = parseSettingsWriteLock(fs18.readFileSync(lock, "utf8")).token;
       if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(token)) throw new Error("Unsafe configuration write lock token");
       const intentStat = regularStat(file + ".write-intent");
       if (intentStat) {
-        if (intentStat.size > 16384 || JSON.parse(fs13.readFileSync(file + ".write-intent", "utf8")).token !== token) throw new Error("Configuration write intent identity changed");
+        if (intentStat.size > 16384 || JSON.parse(fs18.readFileSync(file + ".write-intent", "utf8")).token !== token) throw new Error("Configuration write intent identity changed");
       }
       if (!writer) {
         if (!initial) throw new Error("Configuration write started after startup snapshot");
@@ -5868,7 +6184,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
       } else if (writerFinished || writer.identity !== identity(stat) || writer.token !== token) {
         const catalog = regularStat(file);
         const catalogIdentity = catalog ? identity(catalog) : null;
-        const committed = [...temporaryIdentities].some(([name, id]) => id === catalogIdentity && !regularStat(path15.join(directory, name)));
+        const committed = [...temporaryIdentities].some(([name, id]) => id === catalogIdentity && !regularStat(path19.join(directory, name)));
         if (writer.identity === identity(stat) || writer.token === token || catalogIdentity === writer.catalog || !committed) {
           throw new Error("Configuration write lock ownership changed without an observed atomic commit");
         }
@@ -5881,11 +6197,11 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
       if (!after || identity(after) !== writer.identity) throw new Error("Configuration write lock ownership changed");
       for (const name of temporaries) {
         if (intentStat && name === "data.json.write-intent." + token + ".tmp") {
-          regularStat(path15.join(directory, name));
+          regularStat(path19.join(directory, name));
           continue;
         }
         if (!new RegExp(`^data\\.json\\.${process.pid}\\.[0-9]+\\.[0-9a-f]+\\.tmp$`).test(name)) throw new Error("Unsafe configuration temporary writer");
-        const temporary = regularStat(path15.join(directory, name));
+        const temporary = regularStat(path19.join(directory, name));
         if (!temporary) continue;
         const before = temporaryIdentities.get(name);
         if (before && before !== identity(temporary)) throw new Error("Configuration temporary identity changed");
@@ -5902,7 +6218,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const read2 = () => {
     checkContext();
-    if (regularStat(lock) || fs13.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+    if (regularStat(lock) || fs18.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
       throw new Error("Unfinished configuration write requires reconciliation");
     }
     const stat = regularStat(file);
@@ -5910,19 +6226,19 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     if (fileIdentity === void 0) fileIdentity = currentIdentity;
     if (fileIdentity !== currentIdentity) throw new Error("Configuration identity changed during startup");
     if (!stat) return null;
-    const fd = fs13.openSync(file, "r");
+    const fd = fs18.openSync(file, "r");
     try {
-      if (identity(fs13.fstatSync(fd)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
-      const value = fs13.readFileSync(fd, "utf8");
-      if (identity(fs13.lstatSync(file)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+      if (identity(fs18.fstatSync(fd)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+      const value = fs18.readFileSync(fd, "utf8");
+      if (identity(fs18.lstatSync(file)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
       return value;
     } finally {
-      fs13.closeSync(fd);
+      fs18.closeSync(fd);
     }
   };
   const retryRead = new Error("Observed historical writer advanced during asynchronous read");
   const checkReadMarkers = () => {
-    if (regularStat(lock) || fs13.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+    if (regularStat(lock) || fs18.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
       if (writer && pendingWriter()) throw retryRead;
       throw new Error("Unfinished configuration write requires reconciliation");
     }
@@ -5956,7 +6272,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     if (await readAsyncFingerprint() !== expectedHash) throw new Error("Configuration changed after startup validation; retry safely");
     if (!allowPendingRuns) {
       const current = await readAsync();
-      checkCatalog(current === null ? {} : await parseCooperatively(current), assertIdleJournals(path15.join(directory, "runtime")));
+      checkCatalog(current === null ? {} : await parseCooperatively(current), assertIdleJournals(path19.join(directory, "runtime")));
       if (current !== null && await hashTextCooperatively(current) !== expectedHash) throw new Error("Configuration changed after startup validation; retry safely");
       checkContext();
     }
@@ -5968,7 +6284,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   let previous, stableSince = import_perf_hooks4.performance.now();
   let validated;
   let wake, changed = false;
-  const watcher = fs13.watch(directory, () => {
+  const watcher = fs18.watch(directory, () => {
     changed = true;
     wake == null ? void 0 : wake();
   });
@@ -6002,12 +6318,12 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     while (true) {
       if (watchError) throw watchError;
       checkContext();
-      const checkpoints = allowPendingRuns ? /* @__PURE__ */ new Map() : assertIdleJournals(path15.join(directory, "runtime"));
+      const checkpoints = allowPendingRuns ? /* @__PURE__ */ new Map() : assertIdleJournals(path19.join(directory, "runtime"));
       if (pendingWriter()) {
         const current = regularStat(file);
         if (current) {
-          const settings2 = asyncCatalog ? await parseCooperatively(await readSettingsTextAsync(file)) : JSON.parse(fs13.readFileSync(file, "utf8"));
-          assertIdleCatalog(settings2, assertIdleJournals(path15.join(directory, "runtime")));
+          const settings2 = asyncCatalog ? await parseCooperatively(await readSettingsTextAsync(file)) : JSON.parse(fs18.readFileSync(file, "utf8"));
+          assertIdleCatalog(settings2, assertIdleJournals(path19.join(directory, "runtime")));
         }
         if (import_perf_hooks4.performance.now() >= writerDeadline) throw new Error("Unfinished configuration write requires reconciliation; startup wait expired");
         stableSince = import_perf_hooks4.performance.now();
@@ -6071,21 +6387,21 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
 
 // settings-write-recovery.ts
 function statFile(file) {
-  const s = fs14.lstatSync(file);
+  const s = fs19.lstatSync(file);
   if (!s.isFile() || s.isSymbolicLink() || s.nlink !== 1) throw new Error("Unsafe interrupted settings artifact");
   return s;
 }
 function small(file) {
   const s = statFile(file);
   if (s.size > 16384) throw new Error("Oversized settings recovery marker");
-  return fs14.readFileSync(file, "utf8");
+  return fs19.readFileSync(file, "utf8");
 }
 function sameFile(a, b) {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
 var exists = (p) => {
   try {
-    fs14.lstatSync(p);
+    fs19.lstatSync(p);
     return true;
   } catch (e) {
     if (e.code === "ENOENT") return false;
@@ -6094,22 +6410,22 @@ var exists = (p) => {
 };
 async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
 }) {
-  const file = path16.join(directory, "data.json"), intentFile = file + ".write-intent", runtime = path16.join(directory, "runtime");
+  const file = path20.join(directory, "data.json"), intentFile = file + ".write-intent", runtime = path20.join(directory, "runtime");
   if (!exists(intentFile)) return;
   const intentText = small(intentFile), intent = JSON.parse(intentText);
   if (intent.schemaVersion !== 1 || !/^[a-f0-9-]{36}$/.test(intent.token || "") || !intent.owner || !Number.isSafeInteger(intent.owner.pid) || intent.owner.pid <= 0 || !/^[a-f0-9]{64}$/.test(intent.originalHash || "") || intent.preparedHash !== void 0 && !/^[a-f0-9]{64}$/.test(intent.preparedHash) || intent.temporary !== void 0 && !new RegExp(`^data\\.json\\.${intent.owner.pid}\\.[0-9]+\\.[0-9a-f]+\\.tmp$`).test(intent.temporary) || intent.preparedHash && !intent.temporary) throw new Error("Invalid interrupted settings proof");
   const owner = readExecutionLeaseOwner(runtime);
   if (JSON.stringify(owner) !== JSON.stringify(intent.owner)) throw new Error("Interrupted settings owner identity changed");
-  const archive = path16.join(runtime, "settings-write-recovery-" + intent.token);
+  const archive = path20.join(runtime, "settings-write-recovery-" + intent.token);
   let primaryHash;
   await recoverExecutionLeaseAsync(runtime, owner.token, async (currentOwner) => {
     const assertContext = () => {
       assertOpen();
-      const anchor = JSON.parse(small(path16.join(runtime, "execution.lock", "owner.json"))).settingsWriteIntent;
-      if ((anchor == null ? void 0 : anchor.token) !== intent.token || (anchor == null ? void 0 : anchor.sha256) !== (0, import_crypto9.createHash)("sha256").update(intentText, "utf8").digest("hex")) throw new Error("Interrupted settings proof is not bound to its execution owner");
+      const anchor = JSON.parse(small(path20.join(runtime, "execution.lock", "owner.json"))).settingsWriteIntent;
+      if ((anchor == null ? void 0 : anchor.token) !== intent.token || (anchor == null ? void 0 : anchor.sha256) !== (0, import_crypto10.createHash)("sha256").update(intentText, "utf8").digest("hex")) throw new Error("Interrupted settings proof is not bound to its execution owner");
       if (settingsDirectoryIdentity(directory) !== intent.directoryIdentity || settingsDirectoryIdentity(runtime) !== intent.runtimeIdentity || small(intentFile) !== intentText || JSON.stringify(readExecutionLeaseOwner(runtime)) !== JSON.stringify(currentOwner)) throw new Error("Interrupted settings installation or proof changed");
       if (exists(file + ".write-lock") && settingsWriteLockToken(file + ".write-lock") !== intent.token) throw new Error("Interrupted settings lock token changed");
-      if (fs14.readdirSync(runtime).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Runtime maintenance is unresolved");
+      if (fs19.readdirSync(runtime).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Runtime maintenance is unresolved");
     };
     assertContext();
     const primaryStat = statFile(file), text = await readSettingsTextAsync(file);
@@ -6122,31 +6438,31 @@ async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
     if (await settingsFingerprint(file) !== primaryHash || !sameFile(primaryStat, statFile(file))) throw new Error("Saved catalog changed during recovery");
     const intentUpdate = "data.json.write-intent." + intent.token + ".tmp";
     const allowed = /* @__PURE__ */ new Set([intent.temporary, intentUpdate]);
-    const temporaries = () => fs14.readdirSync(directory).filter((n) => n.startsWith("data.json.") && n.endsWith(".tmp")).sort();
+    const temporaries = () => fs19.readdirSync(directory).filter((n) => n.startsWith("data.json.") && n.endsWith(".tmp")).sort();
     const names = temporaries();
     if (names.some((n) => !allowed.has(n))) throw new Error("Unidentified settings temporary requires explicit recovery");
     const artifacts = [...names, ...exists(file + ".write-lock") ? ["data.json.write-lock"] : [], "data.json.write-intent"];
     const records = [];
     for (const name of artifacts) {
-      const target = path16.join(directory, name), stat = statFile(target), hash = await settingsFingerprint(target);
+      const target = path20.join(directory, name), stat = statFile(target), hash = await settingsFingerprint(target);
       if (!sameFile(stat, statFile(target))) throw new Error("Interrupted settings artifact changed");
       records.push({ name, stat, hash });
     }
     assertContext();
     if (JSON.stringify(temporaries()) !== JSON.stringify(names) || exists(archive)) throw new Error("Settings recovery state changed or archive exists");
     if (await settingsFingerprint(file) !== primaryHash) throw new Error("Saved catalog changed before archival");
-    fs14.mkdirSync(archive);
+    fs19.mkdirSync(archive);
     const moved = [];
     try {
       for (const record of records) {
         assertOpen();
-        const target = path16.join(directory, record.name);
+        const target = path20.join(directory, record.name);
         if (!sameFile(record.stat, statFile(target)) || await settingsFingerprint(target) !== record.hash) throw new Error("Interrupted settings artifact changed before archival");
         for (let attempt = 0; ; attempt++) {
           assertOpen();
           if (!sameFile(record.stat, statFile(target))) throw new Error("Interrupted settings artifact identity changed");
           try {
-            await fs14.promises.rename(target, path16.join(archive, record.name));
+            await fs19.promises.rename(target, path20.join(archive, record.name));
             break;
           } catch (error) {
             if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code || "") || attempt >= 4) throw error;
@@ -6156,10 +6472,10 @@ async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
         moved.push(record.name);
       }
       if (await settingsFingerprint(file) !== primaryHash || !sameFile(primaryStat, statFile(file))) throw new Error("Saved catalog changed after archival");
-      for (const record of records) if (await settingsFingerprint(path16.join(archive, record.name)) !== record.hash) throw new Error("Settings recovery archive verification failed");
+      for (const record of records) if (await settingsFingerprint(path20.join(archive, record.name)) !== record.hash) throw new Error("Settings recovery archive verification failed");
       assertOpen();
       const receipt = { schemaVersion: 1, at: (/* @__PURE__ */ new Date()).toISOString(), token: intent.token, owner: currentOwner, primaryHash, moved, artifacts: records.map((r) => ({ name: r.name, hash: r.hash })), temporaryPromoted: false, executionsResumed: false };
-      const handle = await fs14.promises.open(path16.join(archive, "receipt.json"), "wx", 384);
+      const handle = await fs19.promises.open(path20.join(archive, "receipt.json"), "wx", 384);
       try {
         await handle.writeFile(JSON.stringify(receipt, null, 2));
         await handle.sync();
@@ -6167,7 +6483,7 @@ async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
         await handle.close();
       }
     } catch (error) {
-      fs14.writeFileSync(path16.join(archive, "failure.json"), JSON.stringify({ moved, error: String(error) }), { flag: "wx", mode: 384 });
+      fs19.writeFileSync(path20.join(archive, "failure.json"), JSON.stringify({ moved, error: String(error) }), { flag: "wx", mode: 384 });
       throw error;
     }
   });
@@ -6201,13 +6517,13 @@ function presentationFields(value) {
 }
 
 // cli-plugin-requests.ts
-var fs15 = __toESM(require("fs"));
-var path17 = __toESM(require("path"));
-var import_crypto11 = require("crypto");
+var fs20 = __toESM(require("fs"));
+var path21 = __toESM(require("path"));
+var import_crypto12 = require("crypto");
 var import_perf_hooks5 = require("perf_hooks");
 
 // workflow-edit.ts
-var import_crypto10 = require("crypto");
+var import_crypto11 = require("crypto");
 var object2 = (value) => value && typeof value === "object" && !Array.isArray(value);
 var only = (value, keys) => object2(value) && Object.keys(value).every((key) => keys.includes(key));
 function validWorkflowEdit(value) {
@@ -6236,7 +6552,7 @@ function workflowEditDefinition(workflow) {
   };
 }
 function workflowEditHash(workflow) {
-  return (0, import_crypto10.createHash)("sha256").update(JSON.stringify(workflowEditDefinition(workflow))).digest("hex");
+  return (0, import_crypto11.createHash)("sha256").update(JSON.stringify(workflowEditDefinition(workflow))).digest("hex");
 }
 async function applyWorkflowEdit(host, command) {
   if (!validWorkflowEdit(command)) throw new Error("Invalid workflow edit; only name, description and existing step text are supported");
@@ -6282,53 +6598,53 @@ function executionSummary(state, presentation = state) {
   return { runId, workflowId, phase, revision, nextStepId, ...presentationFields(presentation) };
 }
 var uuid2 = /^[a-f0-9-]{36}$/;
-function regularDirectory(directory) {
-  const stat = fs15.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs15.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
+function regularDirectory2(directory) {
+  const stat = fs20.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs20.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
 }
 function read(file) {
-  const stat = fs15.lstatSync(file);
+  const stat = fs20.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) throw new Error("Unsafe CLI request file");
-  return JSON.parse(fs15.readFileSync(file, "utf8"));
+  return JSON.parse(fs20.readFileSync(file, "utf8"));
 }
 function write(file, value) {
-  const fd = fs15.openSync(file, "wx", 384);
+  const fd = fs20.openSync(file, "wx", 384);
   try {
-    fs15.writeFileSync(fd, JSON.stringify(value));
-    fs15.fsyncSync(fd);
+    fs20.writeFileSync(fd, JSON.stringify(value));
+    fs20.fsyncSync(fd);
   } finally {
-    fs15.closeSync(fd);
+    fs20.closeSync(fd);
   }
 }
 async function replace(file, value, check, asyncFlush = true) {
-  const temp = file + "." + (0, import_crypto11.randomUUID)() + ".tmp";
+  const temp = file + "." + (0, import_crypto12.randomUUID)() + ".tmp";
   check();
   const deadline = import_perf_hooks5.performance.now() + 2e3;
   let lastError;
   const bytes = JSON.stringify(value);
   let owned;
   const sameTemporary = () => {
-    if (!owned || !fs15.existsSync(temp)) return false;
-    const current = fs15.lstatSync(temp);
+    if (!owned || !fs20.existsSync(temp)) return false;
+    const current = fs20.lstatSync(temp);
     return current.isFile() && !current.isSymbolicLink() && current.nlink === 1 && current.dev === owned.dev && current.ino === owned.ino;
   };
   try {
-    const fd = fs15.openSync(temp, "wx", 384);
+    const fd = fs20.openSync(temp, "wx", 384);
     try {
-      owned = fs15.fstatSync(fd);
-      fs15.writeFileSync(fd, bytes);
-      if (asyncFlush) await new Promise((resolve10, reject) => fs15.fsync(fd, (error) => error ? reject(error) : resolve10()));
-      else fs15.fsyncSync(fd);
+      owned = fs20.fstatSync(fd);
+      fs20.writeFileSync(fd, bytes);
+      if (asyncFlush) await new Promise((resolve10, reject) => fs20.fsync(fd, (error) => error ? reject(error) : resolve10()));
+      else fs20.fsyncSync(fd);
     } finally {
-      fs15.closeSync(fd);
+      fs20.closeSync(fd);
     }
     for (let attempt = 0; ; attempt++) {
       if (attempt > 0 && import_perf_hooks5.performance.now() >= deadline) throw lastError;
-      if (!sameTemporary() || fs15.readFileSync(temp, "utf8") !== bytes) throw new Error("CLI publication temporary identity changed");
+      if (!sameTemporary() || fs20.readFileSync(temp, "utf8") !== bytes) throw new Error("CLI publication temporary identity changed");
       check();
-      if (fs15.existsSync(file)) read(file);
+      if (fs20.existsSync(file)) read(file);
       try {
-        fs15.renameSync(temp, file);
+        fs20.renameSync(temp, file);
         return;
       } catch (error) {
         lastError = error;
@@ -6337,7 +6653,7 @@ async function replace(file, value, check, asyncFlush = true) {
       }
     }
   } finally {
-    if (sameTemporary() && fs15.statSync(temp).size === Buffer.byteLength(bytes) && fs15.readFileSync(temp, "utf8") === bytes) fs15.unlinkSync(temp);
+    if (sameTemporary() && fs20.statSync(temp).size === Buffer.byteLength(bytes) && fs20.readFileSync(temp, "utf8") === bytes) fs20.unlinkSync(temp);
   }
 }
 function validCommand(value) {
@@ -6347,10 +6663,10 @@ function validCommand(value) {
 }
 function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({})) {
   lease.assertOwned();
-  const root = fs15.realpathSync(lease.directory), directory = path17.join(root, "cli-" + lease.token);
-  fs15.mkdirSync(directory, { mode: 448 });
-  regularDirectory(directory);
-  const descriptor = path17.join(directory, "host");
+  const root = fs20.realpathSync(lease.directory), directory = path21.join(root, "cli-" + lease.token);
+  fs20.mkdirSync(directory, { mode: 448 });
+  regularDirectory2(directory);
+  const descriptor = path21.join(directory, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
   const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true });
@@ -6360,7 +6676,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
   const active = /* @__PURE__ */ new Map();
   const seen = /* @__PURE__ */ new Set();
   const check = () => {
-    regularDirectory(directory);
+    regularDirectory2(directory);
     lease.assertOwned();
   };
   const checkDescriptor = () => {
@@ -6369,10 +6685,10 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
     if (previous.protocol !== 1 || previous.owner !== lease.token || previous.pid !== process.pid) throw new Error("CLI host identity changed");
   };
   const receipt = (id, value) => {
-    const file = path17.join(directory, id + ".receipt");
+    const file = path21.join(directory, id + ".receipt");
     return replace(file, { protocol: 1, owner: lease.token, id, ...value }, () => {
       check();
-      if (fs15.existsSync(file)) {
+      if (fs20.existsSync(file)) {
         const previous = read(file);
         if (previous.protocol !== 1 || previous.owner !== lease.token || previous.id !== id) throw new Error("CLI receipt identity changed");
       }
@@ -6383,9 +6699,9 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
     closed = true;
     for (const execution of active.values()) execution.controller.abort();
     check();
-    if (fs15.existsSync(descriptor)) {
+    if (fs20.existsSync(descriptor)) {
       checkDescriptor();
-      fs15.unlinkSync(descriptor);
+      fs20.unlinkSync(descriptor);
     }
   };
   const fail = () => {
@@ -6413,24 +6729,24 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
       }
     }
     if (closed) return;
-    for (const execution of active.values()) if (fs15.existsSync(path17.join(directory, execution.id + ".cancel"))) {
-      read(path17.join(directory, execution.id + ".cancel"));
+    for (const execution of active.values()) if (fs20.existsSync(path21.join(directory, execution.id + ".cancel"))) {
+      read(path21.join(directory, execution.id + ".cancel"));
       execution.controller.abort();
     }
-    for (const name of fs15.readdirSync(directory)) {
+    for (const name of fs20.readdirSync(directory)) {
       if (!name.endsWith(".request")) continue;
       const id = name.slice(0, -8);
       if (!uuid2.test(id)) continue;
-      if (seen.has(id) || fs15.existsSync(path17.join(directory, id + ".receipt"))) continue;
+      if (seen.has(id) || fs20.existsSync(path21.join(directory, id + ".receipt"))) continue;
       seen.add(id);
       let request;
       try {
-        request = read(path17.join(directory, name));
+        request = read(path21.join(directory, name));
       } catch (e) {
         await receipt(id, { status: "rejected", error: "Invalid CLI request" });
         continue;
       }
-      if (!request || request.protocol !== 1 || request.owner !== lease.token || request.id !== id || !validCommand(request) || !Number.isFinite(request.expiresAt) || request.expiresAt < Date.now() || request.expiresAt > Date.now() + 6e4 || fs15.existsSync(path17.join(directory, id + ".cancel"))) {
+      if (!request || request.protocol !== 1 || request.owner !== lease.token || request.id !== id || !validCommand(request) || !Number.isFinite(request.expiresAt) || request.expiresAt < Date.now() || request.expiresAt > Date.now() + 6e4 || fs20.existsSync(path21.join(directory, id + ".cancel"))) {
         await receipt(id, { status: "rejected", error: "Expired, cancelled or invalid CLI request" });
         continue;
       }
@@ -6588,8 +6904,8 @@ function buildOpenCodeScript(options) {
 }
 
 // cli-workflow-adapters.ts
-var fs16 = __toESM(require("fs"));
-var path18 = __toESM(require("path"));
+var fs21 = __toESM(require("fs"));
+var path22 = __toESM(require("path"));
 
 // command-output.ts
 function normalizeCommandOutput(text) {
@@ -6800,7 +7116,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const agent = task.agent || (major === 2 ? definition.settings.defaultOpencode2Agent : definition.settings.defaultAgent) || "build";
     if (task.useRalphLoop) prompt = "/ralph-loop " + prompt;
     if (task.interactiveTerminal) {
-      if (path18.isAbsolute(bin) && !fs16.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
+      if (path22.isAbsolute(bin) && !fs21.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
       await new Promise((resolve10, reject) => {
         const options = { onLaunched: resolve10, onError: reject, linuxTerminal: definition.settings.linuxTerminal, opencodeMajor: major };
         if (process.platform === "win32") openOpencodeCliLongPromptWindows(bin, taskCwd, {}, model, task.forceModel ? "" : agent, prompt, options);
@@ -6809,17 +7125,17 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
       return { succeeded: true, output: "[opened interactive OpenCode CLI with preloaded prompt; interactive task result is not observed]" };
     }
     const folder = createAuxiliaryDirectory(taskCwd, "runtime");
-    const outFile = path18.join(folder, "stdout.txt"), errFile = path18.join(folder, "stderr.txt"), doneFile = path18.join(folder, "done.txt");
-    const pidFile = path18.join(folder, "process.pid"), promptFile = path18.join(folder, "instruction.txt"), full = path18.join(folder, "input.txt");
-    const scriptFile = path18.join(folder, "launch" + scriptExt());
+    const outFile = path22.join(folder, "stdout.txt"), errFile = path22.join(folder, "stderr.txt"), doneFile = path22.join(folder, "done.txt");
+    const pidFile = path22.join(folder, "process.pid"), promptFile = path22.join(folder, "instruction.txt"), full = path22.join(folder, "input.txt");
+    const scriptFile = path22.join(folder, "launch" + scriptExt());
     let handle;
     let known = false, launchAttempted = false;
     try {
-      fs16.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
-      fs16.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
+      fs21.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
+      fs21.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
       const script = buildOpenCodeScript({ pidFile, secretEnv: {}, safeCwd: taskCwd.replace(/'/g, "''"), gitCmds: "", bin, model, effectiveAgent: agent, effectiveTask: task, promptFile, outFile, errFile, doneFile, taskCwd, major });
       if (process.platform === "win32") writeUtf8BomFile(scriptFile, script);
-      else fs16.writeFileSync(scriptFile, script, { mode: 384 });
+      else fs21.writeFileSync(scriptFile, script, { mode: 384 });
       launchAttempted = true;
       const launched = handle = launchHidden(scriptFile, pidFile);
       const result = await new Promise((resolve10, reject) => {
@@ -6836,7 +7152,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
-        const read2 = (file) => fs16.existsSync(file) ? decodeCommandBuffer(fs16.readFileSync(file)) : "";
+        const read2 = (file) => fs21.existsSync(file) ? decodeCommandBuffer(fs21.readFileSync(file)) : "";
         let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
           var _a;
@@ -6845,7 +7161,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
               abort();
               return;
             }
-            const completed = fs16.existsSync(doneFile);
+            const completed = fs21.existsSync(doneFile);
             if (!completed && (!(interaction == null ? void 0 : interaction.onOutput) || Date.now() < nextOutputAt)) return;
             const output = formatTaskOutput(read2(outFile), read2(errFile));
             if (output !== lastOutput) {
@@ -6854,7 +7170,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
             }
             nextOutputAt = Date.now() + 500;
             if (!completed) return;
-            const exit = fs16.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
+            const exit = fs21.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
             known = true;
             finish();
@@ -6876,22 +7192,9 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
 }
 
 // release-update.ts
-var fs18 = __toESM(require("fs"));
-var path20 = __toESM(require("path"));
-var import_crypto12 = require("crypto");
-
-// package-maintenance.ts
-var fs17 = __toESM(require("fs"));
-var path19 = __toESM(require("path"));
-function assertPackageMaintenanceSafe(directory) {
-  const runtime = path19.join(directory, "runtime");
-  if (fs17.existsSync(path19.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery");
-  if (fs17.readdirSync(directory).some((name) => name === "data.json.write-lock" || name === "data.json.write-intent" || name.startsWith("data.json.") && name.endsWith(".tmp")) || fs17.readdirSync(runtime).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) {
-    throw new Error("Unfinished write requires reconciliation before package maintenance");
-  }
-}
-
-// release-update.ts
+var fs22 = __toESM(require("fs"));
+var path23 = __toESM(require("path"));
+var import_crypto13 = require("crypto");
 var RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"];
 var RELEASE_DESCRIPTOR = "release-integrity.json";
 function verifyRelease(files2, expectedVersion) {
@@ -6901,7 +7204,7 @@ function verifyRelease(files2, expectedVersion) {
     throw new Error("Incomplete or incompatible AutoOC release");
   }
   for (const file of RELEASE_FILES) {
-    if (!Buffer.isBuffer(files2[file]) || (0, import_crypto12.createHash)("sha256").update(files2[file]).digest("hex") !== descriptor.sha256[file]) {
+    if (!Buffer.isBuffer(files2[file]) || (0, import_crypto13.createHash)("sha256").update(files2[file]).digest("hex") !== descriptor.sha256[file]) {
       throw new Error(`Release integrity mismatch: ${file}`);
     }
   }
@@ -6922,24 +7225,24 @@ function regularPath(root, relative6, create = false) {
   let current = root;
   const parts = relative6.split("/");
   for (let i = 0; i < parts.length; i++) {
-    current = path20.join(current, parts[i]);
+    current = path23.join(current, parts[i]);
     let stat;
     try {
-      stat = fs18.lstatSync(current);
+      stat = fs22.lstatSync(current);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
       throw new Error(`Unsafe release destination: ${relative6}`);
     }
-    if (!stat && i < parts.length - 1 && create) fs18.mkdirSync(current);
+    if (!stat && i < parts.length - 1 && create) fs22.mkdirSync(current);
   }
   return current;
 }
 function hasCompleteInstalledRelease(directory, version) {
   try {
-    const root = fs18.realpathSync(directory);
-    const files2 = Object.fromEntries([...RELEASE_FILES, RELEASE_DESCRIPTOR].map((name) => [name, fs18.readFileSync(regularPath(root, name))]));
+    const root = fs22.realpathSync(directory);
+    const files2 = Object.fromEntries([...RELEASE_FILES, RELEASE_DESCRIPTOR].map((name) => [name, fs22.readFileSync(regularPath(root, name))]));
     verifyRelease(files2, version);
     return true;
   } catch (e) {
@@ -6948,10 +7251,10 @@ function hasCompleteInstalledRelease(directory, version) {
 }
 async function hasCompleteInstalledReleaseAsync(directory, version) {
   try {
-    const root = fs18.realpathSync(directory), files2 = {};
+    const root = fs22.realpathSync(directory), files2 = {};
     for (const name of [...RELEASE_FILES, RELEASE_DESCRIPTOR]) {
       const file = regularPath(root, name);
-      files2[name] = await fs18.promises.readFile(file);
+      files2[name] = await fs22.promises.readFile(file);
       regularPath(root, name);
     }
     verifyRelease(files2, version);
@@ -6963,35 +7266,35 @@ async function hasCompleteInstalledReleaseAsync(directory, version) {
 function installRelease(options) {
   const { files: files2, version, lease } = options;
   verifyRelease(files2, version);
-  const directory = fs18.realpathSync(options.directory);
-  if (fs18.lstatSync(options.directory).isSymbolicLink() || path20.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
+  const directory = fs22.realpathSync(options.directory);
+  if (fs22.lstatSync(options.directory).isSymbolicLink() || path23.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
   lease.assertOwned();
-  const marker = path20.join(lease.directory, "update-pending.json");
-  if (fs18.existsSync(marker)) throw new Error("Previous update requires recovery");
+  const marker = path23.join(lease.directory, "update-pending.json");
+  if (fs22.existsSync(marker)) throw new Error("Previous update requires recovery");
   assertPackageMaintenanceSafe(directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
-  const backup = path20.join(lease.directory, `update-backup-${(0, import_crypto12.randomUUID)()}`);
-  fs18.mkdirSync(backup);
+  const backup = path23.join(lease.directory, `update-backup-${(0, import_crypto13.randomUUID)()}`);
+  fs22.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
   for (const name of names) {
     const source = regularPath(directory, name);
-    const bytes = fs18.existsSync(source) ? fs18.readFileSync(source) : void 0;
+    const bytes = fs22.existsSync(source) ? fs22.readFileSync(source) : void 0;
     previous.set(name, bytes);
     if (bytes) {
-      const target = path20.join(backup, name);
-      fs18.mkdirSync(path20.dirname(target), { recursive: true });
-      fs18.writeFileSync(target, bytes, { flag: "wx" });
+      const target = path23.join(backup, name);
+      fs22.mkdirSync(path23.dirname(target), { recursive: true });
+      fs22.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
-  const record = { schemaVersion: 1, version, backup: path20.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
-  fs18.writeFileSync(path20.join(backup, "recovery.json"), JSON.stringify(record));
-  const fd = fs18.openSync(marker, "wx");
+  const record = { schemaVersion: 1, version, backup: path23.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
+  fs22.writeFileSync(path23.join(backup, "recovery.json"), JSON.stringify(record));
+  const fd = fs22.openSync(marker, "wx");
   try {
-    fs18.writeFileSync(fd, JSON.stringify(record));
-    fs18.fsyncSync(fd);
+    fs22.writeFileSync(fd, JSON.stringify(record));
+    fs22.fsyncSync(fd);
   } finally {
-    fs18.closeSync(fd);
+    fs22.closeSync(fd);
   }
   const written = [];
   try {
@@ -6999,20 +7302,20 @@ function installRelease(options) {
       lease.assertOwned();
       const target = regularPath(directory, name, true);
       written.push(name);
-      fs18.writeFileSync(target, files2[name]);
+      fs22.writeFileSync(target, files2[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs18.readFileSync(regularPath(directory, name))]));
+    const installed = Object.fromEntries(names.map((name) => [name, fs22.readFileSync(regularPath(directory, name))]));
     verifyRelease(installed, version);
-    fs18.unlinkSync(marker);
+    fs22.unlinkSync(marker);
     return { version, backup, installed: names };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath(directory, name);
       const bytes = previous.get(name);
-      if (bytes !== void 0) fs18.writeFileSync(target, bytes);
-      else if (fs18.existsSync(target)) fs18.unlinkSync(target);
+      if (bytes !== void 0) fs22.writeFileSync(target, bytes);
+      else if (fs22.existsSync(target)) fs22.unlinkSync(target);
     }
-    fs18.unlinkSync(marker);
+    fs22.unlinkSync(marker);
     throw error;
   }
 }
@@ -7044,10 +7347,10 @@ async function readPanelCatalog(file) {
 }
 
 // main.ts
-var import_obsidian9 = require("obsidian");
+var import_obsidian10 = require("obsidian");
 var os7 = __toESM(require("os"));
-var fs32 = __toESM(require("fs"));
-var path30 = __toESM(require("path"));
+var fs33 = __toESM(require("fs"));
+var path31 = __toESM(require("path"));
 var crypto2 = __toESM(require("crypto"));
 
 // workflow-handoff.ts
@@ -7117,22 +7420,22 @@ async function executeCodexTask(client, request) {
 // code-runtime.ts
 function executeCode(options) {
   var _a;
-  const fs33 = require("fs");
-  const path31 = require("path");
+  const fs34 = require("fs");
+  const path32 = require("path");
   const vm2 = require("vm");
   const vaultBase = options.vaultBase;
   const defaultCwd = options.cwd;
   const resolveInVault = (p) => {
-    const root = fs33.realpathSync(vaultBase);
-    const resolved = path31.resolve(root, p || ".");
-    if (resolved !== root && !resolved.startsWith(root + path31.sep)) {
+    const root = fs34.realpathSync(vaultBase);
+    const resolved = path32.resolve(root, p || ".");
+    if (resolved !== root && !resolved.startsWith(root + path32.sep)) {
       throw new Error(`Path escapes vault: ${p}`);
     }
     let current = root;
-    for (const component of path31.relative(root, resolved).split(path31.sep).filter(Boolean)) {
-      current = path31.join(current, component);
+    for (const component of path32.relative(root, resolved).split(path32.sep).filter(Boolean)) {
+      current = path32.join(current, component);
       try {
-        if (fs33.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
+        if (fs34.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
       } catch (error) {
         if (error.code === "ENOENT") break;
         throw error;
@@ -7140,10 +7443,10 @@ function executeCode(options) {
     }
     return resolved;
   };
-  const readText = (p) => fs33.readFileSync(p, "utf8");
+  const readText = (p) => fs34.readFileSync(p, "utf8");
   const writeText = (p, content) => {
-    fs33.mkdirSync(path31.dirname(p), { recursive: true });
-    fs33.writeFileSync(p, String(content), "utf8");
+    fs34.mkdirSync(path32.dirname(p), { recursive: true });
+    fs34.writeFileSync(p, String(content), "utf8");
     return p;
   };
   const sandbox = {
@@ -7175,36 +7478,36 @@ function executeCode(options) {
       append: (p, content) => {
         var _a2;
         const full = resolveInVault(p);
-        fs33.mkdirSync(path31.dirname(full), { recursive: true });
-        fs33.appendFileSync(full, String(content), "utf8");
+        fs34.mkdirSync(path32.dirname(full), { recursive: true });
+        fs34.appendFileSync(full, String(content), "utf8");
         (_a2 = options.onVaultMutation) == null ? void 0 : _a2.call(options, { path: full, operation: "append" });
         return full;
       },
-      exists: (p) => fs33.existsSync(resolveInVault(p)),
-      list: (p = ".") => fs33.readdirSync(resolveInVault(p))
+      exists: (p) => fs34.existsSync(resolveInVault(p)),
+      list: (p = ".") => fs34.readdirSync(resolveInVault(p))
     };
   }
   if (options.codeAllowFiles) {
     sandbox.files = {
       cwd: defaultCwd,
-      resolve: (p) => path31.isAbsolute(p) ? path31.resolve(p) : path31.resolve(defaultCwd, p || "."),
-      read: (p) => readText(path31.isAbsolute(p) ? path31.resolve(p) : path31.resolve(defaultCwd, p)),
-      write: (p, content) => writeText(path31.isAbsolute(p) ? path31.resolve(p) : path31.resolve(defaultCwd, p), content),
+      resolve: (p) => path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p || "."),
+      read: (p) => readText(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p)),
+      write: (p, content) => writeText(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p), content),
       append: (p, content) => {
-        const full = path31.isAbsolute(p) ? path31.resolve(p) : path31.resolve(defaultCwd, p);
-        fs33.mkdirSync(path31.dirname(full), { recursive: true });
-        fs33.appendFileSync(full, String(content), "utf8");
+        const full = path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p);
+        fs34.mkdirSync(path32.dirname(full), { recursive: true });
+        fs34.appendFileSync(full, String(content), "utf8");
         return full;
       },
-      exists: (p) => fs33.existsSync(path31.isAbsolute(p) ? path31.resolve(p) : path31.resolve(defaultCwd, p)),
-      list: (p = ".") => fs33.readdirSync(path31.isAbsolute(p) ? path31.resolve(p) : path31.resolve(defaultCwd, p))
+      exists: (p) => fs34.existsSync(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p)),
+      list: (p = ".") => fs34.readdirSync(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p))
     };
   }
   if (options.codeAllowTerminal) {
     const { execSync } = require("child_process");
     sandbox.terminal = {
       run: (command, options2 = {}) => execSync(String(command), {
-        cwd: options2.cwd ? path31.isAbsolute(options2.cwd) ? options2.cwd : path31.resolve(defaultCwd, options2.cwd) : defaultCwd,
+        cwd: options2.cwd ? path32.isAbsolute(options2.cwd) ? options2.cwd : path32.resolve(defaultCwd, options2.cwd) : defaultCwd,
         timeout: Math.min(Math.max(options2.timeoutMs || 3e4, 1e3), 6e5),
         encoding: "utf8",
         windowsHide: true
@@ -7229,19 +7532,19 @@ function executeCode(options) {
 }
 function codeNodeExecutable() {
   if (!process.versions.electron) return process.execPath;
-  const fs33 = require("fs");
-  const path31 = require("path");
-  const directories = (process.env.PATH || process.env.Path || "").split(path31.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path31.isAbsolute(directory));
+  const fs34 = require("fs");
+  const path32 = require("path");
+  const directories = (process.env.PATH || process.env.Path || "").split(path32.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path32.isAbsolute(directory));
   if (process.platform === "win32") {
     for (const base2 of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
-      if (base2 && path31.isAbsolute(base2)) directories.push(path31.join(base2, "nodejs"));
+      if (base2 && path32.isAbsolute(base2)) directories.push(path32.join(base2, "nodejs"));
     }
   } else directories.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin");
   for (const directory of directories) {
-    const file = path31.join(directory, process.platform === "win32" ? "node.exe" : "node");
+    const file = path32.join(directory, process.platform === "win32" ? "node.exe" : "node");
     try {
-      if (fs33.statSync(file).isFile()) {
-        fs33.accessSync(file, fs33.constants.X_OK);
+      if (fs34.statSync(file).isFile()) {
+        fs34.accessSync(file, fs34.constants.X_OK);
         return file;
       }
     } catch (e) {
@@ -7316,9 +7619,9 @@ async function executeCodeAsync(options, signal) {
   const stop = () => {
     if (!child.pid || closed || child.exitCode !== null || child.signalCode !== null) return;
     if ((signal == null ? void 0 : signal.aborted) && process.platform === "win32") {
-      const path31 = require("path");
+      const path32 = require("path");
       const system = process.env.SystemRoot || "C:\\Windows";
-      const killer = spawn6(path31.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = spawn6(path32.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       const fallback = () => {
         if (!closed) child.kill("SIGKILL");
       };
@@ -7409,8 +7712,8 @@ async function runWithVaultMutations(factory, execute) {
 }
 
 // obsidian-vault-refresh.ts
-var fs19 = __toESM(require("fs"));
-var path21 = __toESM(require("path"));
+var fs23 = __toESM(require("fs"));
+var path24 = __toESM(require("path"));
 var ObsidianVaultRefresh = class {
   constructor(root, adapter, timeoutMs = 1e4) {
     this.root = root;
@@ -7443,27 +7746,27 @@ var ObsidianVaultRefresh = class {
     };
   }
   relativeFile(file) {
-    if (!path21.isAbsolute(file)) throw new Error("Refresh path escapes vault");
+    if (!path24.isAbsolute(file)) throw new Error("Refresh path escapes vault");
     if (process.platform === "win32") {
-      let current2 = path21.parse(file).root;
+      let current2 = path24.parse(file).root;
       for (const part of file.slice(current2.length).split(/[\\/]/)) {
         if (!part || part === "." || part === ".." || part.includes(":")) throw new Error("Invalid refresh path");
-        current2 = path21.join(current2, part);
-        if (fs19.lstatSync(current2).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
+        current2 = path24.join(current2, part);
+        if (fs23.lstatSync(current2).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
       }
       file = physicalPath(file);
     }
     const root = physicalPath(this.root);
-    const relative6 = path21.relative(root, file);
-    if (!path21.isAbsolute(file) || !relative6 || relative6 === ".." || relative6.startsWith(".." + path21.sep) || path21.isAbsolute(relative6)) {
+    const relative6 = path24.relative(root, file);
+    if (!path24.isAbsolute(file) || !relative6 || relative6 === ".." || relative6.startsWith(".." + path24.sep) || path24.isAbsolute(relative6)) {
       throw new Error("Refresh path escapes vault");
     }
     let current = root;
-    for (const part of relative6.split(path21.sep)) {
-      current = path21.join(current, part);
-      if (fs19.lstatSync(current).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
+    for (const part of relative6.split(path24.sep)) {
+      current = path24.join(current, part);
+      if (fs23.lstatSync(current).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
     }
-    return relative6.split(path21.sep).join("/");
+    return relative6.split(path24.sep).join("/");
   }
   async reconcile(files2) {
     if (this.stopped) throw new Error("Plugin unloaded");
@@ -7522,8 +7825,8 @@ var ObsidianVaultRefresh = class {
 };
 
 // installed-workflow-host.ts
-var fs27 = __toESM(require("fs"));
-var path28 = __toESM(require("path"));
+var fs30 = __toESM(require("fs"));
+var path30 = __toESM(require("path"));
 
 // code-workflow-adapter.ts
 function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaultMutations) {
@@ -7559,7 +7862,7 @@ function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaul
 }
 
 // codex-workflow-adapter.ts
-var fs20 = __toESM(require("fs"));
+var fs24 = __toESM(require("fs"));
 function codexWorkflowAdapter(createClient, defaults = {}) {
   return {
     supports: (task) => task.taskKind === "codex" && (task.interactiveTerminal === void 0 || typeof task.interactiveTerminal === "boolean"),
@@ -7612,8 +7915,8 @@ function codexWorkflowAdapter(createClient, defaults = {}) {
 }
 function createCodexWorkflowAdapter(definition, vaultBase) {
   const directory = (task) => {
-    const cwd = fs20.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
-    if (!fs20.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
+    const cwd = fs24.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
+    if (!fs24.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
     return cwd;
   };
   const create = (task, callbacks) => {
@@ -7673,7 +7976,7 @@ function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations) {
 }
 
 // code-workflow-host.ts
-var fs22 = __toESM(require("fs"));
+var fs26 = __toESM(require("fs"));
 
 // workflow-routing.ts
 var vm = __toESM(require("vm"));
@@ -7913,7 +8216,7 @@ async function reconcileWorkflowTask(journal, definition, read2, host) {
 }
 
 // workflow-branch.ts
-var path22 = __toESM(require("path"));
+var path25 = __toESM(require("path"));
 var import_child_process9 = require("child_process");
 function validateBranchOptions(task) {
   var _a, _b;
@@ -7941,7 +8244,7 @@ function branchRepository(cwd, vault) {
   const directory = physicalPath(git(physicalPath(cwd), ["rev-parse", "--show-toplevel"]));
   if (!isWithinPhysicalPath(vault, directory)) throw new Error("Git repository is outside the selected vault");
   const metadata = physicalPath(git(directory, ["rev-parse", "--absolute-git-dir"]));
-  const common = physicalPath(path22.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
+  const common = physicalPath(path25.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
   if (!isWithinPhysicalPath(vault, metadata) || !isWithinPhysicalPath(vault, common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
 }
@@ -7981,12 +8284,12 @@ function verifyWorkflowBranch(journal, vault) {
 }
 
 // workflow-approval.ts
-var fs21 = __toESM(require("fs"));
-var path23 = __toESM(require("path"));
-var import_crypto13 = require("crypto");
+var fs25 = __toESM(require("fs"));
+var path26 = __toESM(require("path"));
+var import_crypto14 = require("crypto");
 function responseFile(directory, runId, token) {
   if (!/^[a-f0-9-]+$/.test(token)) throw new Error("Invalid approval identity");
-  return path23.join(directory, `${runId}-${token}.approval.json`);
+  return path26.join(directory, `${runId}-${token}.approval.json`);
 }
 function answerWorkflowApproval(directory, runId, token, approved) {
   var _a;
@@ -8000,11 +8303,11 @@ function answerWorkflowApproval(directory, runId, token, approved) {
   } catch (e) {
     throw new Error("Approval owner is unavailable; reconcile execution");
   }
-  fs21.writeFileSync(responseFile(directory, runId, token), JSON.stringify({ runId, token, approved }), { encoding: "utf8", flag: "wx", mode: 384 });
+  fs25.writeFileSync(responseFile(directory, runId, token), JSON.stringify({ runId, token, approved }), { encoding: "utf8", flag: "wx", mode: 384 });
   return { runId, approval: token, decision: approved ? "approve" : "deny", recorded: true };
 }
 async function awaitWorkflowApproval(journal, directory, request, redact, signal, onCheckpoint) {
-  const token = (0, import_crypto13.randomUUID)(), runId = journal.snapshot().runId;
+  const token = (0, import_crypto14.randomUUID)(), runId = journal.snapshot().runId;
   const ownerToken = readExecutionLeaseOwner(directory).token;
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await (onCheckpoint == null ? void 0 : onCheckpoint(journal.snapshot()));
@@ -8018,10 +8321,10 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
     const abort = () => finish(new Error("Approval interrupted; execution requires reconciliation"));
     const timer = setInterval(() => {
       try {
-        if (!fs21.existsSync(file)) return;
-        const stat = fs21.lstatSync(file);
+        if (!fs25.existsSync(file)) return;
+        const stat = fs25.lstatSync(file);
         if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid approval response file");
-        const response = JSON.parse(fs21.readFileSync(file, "utf8"));
+        const response = JSON.parse(fs25.readFileSync(file, "utf8"));
         if (response.runId !== runId || response.token !== token || typeof response.approved !== "boolean") throw new Error("Approval response identity mismatch");
         finish(void 0, response.approved);
       } catch (e) {
@@ -8113,10 +8416,10 @@ async function runCodeWorkflowHost(options) {
       return resumed.snapshot();
     }
     const journal = await catalogTransaction(lease.directory + "/journal-admission", async () => {
-      for (const file of fs22.readdirSync(lease.directory)) {
+      for (const file of fs26.readdirSync(lease.directory)) {
         if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
-        if (fs22.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
-        const prior = JSON.parse(fs22.readFileSync(lease.directory + "/" + file, "utf8"));
+        if (fs26.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
+        const prior = JSON.parse(fs26.readFileSync(lease.directory + "/" + file, "utf8"));
         ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
         const resolved = prior.phase === "abandoned" || prior.disposition || ["completed", "failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
         if (prior.runId !== options.resumeRunId && !resolved && !admission.permitsPending(prior)) {
@@ -8259,23 +8562,23 @@ function taskProjection(task, workflow, projected, checkpoint) {
 }
 
 // task-history.ts
-var fs23 = __toESM(require("fs"));
-var path24 = __toESM(require("path"));
+var fs27 = __toESM(require("fs"));
+var path27 = __toESM(require("path"));
 function taskElapsedSeconds(task, now = Date.now()) {
   var _a;
   const start = Date.parse(task.lastRun);
   const end = task.status === "running" ? now : Date.parse(task.legacyExecution ? task.legacyExecution.finishedAt : (_a = task.runtimeExecution) == null ? void 0 : _a.finishedAt);
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1e3)) : void 0;
 }
-function regularDirectory2(directory) {
-  if (!fs23.existsSync(directory)) fs23.mkdirSync(directory);
-  const stat = fs23.lstatSync(directory);
+function regularDirectory3(directory) {
+  if (!fs27.existsSync(directory)) fs27.mkdirSync(directory);
+  const stat = fs27.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Task history requires regular directories");
 }
 function persistTaskHistory(vault, workflow, checkpoint, settings) {
   var _a, _b;
   if (settings.logsEnabled === false) return;
-  const root = fs23.realpathSync(vault);
+  const root = fs27.realpathSync(vault);
   const touched = /* @__PURE__ */ new Set();
   for (const [index, observed] of checkpoint.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
@@ -8283,12 +8586,12 @@ function persistTaskHistory(vault, workflow, checkpoint, settings) {
     if (!/^[a-zA-Z0-9_-]+$/.test(step.taskId)) throw new Error("Unsafe task history identity");
     let directory = root;
     for (const part of [".opencode", "logs", step.taskId]) {
-      directory = path24.join(directory, part);
-      regularDirectory2(directory);
+      directory = path27.join(directory, part);
+      regularDirectory3(directory);
     }
     const date = new Date(observed.startedAt), pad = (n) => String(n).padStart(2, "0");
     const timestamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-    const file = path24.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
+    const file = path27.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
     const content = `Run: ${checkpoint.runId}
 Step: ${observed.stepId}
 Status: ${observed.status}
@@ -8297,33 +8600,33 @@ Finished: ${observed.finishedAt || "unknown"}
 
 ${observed.output || "(no output)"}`;
     try {
-      fs23.writeFileSync(file, content, { encoding: "utf8", flag: "wx" });
+      fs27.writeFileSync(file, content, { encoding: "utf8", flag: "wx" });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const stat = fs23.lstatSync(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || fs23.readFileSync(file, "utf8") !== content) throw new Error("Task history conflicts with durable output");
+      const stat = fs27.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || fs27.readFileSync(file, "utf8") !== content) throw new Error("Task history conflicts with durable output");
     }
     touched.add(directory);
   }
   for (const directory of touched) {
-    const files2 = fs23.readdirSync(directory).filter((name) => name.endsWith(".log") && name !== "latest.log").sort();
+    const files2 = fs27.readdirSync(directory).filter((name) => name.endsWith(".log") && name !== "latest.log").sort();
     const max = (_a = settings.maxLogsPerTask) != null ? _a : 50, days = (_b = settings.logRetentionDays) != null ? _b : 30;
     const retained = [];
     for (const name of files2) {
-      const file = path24.join(directory, name), stat2 = fs23.lstatSync(file);
+      const file = path27.join(directory, name), stat2 = fs27.lstatSync(file);
       if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("Task history requires regular files");
       const match = name.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/);
       const date = match ? Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`) : NaN;
-      if (days > 0 && date < Date.now() - days * 864e5) fs23.unlinkSync(file);
+      if (days > 0 && date < Date.now() - days * 864e5) fs27.unlinkSync(file);
       else retained.push(name);
     }
-    while (max > 0 && retained.length > max) fs23.unlinkSync(path24.join(directory, retained.shift()));
-    const latest = path24.join(directory, "latest.log");
-    const stat = fs23.lstatSync(latest, { throwIfNoEntry: false });
+    while (max > 0 && retained.length > max) fs27.unlinkSync(path27.join(directory, retained.shift()));
+    const latest = path27.join(directory, "latest.log");
+    const stat = fs27.lstatSync(latest, { throwIfNoEntry: false });
     if (stat) {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Task history latest must be a regular file");
     }
-    if (retained.length) fs23.writeFileSync(latest, fs23.readFileSync(path24.join(directory, retained[retained.length - 1])));
+    if (retained.length) fs27.writeFileSync(latest, fs27.readFileSync(path27.join(directory, retained[retained.length - 1])));
   }
 }
 
@@ -8441,14 +8744,14 @@ async function persistWorkflowProgress(options) {
 }
 
 // workflow-stop.ts
-var fs24 = __toESM(require("fs"));
-var path25 = __toESM(require("path"));
-var import_crypto14 = require("crypto");
+var fs28 = __toESM(require("fs"));
+var path28 = __toESM(require("path"));
+var import_crypto15 = require("crypto");
 function readStopRequest(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path25.join(directory, runId + ".stop.json");
+  const file = path28.join(directory, runId + ".stop.json");
   try {
-    const stat = fs24.lstatSync(file);
+    const stat = fs28.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid stop request file");
   } catch (error) {
     if (error.code === "ENOENT") return;
@@ -8456,7 +8759,7 @@ function readStopRequest(directory, runId) {
   }
   let value;
   try {
-    value = JSON.parse(fs24.readFileSync(file, "utf8"));
+    value = JSON.parse(fs28.readFileSync(file, "utf8"));
   } catch (e) {
     throw new Error("Invalid stop request");
   }
@@ -8465,8 +8768,8 @@ function readStopRequest(directory, runId) {
 }
 
 // workflow-preflight.ts
-var fs25 = __toESM(require("fs"));
-var path26 = __toESM(require("path"));
+var fs29 = __toESM(require("fs"));
+var path29 = __toESM(require("path"));
 function preflightInstalledWorkflow(definition, vault) {
   var _a, _b;
   assertWorkflowDependencies(definition.workflow, definition.tasks);
@@ -8474,10 +8777,10 @@ function preflightInstalledWorkflow(definition, vault) {
   const checkDirectory = (value) => {
     if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
     const configured = value || root;
-    if (!path26.isAbsolute(configured)) throw new Error("Working directory must be absolute");
+    if (!path29.isAbsolute(configured)) throw new Error("Working directory must be absolute");
     const directory = physicalPath(configured);
     if (!isWithinPhysicalPath(root, directory)) throw new Error("Working directory is outside the selected vault");
-    if (!fs25.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
+    if (!fs29.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
   };
   checkDirectory(definition.settings.workingDirectory);
   for (const item of [definition.workflow, ...definition.workflow.steps, ...definition.tasks]) {
@@ -8526,77 +8829,11 @@ Reply ONLY with YES or NO.`,
   };
 }
 
-// installed-workflow-location.ts
-var fs26 = __toESM(require("fs"));
-var path27 = __toESM(require("path"));
-function regularDirectory3(directory) {
-  const stat = fs26.lstatSync(directory);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Installation must use regular directories");
-}
-function optionalStat(file) {
-  try {
-    return fs26.lstatSync(file);
-  } catch (error) {
-    if (error.code === "ENOENT") return void 0;
-    throw error;
-  }
-}
-function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
-  if (!path27.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
-  const vault = physicalPath(vaultPath);
-  regularDirectory3(vault);
-  let relative6 = path27.join(".obsidian", "plugins", "auto-oc");
-  if (installationDirectory !== void 0) {
-    if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
-      throw new Error("Invalid installation location");
-    }
-    if (process.platform === "win32" && path27.isAbsolute(installationDirectory)) {
-      let inspected = path27.parse(installationDirectory).root;
-      for (const part of installationDirectory.slice(inspected.length).split(/[\\/]/)) {
-        if (!part || part.includes(":")) throw new Error("Invalid installation component");
-        inspected = path27.join(inspected, part);
-        regularDirectory3(inspected);
-      }
-      relative6 = path27.relative(vault, physicalPath(inspected));
-    } else {
-      relative6 = path27.isAbsolute(installationDirectory) ? path27.relative(path27.resolve(vaultPath), installationDirectory) : installationDirectory;
-    }
-    if (!relative6 || path27.isAbsolute(relative6) || relative6.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
-      throw new Error("Installation must remain inside the vault");
-    }
-  }
-  let directory = vault;
-  for (const part of relative6.split(/[\\/]/)) {
-    if (!part) throw new Error("Invalid installation component");
-    directory = path27.join(directory, part);
-    regularDirectory3(directory);
-  }
-  directory = physicalPath(directory);
-  if (!isWithinPhysicalPath(vault, directory)) throw new Error("Installation must remain inside the vault");
-  const configurationFile = path27.join(directory, "data.json");
-  const configStat = optionalStat(configurationFile);
-  if (configStat && (configStat.isSymbolicLink() || !configStat.isFile())) throw new Error("Configuration must be a regular file");
-  const runtimeDirectory = path27.join(directory, "runtime");
-  const runtimeStat = optionalStat(runtimeDirectory);
-  if (runtimeStat && (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory())) throw new Error("Invalid runtime directory");
-  return { vault, installationDirectory: directory, configurationFile, runtimeDirectory };
-}
-function ensureInstalledWorkflowRuntime(location) {
-  const current = resolveInstalledWorkflowLocation(location.vault, location.installationDirectory);
-  if (current.runtimeDirectory !== location.runtimeDirectory) throw new Error("Installation location changed");
-  try {
-    fs26.mkdirSync(current.runtimeDirectory);
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
-  }
-  regularDirectory3(current.runtimeDirectory);
-}
-
 // installed-workflow-host.ts
 var preparingInstallations = /* @__PURE__ */ new Set();
 async function runInstalledWorkflow(options) {
   var _a, _b, _c, _d;
-  if (!path28.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
+  if (!path30.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.stepId !== void 0 && (!options.workflowId || !options.stepId)) throw new Error("A code step requires its parent workflow identity");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
@@ -8610,7 +8847,7 @@ async function runInstalledWorkflow(options) {
   let ownedLease;
   let admission;
   try {
-    if (!options.lease && fs27.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
+    if (!options.lease && fs30.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
     const reader = options.catalogWriter || new SettingsWriter();
     const prepared = await catalogTransaction(configurationFile, async () => {
       var _a2;
@@ -8728,9 +8965,9 @@ async function runInstalledWorkflow(options) {
 }
 
 // workflow-code-modals.ts
-var import_obsidian8 = require("obsidian");
-var fs28 = __toESM(require("fs"));
-var CodeStepLogModal = class extends import_obsidian8.Modal {
+var import_obsidian9 = require("obsidian");
+var fs31 = __toESM(require("fs"));
+var CodeStepLogModal = class extends import_obsidian9.Modal {
   constructor(app, title, read2) {
     super(app);
     this.title = title;
@@ -8758,7 +8995,7 @@ var CodeStepLogModal = class extends import_obsidian8.Modal {
     this.contentEl.empty();
   }
 };
-var CodeStepHistoryModal = class extends import_obsidian8.Modal {
+var CodeStepHistoryModal = class extends import_obsidian9.Modal {
   constructor(app, runtime, workflowId, stepId, title, openOutput) {
     super(app);
     this.runtime = runtime;
@@ -8773,7 +9010,7 @@ var CodeStepHistoryModal = class extends import_obsidian8.Modal {
     const status = this.contentEl.createEl("p", { text: "Loading step history\u2026" });
     try {
       const rows = [];
-      const files2 = await fs28.promises.readdir(this.runtime).catch((error) => {
+      const files2 = await fs31.promises.readdir(this.runtime).catch((error) => {
         if (error.code === "ENOENT") return [];
         throw error;
       });
@@ -8812,75 +9049,9 @@ var CodeStepHistoryModal = class extends import_obsidian8.Modal {
   }
 };
 
-// execution-abandonment.ts
-var fs29 = __toESM(require("fs"));
-function inspectTerminalExecution(options) {
-  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
-  const identity = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
-  return {
-    ...identity,
-    runId: state.runId,
-    workflowId: state.workflowId,
-    definitionHash: state.definitionHash,
-    revision: state.revision,
-    phase: state.phase,
-    causes: checkpointUncertainties(state),
-    disposition: state.disposition
-  };
-}
-async function disposeTerminalExecution(options) {
-  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
-  const lease = options.lease || acquireExecutionLease(location.runtimeDirectory);
-  try {
-    lease.assertOwned();
-    if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Disposition lease identity mismatch");
-    const observed = inspectTerminalExecution(options);
-    for (const key of ["vault", "installationDirectory", "runtimeDirectory", "vaultIdentity", "installationIdentity", "runtimeIdentity", "workflowId", "runId", "definitionHash"]) {
-      if (observed[key] !== options[key]) throw new Error("Disposition observed identity changed; inspect again");
-    }
-    if (observed.revision !== options.revision || JSON.stringify(observed.causes) !== JSON.stringify(options.causes)) throw new Error("Execution revision or uncertainty changed; inspect again");
-    const assertQuiescent = () => {
-      lease.assertOwned();
-      const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault, options.installationDirectory));
-      if (Object.entries(current).some(([key, value]) => options[key] !== value)) throw new Error("Disposition installation identity changed");
-      if (fs29.existsSync(location.configurationFile + ".write-lock") || fs29.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs29.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
-      const config = JSON.parse(fs29.readFileSync(location.configurationFile, "utf8"));
-      if (["tasks", "workflows"].some((kind) => !Array.isArray(config[kind]) || config[kind].some((entry) => entry.status === "running" || entry.pendingCodexApproval))) throw new Error("Active execution requires reconciliation");
-      for (const name of fs29.readdirSync(location.runtimeDirectory)) {
-        if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
-        const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
-        if (["ready", "in_flight"].includes(state.phase)) throw new Error("Active or unfinished execution requires reconciliation");
-      }
-    };
-    assertQuiescent();
-    const journal = ExecutionJournal.open(lease, options.runId, options.definitionHash);
-    await journal.disposeTerminal(options.revision, options.reason, options.acknowledgedUnknownEffects, location);
-    assertQuiescent();
-    return readExecutionCheckpoint(location.runtimeDirectory, options.runId);
-  } finally {
-    if (!options.lease) lease.release();
-  }
-}
-async function abandonInstalledExecution(options) {
-  if (!Number.isSafeInteger(options.revision) || options.revision < 0) throw new Error("Exact observed revision is required");
-  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
-  const lease = options.lease || acquireExecutionLease(location.runtimeDirectory);
-  try {
-    lease.assertOwned();
-    if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Lease belongs to another installation runtime");
-    const state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
-    if (state.workflowId !== options.workflowId) throw new Error("Execution belongs to another workflow or task");
-    const journal = ExecutionJournal.open(lease, state.runId, state.definitionHash);
-    await journal.abandon(options.revision, options.reason, options.acknowledgedUnknownEffects);
-    return journal.snapshot();
-  } finally {
-    if (!options.lease) lease.release();
-  }
-}
-
 // historical-execution-recovery.ts
-var fs30 = __toESM(require("fs"));
-var import_crypto15 = require("crypto");
+var fs32 = __toESM(require("fs"));
+var import_crypto16 = require("crypto");
 function catalogEntries(catalog) {
   if (!Array.isArray(catalog.tasks) || !Array.isArray(catalog.workflows)) throw new Error("Catalog is unavailable; review cannot continue");
   return [...catalog.tasks, ...catalog.workflows, ...catalog.workflows.flatMap((w) => (w.steps || []).map((s) => s.codeExecution).filter(Boolean))];
@@ -8911,7 +9082,7 @@ function inspectHistoricalAttempt(location, workflowId, runId, catalog) {
     definitionHash: state.definitionHash,
     phase: state.phase,
     stepCount: state.steps.length,
-    checkpointHash: (0, import_crypto15.createHash)("sha256").update(JSON.stringify(state)).digest("hex")
+    checkpointHash: (0, import_crypto16.createHash)("sha256").update(JSON.stringify(state)).digest("hex")
   };
 }
 async function closeHistoricalAttempt(observed, lease, reason, acknowledgedUnknownEffects, assertHostIdle, beforeEffects) {
@@ -8919,8 +9090,8 @@ async function closeHistoricalAttempt(observed, lease, reason, acknowledgedUnkno
   return catalogTransaction(location.configurationFile, async () => {
     assertHostIdle();
     lease.assertOwned();
-    if (fs30.existsSync(location.configurationFile + ".write-lock") || fs30.existsSync(location.configurationFile + ".write-intent") || fs30.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs30.readdirSync(location.runtimeDirectory).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("A write or update is pending; wait before reviewing this attempt");
-    const catalog = JSON.parse(fs30.readFileSync(location.configurationFile, "utf8"));
+    if (fs32.existsSync(location.configurationFile + ".write-lock") || fs32.existsSync(location.configurationFile + ".write-intent") || fs32.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs32.readdirSync(location.runtimeDirectory).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("A write or update is pending; wait before reviewing this attempt");
+    const catalog = JSON.parse(fs32.readFileSync(location.configurationFile, "utf8"));
     const current = inspectHistoricalAttempt(location, observed.workflowId, observed.runId, catalog);
     if (JSON.stringify(current) !== JSON.stringify(observed)) throw new Error("The recorded attempt changed; open its review again");
     if (acknowledgedUnknownEffects !== true || typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("Confirm the unknown outcome and enter a reason of 1\u20131000 characters");
@@ -8937,33 +9108,6 @@ async function closeHistoricalAttempt(observed, lease, reason, acknowledgedUnkno
       acknowledgedUnknownEffects
     });
   });
-}
-
-// checkpoint-observation.ts
-var path29 = __toESM(require("path"));
-var fs31 = __toESM(require("fs"));
-async function observeCheckpoint(directory, runId) {
-  if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path29.join(directory, runId + ".json"), stat = fs31.lstatSync(file), text = await readSettingsTextAsync(file);
-  if (text === null) throw new Error("Execution checkpoint is absent");
-  let checkpoint;
-  try {
-    checkpoint = await parseCooperatively(text);
-  } catch (e) {
-    throw new Error("Cannot read valid execution checkpoint");
-  }
-  validateExecutionCheckpoint(checkpoint);
-  if (checkpoint.runId !== runId) throw new Error("Execution identity changed");
-  const hash = await hashTextCooperatively(text);
-  const assertCurrent = () => {
-    const current = fs31.lstatSync(file);
-    if (!current.isFile() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error("Execution checkpoint changed during observation");
-  };
-  assertCurrent();
-  return { checkpoint, text, assertCurrent, async assertUnchanged() {
-    if (await settingsFingerprint(file) !== hash) throw new Error("Execution checkpoint changed during observation");
-    assertCurrent();
-  } };
 }
 
 // main.ts
@@ -9350,28 +9494,28 @@ function getCopilotTaskValidationError(task) {
   return null;
 }
 function addCopilotTaskSettings(container, draft, defaultModel) {
-  new import_obsidian9.Setting(container).setName("Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.").addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "").onChange((value) => {
+  new import_obsidian10.Setting(container).setName("Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.").addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "").onChange((value) => {
     draft.model = value.trim();
   }));
-  new import_obsidian9.Setting(container).setName("Allow tools automatically").setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.").addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true).onChange((value) => {
+  new import_obsidian10.Setting(container).setName("Allow tools automatically").setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.").addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true).onChange((value) => {
     draft.copilotAllowAllTools = value;
   }));
 }
 function addCopilotGlobalSettings(container, plugin) {
   container.createEl("h3", { text: "GitHub Copilot task defaults" });
-  new import_obsidian9.Setting(container).setName("Test Copilot installation").addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
+  new import_obsidian10.Setting(container).setName("Test Copilot installation").addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
     try {
       const bin = resolveCopilotBin(plugin.settings.copilotPath);
       const cwd = plugin.settings.workingDirectory || plugin.app.vault.adapter.basePath || ".";
       const version = await checkCopilotInstallation(bin, cwd);
-      new import_obsidian9.Notice(`AutoOC: ${version}
+      new import_obsidian10.Notice(`AutoOC: ${version}
 ${bin}
 CLI detected. Account access is checked when a task runs.`, 1e4);
     } catch (error) {
-      new import_obsidian9.Notice(`AutoOC: could not start GitHub Copilot CLI \u2014 ${String(error)}`, 1e4);
+      new import_obsidian10.Notice(`AutoOC: could not start GitHub Copilot CLI \u2014 ${String(error)}`, 1e4);
     }
   }));
-  new import_obsidian9.Setting(container).setName("Default Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.").addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "").onChange(async (value) => {
+  new import_obsidian10.Setting(container).setName("Default Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.").addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "").onChange(async (value) => {
     plugin.settings.defaultCopilotModel = value.trim();
     await plugin.saveSettings();
   }));
@@ -9659,19 +9803,19 @@ function nowTimeString() {
   return `${padTwo(now.getHours())}:${padTwo(now.getMinutes())}`;
 }
 function getOpencodeConfigPath() {
-  return path30.join(os7.homedir(), ".config", "opencode", "opencode.json");
+  return path31.join(os7.homedir(), ".config", "opencode", "opencode.json");
 }
 function getUvCandidates() {
   return [
-    path30.join(os7.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
-    path30.join(os7.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
-    path30.join(os7.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
+    path31.join(os7.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
+    path31.join(os7.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
+    path31.join(os7.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
   ];
 }
 function resolveUvBin() {
   for (const candidate of getUvCandidates()) {
     try {
-      if (fs32.existsSync(candidate)) return candidate;
+      if (fs33.existsSync(candidate)) return candidate;
     } catch (e) {
     }
   }
@@ -9822,10 +9966,10 @@ if __name__ == "__main__":
 `;
 }
 function getRalphStateFilePath(vaultBasePath) {
-  return path30.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
+  return path31.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
 }
 function getTaskLogDir(vaultBasePath, taskId) {
-  return path30.join(vaultBasePath, ".opencode", "logs", taskId);
+  return path31.join(vaultBasePath, ".opencode", "logs", taskId);
 }
 function formatTimestampForLog() {
   const now = /* @__PURE__ */ new Date();
@@ -9842,15 +9986,15 @@ function saveLogToFile(vaultBasePath, taskId, output) {
   if (!output || !output.trim()) return null;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    fs32.mkdirSync(logDir, { recursive: true });
+    fs33.mkdirSync(logDir, { recursive: true });
   } catch (e) {
   }
   const timestamp = formatTimestampForLog();
-  const logFile = path30.join(logDir, `${timestamp}.log`);
+  const logFile = path31.join(logDir, `${timestamp}.log`);
   try {
-    fs32.writeFileSync(logFile, output, "utf8");
-    const latestFile = path30.join(logDir, "latest.log");
-    fs32.writeFileSync(latestFile, output, "utf8");
+    fs33.writeFileSync(logFile, output, "utf8");
+    const latestFile = path31.join(logDir, "latest.log");
+    fs33.writeFileSync(latestFile, output, "utf8");
     return logFile;
   } catch (e) {
     return null;
@@ -9859,10 +10003,10 @@ function saveLogToFile(vaultBasePath, taskId, output) {
 function getLogHistory(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs32.existsSync(logDir)) return [];
-    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    if (!fs33.existsSync(logDir)) return [];
+    const files2 = fs33.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
     return files2.map((f) => ({
-      file: path30.join(logDir, f),
+      file: path31.join(logDir, f),
       timestamp: formatLogFilenameTimestamp(f)
     }));
   } catch (e) {
@@ -9871,7 +10015,7 @@ function getLogHistory(vaultBasePath, taskId) {
 }
 function readLogFile(filePath) {
   try {
-    return formatLogContent(fs32.readFileSync(filePath, "utf8"));
+    return formatLogContent(fs33.readFileSync(filePath, "utf8"));
   } catch (e) {
     return "(error reading log file)";
   }
@@ -9880,13 +10024,13 @@ function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
   if (maxLogs <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs32.existsSync(logDir)) return;
-    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    if (!fs33.existsSync(logDir)) return;
+    const files2 = fs33.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
     while (files2.length > maxLogs) {
       const oldFile = files2.shift();
       if (oldFile) {
         try {
-          fs32.unlinkSync(path30.join(logDir, oldFile));
+          fs33.unlinkSync(path31.join(logDir, oldFile));
         } catch (e) {
         }
       }
@@ -9898,9 +10042,9 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
   if (retentionDays <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs32.existsSync(logDir)) return;
+    if (!fs33.existsSync(logDir)) return;
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
-    const files2 = fs32.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    const files2 = fs33.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
     for (const f of files2) {
       const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
       if (match) {
@@ -9908,7 +10052,7 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
         const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
         if (fileDate.getTime() < cutoff) {
           try {
-            fs32.unlinkSync(path30.join(logDir, f));
+            fs33.unlinkSync(path31.join(logDir, f));
           } catch (e) {
           }
         }
@@ -9920,31 +10064,31 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
 function clearTaskLogs(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs32.existsSync(logDir)) return;
-    const files2 = fs32.readdirSync(logDir);
+    if (!fs33.existsSync(logDir)) return;
+    const files2 = fs33.readdirSync(logDir);
     for (const f of files2) {
       try {
-        fs32.unlinkSync(path30.join(logDir, f));
+        fs33.unlinkSync(path31.join(logDir, f));
       } catch (e) {
       }
     }
     try {
-      fs32.rmdirSync(logDir);
+      fs33.rmdirSync(logDir);
     } catch (e) {
     }
   } catch (e) {
   }
 }
 function clearAllLogs(vaultBasePath) {
-  const logsDir = path30.join(vaultBasePath, ".opencode", "logs");
+  const logsDir = path31.join(vaultBasePath, ".opencode", "logs");
   try {
-    if (!fs32.existsSync(logsDir)) return;
-    const dirs = fs32.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs33.existsSync(logsDir)) return;
+    const dirs = fs33.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of dirs) {
       clearTaskLogs(vaultBasePath, dir);
     }
     try {
-      fs32.rmdirSync(logsDir);
+      fs33.rmdirSync(logsDir);
     } catch (e) {
     }
   } catch (e) {
@@ -9952,7 +10096,7 @@ function clearAllLogs(vaultBasePath) {
 }
 function deleteSingleLogFile(filePath) {
   try {
-    fs32.unlinkSync(filePath);
+    fs33.unlinkSync(filePath);
   } catch (e) {
   }
 }
@@ -10022,7 +10166,7 @@ function isWorkflowDue(wf) {
   }
   return false;
 }
-var AutoOCPlugin = class extends import_obsidian9.Plugin {
+var AutoOCPlugin = class extends import_obsidian10.Plugin {
   constructor() {
     super(...arguments);
     this.bulkCatalogMutationInProgress = false;
@@ -10033,7 +10177,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     this.settingsLoadRevision = 0;
     this.settingsPublicationState = "ready";
     this.legacyOutputRedaction = new LegacyOutputRedaction(() => {
-      new import_obsidian9.Notice("AutoOC: some old credentials cannot be hidden in output. This notice does not block tasks. Open Settings \u2192 AutoOC \u2192 Legacy credential notice to review or dismiss the reminder.", 12e3);
+      new import_obsidian10.Notice("AutoOC: some old credentials cannot be hidden in output. This notice does not block tasks. Open Settings \u2192 AutoOC \u2192 Legacy credential notice to review or dismiss the reminder.", 12e3);
     }, {
       getItem: (key) => typeof this.app.loadLocalStorage === "function" ? this.app.loadLocalStorage(key) : localStorage.getItem(key),
       setItem: (key, value) => {
@@ -10221,14 +10365,14 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     const { runtime, names } = this.journalNames();
     return JSON.stringify(names.map((name) => {
       readExecutionCheckpoint(runtime, name.slice(0, -5));
-      return [name, fs32.readFileSync(path30.join(runtime, name), "utf8")];
+      return [name, fs33.readFileSync(path31.join(runtime, name), "utf8")];
     }));
   }
   journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs32.existsSync(path30.join(directory, "data.json.write-lock")) || fs32.existsSync(path30.join(directory, "data.json.write-intent")) || fs32.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
-    const names = fs32.readdirSync(runtime).sort();
+    if (fs33.existsSync(path31.join(directory, "data.json.write-lock")) || fs33.existsSync(path31.join(directory, "data.json.write-intent")) || fs33.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
+    const names = fs33.readdirSync(runtime).sort();
     if (names.some((name) => name === "update-pending.json" || name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished runtime write or update");
     return { runtime, names: names.filter((name) => /^[a-zA-Z0-9-]+\.json$/.test(name)) };
   }
@@ -10266,7 +10410,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       if (this.executionAttempted || this.observedJournalSnapshot === void 0 || this.startupPending || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) throw error;
       if (this.journalSnapshot() !== this.observedJournalSnapshot) throw error;
       const file = this.selectedExecutionLocation().configurationFile;
-      for (const settings of [this.settings, JSON.parse(fs32.readFileSync(file, "utf8"))]) {
+      for (const settings of [this.settings, JSON.parse(fs33.readFileSync(file, "utf8"))]) {
         if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw error;
         assertIdleCatalog({
           tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10276,7 +10420,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     }
   }
   observationProofPath(token) {
-    return path30.join(this.selectedExecutionLocation(false).runtimeDirectory, "plugin-observation-" + token + ".proof");
+    return path31.join(this.selectedExecutionLocation(false).runtimeDirectory, "plugin-observation-" + token + ".proof");
   }
   async recordObservationProof() {
     const lease = this.pluginExecutionLease;
@@ -10285,18 +10429,18 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     this.assertLifecycleOpen();
     lease.assertOwned();
     const file = this.observationProofPath(lease.token);
-    const fd = fs32.openSync(file, "wx", 384);
+    const fd = fs33.openSync(file, "wx", 384);
     try {
-      const identity = fs32.fstatSync(fd);
+      const identity = fs33.fstatSync(fd);
       const bytes = JSON.stringify({ schemaVersion: 1, token: lease.token, journalHash });
-      fs32.writeFileSync(fd, bytes);
-      await new Promise((resolve10, reject) => fs32.fsync(fd, (error) => error ? reject(error) : resolve10()));
+      fs33.writeFileSync(fd, bytes);
+      await new Promise((resolve10, reject) => fs33.fsync(fd, (error) => error ? reject(error) : resolve10()));
       lease.assertOwned();
       this.assertLifecycleOpen();
-      const current = fs32.lstatSync(file);
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs32.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
+      const current = fs33.lstatSync(file);
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs33.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
     } finally {
-      fs32.closeSync(fd);
+      fs33.closeSync(fd);
     }
     this.observationProof = file;
   }
@@ -10306,7 +10450,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     if (this.observationProof) {
       this.pluginExecutionLease.assertOwned();
       const file = this.observationProof;
-      if (fs32.existsSync(file)) fs32.unlinkSync(file);
+      if (fs33.existsSync(file)) fs33.unlinkSync(file);
       this.observationProof = void 0;
     }
     this.executionAttempted = true;
@@ -10314,11 +10458,11 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
   assertClosedObservation(token) {
     const location = this.selectedExecutionLocation(false);
     if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package changed");
-    const file = this.observationProofPath(token), stat = fs32.lstatSync(file);
+    const file = this.observationProofPath(token), stat = fs33.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Invalid observation proof");
-    const proof = JSON.parse(fs32.readFileSync(file, "utf8"));
+    const proof = JSON.parse(fs33.readFileSync(file, "utf8"));
     if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require("crypto").createHash("sha256").update(this.journalSnapshot()).digest("hex")) throw new Error("Observed execution state changed");
-    const settings = JSON.parse(fs32.readFileSync(location.configurationFile, "utf8"));
+    const settings = JSON.parse(fs33.readFileSync(location.configurationFile, "utf8"));
     if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error("Execution requires reconciliation");
     assertIdleCatalog({
       tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10327,25 +10471,25 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
   }
   async completeInstalledRelease() {
     const location = this.selectedExecutionLocation();
-    const manifestFile = path30.join(location.installationDirectory, "manifest.json");
-    const manifestStat = fs32.lstatSync(manifestFile);
+    const manifestFile = path31.join(location.installationDirectory, "manifest.json");
+    const manifestStat = fs33.lstatSync(manifestFile);
     if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1) throw new Error("Unsafe installed plugin manifest");
-    const startingManifest = await fs32.promises.readFile(manifestFile);
+    const startingManifest = await fs33.promises.readFile(manifestFile);
     const installedManifest = JSON.parse(startingManifest.toString("utf8"));
     if (installedManifest.id !== "auto-oc" || installedManifest.id !== this.manifest.id || installedManifest.version !== PLUGIN_BUILD_VERSION) {
       throw new Error("Installed plugin manifest identity or version differs from the bundle");
     }
-    const mainFile = path30.join(location.installationDirectory, "main.js");
-    const stat = fs32.lstatSync(mainFile);
+    const mainFile = path31.join(location.installationDirectory, "main.js");
+    const stat = fs33.lstatSync(mainFile);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe installed plugin bundle");
-    const startingBundle = await fs32.promises.readFile(mainFile);
+    const startingBundle = await fs33.promises.readFile(mainFile);
     const completePackage = await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION);
     const assertCatalog = await waitForInstalledCatalog(location.installationDirectory, () => {
       this.assertLifecycleOpen();
       this.selectedExecutionLocation();
       for (const [file, bytes] of [[manifestFile, startingManifest], [mainFile, startingBundle]]) {
-        const current = fs32.lstatSync(file);
-        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs32.readFileSync(file).equals(bytes)) {
+        const current = fs33.lstatSync(file);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs33.readFileSync(file).equals(bytes)) {
           throw new Error("Installed plugin identity changed during startup");
         }
       }
@@ -10361,10 +10505,10 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     try {
       const files2 = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, PLUGIN_BUILD_VERSION);
       this.assertLifecycleOpen();
-      if (!files2["main.js"].equals(startingBundle) || !fs32.readFileSync(mainFile).equals(startingBundle)) {
+      if (!files2["main.js"].equals(startingBundle) || !fs33.readFileSync(mainFile).equals(startingBundle)) {
         throw new Error("Bootstrap revision differs from the starting plugin; retry with a coherent release");
       }
-      if (!files2["manifest.json"].equals(startingManifest) || !fs32.readFileSync(manifestFile).equals(startingManifest)) {
+      if (!files2["manifest.json"].equals(startingManifest) || !fs33.readFileSync(manifestFile).equals(startingManifest)) {
         throw new Error("Bootstrap manifest differs from the starting installation");
       }
       this.assertExecutionIdle();
@@ -10374,7 +10518,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       Object.assign(this.manifest, installedManifest);
       return assertCatalog;
     } finally {
-      this.updateInProgress = fs32.existsSync(path30.join(location.runtimeDirectory, "update-pending.json"));
+      this.updateInProgress = fs33.existsSync(path31.join(location.runtimeDirectory, "update-pending.json"));
     }
   }
   async onload() {
@@ -10384,12 +10528,12 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     try {
       try {
         const location = this.selectedExecutionLocation(false);
-        if (fs32.existsSync(location.configurationFile + ".write-intent")) {
+        if (fs33.existsSync(location.configurationFile + ".write-intent")) {
           if (!await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Interrupted settings recovery requires a complete verified package");
           this.settingsRecoveryPromise = recoverInterruptedSettingsWrite(location.installationDirectory, () => this.assertLifecycleOpen());
           try {
             const recovered = await this.settingsRecoveryPromise;
-            if (recovered) new import_obsidian9.Notice("AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.", 1e4);
+            if (recovered) new import_obsidian10.Notice("AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.", 1e4);
           } finally {
             this.settingsRecoveryPromise = void 0;
           }
@@ -10434,9 +10578,10 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         id: "review-older-attempts",
         name: "Review older attempts",
         callback: () => {
-          void this.openHistoricalAttemptsReview().catch((error) => new import_obsidian9.Notice(this.redactSecrets(String(error))));
+          void this.openHistoricalAttemptsReview().catch((error) => new import_obsidian10.Notice(this.redactSecrets(String(error))));
         }
       });
+      this.addCommand({ id: "resolve-blocked-executions", name: "Resolve blocked executions", callback: () => this.openBlockedExecutionsReview() });
       this.addCommand({
         id: "review-legacy-credential-notice",
         name: "Review legacy credential notice",
@@ -10462,7 +10607,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         name: "Check due tasks now",
         callback: async () => {
           await this.runDueAll();
-          new import_obsidian9.Notice("AutoOC: check completed.");
+          new import_obsidian10.Notice("AutoOC: check completed.");
         }
       });
       this.addCommand({
@@ -10475,7 +10620,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         name: "AutoOC: Ralph Loop Assistant (install/activate)",
         callback: async () => {
           const result = await this.ensureRalphLoopPluginEnabled();
-          new import_obsidian9.Notice(
+          new import_obsidian10.Notice(
             result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
           );
         }
@@ -10523,7 +10668,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       } catch (cleanup) {
         console.warn("AutoOC host registration cleanup failed", cleanup);
       }
-      new import_obsidian9.Notice(`AutoOC: startup failed \u2014 ${String(error)}`);
+      new import_obsidian10.Notice(`AutoOC: startup failed \u2014 ${String(error)}`);
       throw error;
     } finally {
       this.startupPending = false;
@@ -10538,12 +10683,12 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         event.preventDefault();
         event.returnValue = false;
         if (!this.windowCloseDrain) {
-          new import_obsidian9.Notice("AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.", 8e3);
+          new import_obsidian10.Notice("AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.", 8e3);
           this.windowCloseDrain = Promise.all([this.settingsWriter.drain(), publishingCLI ? (_b = this.cliRequestHost) == null ? void 0 : _b.drain() : void 0, this.settingsRecoveryPromise]).then(() => {
-            new import_obsidian9.Notice("AutoOC: saving finished. You can close or reload the window.");
+            new import_obsidian10.Notice("AutoOC: saving finished. You can close or reload the window.");
           }).catch((error) => {
             console.warn("AutoOC window kept open after save failure", error);
-            new import_obsidian9.Notice("AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.", 1e4);
+            new import_obsidian10.Notice("AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.", 1e4);
           }).finally(() => {
             this.windowCloseDrain = void 0;
           });
@@ -10659,7 +10804,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
             return;
           }
           try {
-            fs32.lstatSync(path30.join(current.runtimeDirectory, "execution.lock"));
+            fs33.lstatSync(path31.join(current.runtimeDirectory, "execution.lock"));
             absentSince = void 0;
             return;
           } catch (error) {
@@ -10675,7 +10820,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
           await this.retryLoadingAutoOC();
         } catch (error) {
           this.stopStartupWait();
-          new import_obsidian9.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
+          new import_obsidian10.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
         }
       }, 1e3);
       this.registerInterval(this.startupWaitTimer);
@@ -10724,8 +10869,9 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         await this.checkForUpdates(true);
         if (this.updateCheckError) throw new Error(this.updateCheckError);
         if (this.updateAvailable) await this.updatePlugin();
-        else new import_obsidian9.Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
-      }
+        else new import_obsidian10.Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
+      },
+      () => this.openBlockedExecutionsReview()
     ));
     this.addRibbonIcon("workflow", "Open AutoOC", () => {
       void open();
@@ -10733,12 +10879,13 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     this.addCommand({ id: "open-auto-oc", name: "Open AutoOC", callback: () => {
       void open();
     } });
-    new import_obsidian9.Notice(this.startupWaitingForOwner ? "AutoOC is open for consultation while another execution owns the engine." : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 1e4);
+    this.addCommand({ id: "resolve-blocked-executions", name: "Resolve blocked executions", callback: () => this.openBlockedExecutionsReview() });
+    new import_obsidian10.Notice(this.startupWaitingForOwner ? "AutoOC is open for consultation while another execution owns the engine." : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 1e4);
   }
   closedSessionRecovery() {
     try {
       const location = this.selectedExecutionLocation(false);
-      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs32.existsSync(path30.join(location.runtimeDirectory, "update-pending.json"))) return;
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs33.existsSync(path31.join(location.runtimeDirectory, "update-pending.json"))) return;
       assertPackageMaintenanceSafe(location.installationDirectory);
       const owner = readExecutionLeaseOwner(location.runtimeDirectory);
       try {
@@ -10749,7 +10896,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       }
       return () => {
         const current = this.selectedExecutionLocation(false);
-        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs32.existsSync(path30.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs33.existsSync(path31.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
         assertPackageMaintenanceSafe(current.installationDirectory);
         recoverExecutionLease(current.runtimeDirectory, owner.token);
       };
@@ -10765,7 +10912,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     const base2 = this.app.vault.adapter.basePath;
     if (!base2) throw new Error("AutoOC execution requires a local vault");
     const configDir = this.app.vault.configDir, id = (_a = this.manifest) == null ? void 0 : _a.id;
-    if (!configDir || path30.isAbsolute(configDir) || !id || /[\\/:]/.test(id)) throw new Error("Invalid selected installation");
+    if (!configDir || path31.isAbsolute(configDir) || !id || /[\\/:]/.test(id)) throw new Error("Invalid selected installation");
     const location = resolveInstalledWorkflowLocation(base2, `${configDir}/plugins/${id}`);
     if (this.pluginExecutionLease) {
       if (requireOwnership) this.pluginExecutionLease.assertOwned();
@@ -10828,7 +10975,8 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     if (!execution || execution.runId !== expectedRunId) throw new Error("Recovery identity changed; reload the workflow");
     if (!["ready", "in_flight"].includes(execution.phase)) throw new Error("Execution does not require recovery");
     const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory, expectedRunId);
-    recoverWorkflowProgress(workflow, this.settings.tasks, this.settings, checkpoint, expectedRunId);
+    const recovered = recoverWorkflowProgress(workflow, this.settings.tasks, this.settings, checkpoint, expectedRunId);
+    if (recovered.runtimeExecution.definitionChanged) return "blocked";
     if (!["ready", "in_flight"].includes(checkpoint.phase)) throw new Error("Execution does not require recovery");
     if (checkpoint.phase === "ready") return "resume";
     const last = checkpoint.steps[checkpoint.steps.length - 1];
@@ -10855,14 +11003,14 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
           request.stepId
         );
       } catch (error) {
-        if (!this.lifecycleStopped) new import_obsidian9.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
+        if (!this.lifecycleStopped) new import_obsidian10.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
         throw error;
       }
     }, async (request) => {
       const assertIdle = () => {
         this.assertLifecycleOpen();
         this.pluginExecutionLease.assertOwned();
-        if (this.updateInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size) throw new Error("Execution active; wait for AutoOC to finish, keeping Obsidian open");
+        if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size) throw new Error("Execution active; wait for AutoOC to finish, keeping Obsidian open");
         assertIdleCatalog(this.settings, assertIdleJournals(this.selectedExecutionLocation().runtimeDirectory));
       };
       assertIdle();
@@ -11031,7 +11179,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       throw new Error("Step execution changed; refresh before stopping.");
     }
     this.sharedExecution(workflowId, void 0, observed.runId).controller.abort();
-    new import_obsidian9.Notice("Stop requested. Commands already started may still have effects.");
+    new import_obsidian10.Notice("Stop requested. Commands already started may still have effects.");
   }
   async setCodeStepDisabled(workflowId, stepId, disabled) {
     const save = async (transaction) => {
@@ -11204,7 +11352,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
   }
   getMcpBridgePath() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
-    return path30.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
+    return path31.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
   }
   async startMcpBridge() {
   }
@@ -11536,9 +11684,9 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       }
       await this.saveSettings(false);
       (_a = this.view) == null ? void 0 : _a.refresh();
-      if (showNotice) new import_obsidian9.Notice(`AutoOC: ${models.length} Codex models loaded.`);
+      if (showNotice) new import_obsidian10.Notice(`AutoOC: ${models.length} Codex models loaded.`);
     } catch (error) {
-      if (showNotice) new import_obsidian9.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
+      if (showNotice) new import_obsidian10.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
     } finally {
       client.dispose();
     }
@@ -11678,10 +11826,10 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       this.settingsWritableCatalog = localFile ? { file: localFile, version: this.settingsWriter.confirmedVersion(localFile) } : void 0;
       this.settingsPublicationState = "ready";
     };
-    this.legacyOutputRedaction.load(path30.join((location == null ? void 0 : location.installationDirectory) || path30.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path30.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
+    this.legacyOutputRedaction.load(path31.join((location == null ? void 0 : location.installationDirectory) || path31.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path31.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
     for (const item of [...nextSettings.tasks, ...nextSettings.workflows, ...nextSettings.workflows.flatMap((w) => w.steps || [])]) {
       const error = autoOCDependencyError(item);
-      if (error) new import_obsidian9.Notice(error);
+      if (error) new import_obsidian10.Notice(error);
     }
     nextSettings.tasks = nextSettings.tasks.map((task) => {
       var _a2, _b2;
@@ -11903,9 +12051,9 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
   }
   isRalphLoopEnabled() {
     const configPath = getOpencodeConfigPath();
-    if (!fs32.existsSync(configPath)) return false;
+    if (!fs33.existsSync(configPath)) return false;
     try {
-      const raw = fs32.readFileSync(configPath, "utf8");
+      const raw = fs33.readFileSync(configPath, "utf8");
       const data = JSON.parse(raw);
       return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
     } catch (e) {
@@ -11914,14 +12062,14 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
   }
   async ensureRalphLoopPluginEnabled() {
     const configPath = getOpencodeConfigPath();
-    const configDir = path30.dirname(configPath);
-    if (!fs32.existsSync(configDir)) {
-      fs32.mkdirSync(configDir, { recursive: true });
+    const configDir = path31.dirname(configPath);
+    if (!fs33.existsSync(configDir)) {
+      fs33.mkdirSync(configDir, { recursive: true });
     }
     let data = {};
-    if (fs32.existsSync(configPath)) {
+    if (fs33.existsSync(configPath)) {
       try {
-        const raw = fs32.readFileSync(configPath, "utf8");
+        const raw = fs33.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -11933,7 +12081,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     }
     plugins.push("opencode-ralph-loop");
     data.plugin = plugins;
-    fs32.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+    fs33.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     return { changed: true, configPath };
   }
@@ -11941,7 +12089,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     return {
       vaultBasePath,
-      mcpPath: path30.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
+      mcpPath: path31.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
     };
   }
   getAutoOcMcpConfigBlock(requireAvailableUv = false) {
@@ -11958,21 +12106,21 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
   }
   ensureAutoOcMcpServerFile() {
     const { mcpPath } = this.getAutoOcMcpPaths();
-    fs32.mkdirSync(path30.dirname(mcpPath), { recursive: true });
-    fs32.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    fs33.mkdirSync(path31.dirname(mcpPath), { recursive: true });
+    fs33.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
     return mcpPath;
   }
   async ensureAutoOcMcpEnabled() {
     const configPath = getOpencodeConfigPath();
-    const configDir = path30.dirname(configPath);
-    if (!fs32.existsSync(configDir)) {
-      fs32.mkdirSync(configDir, { recursive: true });
+    const configDir = path31.dirname(configPath);
+    if (!fs33.existsSync(configDir)) {
+      fs33.mkdirSync(configDir, { recursive: true });
     }
     const mcpPath = this.ensureAutoOcMcpServerFile();
     let data = {};
-    if (fs32.existsSync(configPath)) {
+    if (fs33.existsSync(configPath)) {
       try {
-        const raw = fs32.readFileSync(configPath, "utf8");
+        const raw = fs33.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -11986,7 +12134,7 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       mcp["autooc-mcp"] = nextBlock;
       data.mcp = mcp;
       if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-      fs32.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+      fs33.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     }
     return { changed, configPath, mcpPath };
@@ -12035,8 +12183,8 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         this.assertLifecycleOpen();
         const vaultBasePath = this.app.vault.adapter.basePath || "";
         const location = ((_a = this.manifest) == null ? void 0 : _a.id) && vaultBasePath ? this.selectedExecutionLocation(false) : void 0;
-        const directory = (location == null ? void 0 : location.installationDirectory) || path30.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path30.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc"));
-        this.legacyOutputRedaction.load(path30.join(directory, "secrets.vault.json"), tryGetSafeStorage(), false);
+        const directory = (location == null ? void 0 : location.installationDirectory) || path31.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path31.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc"));
+        this.legacyOutputRedaction.load(path31.join(directory, "secrets.vault.json"), tryGetSafeStorage(), false);
         return this.legacyCredentialNoticeStatus();
       },
       acknowledge: (id) => {
@@ -12066,23 +12214,118 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       this.updateAvailable = comparison > 0 || comparison === 0 && !!incomplete;
       (_a = this.view) == null ? void 0 : _a.refresh();
       if (!silent) {
-        new import_obsidian9.Notice(
+        new import_obsidian10.Notice(
           this.updateAvailable ? `AutoOC: install or repair the complete v${remoteVersion} package.` : `AutoOC: already up to date (v${this.manifest.version}).`
         );
       }
     } catch (e) {
       this.updateCheckError = String(e);
       (_b = this.view) == null ? void 0 : _b.refresh();
-      if (!silent) new import_obsidian9.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
+      if (!silent) new import_obsidian10.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
     }
   }
   get panelAvailable() {
     return this.ready || !!this.startupError && !this.startupRecoveryDisposed;
   }
+  openBlockedExecutionsReview(runId) {
+    if (!this.panelAvailable) throw new Error("AutoOC is still loading or closing");
+    new BlockedExecutionModal(
+      this.app,
+      () => inspectBlockedExecutions(this.selectedExecutionLocation(false)),
+      (inspection, attempt) => this.confirmResetBlockedAttempt(inspection, attempt),
+      this.ready ? void 0 : async (inspection) => {
+        if (!await new ConfirmModal(
+          this.app,
+          "Reconnect execution controls?",
+          "Reconnect AutoOC while keeping every saved attempt. No task will run. Confirm after checking that the original external work has ended. A live external owner or an active save still prevents reconnection."
+        ).openAndWait()) return false;
+        await this.withRecoveryLease(inspection, async () => {
+        });
+        return true;
+      },
+      (error) => this.redactSecrets(String(error)),
+      runId
+    ).open();
+  }
+  async confirmResetBlockedAttempt(inspection, attempt) {
+    const modal = new ConfirmModal(
+      this.app,
+      "Reset this blocked attempt?",
+      `${attempt.name}. Attempt: ${attempt.runId}. ${attempt.completedSteps} completed step(s) will remain in history. Confirm that the original external work has ended and accept that unverified effects remain unknown. This closes only this attempt; it does not undo changes, mark success, or start new work. A later Run may repeat earlier effects. Enter the reason for closing it.`,
+      true
+    );
+    if (!await modal.openAndWait()) return false;
+    await this.withRecoveryLease(inspection, async (lease, assertIdle) => {
+      await resetBlockedAttempt(inspection, attempt, lease, modal.reason, true, assertIdle);
+    });
+    new import_obsidian10.Notice("Attempt closed with unknown outcome. History and results are preserved. Nothing was started.");
+    return true;
+  }
+  // Recovery holds the same admission and shutdown barriers as execution. It
+  // can borrow a current idle owner, or reclaim an exact stopped/dead owner;
+  // it never treats PID equality alone as authority to release a reservation.
+  async withRecoveryLease(inspection, action) {
+    const assertIdle = () => {
+      var _a;
+      if (!this.panelAvailable || this.startupRecoveryDisposed || this.startupPending || this.updateInProgress || this.workflowEditPending || this.sharedWorkflowExecution || this.definitionStarts.size || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.draftControllers.size || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) {
+        throw new Error("Active work or saving must finish before recovery. No attempt was reset.");
+      }
+    };
+    assertIdle();
+    if (this.bulkCatalogMutationInProgress || this.sharedCompletions.size) throw new Error("Another operation is finishing; refresh the recovery review");
+    const consulting = !this.ready;
+    const expectedSettings = consulting ? void 0 : captureJsonStructure(this.settings);
+    this.bulkCatalogMutationInProgress = true;
+    const pending = Promise.resolve().then(async () => {
+      assertIdle();
+      const location = assertBlockedInspection(inspection, true);
+      if (!samePhysicalPath(this.selectedExecutionLocation(false).installationDirectory, location.installationDirectory)) throw new Error("Selected installation changed");
+      let lease = this.pluginExecutionLease;
+      const temporary = consulting || !lease;
+      if (!lease) {
+        if (inspection.owner) {
+          const relinquish = inspection.owner.pid === process.pid ? stoppedLeaseOwners.get(inspection.owner.token) : void 0;
+          if (relinquish) relinquish(location.runtimeDirectory, true);
+          else recoverExecutionLease(location.runtimeDirectory, inspection.owner.token, () => {
+            assertIdle();
+            assertBlockedInspection(inspection, true);
+          });
+        }
+        lease = acquireExecutionLease(location.runtimeDirectory);
+      }
+      try {
+        lease.assertOwned();
+        if (!samePhysicalPath(lease.directory, location.runtimeDirectory)) throw new Error("Recovery owner belongs to another installation");
+        assertIdle();
+        assertBlockedInspection(inspection, false);
+        if (!consulting && this.pluginExecutionLease === lease) this.beginExecutionEffects();
+        await action(lease, assertIdle);
+        if (!consulting && this.panelAvailable && !this.lifecycleStopped) {
+          if (!matchesJsonStructure(this.settings, expectedSettings)) throw new Error("Recovery may already be recorded. Local edits were preserved; refresh the review before continuing.");
+          await this.loadSettings();
+          this.refreshOpenViews();
+        }
+      } finally {
+        if (temporary) {
+          assertPackageMaintenanceSafe(location.installationDirectory);
+          if (this.pluginExecutionLease === lease) this.releasePluginExecution(false);
+          else lease.release();
+        }
+      }
+    });
+    this.sharedCompletions.add(pending);
+    try {
+      await pending;
+    } finally {
+      this.sharedCompletions.delete(pending);
+      this.bulkCatalogMutationInProgress = false;
+    }
+    if (consulting && this.panelAvailable) await this.retryLoadingAutoOC();
+  }
   assertPackageUpdateIdle(stoppedOwner = false) {
     var _a, _b;
     if (!stoppedOwner && this.lifecycleStopped && (!this.startupError || this.startupRecoveryDisposed)) throw new Error("AutoOC instance is stopped");
-    if (this.startupPending || this.sharedWorkflowExecution || this.sharedCompletions.size || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.workflowEditPending || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) {
+    if (this.startupPending || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.sharedCompletions.size || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.workflowEditPending || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) {
       throw new Error("An active execution or save must finish before updating AutoOC");
     }
     const location = this.selectedExecutionLocation(false);
@@ -12115,11 +12358,11 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
         maintenanceLease = true;
       }
       (_a = this.view) == null ? void 0 : _a.refresh();
-      new import_obsidian9.Notice("AutoOC: downloading update\u2026");
+      new import_obsidian10.Notice("AutoOC: downloading update\u2026");
       const files2 = await downloadRelease("https://raw.githubusercontent.com/" + GITHUB_REPO + "/" + GITHUB_BRANCH, targetVersion);
       await this.settingsWriter.drain();
       this.assertPackageUpdateIdle();
-      const pluginDir = path30.dirname(this.pluginExecutionLease.directory);
+      const pluginDir = path31.dirname(this.pluginExecutionLease.directory);
       installRelease({ directory: pluginDir, version: targetVersion, files: files2, lease: this.pluginExecutionLease });
       this.lifecycleStopped = true;
       this.ready = false;
@@ -12127,20 +12370,20 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       this.stopStartupWait();
       (_b = this.cliRequestHost) == null ? void 0 : _b.close();
       this.releasePluginExecution(false);
-      new import_obsidian9.Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin\u2026");
+      new import_obsidian10.Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin\u2026");
       try {
         await this.app.plugins.disablePlugin(this.manifest.id);
         await this.app.plugins.enablePlugin(this.manifest.id);
         const loaded = (_c = this.app.plugins.plugins) == null ? void 0 : _c[this.manifest.id];
         if (!(loaded == null ? void 0 : loaded.panelAvailable) && !(loaded == null ? void 0 : loaded.ready)) throw new Error("New plugin panel did not open");
-        new import_obsidian9.Notice("AutoOC: plugin reloaded.");
+        new import_obsidian10.Notice("AutoOC: plugin reloaded.");
       } catch (e) {
-        new import_obsidian9.Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12e3);
+        new import_obsidian10.Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12e3);
       }
     } catch (error) {
-      new import_obsidian9.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
+      new import_obsidian10.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
     } finally {
-      this.updateInProgress = !!this.pluginExecutionLease && fs32.existsSync(path30.join(this.pluginExecutionLease.directory, "update-pending.json"));
+      this.updateInProgress = !!this.pluginExecutionLease && fs33.existsSync(path31.join(this.pluginExecutionLease.directory, "update-pending.json"));
       if (maintenanceLease && this.pluginExecutionLease && !this.updateInProgress) {
         try {
           this.releasePluginExecution(false);
@@ -12188,12 +12431,12 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       return { output: this.redactSecrets(result.output), exitCode: result.succeeded ? 0 : -1 };
     }
     return new Promise((resolve10) => {
-      const fs33 = require("fs");
-      const path31 = require("path");
+      const fs34 = require("fs");
+      const path32 = require("path");
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const outFile = path31.join(tmpDir, `autooc-eval-${evalId}.txt`);
-      const pidFile = path31.join(tmpDir, `autooc-eval-${evalId}.pid`);
+      const outFile = path32.join(tmpDir, `autooc-eval-${evalId}.txt`);
+      const pidFile = path32.join(tmpDir, `autooc-eval-${evalId}.pid`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
@@ -12203,15 +12446,15 @@ var AutoOCPlugin = class extends import_obsidian9.Plugin {
       const cleanup = (removeScript = true) => {
         hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
         try {
-          fs33.unlinkSync(scriptFile);
+          fs34.unlinkSync(scriptFile);
         } catch (e) {
         }
         try {
-          fs33.unlinkSync(outFile);
+          fs34.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs33.unlinkSync(pidFile);
+          fs34.unlinkSync(pidFile);
         } catch (e) {
         }
       };
@@ -12266,9 +12509,9 @@ DONE:%s
 %s' "$exit_code" "$combined" > ${shSingleQuoted(outFile)}`
         ].join("\n");
       }
-      const scriptFile = path31.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
+      const scriptFile = path32.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
       if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-      else fs33.writeFileSync(scriptFile, launchScript, "utf8");
+      else fs34.writeFileSync(scriptFile, launchScript, "utf8");
       hiddenProc = launchHidden(scriptFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -12281,10 +12524,10 @@ DONE:%s
           resolve10({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
-        if (!fs33.existsSync(outFile)) return;
+        if (!fs34.existsSync(outFile)) return;
         settled = true;
         clearInterval(poll);
-        const raw = fs33.readFileSync(outFile, "utf8");
+        const raw = fs34.readFileSync(outFile, "utf8");
         cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
@@ -12398,7 +12641,7 @@ DONE:%s
       try {
         this.openHistoricalExecutionRecovery(workflowId, runId);
       } catch (error) {
-        new import_obsidian9.Notice(this.redactSecrets(String(error)));
+        new import_obsidian10.Notice(this.redactSecrets(String(error)));
       }
     }).open();
   }
@@ -12527,7 +12770,7 @@ DONE:%s
     const disabledReason = taskDisabledReason(this.settings.tasks[idx]);
     if (disabledReason) throw new Error(disabledReason);
     if (this.isTaskActive(this.settings.tasks[idx])) {
-      new import_obsidian9.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
+      new import_obsidian10.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
       if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
@@ -12578,13 +12821,13 @@ DONE:%s
     }
     if (effectiveTask.taskKind === "codex") {
       void this.runCodexTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
-        new import_obsidian9.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian10.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
     if (effectiveTask.taskKind === "copilot") {
       void this.runCopilotTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
-        new import_obsidian9.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian10.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
@@ -12596,7 +12839,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a string when provided.";
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
+      new import_obsidian10.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -12608,7 +12851,7 @@ DONE:%s
         this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
         this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
         await this.saveSettings();
-        new import_obsidian9.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        new import_obsidian10.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
         if (onComplete) await onComplete(this.settings.tasks[idx], -1);
         return;
       }
@@ -12618,7 +12861,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: "${task.name}" has an empty prompt.`);
+      new import_obsidian10.Notice(`AutoOC: "${task.name}" has an empty prompt.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -12627,7 +12870,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: "${task.name}" has no model selected.`);
+      new import_obsidian10.Notice(`AutoOC: "${task.name}" has no model selected.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -12655,7 +12898,7 @@ DONE:%s
         await this.saveSettings();
         if (!this.isLegacyCurrent(attempt) || cancelled2 || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current || current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller2) return;
         if (this.runningProcesses.get(task.id) === controller2) this.runningProcesses.delete(task.id);
-        new import_obsidian9.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
+        new import_obsidian10.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
         if (onComplete) await onComplete(current, error ? -1 : 0);
       };
       current.status = "running";
@@ -12701,7 +12944,7 @@ DONE:%s
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.finishLegacyStart(attempt);
-    new import_obsidian9.Notice(`AutoOC: running "${task.name}"\u2026`);
+    new import_obsidian10.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
     const bin = checkedOpenCode2Bin || args[0];
     let prompt = effectiveTask.prompt;
@@ -12718,47 +12961,47 @@ DONE:%s
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
     const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
-    const fs33 = require("fs");
+    const fs34 = require("fs");
     try {
-      fs33.unlinkSync(outFile);
+      fs34.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs33.unlinkSync(errFile);
+      fs34.unlinkSync(errFile);
     } catch (e) {
     }
     try {
-      fs33.unlinkSync(doneFile);
+      fs34.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
-      fs33.unlinkSync(pidFile);
+      fs34.unlinkSync(pidFile);
     } catch (e) {
     }
     try {
-      fs33.unlinkSync(promptFile);
+      fs34.unlinkSync(promptFile);
     } catch (e) {
     }
     try {
-      fs33.unlinkSync(fullPromptFile);
+      fs34.unlinkSync(fullPromptFile);
     } catch (e) {
     }
     try {
-      fs33.unlinkSync(tmpFullPromptFile);
+      fs34.unlinkSync(tmpFullPromptFile);
     } catch (e) {
     }
     if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
       try {
-        fs33.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs34.writeFileSync(fullPromptFile, prompt, "utf8");
       } catch (e) {
         fullPromptFile = tmpFullPromptFile;
-        fs33.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs34.writeFileSync(fullPromptFile, prompt, "utf8");
       }
       const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
       const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
-      fs33.writeFileSync(promptFile, shortPrompt, "utf8");
+      fs34.writeFileSync(promptFile, shortPrompt, "utf8");
     } else {
-      fs33.writeFileSync(promptFile, preparedPrompt, "utf8");
+      fs34.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
@@ -12786,7 +13029,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const launchScript = buildOpenCodeScript({ pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd, major: effectiveTask.taskKind === "opencode2" ? 2 : 1 });
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-    else fs33.writeFileSync(scriptFile, launchScript, "utf8");
+    else fs34.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
     try {
       hiddenProc = launchHidden(scriptFile, pidFile);
@@ -12796,7 +13039,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: could not launch "${task.name}".`);
+      new import_obsidian10.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
       return;
     }
@@ -12808,31 +13051,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
       try {
-        fs33.unlinkSync(promptFile);
+        fs34.unlinkSync(promptFile);
       } catch (e) {
       }
       try {
-        fs33.unlinkSync(fullPromptFile);
+        fs34.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       try {
-        fs33.unlinkSync(tmpFullPromptFile);
+        fs34.unlinkSync(tmpFullPromptFile);
       } catch (e) {
       }
       try {
-        fs33.unlinkSync(outFile);
+        fs34.unlinkSync(outFile);
       } catch (e) {
       }
       try {
-        fs33.unlinkSync(errFile);
+        fs34.unlinkSync(errFile);
       } catch (e) {
       }
       try {
-        fs33.unlinkSync(doneFile);
+        fs34.unlinkSync(doneFile);
       } catch (e) {
       }
       try {
-        fs33.unlinkSync(pidFile);
+        fs34.unlinkSync(pidFile);
       } catch (e) {
       }
     };
@@ -12863,7 +13106,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       cleanupTempFiles();
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: could not launch "${task.name}".`);
+      new import_obsidian10.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
     const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
@@ -12896,7 +13139,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
 [\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings(false);
         if (!this.isLegacyCurrent(attempt)) return;
-        new import_obsidian9.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
+        new import_obsidian10.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
         if (shouldAbortBeforeFinalMutation(t)) return;
@@ -12915,12 +13158,12 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         await this.saveSettings();
         if (wasManuallyStopped(t)) return;
         if (onComplete) await onComplete(t, -1);
-        new import_obsidian9.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
+        new import_obsidian10.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
-      if (!fs33.existsSync(doneFile)) {
-        const stdout2 = fs33.existsSync(outFile) ? decodeCommandBuffer(fs33.readFileSync(outFile)) : "";
-        const stderr2 = fs33.existsSync(errFile) ? decodeCommandBuffer(fs33.readFileSync(errFile)) : "";
+      if (!fs34.existsSync(doneFile)) {
+        const stdout2 = fs34.existsSync(outFile) ? decodeCommandBuffer(fs34.readFileSync(outFile)) : "";
+        const stderr2 = fs34.existsSync(errFile) ? decodeCommandBuffer(fs34.readFileSync(errFile)) : "";
         const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
         if (normalized2) {
           t.output = `${normalized2}
@@ -12937,9 +13180,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      const stdout = fs33.existsSync(outFile) ? decodeCommandBuffer(fs33.readFileSync(outFile)) : "";
-      const stderr = fs33.existsSync(errFile) ? decodeCommandBuffer(fs33.readFileSync(errFile)) : "";
-      const exitCodeRaw = fs33.readFileSync(doneFile, "utf8").trim();
+      const stdout = fs34.existsSync(outFile) ? decodeCommandBuffer(fs34.readFileSync(outFile)) : "";
+      const stderr = fs34.existsSync(errFile) ? decodeCommandBuffer(fs34.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs34.readFileSync(doneFile, "utf8").trim();
       cleanupTempFiles();
       if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
@@ -12951,10 +13194,10 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         t.output += `
 [exit code: ${exitCode}]`;
         (_c2 = this.view) == null ? void 0 : _c2.startGradualSink(task.id);
-        new import_obsidian9.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
+        new import_obsidian10.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
-        new import_obsidian9.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
+        new import_obsidian10.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, task.id, t.output);
@@ -13059,7 +13302,7 @@ ${current.output}`);
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.emitTaskUpdated(current);
-    new import_obsidian9.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
+    new import_obsidian10.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
     if (onComplete) await onComplete(current, exitCode);
   }
   createCopilotClient(cwd, onOutput) {
@@ -13111,14 +13354,14 @@ ${current.output}`);
     await this.saveSettings();
     if (!isCurrent()) return;
     this.finishLegacyStart(attempt);
-    new import_obsidian9.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
+    new import_obsidian10.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
     const scheduleSave = () => {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
         if (!isCurrent()) return;
         void this.saveSettings(false).catch(() => {
-          new import_obsidian9.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
+          new import_obsidian10.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
         });
       }, 1e4);
     };
@@ -13130,9 +13373,9 @@ ${current.output}`);
         if (task.interactiveTerminal) {
           const bin = resolveCodexBin(this.settings.codexPath);
           openCodexApp(bin, taskCwd, (error) => {
-            new import_obsidian9.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
+            new import_obsidian10.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
           });
-          new import_obsidian9.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
+          new import_obsidian10.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
         }
         scheduleSave();
       },
@@ -13154,7 +13397,7 @@ ${current.output}`);
         current.output += `${current.output ? "\n" : ""}[waiting for approval: ${approval.summary}]`;
         void this.saveSettings(false);
         this.emitTaskUpdated(current);
-        new import_obsidian9.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
+        new import_obsidian10.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
       }
     });
     this.runningCodexClients.set(task.id, client);
@@ -13183,13 +13426,13 @@ ${current.output}`);
       current.output = finalOutput;
       if (successful) {
         current.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
-        new import_obsidian9.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
+        new import_obsidian10.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
       } else {
         current.status = "failed";
         current.output += `
 [Codex status: ${result.status}]`;
         (_c = this.view) == null ? void 0 : _c.startGradualSink(task.id);
-        new import_obsidian9.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+        new import_obsidian10.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
       }
       codexLogOutput = `${metadata}
 [started: ${startedAt}]
@@ -13213,7 +13456,7 @@ ${this.redactSecrets(result.transcript || current.output)}`;
 
 ${current.output}`;
       (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
-      new import_obsidian9.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+      new import_obsidian10.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
       if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
@@ -13246,11 +13489,11 @@ ${current.output}`;
     const client = this.runningCodexClients.get(taskId);
     const approval = task == null ? void 0 : task.pendingCodexApproval;
     if (!task || !client || !approval) {
-      new import_obsidian9.Notice("AutoOC: this Codex approval is no longer active.");
+      new import_obsidian10.Notice("AutoOC: this Codex approval is no longer active.");
       return;
     }
     if (!client.resolveApproval(approval.requestId, approved)) {
-      new import_obsidian9.Notice("AutoOC: could not answer the Codex approval.");
+      new import_obsidian10.Notice("AutoOC: could not answer the Codex approval.");
       return;
     }
     task.output += `
@@ -13285,7 +13528,7 @@ ${current.output}`;
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[AutoOC] Code task not launched: code is empty.";
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: "${current.name}" has empty code.`);
+      new import_obsidian10.Notice(`AutoOC: "${current.name}" has empty code.`);
       if (onComplete) await onComplete(current, -1);
       return;
     }
@@ -13297,7 +13540,7 @@ ${current.output}`;
     current.output = "[running code task...]\n";
     (_a = this.view) == null ? void 0 : _a.resetDashboardTaskShift(current.id);
     await this.saveSettings();
-    new import_obsidian9.Notice(`AutoOC: running code task "${current.name}"...`);
+    new import_obsidian10.Notice(`AutoOC: running code task "${current.name}"...`);
     try {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       this.finishLegacyStart(attempt);
@@ -13315,7 +13558,7 @@ ${current.output}`;
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = this.redactSecrets((current.output || "") + out);
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
-      new import_obsidian9.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
+      new import_obsidian10.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, current.id, current.output || "(no output)");
         cleanupOldLogs(vaultBasePath, current.id, this.settings.maxLogsPerTask);
@@ -13334,7 +13577,7 @@ ${current.output}`;
         cleanupLogsByAge(vaultBasePath, current.id, this.settings.logRetentionDays);
       }
       await this.saveSettings();
-      new import_obsidian9.Notice(`AutoOC: \u274C code task "${current.name}" failed.`);
+      new import_obsidian10.Notice(`AutoOC: \u274C code task "${current.name}" failed.`);
       if (onComplete) await onComplete(current, -1);
     } finally {
       if (this.codeTaskRuns.get(current.id) === execution) this.codeTaskRuns.delete(current.id);
@@ -13388,7 +13631,7 @@ ${current.output}`;
         if (((_a2 = this.legacyAttempts) == null ? void 0 : _a2.get(id)) === attempt && task.legacyExecution === metadata) {
           await this.saveSettings();
           if (((_b2 = this.legacyAttempts) == null ? void 0 : _b2.get(id)) !== attempt || task.legacyExecution !== metadata || (ownerWorkflow == null ? void 0 : ownerWorkflow.legacyExecution) !== ownerExecution) return "stop-requested";
-          new import_obsidian9.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
+          new import_obsidian10.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
         }
         return "stop-requested";
       })();
@@ -13408,7 +13651,7 @@ ${current.output}`;
       }
       if (!execution.controller.signal.aborted) {
         execution.controller.abort();
-        new import_obsidian9.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
+        new import_obsidian10.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
       }
       return "stop-requested";
     }
@@ -13440,7 +13683,7 @@ ${current.output}`;
     if (wf.legacyExecution !== execution || ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id))) return;
     if (((_i = this.definitionStarts) == null ? void 0 : _i.get(`workflow:${id}`)) === startToken) (_j = this.definitionStarts) == null ? void 0 : _j.delete(`workflow:${id}`);
     this.refreshStartControls();
-    new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
+    new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
   async runDueAll() {
     if (this.lifecycleStopped || this.startupPending || this.updateInProgress || this.bulkCatalogMutationInProgress) return;
@@ -13460,7 +13703,7 @@ ${current.output}`;
       if (this.definitionDisabledReason("task", dueTasks[i].id)) continue;
       const error = autoOCDependencyError(dueTasks[i]);
       if (error) {
-        new import_obsidian9.Notice(error);
+        new import_obsidian10.Notice(error);
         continue;
       }
       await this.runTask(dueTasks[i]);
@@ -13475,7 +13718,7 @@ ${current.output}`;
       try {
         assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks);
       } catch (error) {
-        new import_obsidian9.Notice(String(error));
+        new import_obsidian10.Notice(String(error));
         continue;
       }
       await this.runWorkflow(dueWorkflows[i]);
@@ -13508,17 +13751,17 @@ ${current.output}`;
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
-    new import_obsidian9.Notice(`Task "${copy.name}" duplicated.`);
+    new import_obsidian10.Notice(`Task "${copy.name}" duplicated.`);
   }
   async clearTaskLogs(id) {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     clearTaskLogs(vaultBasePath, id);
-    new import_obsidian9.Notice("Logs cleared for this task.");
+    new import_obsidian10.Notice("Logs cleared for this task.");
   }
   async clearAllLogs() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     clearAllLogs(vaultBasePath);
-    new import_obsidian9.Notice("All logs cleared.");
+    new import_obsidian10.Notice("All logs cleared.");
   }
   workflowTaskIds(workflow) {
     return Array.from(new Set(workflow.steps.map((step) => step.taskId).filter(Boolean)));
@@ -13566,7 +13809,7 @@ ${current.output}`;
     };
     this.settings.workflows.push(copy);
     await this.saveSettings();
-    new import_obsidian9.Notice(`Workflow "${copy.name}" duplicated.`);
+    new import_obsidian10.Notice(`Workflow "${copy.name}" duplicated.`);
   }
   ensureUniqueTaskName(name) {
     const existing = new Set(this.settings.tasks.map((t) => t.name));
@@ -13621,12 +13864,12 @@ ${current.output}`;
         title: "Export AutoOC tasks and workflows"
       });
       if (result.canceled || !result.filePath) return;
-      fs32.writeFileSync(result.filePath, json, "utf8");
-      new import_obsidian9.Notice(
+      fs33.writeFileSync(result.filePath, json, "utf8");
+      new import_obsidian10.Notice(
         `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
       );
     } catch (e) {
-      new import_obsidian9.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
+      new import_obsidian10.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
     }
   }
   buildExportSelectionPayload(selectedTaskIds, selectedWorkflowIds) {
@@ -13648,7 +13891,7 @@ ${current.output}`;
     };
   }
   async importFromFile(filePath) {
-    const raw = fs32.readFileSync(filePath, "utf8");
+    const raw = fs33.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
     return this.importFromData(data);
   }
@@ -13789,7 +14032,7 @@ ${current.output}`;
     await this.saveSettings();
     for (const item of [...this.settings.tasks, ...this.settings.workflows, ...this.settings.workflows.flatMap((w) => w.steps || [])]) {
       const error = autoOCDependencyError(item);
-      if (error) new import_obsidian9.Notice(error);
+      if (error) new import_obsidian10.Notice(error);
     }
     return { tasksImported, workflowsImported };
   }
@@ -13820,21 +14063,21 @@ ${current.output}`;
       const execution = item.runtimeExecution;
       return execution && !["completed", "failed", "abandoned"].includes(execution.phase) && !this.ownsSharedRun(item.id, execution.runId);
     })) {
-      new import_obsidian9.Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
+      new import_obsidian10.Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
       return;
     }
     if (wf.status === "running") {
-      new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
       return;
     }
     if (wf.steps.length === 0) {
-      new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
+      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
       return;
     }
     for (let i = 0; i < wf.steps.length; i++) {
       const step = wf.steps[i];
       if (step.stepKind === "task" && !this.settings.tasks.find((t) => t.id === step.taskId)) {
-        new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
+        new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
         return;
       }
     }
@@ -13869,13 +14112,13 @@ ${current.output}`;
     if (this.workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     releaseStart == null ? void 0 : releaseStart();
     this.refreshStartControls();
-    new import_obsidian9.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
+    new import_obsidian10.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
     const entryStep = this.findEntryStep(wf);
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
       if (this.workflowRuntime.get(wf.id) !== context) return;
-      new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
+      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
     await this.runWorkflowStepById(wf.id, entryStep.id);
@@ -13897,7 +14140,7 @@ ${current.output}`;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
       wf.status = "failed";
-      new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
+      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
       await this.saveSettings();
       return;
     }
@@ -13915,7 +14158,7 @@ ${current.output}`;
     return resolveWorkflowTransition(wf.steps, currentStepIndex, lastOutput, lastSucceeded, transitions, this.getRuntimeOutputs(wf.id), {
       evaluate: async (transition, target, input) => {
         var _a, _b;
-        new import_obsidian9.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
+        new import_obsidian10.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
         const cwd = this.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
         const model = this.settings.defaultAiEngine === "opencode2" ? this.settings.defaultOpencode2Model || "" : ((_a = this.availableModels[0]) == null ? void 0 : _a.value) || this.settings.defaultModel || "opencode/default";
         const prompt = ((_b = transition.evaluatePrompt) == null ? void 0 : _b.trim()) || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
@@ -13930,7 +14173,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         return result.output;
       },
       onError: (kind, error) => {
-        new import_obsidian9.Notice(`AutoOC: ${kind} error \u2014 ${String(error)}`);
+        new import_obsidian10.Notice(`AutoOC: ${kind} error \u2014 ${String(error)}`);
       }
     });
   }
@@ -13988,7 +14231,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     (_a = this.workflowDelayControllers.get(wf.id)) == null ? void 0 : _a.abort();
     const controller = new AbortController();
     this.workflowDelayControllers.set(wf.id, controller);
-    new import_obsidian9.Notice(`AutoOC: \u23F1 ${spec.output} in "${wf.name}"...`);
+    new import_obsidian10.Notice(`AutoOC: \u23F1 ${spec.output} in "${wf.name}"...`);
     try {
       await waitForWorkflowDelay(spec.milliseconds, controller.signal);
       if (controller.signal.aborted || wf.status !== "running" || this.workflowRuntime.get(wf.id) !== ctx) return;
@@ -14023,13 +14266,13 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (this.workflowRuntime.get(wf.id) !== ctx) return;
       const masked = this.redactSecrets(out);
       if (ctx) ctx.stepOutputs.set(step.id, masked);
-      new import_obsidian9.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
+      new import_obsidian10.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
       await this.completeStep(wf, step, stepIndex, true, masked);
     } catch (err) {
       if (this.workflowRuntime.get(wf.id) !== ctx) return;
       const msg = this.redactSecrets(`[code error: ${String(err)}]`);
       if (ctx) ctx.stepOutputs.set(step.id, msg);
-      new import_obsidian9.Notice(this.redactSecrets(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`));
+      new import_obsidian10.Notice(this.redactSecrets(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`));
       await this.completeStep(wf, step, stepIndex, false, msg);
     }
   }
@@ -14045,7 +14288,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
-      new import_obsidian9.Notice(`AutoOC: Workflow "${wf.name}" failed \u2014 task not found at step ${stepIndex + 1}.`);
+      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" failed \u2014 task not found at step ${stepIndex + 1}.`);
       await this.saveSettings();
       return;
     }
@@ -14090,7 +14333,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         completedTask.output += failedByTask ? `
 [Workflow failed at step ${stepIndex + 1}/${currentWf.steps.length}]` : `
 [Workflow completed at step ${stepIndex + 1}/${currentWf.steps.length}]`;
-        new import_obsidian9.Notice(
+        new import_obsidian10.Notice(
           failedByTask ? `AutoOC: \u274C Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.` : `AutoOC: \u2705 Workflow "${currentWf.name}" completed at step ${stepIndex + 1}/${currentWf.steps.length}.`
         );
         this.workflowRuntime.delete(currentWf.id);
@@ -14101,7 +14344,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (nextIdx === -1) {
         if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         currentWf.status = "failed";
-        new import_obsidian9.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
+        new import_obsidian10.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
         await this.saveSettings();
         return;
       }
@@ -14110,7 +14353,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       await this.saveSettings();
       if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
-      new import_obsidian9.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
+      new import_obsidian10.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
         if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
@@ -14146,7 +14389,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         wfRef2.status = succeeded ? "completed" : "failed";
         await this.saveSettings();
         if (this.workflowRuntime.get(wf.id) !== ctx) return;
-        new import_obsidian9.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
+        new import_obsidian10.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
       }
       this.workflowRuntime.delete(wf.id);
       return;
@@ -14158,7 +14401,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
         if (!isCurrentExecution()) return;
-        new import_obsidian9.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
+        new import_obsidian10.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
         setTimeout(() => {
           if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId);
         }, 200);
@@ -14166,7 +14409,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     }
   }
 };
-var AutoOCView = class extends import_obsidian9.ItemView {
+var AutoOCView = class extends import_obsidian10.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.selectionMode = false;
@@ -14297,7 +14540,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         this.render();
       } catch (error) {
         button.disabled = false;
-        new import_obsidian9.Notice(`AutoOC: Could not change availability. ${String(error)}`);
+        new import_obsidian10.Notice(`AutoOC: Could not change availability. ${String(error)}`);
       }
     };
   }
@@ -14798,21 +15041,21 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       "autooc-mcp": this.plugin.getAutoOcMcpConfigBlock()
     };
     await copyTextToClipboard(JSON.stringify(snippet, null, 2));
-    new import_obsidian9.Notice("AutoOC: autooc-mcp install JSON copied.");
+    new import_obsidian10.Notice("AutoOC: autooc-mcp install JSON copied.");
   }
   async installAutoOcMcpInOpenCode() {
     try {
       const result = await this.plugin.ensureAutoOcMcpEnabled();
-      new import_obsidian9.Notice(
+      new import_obsidian10.Notice(
         result.changed ? `AutoOC: autooc-mcp installed at ${result.configPath}. Restart OpenCode.` : `AutoOC: autooc-mcp was already configured at ${result.configPath}.`
       );
     } catch (e) {
-      new import_obsidian9.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
+      new import_obsidian10.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
     }
   }
   async copyUvInstallCommand() {
     await copyTextToClipboard(getUvInstallCommand());
-    new import_obsidian9.Notice("AutoOC: uv install command copied.");
+    new import_obsidian10.Notice("AutoOC: uv install command copied.");
   }
   // Renders the extension header at the top of the panel: title,
   // version, check-updates button, and a status pill when an update
@@ -14879,7 +15122,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       else if (task) this.openTaskInList(task);
       else if (workflow) this.openWorkflowInList(workflow);
       else {
-        new import_obsidian9.Notice("This item was removed. Refresh the Dashboard.");
+        new import_obsidian10.Notice("This item was removed. Refresh the Dashboard.");
         this.refresh();
       }
     };
@@ -14895,7 +15138,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       } else if (task) {
         if (history) new LogHistoryModal(this.app, task, this.plugin).open();
         else new LiveLogModal(this.app, task, this.plugin).open();
-      } else new import_obsidian9.Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
+      } else new import_obsidian10.Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
     this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
       items: () => dashboardItems(
@@ -15040,7 +15283,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           await callback();
         } catch (error) {
-          new import_obsidian9.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
+          new import_obsidian10.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
         } finally {
           if (button.isConnected) button.disabled = false;
         }
@@ -15104,7 +15347,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           await this.plugin.resolveCodeStepAttempt(workflow.id, step.id);
         } catch (error) {
-          new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
         }
       };
     }
@@ -15154,7 +15397,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
     var _a;
     const workflow = this.plugin.settings.workflows.find((item) => item.id === workflowId);
     if (!(workflow == null ? void 0 : workflow.steps.some((step) => step.id === stepId && step.stepKind === "code"))) {
-      new import_obsidian9.Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
+      new import_obsidian10.Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
       this.render();
       return;
     }
@@ -15268,7 +15511,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
       return;
     }
-    new import_obsidian9.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12e3);
+    new import_obsidian10.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12e3);
   }
   renderExecutionStatus(parent, item, kind) {
     if (!item.runtimeExecution) return;
@@ -15300,7 +15543,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       } catch (error) {
         button.disabled = false;
         button.textContent = label;
-        new import_obsidian9.Notice(`AutoOC: ${String(error)}`);
+        new import_obsidian10.Notice(`AutoOC: ${String(error)}`);
       }
     };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
@@ -15368,7 +15611,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       try {
         new LogHistoryModal(this.app, task, this.plugin).open();
       } catch (err) {
-        new import_obsidian9.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        new import_obsidian10.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
       }
     };
     if (task.status === "failed") {
@@ -15379,7 +15622,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         task.status = "pending";
         await this.plugin.saveSettings();
         this.render();
-        new import_obsidian9.Notice(`AutoOC: "${task.name}" reset to pending.`);
+        new import_obsidian10.Notice(`AutoOC: "${task.name}" reset to pending.`);
       };
     }
     const details = card.createDiv("auto-oc-card-details");
@@ -15438,6 +15681,12 @@ var AutoOCView = class extends import_obsidian9.ItemView {
     }
     const actions = details.createDiv("auto-oc-card-actions");
     const terminalBinding = task.runtimeExecution;
+    if (terminalBinding && !terminalBinding.disposition && (["ready", "in_flight"].includes(terminalBinding.phase) || terminalBinding.terminalUncertainty) && !this.plugin.ownsExecution(terminalBinding.workflowId, terminalBinding.runId)) {
+      actions.createEl("button", { text: "Resolve blocked execution\u2026" }).onclick = (e) => {
+        e.stopPropagation();
+        this.plugin.openBlockedExecutionsReview(terminalBinding.runId);
+      };
+    }
     if ((terminalBinding == null ? void 0 : terminalBinding.terminalUncertainty) && !terminalBinding.disposition && ["failed", "completed"].includes(terminalBinding.phase) && task.status !== "running") {
       const dispose = actions.createEl("button", { text: "Resolve historical uncertainty" });
       dispose.onclick = async (e) => {
@@ -15445,7 +15694,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id, terminalBinding.runId);
         } catch (error) {
-          new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
         }
       };
     }
@@ -15456,7 +15705,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           await this.plugin.confirmAbandonTaskExecution(task.id);
         } catch (error) {
-          new import_obsidian9.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
+          new import_obsidian10.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
         }
       };
     }
@@ -15517,7 +15766,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       try {
         new LogHistoryModal(this.app, task, this.plugin).open();
       } catch (err) {
-        new import_obsidian9.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        new import_obsidian10.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
       }
     };
     const btnCmd = actions.createEl("button", {
@@ -15538,7 +15787,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       try {
         new CreateTaskModal(this.app, this.plugin, task).open();
       } catch (err) {
-        new import_obsidian9.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+        new import_obsidian10.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
       }
     };
     const btnDuplicate = actions.createEl("button", {
@@ -15693,7 +15942,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       try {
         await this.plugin.runWorkflow(workflow);
       } catch (error) {
-        new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
       }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
@@ -15732,7 +15981,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         workflow.status = "pending";
         await this.plugin.saveSettings();
         this.render();
-        new import_obsidian9.Notice(`Workflow "${workflow.name}" reset to pending.`);
+        new import_obsidian10.Notice(`Workflow "${workflow.name}" reset to pending.`);
       };
     }
     const details = card.createDiv("auto-oc-card-details");
@@ -15873,7 +16122,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           new LogHistoryModal(this.app, task, this.plugin).open();
         } catch (err) {
-          new import_obsidian9.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+          new import_obsidian10.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
         }
       };
       const btnCmd = taskActions.createEl("button", {
@@ -15893,7 +16142,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           new CreateTaskModal(this.app, this.plugin, task).open();
         } catch (err) {
-          new import_obsidian9.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+          new import_obsidian10.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
         }
       };
     }
@@ -15937,6 +16186,12 @@ var AutoOCView = class extends import_obsidian9.ItemView {
     }
     const actions = details.createDiv("auto-oc-card-actions");
     const durableExecution = workflow.runtimeExecution;
+    if (durableExecution && !durableExecution.disposition && (["ready", "in_flight"].includes(durableExecution.phase) || durableExecution.terminalUncertainty) && !this.plugin.isWorkflowExecuting(workflow.id)) {
+      actions.createEl("button", { text: "Resolve blocked execution\u2026" }).onclick = (e) => {
+        e.stopPropagation();
+        this.plugin.openBlockedExecutionsReview(durableExecution.runId);
+      };
+    }
     if ((durableExecution == null ? void 0 : durableExecution.terminalUncertainty) && !durableExecution.disposition && ["failed", "completed"].includes(durableExecution.phase) && !this.plugin.isWorkflowExecuting(workflow.id)) {
       const dispose = actions.createEl("button", { text: "Resolve historical uncertainty" });
       dispose.onclick = async (e) => {
@@ -15944,7 +16199,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           await this.plugin.confirmTerminalDisposition(workflow.id, durableExecution.runId);
         } catch (error) {
-          new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
         } finally {
           this.refresh();
         }
@@ -15958,7 +16213,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       } catch (e) {
       }
       const uncertain = mode === "reconcile";
-      actions.createEl("span", { text: mode === "blocked" ? "Recovery blocked: saved evidence needs reconciliation." : uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps." });
+      actions.createEl("span", { text: mode === "blocked" ? durableExecution.definitionChanged ? "The workflow definition changed. Review and reset this attempt, or restore the original definition to continue." : "Recovery blocked: saved evidence needs reconciliation." : uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps." });
       const recover = actions.createEl("button", { text: uncertain ? "Verify previous result" : "Resume saved execution" });
       recover.disabled = mode === "blocked";
       recover.onclick = async (e) => {
@@ -15967,7 +16222,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
         try {
           await this.plugin.recoverSharedWorkflow(workflow.id, durableExecution.runId);
         } catch (error) {
-          new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
         } finally {
           this.refresh();
         }
@@ -15983,7 +16238,7 @@ var AutoOCView = class extends import_obsidian9.ItemView {
       try {
         await this.plugin.runWorkflow(workflow);
       } catch (error) {
-        new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
       }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
@@ -16051,7 +16306,7 @@ ${sharedCount} task(s) are also used by other workflows and will be kept.` : "";
     };
   }
 };
-var ConfirmModal = class extends import_obsidian9.Modal {
+var ConfirmModal = class extends import_obsidian10.Modal {
   constructor(app, titleText, bodyText, requireReason = false) {
     super(app);
     this.titleText = titleText;
@@ -16072,17 +16327,17 @@ var ConfirmModal = class extends import_obsidian9.Modal {
     setupModalX(this);
     contentEl.createEl("h3", { text: this.titleText });
     contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
-    if (this.requireReason) new import_obsidian9.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
+    if (this.requireReason) new import_obsidian10.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
       this.reason = value;
     }));
-    new import_obsidian9.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
+    new import_obsidian10.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
       var _a;
       (_a = this.resolve) == null ? void 0 : _a.call(this, false);
       this.close();
     })).addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => {
       var _a;
       if (this.requireReason && (!this.reason.trim() || this.reason.length > 1e3)) {
-        new import_obsidian9.Notice("Enter a reason of 1\u20131000 characters");
+        new import_obsidian10.Notice("Enter a reason of 1\u20131000 characters");
         return;
       }
       (_a = this.resolve) == null ? void 0 : _a.call(this, true);
@@ -16096,8 +16351,8 @@ var ConfirmModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
-  constructor(leaf, reason, retry, recoverClosedSession, waitingForOwner = false, sameProcessOwner = false, readCatalog, updatePackage) {
+var AutoOCRecoveryView = class extends import_obsidian10.ItemView {
+  constructor(leaf, reason, retry, recoverClosedSession, waitingForOwner = false, sameProcessOwner = false, readCatalog, updatePackage, reviewBlocked) {
     super(leaf);
     this.reason = reason;
     this.retry = retry;
@@ -16106,6 +16361,7 @@ var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
     this.sameProcessOwner = sameProcessOwner;
     this.readCatalog = readCatalog;
     this.updatePackage = updatePackage;
+    this.reviewBlocked = reviewBlocked;
     this.renderGeneration = 0;
   }
   getViewType() {
@@ -16129,7 +16385,7 @@ var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
         try {
           await this.updatePackage();
         } catch (error) {
-          new import_obsidian9.Notice("AutoOC: " + String(error));
+          new import_obsidian10.Notice("AutoOC: " + String(error));
         } finally {
           update.disabled = false;
         }
@@ -16142,7 +16398,8 @@ var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
     const details = this.contentEl.createEl("pre", { text: this.reason });
     details.style.whiteSpace = "pre-wrap";
     details.style.overflowWrap = "anywhere";
-    this.contentEl.createEl("p", { text: this.waitingForOwner ? "The active execution keeps its reservation. No task will be resumed or repeated when this panel loads." : this.recoverClosedSession ? "Recovery enables the engine without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation." : this.sameProcessOwner ? "This Obsidian window still holds a previous AutoOC reservation. Retrying cannot release it while its state is unconfirmed. Let any active task finish, then close and reopen this vault window. If recovery is offered after reopening, use Recover closed session and open AutoOC. Do not delete runtime files; unfinished runs must still be reviewed." : "Resolve the execution or save reported above before enabling editing and scheduling. Refreshing the catalog and checking for updates do not resume tasks." });
+    this.contentEl.createEl("p", { text: this.waitingForOwner ? "The active execution keeps its reservation. No task will be resumed or repeated when this panel loads." : this.recoverClosedSession ? "Recovery enables the engine without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation." : this.sameProcessOwner ? "This Obsidian window still holds a previous AutoOC reservation. Open Resolve blocked executions to reconnect the controls or review and reset a saved attempt. Active work must finish first. Your tasks and history are preserved." : "Resolve the execution or save reported above before enabling editing and scheduling. Refreshing the catalog and checking for updates do not resume tasks." });
+    if (this.reviewBlocked) this.contentEl.createEl("button", { text: "Resolve blocked executions" }).onclick = () => this.reviewBlocked();
     if (this.recoverClosedSession) {
       const recover = this.contentEl.createEl("button", { text: "Recover closed session and open AutoOC" });
       recover.onclick = async () => {
@@ -16152,7 +16409,7 @@ var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
           this.recoverClosedSession();
           await this.retry();
         } catch (error) {
-          new import_obsidian9.Notice("AutoOC: " + String(error));
+          new import_obsidian10.Notice("AutoOC: " + String(error));
           recover.disabled = false;
         }
       };
@@ -16163,7 +16420,7 @@ var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
       try {
         await this.retry();
       } catch (error) {
-        new import_obsidian9.Notice("AutoOC: " + String(error));
+        new import_obsidian10.Notice("AutoOC: " + String(error));
         button.disabled = false;
       }
     };
@@ -16190,7 +16447,7 @@ var AutoOCRecoveryView = class extends import_obsidian9.ItemView {
     this.contentEl.empty();
   }
 };
-var CreateTaskModal = class extends import_obsidian9.Modal {
+var CreateTaskModal = class extends import_obsidian10.Modal {
   constructor(app, plugin, editTask, saveDraft) {
     super(app);
     this.saveDraft = saveDraft;
@@ -16236,7 +16493,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
-    if (!this.editTask) new import_obsidian9.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a draft. Review and edit it here before creating the task.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
+    if (!this.editTask) new import_obsidian10.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a draft. Review and edit it here before creating the task.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
       this.aiDraftModal = this.plugin.openAiDraft("task", this.draft.prompt || this.draft.name || "", (generated) => {
         if (this.editorClosed) return;
         this.draft = generated.tasks[0];
@@ -16246,7 +16503,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       });
     }));
     if (this.saveDraft) contentEl.createEl("p", { text: "This task is part of an unsaved workflow draft. Changes stay in the editor until you create the workflow." });
-    new import_obsidian9.Setting(contentEl).setName("Task type").setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.").addDropdown((dd) => {
+    new import_obsidian10.Setting(contentEl).setName("Task type").setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.").addDropdown((dd) => {
       dd.addOption("opencode", "OpenCode 1 task");
       dd.addOption("opencode2", "OpenCode 2 task");
       dd.addOption("codex", "Codex task");
@@ -16283,16 +16540,16 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
         this.onOpen();
       });
     });
-    new import_obsidian9.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+    new import_obsidian10.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
       this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
-    new import_obsidian9.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a2 = this.draft.name) != null ? _a2 : "").onChange((v) => this.draft.name = v);
       if (shouldFocusName) window.setTimeout(() => text.inputEl.focus(), 50);
     });
-    new import_obsidian9.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a2 = this.draft.area) != null ? _a2 : "").onChange((v) => this.draft.area = v.trim());
@@ -16302,14 +16559,14 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
     });
     if (taskKind === "code") {
       const initialCode = (_a = this.draft.code) != null ? _a : "// Set output to pass data forward\noutput = input;";
-      new import_obsidian9.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.").addTextArea((ta) => {
+      new import_obsidian10.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.").addTextArea((ta) => {
         ta.setValue(initialCode).onChange((v) => this.draft.code = v);
         ta.inputEl.addClass("auto-oc-modal-textarea");
         setupCodeTextarea(ta.inputEl, this.app);
         ta.inputEl.rows = 12;
         ta.inputEl.style.width = "100%";
       });
-      new import_obsidian9.Setting(contentEl).setName("Variables").setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Variables").setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
       }).addText((text) => {
@@ -16319,7 +16576,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
     } else {
       const promptNotice = contentEl.createDiv("auto-oc-prompt-notice");
       promptNotice.style.display = "none";
-      new import_obsidian9.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
+      new import_obsidian10.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
         var _a2, _b2;
         const updatePromptNotice = (value) => {
           if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
@@ -16346,14 +16603,14 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       });
     }
     contentEl.createDiv("auto-oc-modal-section-title").setText(isOpenCodeTask(taskKind) ? "\u{1F4C2} Workspace & Git" : "\u{1F4C2} Workspace");
-    new import_obsidian9.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.app.vault.adapter.basePath || "C:\\path\\to\\project").setValue((_a2 = this.draft.workingDirectory) != null ? _a2 : "").onChange((v) => this.draft.workingDirectory = v);
     });
     let branchInput = null;
     if (isOpenCodeTask(taskKind)) {
-      new import_obsidian9.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
         var _a2;
         branchInput = text.inputEl;
         text.inputEl.addClass("auto-oc-modal-input");
@@ -16361,7 +16618,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       }).addButton(
         (btn) => btn.setButtonText("\u{1F50D} Discover").onClick(async () => {
           const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-          new import_obsidian9.Notice("AutoOC: Fetching branches...");
+          new import_obsidian10.Notice("AutoOC: Fetching branches...");
           try {
             const branches = listGitBranches(taskCwd);
             if (branches.length > 0) {
@@ -16369,17 +16626,17 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
               if (selected) {
                 this.draft.branch = selected;
                 if (branchInput) branchInput.value = selected;
-                new import_obsidian9.Notice(`AutoOC: Selected branch ${selected}`);
+                new import_obsidian10.Notice(`AutoOC: Selected branch ${selected}`);
               }
             } else {
-              new import_obsidian9.Notice("AutoOC: No branches found.");
+              new import_obsidian10.Notice("AutoOC: No branches found.");
             }
           } catch (e) {
-            new import_obsidian9.Notice(`AutoOC: Could not list branches: ${String(e)}`);
+            new import_obsidian10.Notice(`AutoOC: Could not list branches: ${String(e)}`);
           }
         })
       );
-      new import_obsidian9.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.createBranch) != null ? _a2 : false);
         tog.onChange((v) => this.draft.createBranch = v);
@@ -16388,7 +16645,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
     if (taskKind === "opencode") {
       const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
       const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
-      new import_obsidian9.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
+      new import_obsidian10.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
         var _a2;
         projectAgents.forEach((a) => dd.addOption(a.value, a.label));
         const current = (_a2 = this.draft.agent) != null ? _a2 : this.plugin.getEffectiveAgent();
@@ -16400,15 +16657,15 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.agent = v);
       });
-      new import_obsidian9.Setting(contentEl).addButton(
+      new import_obsidian10.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Agents").onClick(() => {
           this.plugin.refreshAgents(agentCwd);
-          new import_obsidian9.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
+          new import_obsidian10.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
           this.contentEl.empty();
           this.onOpen();
         })
       );
-      new import_obsidian9.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
+      new import_obsidian10.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
         var _a2;
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
@@ -16421,18 +16678,18 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.model = v);
       });
-      new import_obsidian9.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.forceModel) != null ? _a2 : false);
         tog.onChange((v) => this.draft.forceModel = v);
       });
-      new import_obsidian9.Setting(contentEl).addButton(
+      new import_obsidian10.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Models").onClick(() => {
           this.plugin.refreshModels();
-          new import_obsidian9.Notice("AutoOC: models updated. Reopen dialog.");
+          new import_obsidian10.Notice("AutoOC: models updated. Reopen dialog.");
         })
       );
-      new import_obsidian9.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.useRalphLoop) != null ? _a2 : false);
         tog.onChange((v) => this.draft.useRalphLoop = v);
@@ -16440,29 +16697,29 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
         (btn) => btn.setButtonText("Installation Assistant").onClick(async () => {
           try {
             const result = await this.plugin.ensureRalphLoopPluginEnabled();
-            new import_obsidian9.Notice(
+            new import_obsidian10.Notice(
               result.changed ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `Ralph Loop was already active at ${result.configPath}.`
             );
           } catch (e) {
-            new import_obsidian9.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+            new import_obsidian10.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
           }
         })
       );
     } else if (taskKind === "opencode2") {
       (_b = this.draft).model || (_b.model = this.plugin.settings.defaultOpencode2Model || "");
       (_c = this.draft).agent || (_c.agent = this.plugin.settings.defaultOpencode2Agent || "build");
-      new import_obsidian9.Setting(contentEl).setName("OpenCode 2 model").setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.").addText((text) => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "").onChange((value) => {
+      new import_obsidian10.Setting(contentEl).setName("OpenCode 2 model").setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.").addText((text) => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "").onChange((value) => {
         this.draft.model = value.trim();
       }));
-      new import_obsidian9.Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build").onChange((value) => {
+      new import_obsidian10.Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build").onChange((value) => {
         this.draft.agent = value.trim();
       }));
-      new import_obsidian9.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
+      new import_obsidian10.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
         this.draft.forceModel = value;
       }));
       contentEl.createEl("p", { text: this.draft.interactiveTerminal ? "Opens OpenCode 2 mini with your model, agent and prompt. AutoOC confirms startup; the terminal session remains under your control." : "Runs OpenCode 2 with a private server. AutoOC captures the result and waits for completion. Explicitly denied permissions remain denied.", cls: "setting-item-description" });
     } else if (taskKind === "codex") {
-      new import_obsidian9.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
+      new import_obsidian10.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
         var _a2, _b2;
         dd.addOption("", "Automatic");
         this.plugin.availableCodexModels.forEach((entry) => dd.addOption(entry.value, entry.label));
@@ -16479,7 +16736,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
         await this.plugin.refreshCodexModels(true);
         this.onOpen();
       }));
-      new import_obsidian9.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
+      new import_obsidian10.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
         const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
         efforts.forEach((effort) => dd.addOption(effort, effort));
         const current = this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -16491,20 +16748,20 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       addCopilotTaskSettings(contentEl, this.draft, this.plugin.settings.defaultCopilotModel);
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
-      new import_obsidian9.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowVault);
         tog.onChange((v) => this.draft.codeAllowVault = v);
       });
-      new import_obsidian9.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowFiles);
         tog.onChange((v) => this.draft.codeAllowFiles = v);
       });
-      new import_obsidian9.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }).").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }).").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowTerminal);
         tog.onChange((v) => this.draft.codeAllowTerminal = v);
       });
     }
-    new import_obsidian9.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
+    new import_obsidian10.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a2;
       dd.addOption("manual", "Manual (run only when I press play)");
       dd.addOption("once", "Once (specific date and time)");
@@ -16519,14 +16776,14 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian9.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(todayString()).setValue((_a2 = this.draft.scheduleDate) != null ? _a2 : "").onChange((v) => this.draft.scheduleDate = v);
       });
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian9.Setting(contentEl).setName("Weekdays");
+      const daySetting = new import_obsidian10.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -16551,7 +16808,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       });
     }
     if (this.draft.scheduleType === "monthly") {
-      new import_obsidian9.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("1, 15, 31").setValue(((_a2 = this.draft.scheduleMonthDays) != null ? _a2 : []).join(", ")).onChange((v) => {
@@ -16561,7 +16818,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       });
     }
     if (this.draft.scheduleType === "interval") {
-      new import_obsidian9.Setting(contentEl).setName("Interval").setDesc("Run the task repeatedly every X units").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Interval").setDesc("Run the task repeatedly every X units").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -16580,42 +16837,42 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
       });
     }
     if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
-      new import_obsidian9.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("09:00").setValue((_a2 = this.draft.scheduleTime) != null ? _a2 : "").onChange((v) => this.draft.scheduleTime = v);
       });
     }
-    new import_obsidian9.Setting(contentEl).addButton(
+    new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.saveDraft ? "Apply to workflow draft" : this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
         var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
         if (!((_a2 = this.draft.name) == null ? void 0 : _a2.trim())) {
-          new import_obsidian9.Notice("Name is required.");
+          new import_obsidian10.Notice("Name is required.");
           return;
         }
         const savingTaskKind = this.draft.taskKind || "opencode";
         if (savingTaskKind !== "code" && !((_b2 = this.draft.prompt) == null ? void 0 : _b2.trim())) {
-          new import_obsidian9.Notice("Prompt is required.");
+          new import_obsidian10.Notice("Prompt is required.");
           return;
         }
         if (savingTaskKind === "code" && !(this.draft.code || "").trim()) {
-          new import_obsidian9.Notice("Code is required.");
+          new import_obsidian10.Notice("Code is required.");
           return;
         }
         if (isOpenCodeTask(savingTaskKind) && !((_c2 = this.draft.model) != null ? _c2 : "").trim()) {
-          new import_obsidian9.Notice("You must select a model.");
+          new import_obsidian10.Notice("You must select a model.");
           return;
         }
         if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_d = this.draft.scheduleTime) != null ? _d : "")) {
-          new import_obsidian9.Notice("Invalid time. Use HH:MM format.");
+          new import_obsidian10.Notice("Invalid time. Use HH:MM format.");
           return;
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_e = this.draft.scheduleDate) != null ? _e : "")) {
-          new import_obsidian9.Notice("Invalid date. Use YYYY-MM-DD format.");
+          new import_obsidian10.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.draft.scheduleType === "monthly" && ((_f = this.draft.scheduleMonthDays) != null ? _f : []).length === 0) {
-          new import_obsidian9.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
+          new import_obsidian10.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         if (this.saveDraft) {
@@ -16703,10 +16960,10 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
             btn.setDisabled(true);
             try {
               await this.plugin.saveGeneratedDefinitionDraft([task]);
-              new import_obsidian9.Notice(`Task "${task.name}" saved.`);
+              new import_obsidian10.Notice(`Task "${task.name}" saved.`);
               this.close();
             } catch (error) {
-              new import_obsidian9.Notice(`Could not save the task: ${error.message}. Your draft is still available.`);
+              new import_obsidian10.Notice(`Could not save the task: ${error.message}. Your draft is still available.`);
             } finally {
               this.savingGeneratedDraft = false;
               btn.setDisabled(false);
@@ -16720,7 +16977,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
           if (areaChanged) (_t = this.plugin.view) == null ? void 0 : _t.render();
           this.plugin.emitTaskUpdated(updatedTask);
         }
-        new import_obsidian9.Notice(`Task "${this.draft.name}" saved.`);
+        new import_obsidian10.Notice(`Task "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -16732,7 +16989,7 @@ var CreateTaskModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var EditWorkflowStepModal = class extends import_obsidian9.Modal {
+var EditWorkflowStepModal = class extends import_obsidian10.Modal {
   constructor(app, plugin, workflow, step) {
     super(app);
     this.plugin = plugin;
@@ -16751,17 +17008,17 @@ var EditWorkflowStepModal = class extends import_obsidian9.Modal {
     contentEl.createEl("h3", {
       text: this.step.stepKind === "delay" ? "Edit Delay Step" : "Edit Code Step"
     });
-    new import_obsidian9.Setting(contentEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.step.stepKind === "delay" ? "Delay" : "Code").setValue(this.draft.name || "").onChange((v) => this.draft.name = v.trim());
     });
-    new import_obsidian9.Setting(contentEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(((_a = this.workflow.area) == null ? void 0 : _a.trim()) || "No area").setValue(this.draft.area || this.workflow.area || "").onChange((v) => this.draft.area = v.trim());
     });
     if (this.step.stepKind === "delay") {
-      new import_obsidian9.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -16779,13 +17036,13 @@ var EditWorkflowStepModal = class extends import_obsidian9.Modal {
       });
     } else {
       const initialCode = this.draft.code || "";
-      new import_obsidian9.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
+      new import_obsidian10.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
         text.inputEl.addClass("auto-oc-modal-textarea");
         text.inputEl.rows = 12;
         text.setValue(initialCode).onChange((v) => this.draft.code = v);
         setupCodeTextarea(text.inputEl, this.app);
       });
-      new import_obsidian9.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
       }).addText((text) => {
@@ -16793,15 +17050,15 @@ var EditWorkflowStepModal = class extends import_obsidian9.Modal {
         text.setPlaceholder("output").setValue(this.draft.codeOutputVar || "output").onChange((v) => this.draft.codeOutputVar = v || "output");
       });
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
-      new import_obsidian9.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowVault);
         tog.onChange((v) => this.draft.codeAllowVault = v);
       });
-      new import_obsidian9.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowFiles);
         tog.onChange((v) => this.draft.codeAllowFiles = v);
       });
-      new import_obsidian9.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
+      new import_obsidian10.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowTerminal);
         tog.onChange((v) => this.draft.codeAllowTerminal = v);
       });
@@ -16810,7 +17067,7 @@ var EditWorkflowStepModal = class extends import_obsidian9.Modal {
         cls: "setting-item-description auto-oc-workflow-section-help"
       });
     }
-    new import_obsidian9.Setting(contentEl).addButton(
+    new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Save Step").setCta().onClick(async () => {
         var _a, _b;
         if (!((_a = this.draft.area) == null ? void 0 : _a.trim())) this.draft.area = this.workflow.area || "";
@@ -16824,7 +17081,7 @@ var EditWorkflowStepModal = class extends import_obsidian9.Modal {
         }
         await this.plugin.saveSettings();
         (_b = this.plugin.view) == null ? void 0 : _b.refresh();
-        new import_obsidian9.Notice("AutoOC: workflow step saved.");
+        new import_obsidian10.Notice("AutoOC: workflow step saved.");
         this.close();
       })
     );
@@ -16833,7 +17090,7 @@ var EditWorkflowStepModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var CreateWorkflowModal = class extends import_obsidian9.Modal {
+var CreateWorkflowModal = class extends import_obsidian10.Modal {
   constructor(app, plugin, editWorkflow) {
     var _a;
     super(app);
@@ -16878,7 +17135,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
     headerBar.createEl("h3", {
       text: this.editWorkflow ? "Edit Workflow" : "New Workflow"
     });
-    if (!this.editWorkflow) new import_obsidian9.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
+    if (!this.editWorkflow) new import_obsidian10.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
       this.aiDraftModal = this.plugin.openAiDraft("workflow", this.draft.description || this.draft.name || "", (generated) => {
         if (this.editorClosed) return;
         this.draft = generated.workflow;
@@ -16908,16 +17165,16 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
       cls: "auto-oc-workflow-guide-tip"
     });
-    new import_obsidian9.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+    new import_obsidian10.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
       this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
-    new import_obsidian9.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
       window.setTimeout(() => text.inputEl.focus(), 50);
     });
-    new import_obsidian9.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => {
@@ -16938,7 +17195,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
         });
       });
     });
-    new import_obsidian9.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.description) != null ? _a : "").onChange((v) => this.draft.description = v);
@@ -16948,12 +17205,12 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       text: "Handoff passes context from the task that just finished to the next task at runtime only. It does not edit the original task prompt.",
       cls: "setting-item-description auto-oc-workflow-section-help"
     });
-    new import_obsidian9.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
+    new import_obsidian10.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffBranch = v);
     });
-    new import_obsidian9.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
+    new import_obsidian10.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffOutput) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffOutput = v);
@@ -16963,7 +17220,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       text: "This schedule belongs to the workflow itself. The individual task schedules are not used while the workflow is running.",
       cls: "setting-item-description auto-oc-workflow-section-help"
     });
-    new import_obsidian9.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
+    new import_obsidian10.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a;
       dd.addOption("manual", "Manual (run only when I press play)");
       dd.addOption("once", "Once (specific date and time)");
@@ -16978,14 +17235,14 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian9.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(todayString()).setValue((_a = this.draft.scheduleDate) != null ? _a : "").onChange((v) => this.draft.scheduleDate = v);
       });
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian9.Setting(contentEl).setName("Weekdays");
+      const daySetting = new import_obsidian10.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -17010,7 +17267,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       });
     }
     if (this.draft.scheduleType === "monthly") {
-      new import_obsidian9.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("1, 15, 31").setValue(((_a = this.draft.scheduleMonthDays) != null ? _a : []).join(", ")).onChange((v) => {
@@ -17020,7 +17277,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       });
     }
     if (this.draft.scheduleType === "interval") {
-      new import_obsidian9.Setting(contentEl).setName("Interval").setDesc("Run the workflow repeatedly every X units").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Interval").setDesc("Run the workflow repeatedly every X units").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -17039,7 +17296,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
       });
     }
     if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
-      new import_obsidian9.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      new import_obsidian10.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
@@ -17052,27 +17309,27 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
     });
     const stepsContainer = contentEl.createDiv("auto-oc-workflow-steps-container");
     this.renderStepsList(stepsContainer);
-    new import_obsidian9.Setting(contentEl).addButton(
+    new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
         var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
-          new import_obsidian9.Notice("Name is required.");
+          new import_obsidian10.Notice("Name is required.");
           return;
         }
         if (this.selectedSteps.length < 2) {
-          new import_obsidian9.Notice("A workflow needs at least 2 steps.");
+          new import_obsidian10.Notice("A workflow needs at least 2 steps.");
           return;
         }
         if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_b = this.draft.scheduleTime) != null ? _b : "")) {
-          new import_obsidian9.Notice("Invalid time. Use HH:MM format.");
+          new import_obsidian10.Notice("Invalid time. Use HH:MM format.");
           return;
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_c = this.draft.scheduleDate) != null ? _c : "")) {
-          new import_obsidian9.Notice("Invalid date. Use YYYY-MM-DD format.");
+          new import_obsidian10.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.draft.scheduleType === "monthly" && ((_d = this.draft.scheduleMonthDays) != null ? _d : []).length === 0) {
-          new import_obsidian9.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
+          new import_obsidian10.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         const steps = this.selectedSteps.map((src, idx) => {
@@ -17161,10 +17418,10 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
             btn.setDisabled(true);
             try {
               await this.plugin.saveGeneratedDefinitionDraft(this.draftTasks, workflow);
-              new import_obsidian9.Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
+              new import_obsidian10.Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
               this.close();
             } catch (error) {
-              new import_obsidian9.Notice(`Could not save the workflow: ${error.message}. Your draft is still available.`);
+              new import_obsidian10.Notice(`Could not save the workflow: ${error.message}. Your draft is still available.`);
             } finally {
               this.savingGeneratedDraft = false;
               btn.setDisabled(false);
@@ -17178,7 +17435,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
           if (areaChanged) (_B = this.plugin.view) == null ? void 0 : _B.render();
           this.plugin.emitWorkflowUpdated(updatedWorkflow);
         }
-        new import_obsidian9.Notice(`Workflow "${this.draft.name}" saved.`);
+        new import_obsidian10.Notice(`Workflow "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -17250,33 +17507,33 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
         delete this.stepConfigs[step.id];
         this.renderStepsList(container);
       };
-      new import_obsidian9.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+      new import_obsidian10.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(this.defaultWorkflowStepName(step, i)).setValue(step.name || "").onChange((v) => {
           step.name = v.trim();
         });
       });
-      new import_obsidian9.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
+      new import_obsidian10.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(((_a2 = this.draft.area) == null ? void 0 : _a2.trim()) || "No area").setValue(step.area || this.draft.area || "").onChange((v) => step.area = v.trim());
       });
       if (step.stepKind === "code") {
         const initialCode = step.code || "";
-        new import_obsidian9.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
+        new import_obsidian10.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
           text.inputEl.addClass("auto-oc-modal-textarea");
           text.inputEl.rows = 6;
           text.setValue(initialCode).onChange((v) => step.code = v);
           setupCodeTextarea(text.inputEl, this.app);
         });
-        new import_obsidian9.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
+        new import_obsidian10.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
           text.setPlaceholder("input").setValue(step.codeInputVar || "input").onChange((v) => step.codeInputVar = v || "input");
         }).addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
           text.setPlaceholder("output").setValue(step.codeOutputVar || "output").onChange((v) => step.codeOutputVar = v || "output");
         });
-        new import_obsidian9.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
+        new import_obsidian10.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
           tog.setTooltip("Vault API");
           tog.setValue(!!step.codeAllowVault);
           tog.onChange((v) => step.codeAllowVault = v);
@@ -17293,7 +17550,7 @@ var CreateWorkflowModal = class extends import_obsidian9.Modal {
           tog.toggleEl.insertAdjacentHTML("afterend", `<span class="auto-oc-day-label">Terminal</span>`);
         });
       } else if (step.stepKind === "delay") {
-        new import_obsidian9.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+        new import_obsidian10.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
           var _a2;
           text.inputEl.addClass("auto-oc-modal-input");
           text.inputEl.type = "number";
@@ -17491,7 +17748,7 @@ Reply ONLY with YES or NO.`;
           if (newTasks.length > 0) {
             const newest = newTasks[newTasks.length - 1];
             this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: newest.id, area: this.draft.area || newest.area || "", transitions: [], position: { x: 0, y: 0 } });
-            new import_obsidian9.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
+            new import_obsidian10.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
           }
           this.renderStepsList(container);
         }, 200);
@@ -17570,7 +17827,7 @@ Reply ONLY with YES or NO.`;
     this.contentEl.empty();
   }
 };
-var ExportModal = class extends import_obsidian9.Modal {
+var ExportModal = class extends import_obsidian10.Modal {
   constructor(app, plugin, taskIds, workflowIds) {
     super(app);
     this.selectedTaskIds = /* @__PURE__ */ new Set();
@@ -17592,10 +17849,10 @@ var ExportModal = class extends import_obsidian9.Modal {
       text: "Select the items you want to share. Selected workflows automatically include their referenced tasks so the file remains importable on another machine.",
       cls: "setting-item-description"
     });
-    new import_obsidian9.Setting(contentEl).setName("Export name (optional)").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Export name (optional)").addText((text) => {
       text.setPlaceholder("My tasks").onChange((v) => this.name = v);
     });
-    new import_obsidian9.Setting(contentEl).setName("Description (optional)").addText((text) => {
+    new import_obsidian10.Setting(contentEl).setName("Description (optional)").addText((text) => {
       text.setPlaceholder("Shared AutoOC configuration").onChange((v) => this.description = v);
     });
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4CB} Tasks");
@@ -17712,7 +17969,7 @@ ${stepNames}` : stepNames;
     btnCopy.onclick = async () => {
       const payload = getPayload();
       if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-        new import_obsidian9.Notice("AutoOC: nothing selected to export.");
+        new import_obsidian10.Notice("AutoOC: nothing selected to export.");
         return;
       }
       const json = this.plugin.buildExportJson(
@@ -17723,9 +17980,9 @@ ${stepNames}` : stepNames;
       );
       try {
         await navigator.clipboard.writeText(json);
-        new import_obsidian9.Notice("AutoOC: JSON copied to clipboard.");
+        new import_obsidian10.Notice("AutoOC: JSON copied to clipboard.");
       } catch (e) {
-        new import_obsidian9.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
+        new import_obsidian10.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
       }
     };
     const btnSave = btnRow.createEl("button", {
@@ -17735,7 +17992,7 @@ ${stepNames}` : stepNames;
     btnSave.onclick = async () => {
       const payload = getPayload();
       if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-        new import_obsidian9.Notice("AutoOC: nothing selected to export.");
+        new import_obsidian10.Notice("AutoOC: nothing selected to export.");
         return;
       }
       await this.plugin.exportToFile(
@@ -17751,7 +18008,7 @@ ${stepNames}` : stepNames;
     this.contentEl.empty();
   }
 };
-var ImportModal = class extends import_obsidian9.Modal {
+var ImportModal = class extends import_obsidian10.Modal {
   constructor(app, plugin) {
     super(app);
     this.filePath = null;
@@ -17834,12 +18091,12 @@ var ImportModal = class extends import_obsidian9.Modal {
       btnImport.textContent = "Importing\u2026";
       try {
         const result = await this.plugin.importFromData(this.previewData);
-        new import_obsidian9.Notice(
+        new import_obsidian10.Notice(
           `AutoOC: imported ${result.tasksImported} task(s) and ${result.workflowsImported} workflow(s).`
         );
         this.close();
       } catch (e) {
-        new import_obsidian9.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
+        new import_obsidian10.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
         btnImport.disabled = false;
         btnImport.textContent = "Import";
       }
@@ -17854,7 +18111,7 @@ var ImportModal = class extends import_obsidian9.Modal {
     this.renderPreview();
   }
   renderFilePanel(panel) {
-    new import_obsidian9.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
+    new import_obsidian10.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
       (btn) => btn.setButtonText("Choose file\u2026").onClick(async () => {
         const chosen = await this.chooseFile();
         if (chosen) {
@@ -17900,21 +18157,21 @@ var ImportModal = class extends import_obsidian9.Modal {
         this.lastValidation = result;
         if (!result.ok) {
           this.previewData = null;
-          new import_obsidian9.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+          new import_obsidian10.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
         } else {
           this.previewData = data;
           this.filePath = null;
           this.selectedLibraryFile = null;
           if (result.warnings.length > 0) {
-            new import_obsidian9.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+            new import_obsidian10.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
           } else {
-            new import_obsidian9.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+            new import_obsidian10.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
           }
         }
       } catch (e) {
         this.previewData = null;
         this.lastValidation = { ok: false, errors: [`Could not parse JSON: ${String(e)}`], warnings: [] };
-        new import_obsidian9.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
+        new import_obsidian10.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
       }
       this.renderPreview();
       this.updateImportButton();
@@ -17947,7 +18204,7 @@ var ImportModal = class extends import_obsidian9.Modal {
         this.pastedJson = formatted;
         parse3();
       } catch (e) {
-        new import_obsidian9.Notice(`AutoOC: cannot format \u2014 ${String(e)}`);
+        new import_obsidian10.Notice(`AutoOC: cannot format \u2014 ${String(e)}`);
       }
     };
   }
@@ -18025,7 +18282,7 @@ var ImportModal = class extends import_obsidian9.Modal {
         return result.filePaths[0];
       }
     } catch (e) {
-      new import_obsidian9.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
+      new import_obsidian10.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
     }
     return null;
   }
@@ -18033,25 +18290,25 @@ var ImportModal = class extends import_obsidian9.Modal {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
-      const raw = fs32.readFileSync(this.filePath, "utf8");
+      const raw = fs33.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
       const result = this.validateExport(data);
       this.lastValidation = result;
       if (!result.ok) {
         this.previewData = null;
-        new import_obsidian9.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        new import_obsidian10.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
       } else {
         this.previewData = data;
         if (result.warnings.length > 0) {
-          new import_obsidian9.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          new import_obsidian10.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
         } else {
-          new import_obsidian9.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          new import_obsidian10.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
         }
       }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian9.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
+      new import_obsidian10.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -18070,7 +18327,7 @@ var ImportModal = class extends import_obsidian9.Modal {
       this.libraryEntries = data.library;
     } catch (e) {
       this.libraryError = String(e);
-      new import_obsidian9.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
+      new import_obsidian10.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
     }
   }
   async loadLibraryFile(fileName) {
@@ -18084,18 +18341,18 @@ var ImportModal = class extends import_obsidian9.Modal {
       this.lastValidation = result;
       if (!result.ok) {
         this.previewData = null;
-        new import_obsidian9.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        new import_obsidian10.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
       } else {
         this.previewData = data;
         if (result.warnings.length > 0) {
-          new import_obsidian9.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          new import_obsidian10.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
         } else {
-          new import_obsidian9.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          new import_obsidian10.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
         }
       }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian9.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
+      new import_obsidian10.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -18377,7 +18634,7 @@ var ImportModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var LiveLogModal = class extends import_obsidian9.Modal {
+var LiveLogModal = class extends import_obsidian10.Modal {
   constructor(app, task, plugin) {
     super(app);
     this.renderEl = null;
@@ -18429,7 +18686,7 @@ var LiveLogModal = class extends import_obsidian9.Modal {
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.lastRenderedContent);
-      new import_obsidian9.Notice("Log copied.");
+      new import_obsidian10.Notice("Log copied.");
     };
     const btnClear = toolbar.createEl("button", {
       text: "\u{1F5D1} Clear View",
@@ -18457,7 +18714,7 @@ var LiveLogModal = class extends import_obsidian9.Modal {
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();
-        void import_obsidian9.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
+        void import_obsidian10.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
         if (this.autoScroll) {
           this.renderEl.scrollTop = this.renderEl.scrollHeight;
         }
@@ -18480,7 +18737,7 @@ var LiveLogModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var LogHistoryModal = class extends import_obsidian9.Modal {
+var LogHistoryModal = class extends import_obsidian10.Modal {
   constructor(app, task, plugin) {
     super(app);
     this.task = task;
@@ -18514,7 +18771,7 @@ var LogHistoryModal = class extends import_obsidian9.Modal {
       if (confirm(`Delete ALL ${history.length} logs for "${this.task.name}"?`)) {
         clearTaskLogs(vaultBasePath, this.task.id);
         this.close();
-        new import_obsidian9.Notice("All logs cleared.");
+        new import_obsidian10.Notice("All logs cleared.");
       }
     };
     const list2 = contentEl.createDiv("auto-oc-log-history-list");
@@ -18545,7 +18802,7 @@ var LogHistoryModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var LogPreviewModal = class extends import_obsidian9.Modal {
+var LogPreviewModal = class extends import_obsidian10.Modal {
   constructor(app, taskName, timestamp, content, plugin) {
     super(app);
     this.taskName = taskName;
@@ -18567,7 +18824,7 @@ var LogPreviewModal = class extends import_obsidian9.Modal {
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.content);
-      new import_obsidian9.Notice("Log copied.");
+      new import_obsidian10.Notice("Log copied.");
     };
     const btnClose = toolbar.createEl("button", {
       text: "\u2716 Close",
@@ -18575,14 +18832,14 @@ var LogPreviewModal = class extends import_obsidian9.Modal {
     });
     btnClose.onclick = () => this.close();
     const renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
-    void import_obsidian9.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
+    void import_obsidian10.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
     renderEl.scrollTop = renderEl.scrollHeight;
   }
   onClose() {
     this.contentEl.empty();
   }
 };
-var BranchSelectorModal = class extends import_obsidian9.Modal {
+var BranchSelectorModal = class extends import_obsidian10.Modal {
   constructor(app, branches) {
     super(app);
     this.selectedBranch = null;
@@ -18619,7 +18876,7 @@ var BranchSelectorModal = class extends import_obsidian9.Modal {
     this.resolveSelection = null;
   }
 };
-var TextPreviewModal = class extends import_obsidian9.Modal {
+var TextPreviewModal = class extends import_obsidian10.Modal {
   constructor(app, titleText, bodyText) {
     super(app);
     this.titleText = titleText;
@@ -18630,10 +18887,10 @@ var TextPreviewModal = class extends import_obsidian9.Modal {
     contentEl.createEl("h3", { text: this.titleText });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.bodyText || "(empty)";
-    new import_obsidian9.Setting(contentEl).addButton(
+    new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.bodyText || "");
-        new import_obsidian9.Notice("Output copied.");
+        new import_obsidian10.Notice("Output copied.");
       })
     );
   }
@@ -18641,7 +18898,7 @@ var TextPreviewModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var CommandPreviewModal = class extends import_obsidian9.Modal {
+var CommandPreviewModal = class extends import_obsidian10.Modal {
   constructor(app, taskName, cmd) {
     super(app);
     this.taskName = taskName;
@@ -18656,10 +18913,10 @@ var CommandPreviewModal = class extends import_obsidian9.Modal {
     });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.cmd;
-    new import_obsidian9.Setting(contentEl).addButton(
+    new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.cmd);
-        new import_obsidian9.Notice("Command copied.");
+        new import_obsidian10.Notice("Command copied.");
       })
     );
   }
@@ -18667,7 +18924,7 @@ var CommandPreviewModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var DiagnosticModal = class extends import_obsidian9.Modal {
+var DiagnosticModal = class extends import_obsidian10.Modal {
   constructor(app, plugin) {
     super(app);
     this.logEl = null;
@@ -18688,10 +18945,10 @@ var DiagnosticModal = class extends import_obsidian9.Modal {
       (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
     }
     this.hiddenProc = null;
-    const fs33 = require("fs");
+    const fs34 = require("fs");
     for (const file of this.tempFiles) {
       try {
-        fs33.unlinkSync(file);
+        fs34.unlinkSync(file);
       } catch (e) {
       }
     }
@@ -18708,27 +18965,27 @@ var DiagnosticModal = class extends import_obsidian9.Modal {
     const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
     contentEl.createEl("p", { text: `Detected binary: ${bin}`, cls: "setting-item-description" });
     contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
-    new import_obsidian9.Setting(contentEl).addButton(
+    new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u25B6 Launch test: 'di hola'").setCta().onClick(() => {
         this.cleanupDiagnostics(true);
         if (this.logEl) this.logEl.textContent = "[launching detached process\u2026]\n";
         const bin2 = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
         if (!model) {
-          new import_obsidian9.Notice("AutoOC: no model selected. Reload models in Settings.");
+          new import_obsidian10.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
-        const fs33 = require("fs");
-        const path31 = require("path");
+        const fs34 = require("fs");
+        const path32 = require("path");
         const osTmp = require("os").tmpdir();
-        const outFile = path31.join(osTmp, "autooc-diag.txt");
-        const pidFile = path31.join(osTmp, "autooc-diag.pid");
+        const outFile = path32.join(osTmp, "autooc-diag.txt");
+        const pidFile = path32.join(osTmp, "autooc-diag.pid");
         try {
-          fs33.unlinkSync(outFile);
+          fs34.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs33.unlinkSync(pidFile);
+          fs34.unlinkSync(pidFile);
         } catch (e) {
         }
         let launchScript;
@@ -18776,9 +19033,9 @@ DONE:" + $exitCode)`
 DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
           ].join("\n");
         }
-        const scriptFile = path31.join(osTmp, `autooc-diag${scriptExt()}`);
+        const scriptFile = path32.join(osTmp, `autooc-diag${scriptExt()}`);
         if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-        else fs33.writeFileSync(scriptFile, launchScript, "utf8");
+        else fs34.writeFileSync(scriptFile, launchScript, "utf8");
         this.tempFiles = [outFile, pidFile, scriptFile];
         if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}
 
@@ -18791,13 +19048,13 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
             if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
             return;
           }
-          if (!fs33.existsSync(outFile)) {
+          if (!fs34.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           if (this.pollHandle) clearInterval(this.pollHandle);
           this.pollHandle = null;
-          const raw = fs33.readFileSync(outFile, "utf8");
+          const raw = fs34.readFileSync(outFile, "utf8");
           this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -18820,7 +19077,7 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
     this.contentEl.empty();
   }
 };
-var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
+var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -18831,13 +19088,14 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
     const credentialIssue = this.plugin.legacyCredentialNoticeStatus();
-    if (credentialIssue) new import_obsidian9.Setting(containerEl).setName("Legacy credential notice").setDesc(credentialIssue.acknowledged ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here." : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
-    new import_obsidian9.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
+    if (credentialIssue) new import_obsidian10.Setting(containerEl).setName("Legacy credential notice").setDesc(credentialIssue.acknowledged ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here." : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
+    new import_obsidian10.Setting(containerEl).setName("Resolve blocked executions").setDesc("Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openBlockedExecutionsReview()));
+    new import_obsidian10.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
       button.setDisabled(true);
       try {
         await this.plugin.openHistoricalAttemptsReview();
       } catch (error) {
-        new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
       } finally {
         button.setDisabled(false);
       }
@@ -18847,16 +19105,16 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
       saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
       applyDiameter: (diameter) => this.plugin.applyDashboardBubbleDiameter(diameter)
     });
-    new import_obsidian9.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
+    new import_obsidian10.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
       this.plugin.settings.defaultConcurrency = value;
       try {
         await this.plugin.saveSettings(false);
       } catch (error) {
-        new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
       }
     }));
     let requestedLimit = String((_a = this.plugin.settings.maxConcurrentExecutions) != null ? _a : 0);
-    new import_obsidian9.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
+    new import_obsidian10.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
       text.inputEl.type = "number";
       text.inputEl.min = "0";
       text.inputEl.step = "1";
@@ -18866,21 +19124,21 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
     }).addButton((button) => button.setButtonText("Apply").onClick(async () => {
       const limit = Number(requestedLimit);
       if (!/^\d+$/.test(requestedLimit) || !Number.isSafeInteger(limit)) {
-        new import_obsidian9.Notice("Enter a whole number of zero or more. Zero means Unlimited.");
+        new import_obsidian10.Notice("Enter a whole number of zero or more. Zero means Unlimited.");
         return;
       }
       button.setDisabled(true);
       try {
         this.plugin.settings.maxConcurrentExecutions = limit;
         await this.plugin.saveSettings(false);
-        new import_obsidian9.Notice(`Maximum simultaneous runs: ${limit === 0 ? "Unlimited" : limit}.`);
+        new import_obsidian10.Notice(`Maximum simultaneous runs: ${limit === 0 ? "Unlimited" : limit}.`);
       } catch (error) {
-        new import_obsidian9.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
       } finally {
         button.setDisabled(false);
       }
     }));
-    new import_obsidian9.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
+    new import_obsidian10.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;
         await this.plugin.saveSettings();
@@ -18889,17 +19147,17 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
     addInteractiveCliSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
     containerEl.createEl("p", { text: "Select OpenCode 2 in a task's Task type to use these settings. Existing OpenCode 1 tasks keep their engine. The executable path is configured under OpenCode 2 CLI above.", cls: "setting-item-description" });
-    new import_obsidian9.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.").addText((text) => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async (value) => {
+    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.").addText((text) => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async (value) => {
       this.plugin.settings.defaultOpencode2Model = value.trim();
       await this.plugin.saveSettings(false);
     }));
-    new import_obsidian9.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async (value) => {
+    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async (value) => {
       this.plugin.settings.defaultOpencode2Agent = value.trim() || "build";
       await this.plugin.saveSettings(false);
     }));
     addCopilotGlobalSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "Codex task defaults" });
-    new import_obsidian9.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
+    new import_obsidian10.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
       dropdown.addOption("", "Automatic");
       this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
       const current = this.plugin.settings.defaultCodexModel || "";
@@ -18917,7 +19175,7 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
       await this.plugin.refreshCodexModels(true);
       this.display();
     }));
-    new import_obsidian9.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
+    new import_obsidian10.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
       const efforts = this.plugin.getCodexReasoningEfforts();
       efforts.forEach((effort) => dropdown.addOption(effort, effort));
       const current = this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -18928,7 +19186,7 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
       });
     });
     containerEl.createEl("h3", { text: "CLI folders and terminals" });
-    new import_obsidian9.Setting(containerEl).setName("Working Directory").setDesc(
+    new import_obsidian10.Setting(containerEl).setName("Working Directory").setDesc(
       "Default folder for interactive CLI sessions and supported tasks. Empty = vault folder."
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
@@ -18936,14 +19194,14 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian9.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
+    new import_obsidian10.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
       (tog) => tog.setValue(!!this.plugin.settings.defaultInteractiveTerminal).onChange(async (v) => {
         this.plugin.settings.defaultInteractiveTerminal = v;
         await this.plugin.saveSettings();
       })
     );
     if (process.platform === "linux") {
-      new import_obsidian9.Setting(containerEl).setName("Linux terminal emulator").setDesc(
+      new import_obsidian10.Setting(containerEl).setName("Linux terminal emulator").setDesc(
         "Command used to open interactive CLI sessions. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
       ).addText(
         (text) => text.setPlaceholder("auto-detect (e.g. konsole)").setValue(this.plugin.settings.linuxTerminal || "").onChange(async (v) => {
@@ -18952,7 +19210,7 @@ var AutoOCSettingTab = class extends import_obsidian9.PluginSettingTab {
         })
       );
     }
-    new import_obsidian9.Setting(containerEl).setName("Shared Library URL").setDesc(
+    new import_obsidian10.Setting(containerEl).setName("Shared Library URL").setDesc(
       `GitHub repo or raw URL used by the Import \u2192 Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.
 Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     ).addText(
@@ -18962,7 +19220,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         this.display();
       })
     );
-    new import_obsidian9.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
+    new import_obsidian10.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a2 = this.plugin.settings.taskTimeoutSeconds) != null ? _a2 : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
@@ -18979,13 +19237,13 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
       cls: "setting-item-description"
     });
-    new import_obsidian9.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
+    new import_obsidian10.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
       (tog) => tog.setValue(this.plugin.settings.logsEnabled).onChange(async (v) => {
         this.plugin.settings.logsEnabled = v;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian9.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
+    new import_obsidian10.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder("50").setValue(String((_a2 = this.plugin.settings.maxLogsPerTask) != null ? _a2 : 50)).onChange(async (v) => {
@@ -18997,7 +19255,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian9.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
+    new import_obsidian10.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder("30").setValue(String((_a2 = this.plugin.settings.logRetentionDays) != null ? _a2 : 30)).onChange(async (v) => {
@@ -19009,7 +19267,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian9.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
+    new import_obsidian10.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
       (btn) => btn.setButtonText("\u{1F9F9} Clear All Logs").setWarning().onClick(async () => {
         if (confirm("Delete ALL log files for ALL tasks? This cannot be undone.")) {
           await this.plugin.clearAllLogs();
@@ -19025,26 +19283,26 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
       cls: "setting-item-description"
     });
-    new import_obsidian9.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
+    new import_obsidian10.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
       (btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
         try {
           const result = await this.plugin.ensureRalphLoopPluginEnabled();
-          new import_obsidian9.Notice(
+          new import_obsidian10.Notice(
             result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
           );
           this.display();
         } catch (e) {
-          new import_obsidian9.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+          new import_obsidian10.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
         }
       })
     ).addButton(
       (btn) => btn.setButtonText("Show status path").onClick(() => {
         const basePath = this.app.vault.adapter.basePath || ".";
         const statePath = getRalphStateFilePath(basePath);
-        new import_obsidian9.Notice(`Ralph state file: ${statePath}`);
+        new import_obsidian10.Notice(`Ralph state file: ${statePath}`);
       })
     );
-    new import_obsidian9.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+    new import_obsidian10.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       const agents = this.plugin.availableAgents;
       agents.forEach((a) => dd.addOption(a.value, a.label));
       const current = this.plugin.getEffectiveAgent();
@@ -19065,7 +19323,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     refreshAgentsBtn.style.marginBottom = "8px";
     refreshAgentsBtn.onclick = () => {
       this.plugin.refreshAgents();
-      new import_obsidian9.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+      new import_obsidian10.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
       this.display();
     };
     containerEl.createEl("p", {
@@ -19081,7 +19339,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = agentsBody.createEl("tr");
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
-    new import_obsidian9.Setting(containerEl).setName("Default OpenCode Model").addDropdown((dd) => {
+    new import_obsidian10.Setting(containerEl).setName("Default OpenCode Model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
       const current = this.plugin.getEffectiveDefaultModel();
@@ -19104,7 +19362,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     refreshBtn.style.marginBottom = "8px";
     refreshBtn.onclick = () => {
       this.plugin.refreshModels();
-      new import_obsidian9.Notice("AutoOC: models reloaded. Refresh this panel.");
+      new import_obsidian10.Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
     containerEl.createEl("p", {
