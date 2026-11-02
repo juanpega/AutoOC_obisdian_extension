@@ -172,6 +172,16 @@ Secrets has been removed from the product: there are no management, reveal, copy
 
 The plugin retains an internal, read-only component to mask known historical values of four or more characters before displaying or persisting output. Electron safeStorage must be able to decrypt them; if the file is unreadable or decryption fails, AutoOC warns without exposing sensitive content or overwriting the file. This does not universally protect external credentials or establish masking in the standalone host, which cannot access the encrypted store.
 
+### An old vault shows a historical output masking notice
+
+Starting with **1.7.17**, open **Settings → AutoOC → Legacy credential notice → Review**, or use the command **AutoOC: Review legacy credential notice**. This warning concerns the retired Secrets feature; it does **not** block a task or sign you out of your CLI. A separate execution error still needs its own resolution.
+
+- **Try reading again** checks whether the old values can now be read. For encrypted values, the original operating-system account and secure storage may be needed; a damaged file needs a known-good backup. See [Electron's secure-storage behavior](https://www.electronjs.org/docs/latest/api/safe-storage).
+- **Keep file and dismiss reminder** acknowledges that some old values still cannot be hidden in output. It saves only a preference on this device, without rewriting `data.json`, changing tasks or workflows, or deleting `secrets.vault.json`. Masking continues for readable values. The reminder stays dismissed for that exact file and problem; a changed file or different failure requires another review.
+- If the file cannot be read at all, fix access to it and retry before dismissing the reminder. AutoOC must identify the file before saving an acknowledgment.
+
+Repeated settings reloads with the same failure do not produce another reminder. A successful read clears the session's warning state. Settings keeps the review option available even after acknowledgment. A transient or partial failure also keeps the masks already known in that session. No passwords are recovered, exported, or injected into tasks by this feature, and dismissal does not restore unavailable masking.
+
 The local MCP bridge was removed in 1.6.2 to eliminate its startup and unload race. AutoOC does not modify other clients' configuration or credentials. Standalone execution remains available through the CLI and the [distributed skill](skills/autooc-runtime/SKILL.md). The existing credentials store is preserved.
 
 <a id="referencia-completa-de-la-cli-autooc"></a>

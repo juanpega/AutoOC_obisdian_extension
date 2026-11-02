@@ -2,9 +2,11 @@
 
 ## Entrega actual
 
-[Candidato 1.7.16: paralelismo predeterminado dentro de la bóveda](paralelismo-boveda-1.7.16/README.md).
+[Candidato 1.7.17: revisión de avisos de credenciales históricas](credenciales-historicas-1.7.17/README.md).
 
 ## Preparación anterior
+
+[Candidato 1.7.16: paralelismo predeterminado dentro de la bóveda](paralelismo-boveda-1.7.16/README.md).
 
 [Candidato 1.7.15: recuperar intentos antiguos desde la interfaz](recuperacion-historica-1.7.15/README.md).
 

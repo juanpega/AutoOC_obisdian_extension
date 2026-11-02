@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.7.17] - Candidato
+
+- El aviso de ocultado de credenciales históricas deja de repetirse en cada recarga de configuración. Distingue almacenamiento seguro no disponible, fallo de descifrado, formato no válido y archivo ilegible, sin exponer contenido sensible.
+- `Legacy credential notice` en ajustes y paleta permite reintentar o conservar el archivo y descartar el recordatorio en este dispositivo para ese contenido y causa exactos. La pantalla aclara que el aviso no bloquea tareas y que descartarlo no restaura el ocultado que falta.
+- Conserva el archivo histórico, catálogo, resultados, permisos y autenticación CLI. Las lecturas parciales o fallidas conservan los valores de ocultado ya conocidos durante la sesión. No cambia el esquema de tareas/workflows ni su prompt de creación.
+
 ## [1.7.16] - Candidato
 
 - Tareas y workflows pueden ejecutarse en paralelo dentro de la misma bóveda por defecto, sin límite impuesto por AutoOC. Las elecciones explícitas anteriores se conservan; ningún trabajo se inicia al actualizar.
