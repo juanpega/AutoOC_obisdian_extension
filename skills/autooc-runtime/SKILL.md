@@ -5,6 +5,14 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Recuperación directa en la interfaz (candidato 1.7.18)
+
+`Resolve blocked executions` está disponible en el panel de consulta, ajustes y paleta, además de las tarjetas bloqueadas. Revisa tanto intentos vinculados como antiguos. `Reconnect execution controls` conserva los intentos y no reanuda tareas. `Reset this attempt…` cierra únicamente el intento observado mediante abandono/disposición oficial, con motivo y confirmación de que el trabajo externo terminó y de que sus efectos no verificados siguen desconocidos. Conserva historial, resultados y definiciones; un `Run` posterior es trabajo nuevo que puede repetir efectos.
+
+La interfaz comprueba instalación, catálogo, journal, revisión y propietario después de confirmar. Una reserva local detenida necesita la entrega comprobada de su instancia original; una reserva de otro proceso solo puede recuperarse si su propietario está ausente. No se mata ningún proceso ni se borran reservas ajenas. Actividad local, escrituras o actualizaciones pendientes y evidencia cambiada siguen bloqueando. Si una operación informa de un fallo tras guardar una decisión, refrescar la revisión antes de volver a actuar.
+
+Una definición modificada no puede continuar el intento original: restaurarla o revisar su cierre. La confirmación humana y la recuperación de reserva siguen siendo decisiones distintas del arranque de trabajo. Estas opciones no añaden un comando CLI ni autorizan al agente a resetear intentos por inferencia. Verificar paquete instalado y carga real antes de atribuir esta interfaz a un equipo remoto.
+
 ## Disponibilidad y pasos Code (1.7.10+)
 
 Verificar `version` y `help` de la instalación. `catalogAvailability: 1` anuncia que `list` y `status` incluyen `disabled`, `blockedByDisabled`, `disabledReason` y `codeSteps`. La desactivación es independiente del estado guardado; un elemento sin bloqueo de desactivación todavía puede tener impedimentos de ejecución. Las consultas no prueban actividad real ni exponen prompts, código o resultados.

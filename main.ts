@@ -13,6 +13,8 @@ import { generateDraftText } from "./ai-draft-runner";
 import { saveGeneratedDefinition, type DraftKind, type GeneratedDraft } from "./ai-draft";
 import { executionStatusHelp, ExecutionStatusHelpModal, HistoricalAttemptsModal, type ExecutionHelpSnapshot } from "./execution-status-help";
 import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
+import { inspectBlockedExecutions, assertBlockedInspection, resetBlockedAttempt, type BlockedExecutionInspection, type BlockedAttempt } from "./blocked-execution-recovery";
+import { BlockedExecutionModal } from "./blocked-execution-modal";
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
 import { LegacyOutputRedaction } from "./legacy-output-redaction";
@@ -1942,6 +1944,7 @@ export default class AutoOCPlugin extends Plugin {
         name: "Review older attempts",
         callback: () => {void this.openHistoricalAttemptsReview().catch(error=>new Notice(this.redactSecrets(String(error))));},
       });
+      this.addCommand({id: "resolve-blocked-executions", name: "Resolve blocked executions", callback: () => this.openBlockedExecutionsReview()});
 
       this.addCommand({
         id: "review-legacy-credential-notice",
@@ -2230,9 +2233,10 @@ export default class AutoOCPlugin extends Plugin {
         if (this.updateCheckError) throw new Error(this.updateCheckError);
         if (this.updateAvailable) await this.updatePlugin();
         else new Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
-      }));
+      }, () => this.openBlockedExecutionsReview()));
     this.addRibbonIcon("workflow", "Open AutoOC", () => { void open(); });
     this.addCommand({id: "open-auto-oc", name: "Open AutoOC", callback: () => { void open(); }});
+    this.addCommand({id: "resolve-blocked-executions", name: "Resolve blocked executions", callback: () => this.openBlockedExecutionsReview()});
     new Notice(this.startupWaitingForOwner
       ? "AutoOC is open for consultation while another execution owns the engine."
       : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 10000);
@@ -2332,7 +2336,8 @@ export default class AutoOCPlugin extends Plugin {
     if (!execution || execution.runId !== expectedRunId) throw new Error("Recovery identity changed; reload the workflow");
     if (!["ready","in_flight"].includes(execution.phase)) throw new Error("Execution does not require recovery");
     const checkpoint=readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory,expectedRunId);
-    recoverWorkflowProgress(workflow,this.settings.tasks,this.settings,checkpoint,expectedRunId);
+    const recovered=recoverWorkflowProgress(workflow,this.settings.tasks,this.settings,checkpoint,expectedRunId);
+    if(recovered.runtimeExecution.definitionChanged)return "blocked";
     if (!["ready","in_flight"].includes(checkpoint.phase)) throw new Error("Execution does not require recovery");
     if (checkpoint.phase === "ready") return "resume";
     const last=checkpoint.steps[checkpoint.steps.length-1];
@@ -2360,7 +2365,7 @@ export default class AutoOCPlugin extends Plugin {
     }, async request => {
       const assertIdle=()=>{
         this.assertLifecycleOpen();this.pluginExecutionLease!.assertOwned();
-        if(this.updateInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size)throw new Error("Execution active; wait for AutoOC to finish, keeping Obsidian open");
+        if(this.updateInProgress || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size)throw new Error("Execution active; wait for AutoOC to finish, keeping Obsidian open");
         assertIdleCatalog(this.settings,assertIdleJournals(this.selectedExecutionLocation().runtimeDirectory));
       };
       assertIdle();this.workflowEditPending=true;
@@ -3547,9 +3552,91 @@ export default class AutoOCPlugin extends Plugin {
 
   get panelAvailable(): boolean { return this.ready || !!this.startupError && !this.startupRecoveryDisposed; }
 
+  openBlockedExecutionsReview(runId?:string):void {
+    if(!this.panelAvailable)throw new Error('AutoOC is still loading or closing');
+    new BlockedExecutionModal(this.app,
+      () => inspectBlockedExecutions(this.selectedExecutionLocation(false)),
+      (inspection,attempt) => this.confirmResetBlockedAttempt(inspection,attempt),
+      this.ready ? undefined : async inspection => {
+        if(!await new ConfirmModal(this.app,'Reconnect execution controls?',
+          'Reconnect AutoOC while keeping every saved attempt. No task will run. Confirm after checking that the original external work has ended. A live external owner or an active save still prevents reconnection.').openAndWait())return false;
+        await this.withRecoveryLease(inspection,async()=>{});
+        return true;
+      },error=>this.redactSecrets(String(error)),runId).open();
+  }
+
+  async confirmResetBlockedAttempt(inspection:BlockedExecutionInspection,attempt:BlockedAttempt):Promise<boolean> {
+    const modal=new ConfirmModal(this.app,'Reset this blocked attempt?',
+      `${attempt.name}. Attempt: ${attempt.runId}. ${attempt.completedSteps} completed step(s) will remain in history. Confirm that the original external work has ended and accept that unverified effects remain unknown. This closes only this attempt; it does not undo changes, mark success, or start new work. A later Run may repeat earlier effects. Enter the reason for closing it.`,true);
+    if(!await modal.openAndWait())return false;
+    await this.withRecoveryLease(inspection,async(lease,assertIdle)=>{
+      await resetBlockedAttempt(inspection,attempt,lease,modal.reason,true,assertIdle);
+    });
+    new Notice('Attempt closed with unknown outcome. History and results are preserved. Nothing was started.');
+    return true;
+  }
+
+  // Recovery holds the same admission and shutdown barriers as execution. It
+  // can borrow a current idle owner, or reclaim an exact stopped/dead owner;
+  // it never treats PID equality alone as authority to release a reservation.
+  private async withRecoveryLease(inspection:BlockedExecutionInspection,
+      action:(lease:ExecutionLease,assertIdle:()=>void)=>Promise<void>):Promise<void> {
+    const assertIdle=()=>{
+      if(!this.panelAvailable || this.startupRecoveryDisposed || this.startupPending || this.updateInProgress ||
+          this.workflowEditPending || this.sharedWorkflowExecution || this.definitionStarts.size ||
+          this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size ||
+          this.legacyAttempts.size || this.draftControllers.size || this.settingsWriter.hasPendingWrites || this.cliRequestHost?.hasPendingWork) {
+        throw new Error('Active work or saving must finish before recovery. No attempt was reset.');
+      }
+    };
+    assertIdle();
+    if(this.bulkCatalogMutationInProgress || this.sharedCompletions.size)throw new Error('Another operation is finishing; refresh the recovery review');
+    const consulting=!this.ready;
+    const expectedSettings=consulting ? undefined : captureJsonStructure(this.settings);
+    this.bulkCatalogMutationInProgress=true;
+    const pending=Promise.resolve().then(async()=>{
+      assertIdle();
+      const location=assertBlockedInspection(inspection,true);
+      if(!samePhysicalPath(this.selectedExecutionLocation(false).installationDirectory,location.installationDirectory))throw new Error('Selected installation changed');
+      let lease=this.pluginExecutionLease;
+      const temporary=consulting || !lease;
+      if(!lease) {
+        if(inspection.owner) {
+          const relinquish=inspection.owner.pid===process.pid ? stoppedLeaseOwners.get(inspection.owner.token) : undefined;
+          if(relinquish)relinquish(location.runtimeDirectory,true);
+          else recoverExecutionLease(location.runtimeDirectory,inspection.owner.token,()=>{assertIdle();assertBlockedInspection(inspection,true);});
+        }
+        lease=acquireExecutionLease(location.runtimeDirectory);
+      }
+      try {
+        lease.assertOwned();
+        if(!samePhysicalPath(lease.directory,location.runtimeDirectory))throw new Error('Recovery owner belongs to another installation');
+        assertIdle();assertBlockedInspection(inspection,false);
+        if(!consulting && this.pluginExecutionLease===lease)this.beginExecutionEffects();
+        await action(lease,assertIdle);
+        if(!consulting && this.panelAvailable && !this.lifecycleStopped) {
+          if(!matchesJsonStructure(this.settings,expectedSettings!))throw new Error('Recovery may already be recorded. Local edits were preserved; refresh the review before continuing.');
+          await this.loadSettings();this.refreshOpenViews();
+        }
+      } finally {
+        // Temporary recovery performed no provider work. Preserve the lease
+        // if a partial write remains; never hide an interrupted publication.
+        if(temporary){
+          assertPackageMaintenanceSafe(location.installationDirectory);
+          if(this.pluginExecutionLease===lease)this.releasePluginExecution(false);
+          else lease.release();
+        }
+      }
+    });
+    this.sharedCompletions.add(pending);
+    try {await pending;}
+    finally {this.sharedCompletions.delete(pending);this.bulkCatalogMutationInProgress=false;}
+    if(consulting && this.panelAvailable)await this.retryLoadingAutoOC();
+  }
+
   private assertPackageUpdateIdle(stoppedOwner = false): void {
     if (!stoppedOwner && this.lifecycleStopped && (!this.startupError || this.startupRecoveryDisposed)) throw new Error("AutoOC instance is stopped");
-    if (this.startupPending || this.sharedWorkflowExecution || this.sharedCompletions.size || this.runningProcesses.size ||
+    if (this.startupPending || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.sharedCompletions.size || this.runningProcesses.size ||
         this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.workflowEditPending ||
         this.settingsWriter.hasPendingWrites || this.cliRequestHost?.hasPendingWork) {
       throw new Error("An active execution or save must finish before updating AutoOC");
@@ -6971,6 +7058,9 @@ class AutoOCView extends ItemView {
     const actions = details.createDiv("auto-oc-card-actions");
 
     const terminalBinding=(task as any).runtimeExecution;
+    if(terminalBinding && !terminalBinding.disposition && (['ready','in_flight'].includes(terminalBinding.phase) || terminalBinding.terminalUncertainty) && !this.plugin.ownsExecution(terminalBinding.workflowId,terminalBinding.runId)) {
+      actions.createEl('button',{text:'Resolve blocked execution…'}).onclick=e=>{e.stopPropagation();this.plugin.openBlockedExecutionsReview(terminalBinding.runId);};
+    }
     if(terminalBinding?.terminalUncertainty && !terminalBinding.disposition && ['failed','completed'].includes(terminalBinding.phase) && task.status!=='running') {
       const dispose=actions.createEl('button',{text:'Resolve historical uncertainty'});
       dispose.onclick=async e=>{e.stopPropagation();try {await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id,terminalBinding.runId);} catch(error) {new Notice(this.plugin.redactSecrets(String(error)));}};
@@ -7496,6 +7586,9 @@ class AutoOCView extends ItemView {
     const actions = details.createDiv("auto-oc-card-actions");
 
     const durableExecution=(workflow as any).runtimeExecution;
+    if(durableExecution && !durableExecution.disposition && (['ready','in_flight'].includes(durableExecution.phase) || durableExecution.terminalUncertainty) && !this.plugin.isWorkflowExecuting(workflow.id)) {
+      actions.createEl('button',{text:'Resolve blocked execution…'}).onclick=e=>{e.stopPropagation();this.plugin.openBlockedExecutionsReview(durableExecution.runId);};
+    }
     if(durableExecution?.terminalUncertainty && !durableExecution.disposition && ['failed','completed'].includes(durableExecution.phase) && !this.plugin.isWorkflowExecuting(workflow.id)) {
       const dispose=actions.createEl('button',{text:'Resolve historical uncertainty'});
       dispose.onclick=async e=>{e.stopPropagation();try {await this.plugin.confirmTerminalDisposition(workflow.id,durableExecution.runId);} catch(error) {new Notice(this.plugin.redactSecrets(String(error)));} finally {this.refresh();}};
@@ -7505,7 +7598,9 @@ class AutoOCView extends ItemView {
       let mode:"resume"|"reconcile"|"blocked"="blocked";
       try {mode=this.plugin.sharedWorkflowRecoveryMode(workflow.id,durableExecution.runId);} catch { /* Invalid or stale evidence cannot authorize continuation. */ }
       const uncertain=mode === "reconcile";
-      actions.createEl("span", {text:mode === "blocked" ? "Recovery blocked: saved evidence needs reconciliation." : uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps."});
+      actions.createEl("span", {text:mode === "blocked" ? durableExecution.definitionChanged
+        ? "The workflow definition changed. Review and reset this attempt, or restore the original definition to continue."
+        : "Recovery blocked: saved evidence needs reconciliation." : uncertain ? "Previous step needs verification before continuing." : "Saved execution has pending steps."});
       const recover=actions.createEl("button", {text:uncertain ? "Verify previous result" : "Resume saved execution"});
       recover.disabled=mode === "blocked";
       recover.onclick=async(e)=>{
@@ -7634,7 +7729,7 @@ class ConfirmModal extends Modal {
 class AutoOCRecoveryView extends ItemView {
   private renderGeneration = 0;
   constructor(leaf: WorkspaceLeaf, private reason: string, private retry: () => Promise<void>, private recoverClosedSession?: () => void, private waitingForOwner = false, private sameProcessOwner = false,
-    private readCatalog?: () => Promise<PanelCatalog>, private updatePackage?: () => Promise<void>) { super(leaf); }
+    private readCatalog?: () => Promise<PanelCatalog>, private updatePackage?: () => Promise<void>, private reviewBlocked?: () => void) { super(leaf); }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "AutoOC"; }
   getIcon() { return "workflow"; }
@@ -7668,8 +7763,9 @@ class AutoOCRecoveryView extends ItemView {
       : this.recoverClosedSession
       ? "Recovery enables the engine without resuming or repeating any task. Interrupted runs keep their recorded state and still need review before continuation."
       : this.sameProcessOwner
-      ? "This Obsidian window still holds a previous AutoOC reservation. Retrying cannot release it while its state is unconfirmed. Let any active task finish, then close and reopen this vault window. If recovery is offered after reopening, use Recover closed session and open AutoOC. Do not delete runtime files; unfinished runs must still be reviewed."
+      ? "This Obsidian window still holds a previous AutoOC reservation. Open Resolve blocked executions to reconnect the controls or review and reset a saved attempt. Active work must finish first. Your tasks and history are preserved."
       : "Resolve the execution or save reported above before enabling editing and scheduling. Refreshing the catalog and checking for updates do not resume tasks."});
+    if(this.reviewBlocked)this.contentEl.createEl('button',{text:'Resolve blocked executions'}).onclick=()=>this.reviewBlocked!();
     if (this.recoverClosedSession) {
       const recover = this.contentEl.createEl('button', {text: 'Recover closed session and open AutoOC'});
       recover.onclick = async () => {
@@ -10824,6 +10920,10 @@ class AutoOCSettingTab extends PluginSettingTab {
         ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here."
         : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.")
       .addButton(button => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
+
+    new Setting(containerEl).setName('Resolve blocked executions')
+      .setDesc('Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.')
+      .addButton(button=>button.setButtonText('Review').onClick(()=>this.plugin.openBlockedExecutionsReview()));
 
     new Setting(containerEl).setName('Review older attempts')
       .setDesc('Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.')
