@@ -16,6 +16,7 @@ import { catalogTransaction, type CatalogTransaction } from "./catalog-transacti
 import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
 import { LegacyOutputRedaction } from "./legacy-output-redaction";
+import { LegacyCredentialNoticeModal } from "./legacy-credential-notice";
 import { samePhysicalPath } from "./path-identity";
 import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
 import {createPluginRequestHost} from "./cli-plugin-requests";
@@ -1616,7 +1617,13 @@ export default class AutoOCPlugin extends Plugin {
   private settingsWritableCatalog?: {file:string;version:ObservedVersion};
   settings!: AutoOCSettings;
   private legacyOutputRedaction = new LegacyOutputRedaction(() => {
-    new Notice("AutoOC: historical output masking is unavailable or incomplete. The historical store was kept unchanged.");
+    new Notice("AutoOC: some old credentials cannot be hidden in output. This notice does not block tasks. Open Settings → AutoOC → Legacy credential notice to review or dismiss the reminder.", 12000);
+  }, {
+    getItem: key => typeof this.app.loadLocalStorage === "function" ? this.app.loadLocalStorage(key) : localStorage.getItem(key),
+    setItem: (key, value) => {
+      if (typeof this.app.saveLocalStorage === "function") this.app.saveLocalStorage(key, value);
+      else localStorage.setItem(key, value);
+    },
   });
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
@@ -1934,6 +1941,12 @@ export default class AutoOCPlugin extends Plugin {
         id: "review-older-attempts",
         name: "Review older attempts",
         callback: () => {void this.openHistoricalAttemptsReview().catch(error=>new Notice(this.redactSecrets(String(error))));},
+      });
+
+      this.addCommand({
+        id: "review-legacy-credential-notice",
+        name: "Review legacy credential notice",
+        callback: () => this.openLegacyCredentialNotice(),
       });
 
       this.addCommand({
@@ -3480,6 +3493,23 @@ export default class AutoOCPlugin extends Plugin {
 
   redactSecrets(text: string): string {
     return this.legacyOutputRedaction?.redact(text) ?? text;
+  }
+
+  legacyCredentialNoticeStatus() { return this.legacyOutputRedaction.getIssue(); }
+
+  openLegacyCredentialNotice(onClosed?: () => void): void {
+    new LegacyCredentialNoticeModal(this.app, {
+      review: () => {
+        this.assertLifecycleOpen();
+        const vaultBasePath = (this.app.vault.adapter as any).basePath || "";
+        const location = this.manifest?.id && vaultBasePath ? this.selectedExecutionLocation(false) : undefined;
+        const directory = location?.installationDirectory || path.resolve(vaultBasePath, this.manifest?.dir || path.join(this.app.vault.configDir || ".obsidian", "plugins", this.manifest?.id || "auto-oc"));
+        this.legacyOutputRedaction.load(path.join(directory, "secrets.vault.json"), tryGetSafeStorage(), false);
+        return this.legacyCredentialNoticeStatus();
+      },
+      acknowledge: id => { this.assertLifecycleOpen(); this.legacyOutputRedaction.acknowledge(id); },
+      onClosed,
+    }).open();
   }
 
   // ── Version / update helpers ────────────────────────────────────────────────
@@ -10787,6 +10817,13 @@ class AutoOCSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
+
+    const credentialIssue = this.plugin.legacyCredentialNoticeStatus();
+    if (credentialIssue) new Setting(containerEl).setName("Legacy credential notice")
+      .setDesc(credentialIssue.acknowledged
+        ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here."
+        : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.")
+      .addButton(button => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
 
     new Setting(containerEl).setName('Review older attempts')
       .setDesc('Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.')

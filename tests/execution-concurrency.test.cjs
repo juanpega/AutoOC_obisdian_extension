@@ -15,6 +15,7 @@ function fixture(t,count=3){
 function pluginFixture(t,count=3){
   const f=fixture(t,count),bundle={exports:{}};
   const obsidian=Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab','WorkspaceLeaf'].map(k=>[k,class{}]));
+  const notices=[];obsidian.Notice=class{constructor(message){notices.push(message);}};
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8')+'\nmodule.exports.setAdapter=value=>{createWorkflowTaskAdapter=()=>value;};module.exports.prepareAsync=prepareWorkflowDefinitionAsync;',{
     module:bundle,exports:bundle.exports,require:n=>n==='obsidian'?obsidian:require(n),process,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,
     window:{setInterval,clearInterval,clearTimeout},
@@ -30,8 +31,21 @@ function pluginFixture(t,count=3){
     finish.get(task.id).promise.then(()=>{signal.removeEventListener('abort',abort);resolve({succeeded:true,output:'result-'+task.id});});
     if(signal.aborted)abort();
   });}});
-  return {...f,p,started,finish,effects,prepareAsync:bundle.exports.prepareAsync};
+  return {...f,p,started,finish,effects,notices,prepareAsync:bundle.exports.prepareAsync};
 }
+
+test('an unreadable legacy credential does not block Play or repeat its notice on task reloads',async t=>{
+  const f=pluginFixture(t,1),historical=path.join(f.directory,'secrets.vault.json');
+  const bytes=JSON.stringify({schemaVersion:1,secrets:[{encryptedValue:Buffer.from('synthetic-old-value').toString('base64')}]});fs.writeFileSync(historical,bytes);
+  const local=new Map();f.p.app.loadLocalStorage=key=>local.get(key);f.p.app.saveLocalStorage=(key,value)=>local.set(key,value);
+  await f.p.loadSettings();await f.p.loadSettings();
+  const run=f.p.runTask(f.p.settings.tasks[0]);await waitForStart(f,'a',run);f.finish.get('a').resolve();await run;
+  assert.equal(f.p.settings.tasks[0].status,'completed');assert.equal(f.p.settings.tasks[0].output,'result-a');
+  assert.equal(f.notices.filter(x=>x.includes('Legacy credential notice')).length,1);
+  f.p.legacyOutputRedaction.acknowledge(f.p.legacyCredentialNoticeStatus().id);await f.p.loadSettings();
+  assert.equal(f.p.legacyCredentialNoticeStatus().acknowledged,true);assert.equal(fs.readFileSync(historical,'utf8'),bytes);
+  assert.equal(f.notices.filter(x=>x.includes('Legacy credential notice')).length,1);
+});
 
 test('plugin overlaps two tasks, preserves interleaved settings and finishes in reverse order',async t=>{
   const f=pluginFixture(t),{p}=f;await p.loadSettings();

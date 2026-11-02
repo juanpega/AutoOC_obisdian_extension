@@ -257,12 +257,13 @@ test('plugin supplies task editor model lists without mixing OpenCode versions o
 
 test('the actual shipped creator prompt contains a valid example for each engine and editor', () => {
   const h=harness();
+  const version=JSON.parse(fs.readFileSync(path.join(__dirname,'../manifest.json'),'utf8')).version;
   for(const kind of ['task','workflow']) for(const engine of ['opencode','opencode2','codex','copilot']) {
-    const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,'1.7.11');
+    const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,version);
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
     assert.match(prompt,/Do not include model IDs in the JSON/);
     const example=prompt.split('CREATOR EXAMPLE (replace its content with the requested objective):\n')[1].split('\n\nThe following JSON string')[0];
-    assert.equal(JSON.parse(example).autoOCExport.pluginVersion,'1.7.11');
+    assert.equal(JSON.parse(example).autoOCExport.pluginVersion,version);
     const draft=h.parseGeneratedDraft(example,kind,defaults);
     assert.equal(draft.tasks[0].taskKind,engine);assert.equal(!!draft.workflow,kind==='workflow');
   }
