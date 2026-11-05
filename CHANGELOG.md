@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.7.19] - Candidato
+
+- WorkFlows permite añadir workflows existentes como pasos. El padre espera su resultado y conserva las transiciones, con entrada/salida y estados separados por invocación. Se rechazan referencias inválidas, ciclos y anidamientos que exceden los límites admitidos.
+- Ejecución, parada, continuación y reconciliación conservan un único intento padre, protegen las tareas y workflows descendientes y mantienen el historial independiente de cada hijo.
+- Importación y exportación de workflows anidados con dependencias transitivas, referencias `workflowExportId` y esquema 1.7.0. Se mantienen los formatos históricos y se actualizan las instrucciones y ejemplos de los creadores.
+- Debajo de Your areas, los botones Workflows y Tasks filtran el Dashboard por tipo dentro de sus áreas; All restaura la vista conjunta. Se conservan búsqueda, filtros, áreas plegadas y selección válida.
+- La edición CLI sigue limitada al nombre/descripción del workflow y texto/código de pasos existentes. La creación IA integrada genera un workflow secuencial; los hijos se añaden desde el editor al revisar el borrador.
+
 ## [1.7.17] - Candidato
 
 - El aviso de ocultado de credenciales históricas deja de repetirse en cada recarga de configuración. Distingue almacenamiento seguro no disponible, fallo de descifrado, formato no válido y archivo ilegible, sin exponer contenido sensible.

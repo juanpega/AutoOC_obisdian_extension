@@ -10,7 +10,7 @@ import { isOpenCodeTask } from "./opencode-profile";
 // Validate all steps before the journal or first Code effect. The installed
 // catalog is trusted input, but an explicit vault does not authorize other roots.
 export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:string) {
-  assertWorkflowDependencies(definition.workflow, definition.tasks);
+  assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
   const root = physicalPath(vault);
   const checkDirectory = (value:unknown) => {
     if (value !== undefined && typeof value !== "string") throw new Error("Invalid working directory");
@@ -21,7 +21,7 @@ export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:str
     if (!fs.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
   };
   checkDirectory(definition.settings.workingDirectory);
-  for (const item of [definition.workflow,...definition.workflow.steps,...definition.tasks] as Record<string,any>[]) {
+  for (const item of [definition.workflow,...definition.workflow.steps,...(definition.workflows || []).flatMap(w=>[w,...w.steps]),...definition.tasks] as Record<string,any>[]) {
     if (item.workingDirectory !== undefined) checkDirectory(item.workingDirectory);
     if(item.interactiveTerminal!==undefined && typeof item.interactiveTerminal!=="boolean")throw new Error("interactiveTerminal must be boolean");
     if(item.taskKind==="code" && item.interactiveTerminal===true)throw new Error("Code tasks cannot be interactive");

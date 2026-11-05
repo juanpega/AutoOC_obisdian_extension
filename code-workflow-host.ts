@@ -7,7 +7,6 @@ import * as fs from "fs";
 import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
 import { ExecutionJournal, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { prepareWorkflowDefinition, type PreparedWorkflow } from "./workflow-definition";
-import { findWorkflowEntry } from "./workflow-routing";
 import { advanceWorkflowSession } from "./workflow-session";
 import { executeCodeAsync } from "./code-runtime";
 import { runWithVaultMutations, type VaultMutationBatchFactory } from "./code-vault-mutations";
@@ -18,6 +17,7 @@ import type { WorkflowSessionHost } from "./workflow-session";
 import type { CodexApprovalRequest } from "./codex-client";
 import { prepareTaskBranch, verifyWorkflowBranch } from "./workflow-branch";
 import { awaitWorkflowApproval } from "./workflow-approval";
+import { workflowExecutionPlan, workflowStepContext } from "./workflow-nesting";
 
 
 // Transient display snapshot, never a durable result or a routing input.
@@ -37,10 +37,10 @@ export interface WorkflowTaskAdapter {
 }
 
 export function supportsSharedWorkflow(definition:PreparedWorkflow,tasks?:WorkflowTaskAdapter):boolean {
-  assertWorkflowDependencies(definition.workflow, definition.tasks);
+  assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
   return !definition.workflow.requiresAutoOCSecrets &&
     !definition.tasks.some(task=>task.requiresAutoOCSecrets) &&
-    !definition.workflow.steps.some((step:any)=>!["code","delay","task"].includes(step.stepKind || "task")) &&
+    ![definition.workflow,...(definition.workflows || [])].some(w=>w.steps.some((step:any)=>!["code","delay","task","workflow"].includes(step.stepKind || "task"))) &&
     definition.tasks.every(task=>!!tasks?.supports(task));
 }
 
@@ -64,17 +64,17 @@ export async function runCodeWorkflowHost(options: {
   admission?: ExecutionAdmission;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
-  if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks);
-  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
-  const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, options.definition.settings);
+  if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks, options.definition.workflows);
+  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks, options.definition.workflows);
+  const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, {...options.definition.settings,workflows:options.definition.workflows});
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
   if (options.reconcile && !options.resumeRunId) throw new Error("Reconciliation requires an existing run identity");
   if (options.maxSteps !== undefined && (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1)) throw new Error("Invalid execution step limit");
-  const steps = definition.workflow.steps;
+  const plan = workflowExecutionPlan(definition), steps = plan.steps;
   if (definition.tasks.some(task => !options.tasks?.supports(task))) throw new Error("No adapter for referenced workflow task");
   if (!supportsSharedWorkflow(definition,options.tasks)) throw new Error("Unsupported step, task or model evaluation in this host");
   if(steps.some((step:any)=>step.transitionMode==="eval" || step.transitions?.some((t:any)=>t.mode==="eval")) && !options.evaluate) throw new Error("Model evaluation adapter is required");
-  const entry = findWorkflowEntry(steps);
+  const entry = steps.find(step=>step.id===plan.entry);
   if (!entry) throw new Error("Workflow has no entry step");
   const lease = options.lease || acquireExecutionLease(options.runtimeDirectory);
   const ownsLease = !options.lease;
@@ -98,7 +98,7 @@ export async function runCodeWorkflowHost(options: {
     if(resumed)admission.bind(resumed.snapshot());
     // Reject changed branches before beginning a step or advancing a durable
     // result. A denied resume must leave its checkpoint recoverable unchanged.
-    if (resumed && definition.workflow.handoffBranch && ["ready","in_flight"].includes(resumed.snapshot().phase)) {
+    if (resumed && [definition.workflow,...(definition.workflows || [])].some(w=>w.handoffBranch) && ["ready","in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed,options.vaultBase);
     }
     if(resumed && ["completed","failed"].includes(resumed.snapshot().phase)) {
@@ -108,7 +108,7 @@ export async function runCodeWorkflowHost(options: {
       await options.onCheckpoint?.(state);
       return state;
     }
-    if (resumed?.snapshot().phase === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result) {
+    if (resumed?.snapshot().phase === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result && !plan.scopes.get(resumed.snapshot().nextStepId!)?.boundary) {
       if (!options.reconcile || !options.tasks?.reconcile) throw new Error("Interrupted execution requires reconciliation; cannot replay effects");
       const step = steps.find(step => step.id === resumed.snapshot().nextStepId) as any;
       const task = definition.tasks.find(task => task.id === step?.taskId);
@@ -145,16 +145,15 @@ export async function runCodeWorkflowHost(options: {
     return await advanceWorkflowSession(journal, definition, {
       async execute(step:any, input, outputs, signal) {
         admission.assertOwned(lease,definition);
-        if(definition.workflow.handoffBranch)verifyWorkflowBranch(journal,options.vaultBase);
+        const context=workflowStepContext(plan,step.id,journal.snapshot());
+        const workflow=context.scope.workflow;
+        if([definition.workflow,...(definition.workflows || [])].some(w=>w.handoffBranch))verifyWorkflowBranch(journal,options.vaultBase);
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find(task => task.id === step.taskId);
           if (!task || !options.tasks) throw new Error("Workflow task adapter is unavailable");
           const stepIndex = journal.snapshot().steps.length - 1;
-          await prepareTaskBranch(journal,task,task.workingDirectory || definition.settings.workingDirectory || options.vaultBase,options.vaultBase,!!definition.workflow.handoffBranch);
-          const completed = journal.snapshot().steps.filter(item => item.status !== "in_flight");
-          const previous = completed[completed.length - 1];
-          const prompt = workflowTaskPrompt(task.prompt || "", definition.workflow,
-            previous ? {stepId:previous.stepId,output:previous.output || ""} : undefined);
+          await prepareTaskBranch(journal,task,task.workingDirectory || definition.settings.workingDirectory || options.vaultBase,options.vaultBase,context.scope.handoffBranch);
+          const prompt = workflowTaskPrompt(task.prompt || "", workflow, context.previous);
           let observing = true;
           try {
             return await options.tasks.execute(task, prompt, signal, async(threadId,turnId) => {

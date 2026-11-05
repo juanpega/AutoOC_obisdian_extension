@@ -1,6 +1,7 @@
 import { validateExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { prepareWorkflowDefinition, prepareWorkflowDefinitionAsync } from "./workflow-definition";
 import { cloneJsonStructure } from "./cooperative-json";
+import { workflowExecutionPlan, workflowClosure } from "./workflow-nesting";
 
 // The catalog binding identifies the historical run independently of the
 // editable definition. Check it before deciding how to project that run.
@@ -22,7 +23,7 @@ export function recoverWorkflowProgress(workflow:any,tasks:any[],settings:Record
   // An edited terminal definition can be incomplete. Only definition preparation
   // is optional here; checkpoint and binding errors above are never suppressed.
   try { currentHash = prepareWorkflowDefinition(workflow,tasks,settings).hash; } catch { /* Validate on the next explicit execution. */ }
-  return recoverPreparedProgress(workflow,checkpoint,currentHash);
+  return recoverPreparedProgress(workflow,checkpoint,currentHash,false,settings.workflows);
 }
 
 export async function recoverWorkflowProgressAsync(workflow:any,tasks:any[],settings:Record<string,any>,checkpoint:RunCheckpoint,expectedRunId:string,activelyExecuting=false) {
@@ -34,12 +35,12 @@ export async function recoverWorkflowProgressAsync(workflow:any,tasks:any[],sett
   try { currentHash=(await prepareWorkflowDefinitionAsync(workflow,tasks,settings)).hash; }
   catch (error) { if(activelyExecuting)throw error; }
   if(activelyExecuting && currentHash!==checkpoint.definitionHash)throw new Error("Progress identity or definition mismatch");
-  return recoverPreparedProgress(workflow,checkpoint,currentHash,activelyExecuting);
+  return recoverPreparedProgress(workflow,checkpoint,currentHash,activelyExecuting,settings.workflows);
 }
 
-function recoverPreparedProgress(workflow:any,checkpoint:RunCheckpoint,currentHash:string|undefined,activelyExecuting=false) {
+function recoverPreparedProgress(workflow:any,checkpoint:RunCheckpoint,currentHash:string|undefined,activelyExecuting=false,workflows:any[] = []) {
   const terminal=["completed","failed","abandoned"].includes(checkpoint.phase);
-  if (currentHash === checkpoint.definitionHash) return projectPreparedProgress(workflow,checkpoint,activelyExecuting);
+  if (currentHash === checkpoint.definitionHash) return projectPreparedProgress(workflow,checkpoint,activelyExecuting,workflows);
   return {...workflow,
     ...(checkpoint.createdAt ? {lastRun:checkpoint.createdAt} : {}),
     status:terminal ? checkpoint.phase : 'pending',currentStep:0,
@@ -57,14 +58,21 @@ export function projectWorkflowProgress(workflow:any,tasks:any[],settings:Record
   validateProgressBinding(workflow,checkpoint,expectedRunId);
   const definition = prepareWorkflowDefinition(workflow,tasks,settings);
   if (checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
-  return projectPreparedProgress(workflow,checkpoint,activelyExecuting);
+  return projectPreparedProgress(workflow,checkpoint,activelyExecuting,definition.workflows);
 }
 
-function projectPreparedProgress(workflow:any,checkpoint:RunCheckpoint,activelyExecuting=false) {
-  const last = new Map(checkpoint.steps.map(step=>[step.stepId,step]));
-  if (checkpoint.steps.some(step=>!workflow.steps.some((known:any)=>known.id===step.stepId))) throw new Error("Progress contains an unknown step");
-  if (checkpoint.nextStepId && !workflow.steps.some((known:any)=>known.id===checkpoint.nextStepId)) throw new Error("Progress next step is absent");
-  const target = checkpoint.nextStepId || checkpoint.steps[checkpoint.steps.length-1]?.stepId;
+function projectPreparedProgress(workflow:any,checkpoint:RunCheckpoint,activelyExecuting=false,workflows:any[] = []) {
+  const plan=workflowExecutionPlan({workflow,workflows:workflowClosure(workflow,workflows)});
+  const last = new Map<string,RunCheckpoint["steps"][number]>();
+  for(const step of checkpoint.steps) {
+    const scope=plan.scopes.get(step.stepId);
+    if(!scope)throw new Error("Progress contains an unknown step");
+    const internal=scope.path.length>0 || scope.boundary === "enter";
+    last.set(scope.rootStepId,internal ? {...step,status:checkpoint.phase === "failed" ? "failed" : "in_flight",output:checkpoint.phase === "failed" ? step.output : ""} : step);
+  }
+  if (checkpoint.nextStepId && !plan.scopes.has(checkpoint.nextStepId)) throw new Error("Progress next step is absent");
+  const targetId = checkpoint.nextStepId || checkpoint.steps[checkpoint.steps.length-1]?.stepId;
+  const target = plan.scopes.get(targetId!)?.rootStepId;
   return {...workflow,
     ...(checkpoint.createdAt ? {lastRun:checkpoint.createdAt} : {}),
     status:checkpoint.phase==='abandoned'?'abandoned':checkpoint.phase==='completed'?'completed':checkpoint.phase==='failed'?'failed':activelyExecuting?'running':'pending',

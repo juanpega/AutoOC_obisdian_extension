@@ -13,7 +13,11 @@ export function assertNoRetiredDependency(item: { id?: string; requiresAutoOCSec
   if (error) throw new Error(error);
 }
 
-export function assertWorkflowDependencies(workflow: { id?: string; requiresAutoOCSecrets?: unknown; steps?: any[] }, tasks: any[]): void {
+import { workflowClosure, type NestedWorkflow } from "./workflow-nesting";
+export function assertWorkflowDependencies(workflow: { id?: string; requiresAutoOCSecrets?: unknown; steps?: any[] }, tasks: any[], workflows: NestedWorkflow[] = []): void {
+  if(workflow.steps?.some(step=>step.stepKind === "workflow")) for(const child of workflowClosure(workflow as NestedWorkflow,workflows)) {
+    assertWorkflowDependencies({...child,steps:child.steps.filter(step=>step.stepKind!=="workflow")},tasks);
+  }
   assertNoRetiredDependency(workflow);
   for (const step of workflow.steps || []) {
     assertNoRetiredDependency(step);

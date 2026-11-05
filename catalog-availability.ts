@@ -1,11 +1,20 @@
 /** Availability is independent from execution status and historical results. */
+import { workflowClosure, type NestedWorkflow } from "./workflow-nesting";
 export interface Activatable { id?: string; name?: string; disabled?: boolean; }
 
 export function taskDisabledReason(task: Activatable | undefined): string | undefined {
   return task?.disabled === true ? `Task "${task.name || task.id}" is disabled. Enable it before running.` : undefined;
 }
 
-export function workflowDisabledReason(workflow: Activatable & { steps?: Array<Activatable & { stepKind?: string; taskId?: string }> }, tasks: Activatable[]): string | undefined {
+export function workflowDisabledReason(workflow: Activatable & { steps?: Array<Activatable & { stepKind?: string; taskId?: string }> }, tasks: Activatable[], workflows: NestedWorkflow[] = []): string | undefined {
+  if (workflow.steps?.some(step=>step.stepKind === "workflow")) {
+    try {
+      for (const child of workflowClosure(workflow as NestedWorkflow,workflows)) {
+        const reason=workflowDisabledReason({...child,steps:child.steps.filter(step=>step.stepKind!=="workflow")},tasks);
+        if(reason)return reason;
+      }
+    } catch { /* Invalid references are diagnosed by definition validation, not as disabled items. */ }
+  }
   if (workflow.disabled === true) return `Workflow "${workflow.name || workflow.id}" is disabled. Enable it before running.`;
   for (const step of workflow.steps || []) {
     if (step.disabled === true) return `Step "${step.name || step.id}" is disabled. Enable it before running.`;
@@ -16,8 +25,8 @@ export function workflowDisabledReason(workflow: Activatable & { steps?: Array<A
   return undefined;
 }
 
-export function assertWorkflowEnabled(workflow: Parameters<typeof workflowDisabledReason>[0], tasks: Activatable[]): void {
-  const reason = workflowDisabledReason(workflow, tasks);
+export function assertWorkflowEnabled(workflow: Parameters<typeof workflowDisabledReason>[0], tasks: Activatable[], workflows: NestedWorkflow[] = []): void {
+  const reason = workflowDisabledReason(workflow, tasks, workflows);
   if (reason) throw Object.assign(new Error(reason), {name: 'DisabledExecutionError'});
 }
 

@@ -11,7 +11,7 @@ export function summarizeCliCatalog(config: any, includeStatus: boolean) {
       ...(includeStatus ? {recordedStatus: status(recordedStatus)} : {})};
   };
   const tasks = config.tasks.map((task: any) => summarize(task, taskDisabledReason(task)));
-  const workflows = config.workflows.map((workflow: any) => summarize(workflow, workflowDisabledReason(workflow, config.tasks)));
+  const workflows = config.workflows.map((workflow: any) => summarize(workflow, workflowDisabledReason(workflow, config.tasks, config.workflows)));
   const codeSteps = config.workflows.flatMap((workflow: any) => (workflow.steps || [])
     .filter((step: any) => step.stepKind === 'code').map((step: any) => ({
       ...summarize({id: step.id, name: step.name || step.id, disabled: step.disabled},

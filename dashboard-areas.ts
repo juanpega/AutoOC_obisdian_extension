@@ -5,7 +5,7 @@ import { executionStatusHelp } from "./execution-status-help";
 
 interface Source {
   id: string; name?: string; area?: string; status?: string; disabled?: boolean;
-  taskKind?: string; taskId?: string; stepKind?: string; lastRun?: string;
+  taskKind?: string; taskId?: string; workflowId?: string; stepKind?: string; lastRun?: string;
   runtimeExecution?: { workflowId?: string; runId?: string; phase?: string; requiresReconciliation?: boolean; terminalUncertainty?: boolean; disposition?: unknown };
   pendingCodexApproval?: unknown;
   legacyExecution?: { token?: string; stopState?: string };
@@ -20,10 +20,11 @@ export interface DashboardItem {
 }
 export interface AreaDashboardState {
   query: string; showDisabled: boolean; attentionOnly: boolean;
+  kindFilter: "all" | "workflow" | "task";
   selected?: string; collapsed: Set<string>;
 }
 export const createAreaDashboardState = (): AreaDashboardState => ({
-  query: "", showDisabled: false, attentionOnly: false, collapsed: new Set(),
+  query: "", showDisabled: false, attentionOnly: false, kindFilter: "all", collapsed: new Set(),
 });
 
 const needsAttention = (item: Source, owned: boolean) => {
@@ -62,6 +63,7 @@ export function dashboardItems(tasks: Source[], workflows: Flow[], ownsExecution
   const flowItems: DashboardItem[] = workflows.map(workflow => {
     const children: DashboardItem[] = workflow.steps.map((step, index) => {
       const task = byId.get(step.taskId || ""), code = step.stepKind === "code";
+      const nested = step.stepKind === "workflow", child = nested ? workflows.find(w=>w.id===step.workflowId) : undefined;
       const display = code ? codeStepDisplay(step) : step;
       const status = display.status || "pending";
       const binding = code && step.codeExecution && display.lastRun === step.codeExecution.lastRun
@@ -69,16 +71,16 @@ export function dashboardItems(tasks: Source[], workflows: Flow[], ownsExecution
       return {
         key: JSON.stringify(["step", workflow.id, step.id]), id: step.id, workflowId: workflow.id,
         taskId: code || step.stepKind === "delay" ? undefined : step.taskId,
-        kind: code || task?.taskKind === "code" ? "code" : step.stepKind === "delay" ? "delay" : "task",
-        name: step.name?.trim() || task?.name || (code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
+        kind: nested ? "workflow" : code || task?.taskKind === "code" ? "code" : step.stepKind === "delay" ? "delay" : "task",
+        name: step.name?.trim() || child?.name || task?.name || (nested ? "Missing workflow" : code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
         area: areaName(step.area || workflow.area), status,
-        disabled: !!(workflow.disabled || step.disabled || task?.disabled),
+        disabled: !!(workflow.disabled || step.disabled || task?.disabled || child?.disabled),
         attention: needsAttention({ ...step, status, runtimeExecution: binding }, owned(binding, workflow.id)) ||
-          (!code && step.stepKind !== "delay" && !task),
+          (nested ? !child : !code && step.stepKind !== "delay" && !task),
         detail: `Step ${index + 1} · ${workflow.name}`, lastRun: display.lastRun,
       };
     });
-    const blocked = workflowDisabledReason(workflow, tasks);
+    const blocked = workflowDisabledReason(workflow, tasks, workflows);
     return {
       key: JSON.stringify(["workflow", workflow.id]), id: workflow.id, kind: "workflow",
       name: workflow.name || "Untitled workflow", area: areaName(workflow.area), status: workflow.status || "pending",
@@ -92,7 +94,9 @@ export function dashboardItems(tasks: Source[], workflows: Flow[], ownsExecution
 
 export function dashboardVisibleItems(items: DashboardItem[], state: AreaDashboardState) {
   const query = state.query.trim().toLowerCase();
-  return items.filter(item => (state.showDisabled || !item.disabled) && (!state.attentionOnly || item.attention) &&
+  return items.filter(item =>
+    (state.kindFilter === "workflow" ? item.kind === "workflow" : state.kindFilter === "task" ? item.kind !== "workflow" : true) &&
+    (state.showDisabled || !item.disabled) && (!state.attentionOnly || item.attention) &&
     (!query || [item.name, item.area, item.detail, ...(item.children || []).map(child => `${child.name} ${child.area}`)]
       .some(text => text.toLowerCase().includes(query))));
 }
@@ -104,7 +108,8 @@ export class AreaDashboard {
   readonly root: HTMLElement;
   private map: HTMLElement;
   private inspector: HTMLElement;
-  private summary: HTMLElement;
+  private metrics: HTMLElement;
+  private kindFilters = new Map<AreaDashboardState["kindFilter"], { button: HTMLButtonElement; count: HTMLElement }>();
   private event: HTMLElement;
   private items: DashboardItem[] = [];
   private signature = "";
@@ -119,8 +124,19 @@ export class AreaDashboard {
     this.root = parent.createDiv("auto-oc-areas-dashboard");
     const heading = this.root.createDiv("auto-oc-areas-heading");
     heading.createEl("h2", { text: "Your areas" });
-    heading.createEl("p", { text: "Workflows, tasks and Code steps. Select a bubble to see its details." });
-    this.summary = this.root.createDiv("auto-oc-areas-summary");
+    heading.createEl("p", { text: "Select Workflows or Tasks to filter your areas, then select a bubble to see its details." });
+    const summary = this.root.createDiv("auto-oc-areas-summary");
+    const filters = summary.createDiv({ cls: "auto-oc-areas-kind-filters", attr: { role: "group", "aria-label": "Filter areas by item type" } });
+    for (const [kind, label] of [["all", "All"], ["workflow", "Workflows"], ["task", "Tasks"]] as const) {
+      const button = filters.createEl("button", { cls: "auto-oc-areas-kind-filter", attr: {
+        type: "button", "data-area-kind-filter": kind, "aria-label": kind === "all" ? "Show all items" : `Show ${label.toLowerCase()}`,
+      } });
+      const count = button.createEl("strong");
+      button.createSpan({ text: label });
+      button.onclick = () => { state.kindFilter = kind; this.draw(); };
+      this.kindFilters.set(kind, { button, count });
+    }
+    this.metrics = summary.createDiv("auto-oc-areas-metrics");
     const tools = this.root.createDiv("auto-oc-areas-tools");
     const search = tools.createEl("input", { type: "search", placeholder: "Find a task, workflow or step", attr: { "aria-label": "Search Dashboard" } });
     search.value = state.query;
@@ -161,17 +177,21 @@ export class AreaDashboard {
     if (!visible.some(item => item.key === this.state.selected || item.children?.some(child => child.key === this.state.selected))) {
       this.state.selected = (visible.find(item => !item.disabled && item.status === "running") || visible.find(item => !item.disabled && item.attention) || visible[0])?.key;
     }
-    this.summary.empty();
+    const workflowCount = this.items.filter(item => item.kind === "workflow").length;
+    const counts = { all: this.items.length, workflow: workflowCount, task: this.items.length - workflowCount };
+    for (const [kind, { button, count }] of this.kindFilters) {
+      button.setAttr("aria-pressed", String(this.state.kindFilter === kind));
+      count.setText(String(counts[kind]));
+    }
+    this.metrics.empty();
     for (const [label, count] of [
-      ["workflows", this.items.filter(item => item.kind === "workflow").length],
-      ["tasks", this.items.filter(item => item.kind !== "workflow").length],
       ["Code steps", this.items.reduce((n, item) => n + (item.children?.filter(child => child.kind === "code").length || 0), 0)],
       ["items running", this.items.filter(item => !item.disabled && item.status === "running").length],
       ["steps running", this.items.reduce((n, item) => n + (item.activeSteps || 0), 0)],
       ["need attention", this.items.filter(item => !item.disabled && item.attention).length],
       ["disabled", this.items.filter(item => item.disabled).length],
     ]) {
-      const metric = this.summary.createSpan(); metric.createEl("strong", { text: String(count) }); metric.createSpan({ text: ` ${label}` });
+      const metric = this.metrics.createSpan(); metric.createEl("strong", { text: String(count) }); metric.createSpan({ text: ` ${label}` });
     }
     this.drawMap(); this.drawInspector();
   }

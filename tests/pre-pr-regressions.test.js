@@ -411,8 +411,8 @@ test("workflow prompt documents the canonical export contract", () => {
   const prompt = mainTypeScriptSource.match(/const AUTOOC_WORKFLOW_PROMPT = `([\s\S]*?)`;/)?.[1];
 
   assert.ok(prompt, "AUTOOC_WORKFLOW_PROMPT should exist in main.ts");
-  assert.match(prompt, /"pluginVersion": "1\.7\.2"/);
-  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", "1\.5\.0", or "1\.6\.0"/);
+  assert.ok(prompt.includes('"pluginVersion": "${PLUGIN_BUILD_VERSION}"'));
+  assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", "1\.5\.0", "1\.6\.0", or "1\.7\.0"/);
   assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
   assert.match(prompt, /Every task must include it, including taskKind "code"/);
   assert.match(prompt, /"codex" for Codex in ChatGPT/);

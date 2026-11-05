@@ -14,6 +14,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 Since 1.7.12, **Dashboard** groups workflows and tasks by their **Area** field, with a **No area** group for unassigned items. To reorganize them, change their area in the editor or through the selection actions. Positions from the previous map remain saved in the settings.
 
+Debajo de **Your areas**, pulsa **Workflows** o **Tasks** para mostrar solo ese tipo en sus respectivas áreas; **Tasks** incluye las tareas Code. **All** restaura la vista conjunta. El filtro se combina con la búsqueda, **Needs attention** y **Show disabled**, conserva las áreas plegadas y se mantiene durante la sesión del panel. Los contadores de estos botones indican el total del catálogo, incluidos los elementos desactivados.
+
 Each item has a bubble and a visible name: a double ring for workflows, a terminal icon for AI tasks, and **{ }** for Code. Select a workflow to see its steps, including Code and delays, then select a step to access **Log**, **History**, or **Open controls**. The latter opens the usual run, stop, edit, and disable controls. A workflow's log belongs to its current step; steps have their own results and are not considered completed simply because the workflow finished.
 
 Search includes step and area names. **Needs attention** filters recorded issues; **Show disabled** displays disabled items in gray. Each area can be collapsed, and **Collapse areas / Expand areas** apply to all groups. Selection, search, and collapsed groups persist during the panel session. Exact task and step bubble sizes remain available in Settings (10–80 px).
@@ -70,9 +72,21 @@ Since 1.7.5, Code tasks and steps display JavaScript with syntax highlighting. T
 - Create OpenCode tasks with manual, one-time, daily, weekly, monthly, or interval schedules.
 - Run tasks manually, monitor their status and output, keep logs, configure timeouts, and stop running work.
 - Load available OpenCode models and agents, open configured interactive CLIs from the shared CLI selector, and run a diagnostic from Obsidian.
-- Build workflows in the WorkFlows editor. Workflows support task, delay, and JavaScript code steps; default, forced, conditional, and AI-evaluated transitions; and branching paths.
+- Build workflows in the WorkFlows editor. Workflows support task, workflow, delay, and JavaScript code steps; default, forced, conditional, and AI-evaluated transitions; and branching paths.
 - Import and export task and workflow packages as JSON, and use the included library packages as examples.
 - Secrets has been removed: no secret management or value injection. The historical file is preserved, along with masking of known values when available.
+
+## Workflows anidados (candidato de desarrollo)
+
+En **WorkFlows**, selecciona un workflow existente en **Add existing workflow** y pulsa **Add Workflow Step**. También puedes cambiar la referencia de un paso existente. El padre espera a que el hijo termine; después aplica la transición del paso usando el éxito o fallo del hijo y su última salida. La programación propia del hijo se ignora en esta invocación.
+
+El primer paso del hijo recibe la salida previa del padre como `input`. Cada invocación tiene sus propios `outputs`, con los IDs locales de sus pasos. Al volver, el padre ve una sola salida bajo el ID de su paso Workflow. Un hijo puede utilizarse varias veces y contener otros workflows. Se rechazan referencias ausentes o ambiguas, ciclos de anidamiento, más de 16 niveles y planes de más de 10.000 pasos internos. Los bucles de transiciones conservan el límite de ejecución habitual.
+
+Padre e hijos comparten una ejecución durable y una reserva. **Stop**, **Resume** y **Reconcile**, incluida la CLI, se dirigen al padre y su `runId`. Los resultados internos confirmados no se repiten; un efecto interrumpido sin resultado sigue requiriendo reconciliación. Cambiar una definición descendiente invalida la continuación del intento anterior. Las tareas y workflows descendientes quedan reservados; las políticas explícitas más restrictivas se respetan. La desactivación y las dependencias retiradas se comprueban antes del primer efecto. Los permisos Code siguen siendo los declarados en cada paso, sin ampliarse por anidamiento.
+
+El historial del padre contiene los pasos internos, y el catálogo muestra la salida y el estado del paso Workflow. La ejecución anidada no sustituye el historial independiente del hijo. Las exportaciones incluyen automáticamente hijos y tareas; usan el esquema `1.7.0` con `stepKind: "workflow"` y `workflowExportId`. Al importar, todas las referencias se traducen a nuevos IDs. Los formatos anteriores siguen admitidos.
+
+El creador IA integrado sigue preparando un único workflow secuencial; se pueden añadir hijos existentes al revisar su borrador. La guía de paquetes sí describe el formato anidado. Esta ampliación en las fuentes no acredita publicación ni instalación en una bóveda real.
 
 ## Parallel tasks and workflows
 

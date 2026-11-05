@@ -262,11 +262,32 @@ test('the actual shipped creator prompt contains a valid example for each engine
     const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,version);
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
     assert.match(prompt,/Do not include model IDs in the JSON/);
+    assert.match(prompt,/add existing workflows as steps in the editor|add existing workflows manually/);
     const example=prompt.split('CREATOR EXAMPLE (replace its content with the requested objective):\n')[1].split('\n\nThe following JSON string')[0];
     assert.equal(JSON.parse(example).autoOCExport.pluginVersion,version);
     const draft=h.parseGeneratedDraft(example,kind,defaults);
     assert.equal(draft.tasks[0].taskKind,engine);assert.equal(!!draft.workflow,kind==='workflow');
   }
+});
+
+test('WorkFlows editor adds a child reference and rejects cycles before saving',async()=>{
+  const h=harness();
+  const child={id:'child',name:'Reusable child',steps:[{id:'code',stepKind:'code',code:'output=input'}]};
+  h.plugin.settings.workflows=[child];
+  const editor=new h.CreateWorkflowModal(h.plugin.app,h.plugin);editor.open();
+  const select=editor.contentEl.all().find(el=>el.tag==='select' && el.children.some(option=>option.textContent==='-- Add existing workflow --'));
+  assert.ok(select);select.value=child.id;
+  h.button(editor,'Add Workflow Step').onclick();
+  h.button(editor,'➕ Add Delay Step').onclick();
+  editor.draft.name='Parent';
+  await h.button(editor,'Create Workflow').onclick();
+  const parent=h.plugin.settings.workflows.find(w=>w.id!==child.id);
+  assert.equal(parent.steps[0].stepKind,'workflow');assert.equal(parent.steps[0].workflowId,child.id);
+  assert.equal(h.writes(),1);
+  const edit=new h.CreateWorkflowModal(h.plugin.app,h.plugin,parent);edit.open();
+  child.steps=[{id:'back',stepKind:'workflow',workflowId:parent.id}];
+  await h.button(edit,'Save Changes').onclick();
+  assert.equal(h.writes(),1);assert.ok(h.notices.some(message=>/cycle/.test(message)));
 });
 
 test('OpenCode draft runner sends the exact prompt on stdin with denied tools in an isolated temporary directory', async () => {

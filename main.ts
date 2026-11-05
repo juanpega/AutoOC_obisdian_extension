@@ -78,6 +78,7 @@ import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime, type 
 import { answerWorkflowApproval } from "./workflow-approval";
 import { standaloneTaskWorkflow,projectStandaloneTask,recoverStandaloneTaskAsync } from "./standalone-task";
 import { prepareWorkflowDefinition } from "./workflow-definition";
+import { validateNestedWorkflowExport, workflowClosure, workflowExecutionPlan } from "./workflow-nesting";
 import { supportsSharedWorkflow, type WorkflowTaskOutput } from "./code-workflow-host";
 import { createWorkflowTaskAdapter } from "./workflow-task-adapters";
 import { projectWorkflowProgress, recoverWorkflowProgress, recoverWorkflowProgressAsync, validateProgressBinding } from "./workflow-progress";
@@ -106,7 +107,7 @@ Canonical complete export format:
   "autoOCExport": {
     "schemaVersion": "1.6.0",
     "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
-    "pluginVersion": "1.7.2",
+    "pluginVersion": "${PLUGIN_BUILD_VERSION}",
     "name": "Package name",
     "description": "Short description"
   },
@@ -114,13 +115,14 @@ Canonical complete export format:
   "workflows": []
 }
 
-For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", or "1.6.0". Exports containing Copilot tasks must use "1.6.0"; other new exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
+For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", "1.6.0", or "1.7.0". Nested workflow packages must use "1.7.0"; Copilot packages without nesting use "1.6.0"; other exports may use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
-AutoOC supports DAG workflows with three step kinds:
+AutoOC supports DAG workflows with four step kinds:
 1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
 2. code: runs trusted JavaScript with explicitly enabled capabilities. Node vm is not a security boundary.
 3. delay: pauses the workflow.
+4. workflow: runs a referenced workflow to completion, then uses its final output and success/failure for the parent transition. Use workflowExportId pointing to a workflow exportId in the same package (schema 1.7.0). Include every descendant workflow and task. Forward references and repeated child invocations are allowed; recursive cycles, missing references and more than 16 levels are rejected. Child schedules are ignored. Input reaches the first child step; outputs are local to each invocation. Stop/recovery belongs to the parent run; permissions are never inherited or expanded. The WorkFlows editor can select existing workflows as steps. In-app AI draft creators currently generate a single sequential workflow only: add existing workflows manually after generation; do not generate workflow steps for those creators.
 
 Tasks:
 A task is reusable and can be referenced by workflows.
@@ -319,7 +321,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.5.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.7.2",
+    "pluginVersion": "${PLUGIN_BUILD_VERSION}",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -414,6 +416,21 @@ Minimal valid workflow example:
   ]
 }
 
+Nested workflow package example (schema 1.7.0):
+{
+  "autoOCExport": {"schemaVersion": "1.7.0", "pluginVersion": "${PLUGIN_BUILD_VERSION}", "exportedAt": "2026-11-05T00:00:00.000Z"},
+  "tasks": [],
+  "workflows": [
+    {"exportId": "parent", "name": "Prepare and reuse", "scheduleType": "manual", "steps": [
+      {"id": "prepare", "stepKind": "code", "code": "output = 'hello';", "transitions": [{"toStepId": "child", "mode": "default"}]},
+      {"id": "child", "stepKind": "workflow", "workflowExportId": "child", "transitions": []}
+    ]},
+    {"exportId": "child", "name": "Format input", "scheduleType": "manual", "steps": [
+      {"id": "format", "stepKind": "code", "code": "output = input.toUpperCase();", "transitions": []}
+    ]}
+  ]
+}
+
 Now write the objective for the AutoOC workflow or task you want to generate:`;
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -448,7 +465,7 @@ type DefaultAiEngine = "opencode" | "opencode2" | "codex" | "copilot";
 // v1.4 step model: a step can be a task, a delay, or a programmable code block.
 // Workflows are no longer strictly linear — each step declares its outgoing
 // transitions explicitly, allowing branching and conditional paths.
-type StepKind = "task" | "delay" | "code";
+type StepKind = "task" | "delay" | "code" | "workflow";
 type TransitionMode = "default" | "force" | "eval" | "conditional";
 
 interface WorkflowTransition {
@@ -473,6 +490,7 @@ interface WorkflowStep {
   area?: string;
   // task-specific
   taskId?: string;
+  workflowId?: string;
   // legacy fields (used when transitions[] is missing) — kept for back-compat
   transitionMode?: "default" | "force" | "eval";
   evaluatePrompt?: string;
@@ -746,6 +764,7 @@ interface ExportWorkflowStep {
   area?: string;
   // task
   taskExportId?: string;
+  workflowExportId?: string;
   transitionMode?: "default" | "force" | "eval";
   evaluatePrompt?: string;
   forceContinue?: boolean;
@@ -1068,7 +1087,8 @@ function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
 function toExportWorkflow(
   workflow: Workflow,
   exportId: string,
-  taskExportIdMap: Map<string, string>
+  taskExportIdMap: Map<string, string>,
+  workflowExportIdMap: Map<string, string> = new Map()
 ): ExportWorkflow {
   return {
     exportId,
@@ -1094,6 +1114,7 @@ function toExportWorkflow(
       stepKind: step.stepKind || "task",
       name: step.name,
       area: step.area,
+      workflowExportId: step.stepKind === "workflow" ? workflowExportIdMap.get(step.workflowId || "") : undefined,
       taskExportId: step.taskId ? (taskExportIdMap.get(step.taskId) ?? "") : undefined,
       transitionMode: step.transitionMode,
       evaluatePrompt: step.evaluatePrompt,
@@ -1654,7 +1675,14 @@ export default class AutoOCPlugin extends Plugin {
     if(value)this.sharedWorkflowExecutions.set(value.workflowId,value);
   }
   private sharedExecution(workflowId?:string,taskId?:string,runId?:string) {
-    return [...(this.sharedWorkflowExecutions?.values() || [])].find(e=>(!workflowId || e.workflowId===workflowId) && (!taskId || e.taskId===taskId || e.checkpoint?.steps.some(s=>this.settings.workflows.find(w=>w.id===e.workflowId)?.steps.some(step=>step.id===s.stepId && step.taskId===taskId))) && (!runId || e.runId===runId));
+    return [...(this.sharedWorkflowExecutions?.values() || [])].find(e=>{
+      if(workflowId && e.workflowId!==workflowId || runId && e.runId!==runId)return false;
+      if(!taskId || e.taskId===taskId)return true;
+      const workflow=this.settings.workflows.find(w=>w.id===e.workflowId);
+      if(!workflow)return false;
+      try { return [workflow,...workflowClosure(workflow,this.settings.workflows)].some(w=>w.steps.some(step=>step.taskId===taskId && (!step.stepKind || step.stepKind === "task"))); }
+      catch { return (this.settings.tasks.find(t=>t.id===taskId) as any)?.runtimeExecution?.runId===e.runId; }
+    });
   }
   private sharedSettingsBaseline?: ReturnType<typeof captureJsonStructure>;
   private sharedCompletions = new Set<Promise<unknown>>();
@@ -2340,6 +2368,8 @@ export default class AutoOCPlugin extends Plugin {
     if(recovered.runtimeExecution.definitionChanged)return "blocked";
     if (!["ready","in_flight"].includes(checkpoint.phase)) throw new Error("Execution does not require recovery");
     if (checkpoint.phase === "ready") return "resume";
+    const plan=workflowExecutionPlan(prepareWorkflowDefinition(workflow!,this.settings.tasks,this.settings));
+    if(plan.scopes.get(checkpoint.nextStepId!)?.boundary)return "resume";
     const last=checkpoint.steps[checkpoint.steps.length-1];
     if (last.evaluations?.some(item=>item.status === "in_flight")) return "blocked";
     return last.result ? "resume" : "reconcile";
@@ -2393,8 +2423,8 @@ export default class AutoOCPlugin extends Plugin {
     let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
     if (stepId && selected) selected = selectCodeStep(selected, stepId);
     if (selected) {
-      assertWorkflowDependencies(selected, this.settings.tasks);
-      if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks);
+      assertWorkflowDependencies(selected, this.settings.tasks, this.settings.workflows);
+      if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks, this.settings.workflows);
     }
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
@@ -2588,7 +2618,7 @@ export default class AutoOCPlugin extends Plugin {
   definitionDisabledReason(kind: CatalogKind, id: string): string | undefined {
     if (kind === "task") return taskDisabledReason(this.settings.tasks.find(item => item.id === id));
     const workflow = this.settings.workflows.find(item => item.id === id);
-    return workflow ? workflowDisabledReason(workflow, this.settings.tasks) : undefined;
+    return workflow ? workflowDisabledReason(workflow, this.settings.tasks, this.settings.workflows) : undefined;
   }
 
   private hasUncertainLegacyTask(workflowId: string): boolean {
@@ -2971,7 +3001,7 @@ export default class AutoOCPlugin extends Plugin {
             }
             void this.runTask(item as ScheduledTask);
           } else {
-            assertWorkflowDependencies(item as Workflow, this.settings.tasks);
+            assertWorkflowDependencies(item as Workflow, this.settings.tasks, this.settings.workflows);
             const workflowPlayError = this.getMcpWorkflowPlayError(item as Workflow);
             if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
             void this.runWorkflow(item as Workflow);
@@ -4914,7 +4944,11 @@ export default class AutoOCPlugin extends Plugin {
       if (observed && observed.kind !== "shared") throw new Error("Task execution changed or is not owned here");
       const checkpoint = execution?.checkpoint;
       const active = checkpoint?.steps[checkpoint.steps.length - 1];
-      const step = this.settings.workflows.find(workflow => workflow.id === observed?.workflowId)?.steps.find(step => step.id === observed?.stepId);
+      const ownerWorkflow = this.settings.workflows.find(workflow => workflow.id === observed?.workflowId);
+      let step: {taskId?:string;stepKind?:string} | undefined;
+      try {
+        if(ownerWorkflow)step=workflowExecutionPlan({workflow:ownerWorkflow,workflows:workflowClosure(ownerWorkflow,this.settings.workflows)}).steps.find(item=>item.id===observed?.stepId);
+      } catch { /* A changed reference cannot authorize stopping an obsolete task card. */ }
       const sameBinding = observed && binding && Object.keys(observed).every(key => (observed as any)[key] === (binding as any)[key]);
       const referencesTask = execution?.taskId === id || step?.taskId === id && (!step.stepKind || step.stepKind === "task");
       if (!observed || observed.taskId !== id || !observed.runId || !observed.workflowId || !observed.stepId || !Number.isSafeInteger(observed.stepIndex) ||
@@ -4993,7 +5027,7 @@ export default class AutoOCPlugin extends Plugin {
     for (let i = 0; i < dueWorkflows.length; i++) {
       if (this.bulkCatalogMutationInProgress) return;
       if (this.definitionDisabledReason("workflow", dueWorkflows[i].id)) continue;
-      try { assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks); }
+      try { assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks, this.settings.workflows); }
       catch (error) { new Notice(String(error)); continue; }
       await this.runWorkflow(dueWorkflows[i]);
       if (i < dueWorkflows.length - 1) await delay(DUE_LAUNCH_GAP_MS);
@@ -5113,6 +5147,12 @@ export default class AutoOCPlugin extends Plugin {
     name?: string,
     description?: string
   ): string {
+    const included = new Map(workflows.map(workflow => [workflow.id, workflow]));
+    for (const workflow of workflows) for (const child of workflowClosure(workflow, this.settings?.workflows || workflows)) included.set(child.id, child as Workflow);
+    workflows = [...included.values()];
+    const taskIds = new Set(workflows.flatMap(w => w.steps.filter(s => s.stepKind === "task" || !s.stepKind).map(s => s.taskId)));
+    tasks = [...new Map([...tasks, ...(this.settings?.tasks || []).filter(t => taskIds.has(t.id))].map(t => [t.id,t])).values()];
+    const workflowExportIdMap = new Map(workflows.map((w,i) => [w.id, `wf-${i}`]));
     const taskExportIdMap = new Map<string, string>();
     const exportTasks = tasks.map((t, i) => {
       const exportId = `task-${i}`;
@@ -5120,12 +5160,12 @@ export default class AutoOCPlugin extends Plugin {
       return toExportTask(t, exportId);
     });
     const exportWorkflows = workflows.map((w, i) =>
-      toExportWorkflow(w, `wf-${i}`, taskExportIdMap)
+      toExportWorkflow(w, `wf-${i}`, taskExportIdMap, workflowExportIdMap)
     );
 
     const data: AutoOCExportFile = {
       autoOCExport: {
-        schemaVersion: tasks.some((task) => task.taskKind === "copilot") ? "1.6.0" : "1.5.0",
+        schemaVersion: workflows.some(w=>w.steps.some(s=>s.stepKind === "workflow")) ? "1.7.0" : tasks.some((task) => task.taskKind === "copilot") ? "1.6.0" : "1.5.0",
         exportedAt: new Date().toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -5156,8 +5196,9 @@ export default class AutoOCPlugin extends Plugin {
       });
       if (result.canceled || !result.filePath) return;
       fs.writeFileSync(result.filePath, json, "utf8");
+      const exported=JSON.parse(json) as AutoOCExportFile;
       new Notice(
-        `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
+        `AutoOC: exported ${exported.tasks.length} task(s) and ${exported.workflows.length} workflow(s).`
       );
     } catch (e) {
       new Notice(`AutoOC: export failed — ${String(e)}`);
@@ -5173,7 +5214,8 @@ export default class AutoOCPlugin extends Plugin {
     referencedTaskIds: Set<string>;
   } {
     const tasks = this.settings.tasks.filter((t) => selectedTaskIds.has(t.id));
-    const workflows = this.settings.workflows.filter((w) => selectedWorkflowIds.has(w.id));
+    const selected = this.settings.workflows.filter((w) => selectedWorkflowIds.has(w.id));
+    const workflows = [...new Map(selected.flatMap(w => [w,...workflowClosure(w,this.settings.workflows) as Workflow[]]).map(w => [w.id,w])).values()];
 
     // Workflows always need their referenced tasks to be importable.
     const referencedTaskIds = new Set<string>();
@@ -5211,12 +5253,15 @@ export default class AutoOCPlugin extends Plugin {
     }
     // Accept legacy schemas, Codex 1.5 and Copilot 1.6 packages.
     const sv = data.autoOCExport.schemaVersion;
-    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0" && sv !== "1.6.0") {
+    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0" && sv !== "1.6.0" && sv !== "1.7.0") {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
 
     for(const item of [...(data.tasks || []),...(data.workflows || [])]) { validateConcurrency(item); validateDisabled(item); }
     for (const workflow of data.workflows || []) for (const step of workflow.steps || []) validateDisabled(step);
+    validateNestedWorkflowExport(data);
+    const importedWorkflowIds = new Map((data.workflows || []).map(w => [w, generateId()]));
+    const exportIdToWorkflowId = new Map((data.workflows || []).map(w => [w.exportId, importedWorkflowIds.get(w)!]));
     const exportIdToTaskId = new Map<string, string>();
     let tasksImported = 0;
 
@@ -5297,6 +5342,7 @@ export default class AutoOCPlugin extends Plugin {
           requiresAutoOCSecrets: s.requiresAutoOCSecrets,
           name: (s as any).name,
           area: (s as any).area || ew.area || "",
+          workflowId: s.workflowExportId ? exportIdToWorkflowId.get(s.workflowExportId) : undefined,
           taskId: (s as any).taskExportId ? exportIdToTaskId.get((s as any).taskExportId) : undefined,
           transitionMode: (s as any).transitionMode,
           evaluatePrompt: (s as any).evaluatePrompt,
@@ -5331,7 +5377,7 @@ export default class AutoOCPlugin extends Plugin {
       if (steps.length === 0) continue;
 
       const workflow: Workflow = {
-        id: generateId(),
+        id: importedWorkflowIds.get(ew)!,
         requiresAutoOCSecrets: ew.requiresAutoOCSecrets,
         name: this.ensureUniqueWorkflowName(ew.name),
         area: ew.area ?? "",
@@ -5377,8 +5423,8 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async executeWorkflow(workflow: Workflow, releaseStart?: () => void) {
-    assertWorkflowEnabled(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks);
-    assertWorkflowDependencies(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks);
+    assertWorkflowEnabled(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks, this.settings.workflows);
+    assertWorkflowDependencies(this.settings.workflows.find(w => w.id === workflow.id) || workflow, this.settings.tasks, this.settings.workflows);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -5428,6 +5474,7 @@ export default class AutoOCPlugin extends Plugin {
       }
     }
 
+    if (wf.steps.some(step=>step.stepKind === "workflow")) throw new Error("Nested workflows require the shared runtime and compatible task adapters");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     wf.legacyExecution = {token:require("crypto").randomUUID()};
     // Initialize the runtime context that flows between steps.
@@ -5474,7 +5521,7 @@ export default class AutoOCPlugin extends Plugin {
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
     const wf = this.settings.workflows[wfIdx];
-    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     if (!wf || wf.status !== "running") return;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
@@ -5535,7 +5582,7 @@ export default class AutoOCPlugin extends Plugin {
   async runWorkflowStep(wfIdx: number, stepIndex: number) {
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
-    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
     if (!step) {
@@ -5570,7 +5617,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runDelayStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
-    assertWorkflowDependencies(wf, this.settings.tasks);
+    assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     const spec = workflowDelay(step.delayValue, step.delayUnit);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     if (this.stoppingWorkflows.has(wf.id) || wf.status !== "running") return;
@@ -5590,7 +5637,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runCodeStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
-    assertWorkflowDependencies(wf, this.settings.tasks);
+    assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     const ctx = (this as any).workflowRuntime.get(wf.id);
     const inputVar = step.codeInputVar || "input";
     const outputVar = step.codeOutputVar || "output";
@@ -5620,7 +5667,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runTaskStep(wf: Workflow, step: WorkflowStep, stepIndex: number) {
-    assertWorkflowDependencies(wf, this.settings.tasks);
+    assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     const executionContext = (this as any).workflowRuntime?.get(wf.id);
     const isCurrentExecution = () => executionContext !== undefined &&
       (this as any).workflowRuntime?.get(wf.id) === executionContext &&
@@ -7216,6 +7263,7 @@ class AutoOCView extends ItemView {
       const filteredWorkflows = workflows.filter((workflow) => {
         const area = workflow.area?.trim() || "No area";
         const stepText = workflow.steps.map((step) => {
+          if (step.stepKind === "workflow") return this.plugin.settings.workflows.find(w=>w.id===step.workflowId)?.name || "Missing workflow";
           if (step.stepKind === "code") return step.code || "code";
           if (step.stepKind === "delay") return `${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
           const task = this.plugin.settings.tasks.find((candidate) => candidate.id === step.taskId);
@@ -7293,7 +7341,7 @@ class AutoOCView extends ItemView {
   }
 
   private renderWorkflowCard(parent: HTMLElement, workflow: Workflow) {
-    try { assertWorkflowDependencies(workflow, this.plugin.settings.tasks); }
+    try { assertWorkflowDependencies(workflow, this.plugin.settings.tasks, this.plugin.settings.workflows); }
     catch (error) { parent.createEl("p", {text: String(error), cls: "mod-warning"}); }
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${workflow.status}`);
     card.setAttr("data-auto-oc-workflow-id", workflow.id);
@@ -7375,7 +7423,8 @@ class AutoOCView extends ItemView {
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
     const stepLabel = (step: WorkflowStep): string => {
       if (step.name?.trim()) return step.name.trim();
-      if (step.stepKind === "code") return "{ } Code";
+      if (step.stepKind === "workflow") return `Workflow: ${this.plugin.settings.workflows.find(w=>w.id===step.workflowId)?.name || "Missing workflow"}`;
+    if (step.stepKind === "code") return "{ } Code";
       if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
       const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
       return t ? t.name : "(deleted task)";
@@ -7445,6 +7494,13 @@ class AutoOCView extends ItemView {
       }
 
       if (!task) {
+        if (step.stepKind === "workflow") {
+          stepItem.createDiv("auto-oc-workflow-task-meta").createSpan({text:"Runs the child workflow before continuing."});
+          const actions=stepItem.createDiv("auto-oc-workflow-task-actions");
+          const log=actions.createEl("button",{text:"📄 Log",cls:"auto-oc-btn-output"});
+          log.disabled=!step.output;
+          log.onclick=event=>{event.stopPropagation();new TextPreviewModal(this.app,`${stepName} output`,step.output || "").open();};
+        }
         if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
           stepMeta.createSpan({ text: `Pauses for ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}` });
@@ -8717,7 +8773,7 @@ class CreateWorkflowModal extends Modal {
     const guide = contentEl.createDiv("auto-oc-workflow-guide");
     guide.createEl("h4", { text: "How workflows work" });
     const guideList = guide.createEl("ol");
-    guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
+    guideList.createEl("li", { text: "A workflow has its own schedule. Steps can run tasks, nested workflows, JavaScript or delays. Nested schedules are ignored; the parent waits for the child result." });
     guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is manual, once, daily, weekly, monthly, completed, or pending." });
     guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
     guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
@@ -8970,7 +9026,7 @@ class CreateWorkflowModal extends Modal {
               name: src.name?.trim() || undefined,
               area: src.area?.trim() || workflowArea,
               transitions: [],
-              position: { x: 60 + idx * 280, y: 60 },
+              position: src.position || { x: 60 + idx * 280, y: 60 },
               transitionMode: config.transitionMode || "default",
               evaluatePrompt: config.evaluatePrompt,
               forceContinue: config.forceContinue,
@@ -8987,6 +9043,9 @@ class CreateWorkflowModal extends Modal {
             }];
           }
 
+          const candidate = {...this.draft,id:this.editWorkflow?.id || this.draft.id || "@draft",steps} as Workflow;
+          try { workflowClosure(candidate,[...this.plugin.settings.workflows.filter(w=>w.id!==candidate.id),candidate]); }
+          catch(error) { new Notice((error as Error).message); return; }
           let updatedWorkflow: Workflow | null = null;
           let areaChanged = false;
           if (this.editWorkflow) {
@@ -9072,6 +9131,7 @@ class CreateWorkflowModal extends Modal {
   }
 
   private defaultWorkflowStepName(step: WorkflowStep, index?: number): string {
+    if (step.stepKind === "workflow") return `Workflow: ${this.plugin.settings.workflows.find(w=>w.id===step.workflowId)?.name || "Missing workflow"}`;
     if (step.stepKind === "code") return "{ } Code";
     if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
     const task = this.availableTasks().find((t) => t.id === step.taskId);
@@ -9083,7 +9143,7 @@ class CreateWorkflowModal extends Modal {
 
     if (this.selectedSteps.length === 0) {
       container.createEl("p", {
-        text: "No steps added yet. Add a task, code, or delay step below.",
+        text: "No steps added yet. Add a task, workflow, code, or delay step below.",
         cls: "auto-oc-empty",
       });
     }
@@ -9165,6 +9225,15 @@ class CreateWorkflowModal extends Modal {
             .onChange((v) => (step.area = v.trim()));
         });
 
+      if (step.stepKind === "workflow") {
+        new Setting(stepEl).setName("Workflow").setDesc("Runs to completion before continuing. Its schedule is ignored; permissions stay unchanged.")
+          .addDropdown(dd => {
+            dd.addOption("", "Select a workflow");
+            for (const child of this.plugin.settings.workflows) if(child.id !== this.editWorkflow?.id) dd.addOption(child.id,child.name);
+            if(step.workflowId && !this.plugin.settings.workflows.some(w=>w.id===step.workflowId)) dd.addOption(step.workflowId,"Missing workflow");
+            dd.setValue(step.workflowId || "").onChange(value=>{step.workflowId=value;});
+          });
+      }
       if (step.stepKind === "code") {
         const initialCode = step.code || "";
         new Setting(stepEl)
@@ -9455,6 +9524,21 @@ class CreateWorkflowModal extends Modal {
       };
     }
 
+    const workflowSelect = addDiv.createEl("select", { cls: "auto-oc-status-select" });
+    workflowSelect.createEl("option", { text: "-- Add existing workflow --" }).value = "";
+    for (const child of this.plugin.settings.workflows) {
+      if (child.id === this.editWorkflow?.id) continue;
+      try { if (workflowClosure(child,this.plugin.settings.workflows).some(w=>w.id===this.editWorkflow?.id)) continue; }
+      catch { continue; }
+      workflowSelect.createEl("option", { text: child.name }).value = child.id;
+    }
+    const addWorkflow = addDiv.createEl("button", { text: "Add Workflow Step", cls: "auto-oc-btn-secondary" });
+    addWorkflow.onclick = () => {
+      if (!workflowSelect.value) return;
+      this.selectedSteps.push({id:generateId(),stepKind:"workflow",workflowId:workflowSelect.value,transitions:[]});
+      this.renderStepsList(container);
+    };
+
     const btnCode = addDiv.createEl("button", {
       text: "➕ Add Code Step",
       cls: "auto-oc-btn-secondary",
@@ -9624,6 +9708,7 @@ class ExportModal extends Modal {
         label.createSpan({ text: ` ${wf.name}` });
         const stepNames = wf.steps
           .map((s) => {
+            if (s.stepKind === "workflow") return `Workflow: ${this.plugin.settings.workflows.find(w=>w.id===s.workflowId)?.name || "Missing workflow"}`;
             if (s.stepKind === "code") return "{ } Code";
             if (s.stepKind === "delay") return `⏱ ${s.delayValue ?? 5} ${s.delayUnit ?? "minutes"}`;
             return this.plugin.settings.tasks.find((t) => t.id === s.taskId)?.name ?? "?";
@@ -9656,7 +9741,7 @@ class ExportModal extends Modal {
       summary.textContent =
         `Will export ${explicitTasks} selected task(s)` +
         (autoTasks > 0 ? ` + ${autoTasks} task(s) required by workflows` : "") +
-        ` and ${payload.workflows.length} selected workflow(s).`;
+        ` and ${payload.workflows.length} workflow(s), including dependencies.`;
     };
     updateSummary();
 
@@ -10110,7 +10195,7 @@ class ImportModal extends Modal {
       return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
     }
     const sv = data.autoOCExport.schemaVersion;
-    const SUPPORTED = ["1.0", "1.4.0", "1.5.0", "1.6.0"];
+    const SUPPORTED = ["1.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0"];
     if (!sv) {
       errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
     } else if (!SUPPORTED.includes(sv)) {
@@ -10189,6 +10274,8 @@ class ImportModal extends Modal {
       });
     }
 
+    try { validateNestedWorkflowExport(data); } catch(error) { errors.push((error as Error).message); }
+
     // Validate workflows. We do this in two passes:
     //   1. Collect all step ids so transitions can resolve them
     //   2. Validate each step's structure and its transitions
@@ -10227,8 +10314,8 @@ class ImportModal extends Modal {
           const swhere = wwhere + ".steps[" + i + "]";
           if (!s || typeof s !== "object") { return; }
           const kind = s.stepKind || "task";
-          if (!["task", "delay", "code"].includes(kind)) {
-            errors.push(swhere + ".stepKind \"" + kind + "\" is invalid. Expected: task, delay, or code.");
+          if (!["task", "delay", "code", "workflow"].includes(kind)) {
+            errors.push(swhere + ".stepKind \"" + kind + "\" is invalid. Expected: task, workflow, delay, or code.");
           }
           if (kind === "task") {
             if (typeof s.taskExportId !== "string" || !s.taskExportId.trim()) {

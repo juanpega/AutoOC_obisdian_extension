@@ -5,6 +5,7 @@ import { projectWorkflowProgress, validateProgressBinding } from "./workflow-pro
 import { standaloneTaskWorkflow } from "./standalone-task";
 import { persistTaskHistory } from "./task-history";
 import { selectCodeStep } from "./workflow-code-step";
+import { workflowExecutionPlan, workflowClosure } from "./workflow-nesting";
 
 export interface PersistedWorkflowCatalog {
   catalog: any;
@@ -73,8 +74,9 @@ export async function persistWorkflowProgress(options: {
   }
   const projected = preserveLegacy ? matches[0] : {...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId),legacyExecution:undefined};
   const observedTasks = new Map<string,{stepId:string;stepIndex:number;observed:RunCheckpoint["steps"][number]}>();
+  const executionSteps=workflowExecutionPlan({workflow,workflows:workflowClosure(workflow,config.workflows)}).steps;
   for (const [stepIndex, observed] of durable.steps.entries()) {
-    const step = workflow.steps.find((item:any)=>item.id === observed.stepId);
+    const step = executionSteps.find((item:any)=>item.id === observed.stepId);
     if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
       observedTasks.set(step.taskId,{stepId:step.id,stepIndex,observed});
     }
@@ -111,7 +113,7 @@ export async function persistWorkflowProgress(options: {
   } : step)} : projected;
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? replacement : workflow)};
   await writer.save(options.configurationFile, () => next);
-  if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
+  if (options.vaultBase) persistTaskHistory(options.vaultBase, {...workflow,steps:executionSteps}, durable, config);
   const confirmed={catalog:next,version:writer.confirmedVersion(options.configurationFile),
     runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};
   await options.onCommitted?.(confirmed,transaction);
