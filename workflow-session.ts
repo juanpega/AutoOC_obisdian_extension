@@ -1,6 +1,7 @@
 import { ExecutionJournal, type RunCheckpoint } from "./execution-journal";
-import { resolveWorkflowTransition, workflowStepTransitions, type RoutingStep, type RoutingTransition } from "./workflow-routing";
+import { resolveWorkflowTransition, type RoutingStep, type RoutingTransition } from "./workflow-routing";
 import { prepareWorkflowDefinition, type PreparedWorkflow } from "./workflow-definition";
+import { workflowExecutionPlan, workflowStepContext, workflowPlanNext } from "./workflow-nesting";
 
 export interface WorkflowSessionHost {
   // The adapter must settle only after the actual task result. A launched
@@ -18,10 +19,10 @@ export async function advanceWorkflowSession(
   journal: ExecutionJournal, definition: PreparedWorkflow, host: WorkflowSessionHost,
   options: {signal?: AbortSignal; maxSteps?: number} = {},
 ): Promise<RunCheckpoint> {
-  const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks as Array<{id:string}>, definition.settings);
+  const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks as Array<{id:string}>, {...definition.settings,workflows:definition.workflows});
   const checkpoint = journal.snapshot();
   if (verified.hash !== definition.hash || checkpoint.definitionHash !== verified.hash || checkpoint.workflowId !== verified.workflow.id) throw new Error("Workflow definition does not match execution checkpoint");
-  const steps = verified.workflow.steps;
+  const plan = workflowExecutionPlan(verified), steps = plan.steps;
   if (new Set(steps.map(step => step.id)).size !== steps.length) throw new Error("Duplicate workflow step identity");
   const limit = options.maxSteps ?? 10000;
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid execution step limit");
@@ -29,15 +30,13 @@ export async function advanceWorkflowSession(
   for (let count = 0; count < limit; count++) {
     const state = journal.snapshot();
     const observed=state.phase === "in_flight" ? state.steps[state.steps.length-1].result : undefined;
-    if (state.phase === "in_flight" && !observed) throw new Error("Interrupted step requires reconciliation before continuation");
+    if (state.phase === "in_flight" && !observed && !plan.scopes.get(state.nextStepId!)?.boundary) throw new Error("Interrupted step requires reconciliation before continuation");
     if (!["ready","in_flight"].includes(state.phase) || options.signal?.aborted) return state;
     const index = steps.findIndex(step => step.id === state.nextStepId);
     if (index < 0) throw new Error("Checkpoint step is absent from workflow definition");
     const step = steps[index];
-    const outputs: Record<string, string> = Object.create(null);
-    for (const previous of state.steps) outputs[previous.stepId] = previous.output || "";
-    const input = state.steps.length ? state.steps[state.steps.length - 1].output || "" : "";
-    if(!observed) {
+    const {outputs,input,scope} = workflowStepContext(plan,step.id,state);
+    if(state.phase === "ready") {
       await journal.begin(step.id);
       try {
         await host.onCheckpoint?.(journal.snapshot());
@@ -55,7 +54,10 @@ export async function advanceWorkflowSession(
     }
     // Exceptions (transport loss, crash, abort) leave the checkpoint in flight.
     // Adapters return succeeded:false for a known, observed execution failure.
-    const result = observed || await host.execute(step, input, outputs, options.signal);
+    const last = state.steps.filter(item => item.status !== "in_flight").slice(-1)[0];
+    const result = observed || (scope.boundary === "enter" ? {succeeded:true,output:input} :
+      scope.boundary === "return" ? {succeeded:last?.status === "completed",output:last?.output || "",cancelled:last?.result?.cancelled} :
+      await host.execute(step, input, outputs, options.signal));
     if (typeof result.succeeded !== "boolean" || typeof result.output !== "string") throw new Error("Invalid execution result");
     if (result.cancelled !== undefined && (typeof result.cancelled !== "boolean" || result.cancelled && result.succeeded)) throw new Error("Invalid cancellation result");
     const output = observed ? result.output : host.redact(result.output);
@@ -72,8 +74,8 @@ export async function advanceWorkflowSession(
       await host.onCheckpoint?.(journal.snapshot());
       return journal.snapshot();
     }
-    outputs[step.id] = output;
-    const transitions = workflowStepTransitions(steps, index);
+    outputs[scope.localId] = output;
+    const transitions = step.transitions || [];
     const next = await resolveWorkflowTransition(steps,index,output,result.succeeded,transitions,outputs,{
       evaluate:async(transition,target,input)=>{
         if (options.signal?.aborted) throw new Error("Workflow cancelled before evaluation");
@@ -90,7 +92,7 @@ export async function advanceWorkflowSession(
       }, onError:(kind,error)=>{host.onTransitionError(kind,error);if(kind==="eval")throw error;},
     });
     if(options.signal?.aborted) return journal.snapshot();
-    await journal.finish(step.id,result.succeeded,output,next.nextStepId);
+    await journal.finish(step.id,result.succeeded,output,workflowPlanNext(plan,step.id,next.nextStepId));
     await host.onCheckpoint?.(journal.snapshot());
   }
   // Budget exhaustion preserves a ready checkpoint; it is not reported done.

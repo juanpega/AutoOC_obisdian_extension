@@ -26,14 +26,15 @@ export function executionAdmissionDiagnostic(error:unknown):string|undefined {
   const message=(error as {message?:unknown})?.message;
   return typeof message==='string' && (admissionDiagnostics.has(message) || /^Concurrent execution limit reached \([1-9][0-9]{0,15}\)$/.test(message)) ? message : undefined;
 }
-type Resources = {exclusive:boolean; sharedWorkspace:boolean; tasks:Set<string>; directories:string[]; repositories:Set<string>};
+type Resources = {exclusive:boolean; sharedWorkspace:boolean; tasks:Set<string>; workflows:Set<string>; directories:string[]; repositories:Set<string>};
 function resources(definition:PreparedWorkflow,vault:string):Resources {
   const {workflow,tasks,settings}=definition;
-  for(const item of [workflow,...tasks])validateConcurrency(item);
+  const workflows=[workflow,...(definition.workflows || [])];
+  for(const item of [...workflows,...tasks])validateConcurrency(item);
   const standalone=workflow.id.startsWith('@task:');
   const policy=(standalone ? tasks[0]?.concurrency : workflow.concurrency) ?? concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
-  const result:Resources={exclusive:policy==="exclusive" || !!workflow.handoffBranch,sharedWorkspace:policy==="parallel",tasks:new Set(tasks.map(t=>t.id)),directories:[],repositories:new Set()};
-  for(const item of [...workflow.steps.filter((s:any)=>s.stepKind==='code'),...tasks] as any[]) {
+  const result:Resources={exclusive:policy==="exclusive" || workflows.some(w=>!!w.handoffBranch || w.concurrency === "exclusive"),sharedWorkspace:policy==="parallel" && !workflows.some(w=>w.concurrency === "independent"),tasks:new Set(tasks.map(t=>t.id)),workflows:new Set(workflows.map(w=>w.id)),directories:[],repositories:new Set()};
+  for(const item of [...workflows.flatMap(w=>w.steps).filter((s:any)=>s.stepKind==='code'),...tasks] as any[]) {
     if(item.branch || workflow.handoffBranch)result.exclusive=true;
     if(item.interactiveTerminal || (item.taskKind===undefined && item.stepKind!=='code' && settings.defaultInteractiveTerminal)) result.exclusive=true;
     if(item.stepKind==='code' || item.taskKind==='code') {
@@ -53,7 +54,7 @@ function resources(definition:PreparedWorkflow,vault:string):Resources {
     // Engines can access their workspace. Their declared directories are a
     // cooperation contract for trusted tasks, never a security sandbox.
   }
-  if(!result.sharedWorkspace && workflow.steps.some((s:any)=>s.transitionMode==='eval' || s.transitions?.some((t:any)=>t.mode==='eval')))result.exclusive=true;
+  if(!result.sharedWorkspace && workflows.some(w=>w.steps.some((s:any)=>s.transitionMode==='eval' || s.transitions?.some((t:any)=>t.mode==='eval'))))result.exclusive=true;
   return result;
 }
 function canShareWorkspace(a:Resources,b:Resources):boolean {
@@ -104,7 +105,7 @@ export class ExecutionCoordinator {
     // Retained parallel runs reserve their own tasks without stopping other
     // opted-in work in this host. Nothing closes or replays the retained run.
     return canShareWorkspace(admission.resources,known.resources) &&
-      admission.definition.workflow.id!==known.definition.workflow.id &&
+      ![...admission.resources.workflows].some(id=>known.resources.workflows.has(id)) &&
       ![...admission.resources.tasks].some(id=>known.resources.tasks.has(id));
   }
   admit(definition:PreparedWorkflow,vault:string,resumeRunId?:string):ExecutionAdmission {
@@ -124,7 +125,7 @@ export class ExecutionCoordinator {
       previous.advancing=true;previous.confirmedTerminal=false;return previous;
     }
     for(const current of this.sessions) {
-      if(current.definition.workflow.id===definition.workflow.id || [...requested.tasks].some(id=>current.resources.tasks.has(id)))throw new Error('A shared workflow is already executing; definition or referenced task is reserved');
+      if([...requested.workflows].some(id=>current.resources.workflows.has(id)) || [...requested.tasks].some(id=>current.resources.tasks.has(id)))throw new Error('A shared workflow is already executing; definition or referenced task is reserved');
       if(!current.advancing && !canShareWorkspace(requested,current.resources))throw new Error('Execution outcome requires continuation or reconciliation; reservation retained');
       if(requested.exclusive || current.resources.exclusive)throw new Error('Exclusive execution must finish before shared execution');
       if(!canShareWorkspace(requested,current.resources) && (requested.directories.some(a=>current.resources.directories.some(b=>isWithinPhysicalPath(a,b)||isWithinPhysicalPath(b,a))) || [...requested.repositories].some(a=>[...current.resources.repositories].some(b=>samePhysicalPath(a,b)))))throw new Error('Execution resource is occupied (workspace or Git repository)');

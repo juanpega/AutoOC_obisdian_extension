@@ -5,6 +5,7 @@ import { captureJsonStructure, encodeCapturedJson } from "./cooperative-json";
 import { setImmediate } from "timers";
 import { performance } from "perf_hooks";
 import { concurrencySettings, type ConcurrencySettings } from "./execution-concurrency-settings";
+import { workflowClosure, type NestedWorkflow } from "./workflow-nesting";
 
 // Availability gates new execution, but must not invalidate historical checkpoints.
 const runtimeFields = new Set(["disabled", "codeExecution", "status", "lastRun", "output", "createdAt", "currentStep", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval", "runtimeExecution", "legacyExecution"]);
@@ -28,25 +29,29 @@ export interface PreparedWorkflow {
   tasks: Array<Record<string, any>>;
   settings: Record<string, any>;
   admissionSettings?: ConcurrencySettings;
+  workflows?: NestedWorkflow[];
 }
 
 // Freeze the effective definition, including referenced tasks and engine
 // defaults. Runtime output or an unrelated task cannot invalidate recovery.
 function definitionPayload(workflow: {id:string;steps:RoutingStep[]}, tasks: Array<{id:string}>, settings: Record<string, any>) {
   if (!workflow.id || !workflow.steps.length || new Set(workflow.steps.map(s => s.id)).size !== workflow.steps.length) throw new Error("Invalid workflow identity or steps");
-  const refs = [...new Set(workflow.steps.filter((s:any) => s.stepKind === "task" || !s.stepKind && s.taskId).map((s:any) => s.taskId))];
+  const children = workflow.steps.some(s => s.stepKind === "workflow") ? workflowClosure(workflow, settings.workflows || []) : [];
+  const refs = [...new Set([workflow,...children].flatMap(w => w.steps).filter((s:any) => s.stepKind === "task" || !s.stepKind && s.taskId).map((s:any) => s.taskId))];
   const selected = refs.map(id => {
     const matches = tasks.filter(t => t.id === id);
     if (!id || matches.length !== 1) throw new Error("Missing or ambiguous referenced task");
     return withoutRuntime(matches[0]);
   });
   const usesOpenCode2 = selected.some(task => task.taskKind === 'opencode2') || settings.defaultAiEngine === 'opencode2';
-  return canonical({workflow:{...withoutRuntime(workflow),steps:workflow.steps.map(s => withoutRuntime(s as any))},tasks:selected,settings:effectiveExecutionSettings(settings, usesOpenCode2)});
+  const clean = (w: typeof workflow) => ({...withoutRuntime(w),steps:w.steps.map(s => withoutRuntime(s as any))});
+  return canonical({workflow:clean(workflow),...(children.length ? {workflows:children.map(clean)} : {}),tasks:selected,settings:effectiveExecutionSettings(settings, usesOpenCode2)});
 }
 
 // Retain availability for execution guards while keeping historical hashes stable.
-function withAvailability(payload: any, workflow: { id: string; disabled?: boolean }, tasks: Array<{ id: string; disabled?: boolean }>) {
+function withAvailability(payload: any, workflow: { id: string; disabled?: boolean }, tasks: Array<{ id: string; disabled?: boolean }>, catalog: NestedWorkflow[] = []) {
   return {...payload,
+    ...(payload.workflows ? {workflows:payload.workflows.map((child:any) => withAvailability({workflow:child,tasks:[]},catalog.find(w=>w.id===child.id)!,[],[]).workflow)} : {}),
     workflow: {...payload.workflow, ...(workflow.disabled !== undefined ? {disabled: workflow.disabled} : {}),
       steps: payload.workflow.steps.map((step: any) => {
         const source = (workflow as any).steps.find((item: any) => item.id === step.id);
@@ -66,7 +71,7 @@ export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash = digest.digest("hex");
   // Admission preferences do not change task effects or historical fingerprints.
-  return freeze({...withAvailability(payload,workflow,tasks),hash,admissionSettings:concurrencySettings(settings)});
+  return freeze({...withAvailability(payload,workflow,tasks,settings.workflows),hash,admissionSettings:concurrencySettings(settings)});
 }
 
 // Capture and detach the effective structure before the first yield. Strings
@@ -74,7 +79,7 @@ export function prepareWorkflowDefinition(workflow: {id:string;steps:RoutingStep
 // editable catalog. The compact byte stream is EXACTLY the historical hash.
 export async function prepareWorkflowDefinitionAsync(workflow: {id:string;steps:RoutingStep[]}, tasks: Array<{id:string}>, settings: Record<string,any>): Promise<PreparedWorkflow> {
   const payload = freeze(definitionPayload(workflow,tasks,settings));
-  const availablePayload = freeze(withAvailability(payload,workflow,tasks));
+  const availablePayload = freeze(withAvailability(payload,workflow,tasks,settings.workflows));
   const admissionSettings = Object.freeze(concurrencySettings(settings));
   const captured = captureJsonStructure(payload,0), digest = createHash("sha256");
   // Also yield for many small definitions whose aggregate would monopolize a

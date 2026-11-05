@@ -42,7 +42,8 @@ The plugin launches OpenCode as an external process. On Windows, non-interactive
 - `AutoOCPlugin` in `main.ts`: the central plugin class. It loads and migrates settings, registers Obsidian commands and views, schedules due checks, launches tasks, runs workflows, installs Ralph Loop / `autooc-mcp`, checks for updates, and saves state.
 - `AutoOCView` in `main.ts`: the Obsidian `ItemView` used for the user interface. It renders dashboard, tasks, workflows, secrets, logs, and action buttons. It delegates mutations and execution to `AutoOCPlugin`.
 - Task model: `ScheduledTask` describes either an OpenCode task or a reusable JavaScript code task. It includes prompt/code, model, agent, schedule, status, output, working directory, branch options, and optional terminal/file/vault permissions for code tasks.
-- Workflow model: `Workflow` contains `WorkflowStep` nodes. Steps can be `task`, `delay`, or `code`. Step transitions can be `default`, `force`, `eval`, or `conditional`, which makes workflows DAG-like rather than strictly linear.
+- Modelo de workflow: `Workflow` contiene nodos `WorkflowStep` de tipo `task`, `workflow`, `delay` o `code`. Las transiciones pueden ser `default`, `force`, `eval` o `conditional`.
+- Anidamiento: `workflow-nesting.ts` resuelve la clausura de referencias `workflowId`, rechaza ciclos y genera un plan interno con identidades separadas por invocación y límites de entrada/retorno. `workflow-definition.ts` incorpora las definiciones descendientes y sus tareas al hash; los workflows sin hijos conservan sus bytes históricos. `workflow-session.ts` utiliza un único journal y ámbitos locales de entrada/salidas. Los límites internos no ejecutan efectos y pueden continuar tras una interrupción; las hojas conservan la reconciliación habitual. La proyección del catálogo agrega el progreso al paso padre y preserva el historial independiente de los hijos. El coordinador reserva todas las identidades de workflow y tarea alcanzables.
 - Workflow runner: `runWorkflow()`, `runWorkflowStepById()`, `runWorkflowStep()`, `runTaskStep()`, `runDelayStep()`, `runCodeStep()`, `completeStep()`, and `resolveNextStep()` coordinate step execution and route to the next step.
 - Task runner: `runTask()` launches OpenCode tasks or delegates to `runCodeTask()` for local JavaScript code tasks. Non-interactive OpenCode output is collected through temporary files.
 - Code execution sandbox: code tasks and code workflow steps use Node `vm.runInContext()`. Optional APIs expose vault-local file operations, broader filesystem operations, and terminal execution when the task/step explicitly enables them.
@@ -107,7 +108,7 @@ Task execution
 Workflow execution
   -> Workflow.steps
   -> runtime stepOutputs map
-  -> task/delay/code step output
+  -> task/workflow/delay/code step output
   -> transition resolver
   -> next step or workflow completion
 

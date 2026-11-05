@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.18",
+      version: "1.7.19",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -764,11 +764,197 @@ module.exports = __toCommonJS(main_exports);
 // dashboard-areas.ts
 var import_obsidian2 = require("obsidian");
 
+// workflow-routing.ts
+var vm = __toESM(require("vm"));
+function workflowStepTransitions(steps, index) {
+  var _a;
+  const step = steps[index];
+  if (!step) throw new Error("Workflow step is absent");
+  if ((_a = step.transitions) == null ? void 0 : _a.length) return step.transitions;
+  const next = steps[index + 1];
+  if (!next) return [];
+  if (step.stepKind === "code" || step.stepKind === "delay") return [{ toStepId: next.id, mode: "default" }];
+  return [{ toStepId: next.id, mode: step.transitionMode || "default", evaluatePrompt: step.evaluatePrompt, forceContinue: step.forceContinue }];
+}
+function findWorkflowEntry(steps) {
+  if (!steps.length) return null;
+  const incoming = new Set(steps.flatMap((step) => (step.transitions || []).map((t) => t.toStepId)));
+  const candidates = steps.filter((step) => !incoming.has(step.id));
+  if (!candidates.length) return steps[0];
+  return candidates.sort((a, b) => {
+    var _a, _b, _c, _d;
+    return ((_b = (_a = a.position) == null ? void 0 : _a.x) != null ? _b : 0) - ((_d = (_c = b.position) == null ? void 0 : _c.x) != null ? _d : 0);
+  })[0];
+}
+function evaluateWorkflowCondition(expression, input, outputs) {
+  if (!expression || !expression.trim()) return false;
+  const sandbox = {
+    input: input || "",
+    outputs,
+    String,
+    Number,
+    Boolean,
+    Array,
+    Object,
+    JSON,
+    Math,
+    Date,
+    RegExp,
+    console: { log: () => {
+    } }
+  };
+  const source = expression.trim().startsWith("return") ? `(function(){ ${expression} })()` : `(${expression})`;
+  return !!vm.runInNewContext(source, sandbox, { timeout: 500 });
+}
+async function resolveWorkflowTransition(steps, index, input, succeeded, transitions, outputs, host) {
+  var _a;
+  if (!(transitions == null ? void 0 : transitions.length)) {
+    const next = steps[index + 1];
+    return { nextStepId: (_a = next == null ? void 0 : next.id) != null ? _a : null, reason: next ? "linear" : "end" };
+  }
+  for (const transition of transitions) {
+    const target = steps.find((step) => step.id === transition.toStepId);
+    if (!target) continue;
+    if (transition.mode === "force" || transition.forceContinue) return { nextStepId: target.id, reason: "force" };
+    if (transition.mode === "default") {
+      if (succeeded) return { nextStepId: target.id, reason: "default" };
+    } else if (transition.mode === "eval") {
+      try {
+        const response = await host.evaluate(transition, target, input);
+        if (/\bYES\b/i.test(response) && !/\bNO\b/i.test(response)) return { nextStepId: target.id, reason: "eval:yes" };
+      } catch (error) {
+        host.onError("eval", error);
+      }
+    } else if (transition.mode === "conditional") {
+      try {
+        if (evaluateWorkflowCondition(transition.condition || "", input, outputs)) return { nextStepId: target.id, reason: "conditional:true" };
+      } catch (error) {
+        host.onError("condition", error);
+      }
+    }
+  }
+  return { nextStepId: null, reason: "no-match" };
+}
+
+// workflow-nesting.ts
+var MAX_WORKFLOW_DEPTH = 16;
+var MAX_PLAN_STEPS = 1e4;
+function validateNestedWorkflowExport(data) {
+  var _a;
+  if (!Array.isArray(data.workflows) || !data.workflows.some((w) => Array.isArray(w == null ? void 0 : w.steps) && w.steps.some((s) => (s == null ? void 0 : s.stepKind) === "workflow"))) return;
+  if (((_a = data.autoOCExport) == null ? void 0 : _a.schemaVersion) !== "1.7.0") throw new Error("Nested workflows require export schema 1.7.0");
+  const workflows = data.workflows.map((w) => {
+    var _a2;
+    return { ...w, id: w.exportId, steps: (_a2 = w.steps) == null ? void 0 : _a2.map((s) => ({ ...s, workflowId: s.workflowExportId })) };
+  });
+  if (workflows.some((w) => typeof w.id !== "string" || !w.id) || new Set(workflows.map((w) => w.id)).size !== workflows.length) throw new Error("Missing or duplicate workflow exportId");
+  const tasks = new Set((data.tasks || []).map((t) => t.exportId));
+  for (const w of workflows) {
+    workflowClosure(w, workflows);
+    for (const s of w.steps) if ((s.stepKind === "task" || !s.stepKind) && !tasks.has(s.taskExportId)) throw new Error("Missing referenced task in nested workflow package");
+  }
+}
+function workflowClosure(root, catalog = []) {
+  const found = /* @__PURE__ */ new Map();
+  let visits = 0;
+  const visit = (workflow, ancestors) => {
+    if (++visits > MAX_PLAN_STEPS) throw new Error(`Expanded workflow exceeds ${MAX_PLAN_STEPS} invocations`);
+    if (ancestors.includes(workflow.id)) throw new Error(`Workflow nesting cycle: ${[...ancestors, workflow.id].join(" -> ")}`);
+    if (ancestors.length >= MAX_WORKFLOW_DEPTH) throw new Error(`Workflow nesting exceeds ${MAX_WORKFLOW_DEPTH} levels`);
+    if (!workflow.id || !Array.isArray(workflow.steps) || !workflow.steps.length || workflow.steps.some((step) => !step || typeof step.id !== "string" || !step.id) || new Set(workflow.steps.map((step) => step.id)).size !== workflow.steps.length) throw new Error("Invalid workflow identity or steps");
+    for (const step of workflow.steps) {
+      if (step.stepKind !== "workflow") continue;
+      const matches = catalog.filter((item) => item.id === step.workflowId);
+      if (typeof step.workflowId !== "string" || !step.workflowId || matches.length !== 1) throw new Error(`Missing or ambiguous referenced workflow (${step.workflowId || step.id})`);
+      const child = matches[0];
+      visit(child, [...ancestors, workflow.id]);
+      found.set(child.id, child);
+    }
+  };
+  visit(root, []);
+  return [...found.values()];
+}
+function workflowExecutionPlan(definition) {
+  const root = definition.workflow;
+  const scopes = /* @__PURE__ */ new Map(), steps = [];
+  const used = new Set(root.steps.map((step) => step.id));
+  const internal = (parts) => {
+    let id = `@nested:${JSON.stringify(parts)}`;
+    while (used.has(id)) id = "@" + id;
+    used.add(id);
+    return id;
+  };
+  const expand = (workflow, path32, returnId, enterId, inheritedBranch = false) => {
+    var _a;
+    const ids = new Map(workflow.steps.map((step) => [step.id, path32.length ? internal([...path32, step.id]) : step.id]));
+    const entries = new Map(workflow.steps.map((step) => [step.id, step.stepKind === "workflow" ? internal([...path32, step.id, "enter"]) : ids.get(step.id)]));
+    for (const [index, source] of workflow.steps.entries()) {
+      const id = ids.get(source.id);
+      const scope = { workflow, path: path32, localId: source.id, rootStepId: path32[0] || source.id, returnId, enterId, handoffBranch: inheritedBranch || !!workflow.handoffBranch };
+      const transitions = workflowStepTransitions(workflow.steps, index).map((edge) => {
+        if (!entries.has(edge.toStepId)) throw new Error("Workflow transition references a missing step");
+        return { ...edge, toStepId: entries.get(edge.toStepId) };
+      });
+      if (source.stepKind === "workflow") {
+        const child = (_a = definition.workflows) == null ? void 0 : _a.find((item) => item.id === source.workflowId);
+        if (!child) throw new Error("Referenced workflow is unavailable");
+        const entryId = entries.get(source.id);
+        scopes.set(entryId, { ...scope, boundary: "enter" });
+        const entryStep = { id: entryId, stepKind: "workflow", transitions: [] };
+        steps.push(entryStep);
+        const childEntry = expand(child, [...path32, source.id], id, entryId, scope.handoffBranch);
+        entryStep.transitions = [{ toStepId: childEntry, mode: "default" }];
+        scopes.set(id, { ...scope, boundary: "return" });
+      } else scopes.set(id, scope);
+      steps.push({ ...source, id, transitions });
+      if (steps.length > MAX_PLAN_STEPS) throw new Error(`Expanded workflow exceeds ${MAX_PLAN_STEPS} steps`);
+    }
+    return entries.get(findWorkflowEntry(workflow.steps).id);
+  };
+  const entry = expand(root, []);
+  return { steps, entry, scopes };
+}
+function workflowStepContext(plan, stepId, state) {
+  var _a, _b;
+  const scope = plan.scopes.get(stepId);
+  let start = 0;
+  if (scope.enterId) {
+    for (let i = state.steps.length - 1; i >= 0; i--) if (state.steps[i].stepId === scope.enterId) {
+      start = i + 1;
+      break;
+    }
+  }
+  const outputs = /* @__PURE__ */ Object.create(null);
+  let previous;
+  for (const item of state.steps.slice(start)) {
+    const known = plan.scopes.get(item.stepId);
+    if (item.status === "in_flight" || !known || known.boundary === "enter" || JSON.stringify(known.path) !== JSON.stringify(scope.path)) continue;
+    outputs[known.localId] = item.output || "";
+    previous = { stepId: known.localId, output: item.output || "" };
+  }
+  const input = (_b = previous == null ? void 0 : previous.output) != null ? _b : scope.enterId ? ((_a = state.steps[start - 1]) == null ? void 0 : _a.output) || "" : "";
+  return { scope, outputs, input, previous: previous || (scope.enterId ? { stepId: "workflow input", output: input } : void 0) };
+}
+function workflowPlanNext(plan, stepId, next) {
+  var _a;
+  return next || ((_a = plan.scopes.get(stepId)) == null ? void 0 : _a.returnId) || null;
+}
+
 // catalog-availability.ts
 function taskDisabledReason(task) {
   return (task == null ? void 0 : task.disabled) === true ? `Task "${task.name || task.id}" is disabled. Enable it before running.` : void 0;
 }
-function workflowDisabledReason(workflow, tasks) {
+function workflowDisabledReason(workflow, tasks, workflows = []) {
+  var _a;
+  if ((_a = workflow.steps) == null ? void 0 : _a.some((step) => step.stepKind === "workflow")) {
+    try {
+      for (const child of workflowClosure(workflow, workflows)) {
+        const reason = workflowDisabledReason({ ...child, steps: child.steps.filter((step) => step.stepKind !== "workflow") }, tasks);
+        if (reason) return reason;
+      }
+    } catch (e) {
+    }
+  }
   if (workflow.disabled === true) return `Workflow "${workflow.name || workflow.id}" is disabled. Enable it before running.`;
   for (const step of workflow.steps || []) {
     if (step.disabled === true) return `Step "${step.name || step.id}" is disabled. Enable it before running.`;
@@ -778,8 +964,8 @@ function workflowDisabledReason(workflow, tasks) {
   }
   return void 0;
 }
-function assertWorkflowEnabled(workflow, tasks) {
-  const reason = workflowDisabledReason(workflow, tasks);
+function assertWorkflowEnabled(workflow, tasks, workflows = []) {
+  const reason = workflowDisabledReason(workflow, tasks, workflows);
   if (reason) throw Object.assign(new Error(reason), { name: "DisabledExecutionError" });
 }
 function validateDisabled(item) {
@@ -2005,18 +2191,21 @@ function freeze(value) {
 }
 function definitionPayload(workflow, tasks, settings) {
   if (!workflow.id || !workflow.steps.length || new Set(workflow.steps.map((s) => s.id)).size !== workflow.steps.length) throw new Error("Invalid workflow identity or steps");
-  const refs = [...new Set(workflow.steps.filter((s) => s.stepKind === "task" || !s.stepKind && s.taskId).map((s) => s.taskId))];
+  const children = workflow.steps.some((s) => s.stepKind === "workflow") ? workflowClosure(workflow, settings.workflows || []) : [];
+  const refs = [...new Set([workflow, ...children].flatMap((w) => w.steps).filter((s) => s.stepKind === "task" || !s.stepKind && s.taskId).map((s) => s.taskId))];
   const selected = refs.map((id) => {
     const matches = tasks.filter((t) => t.id === id);
     if (!id || matches.length !== 1) throw new Error("Missing or ambiguous referenced task");
     return withoutRuntime(matches[0]);
   });
   const usesOpenCode2 = selected.some((task) => task.taskKind === "opencode2") || settings.defaultAiEngine === "opencode2";
-  return canonical({ workflow: { ...withoutRuntime(workflow), steps: workflow.steps.map((s) => withoutRuntime(s)) }, tasks: selected, settings: effectiveExecutionSettings(settings, usesOpenCode2) });
+  const clean = (w) => ({ ...withoutRuntime(w), steps: w.steps.map((s) => withoutRuntime(s)) });
+  return canonical({ workflow: clean(workflow), ...children.length ? { workflows: children.map(clean) } : {}, tasks: selected, settings: effectiveExecutionSettings(settings, usesOpenCode2) });
 }
-function withAvailability(payload, workflow, tasks) {
+function withAvailability(payload, workflow, tasks, catalog = []) {
   return {
     ...payload,
+    ...payload.workflows ? { workflows: payload.workflows.map((child) => withAvailability({ workflow: child, tasks: [] }, catalog.find((w) => w.id === child.id), [], []).workflow) } : {},
     workflow: {
       ...payload.workflow,
       ...workflow.disabled !== void 0 ? { disabled: workflow.disabled } : {},
@@ -2036,11 +2225,11 @@ function prepareWorkflowDefinition(workflow, tasks, settings) {
   const digest3 = (0, import_crypto4.createHash)("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest3.update(part, "utf8");
   const hash = digest3.digest("hex");
-  return freeze({ ...withAvailability(payload, workflow, tasks), hash, admissionSettings: concurrencySettings(settings) });
+  return freeze({ ...withAvailability(payload, workflow, tasks, settings.workflows), hash, admissionSettings: concurrencySettings(settings) });
 }
 async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
   const payload = freeze(definitionPayload(workflow, tasks, settings));
-  const availablePayload = freeze(withAvailability(payload, workflow, tasks));
+  const availablePayload = freeze(withAvailability(payload, workflow, tasks, settings.workflows));
   const admissionSettings = Object.freeze(concurrencySettings(settings));
   const captured = captureJsonStructure(payload, 0), digest3 = (0, import_crypto4.createHash)("sha256");
   await new Promise((resolve10) => (0, import_timers3.setImmediate)(resolve10));
@@ -2072,7 +2261,7 @@ function recoverWorkflowProgress(workflow, tasks, settings, checkpoint, expected
     currentHash = prepareWorkflowDefinition(workflow, tasks, settings).hash;
   } catch (e) {
   }
-  return recoverPreparedProgress(workflow, checkpoint, currentHash);
+  return recoverPreparedProgress(workflow, checkpoint, currentHash, false, settings.workflows);
 }
 async function recoverWorkflowProgressAsync(workflow, tasks, settings, checkpoint, expectedRunId, activelyExecuting = false) {
   workflow = cloneJsonStructure(workflow);
@@ -2085,11 +2274,11 @@ async function recoverWorkflowProgressAsync(workflow, tasks, settings, checkpoin
     if (activelyExecuting) throw error;
   }
   if (activelyExecuting && currentHash !== checkpoint.definitionHash) throw new Error("Progress identity or definition mismatch");
-  return recoverPreparedProgress(workflow, checkpoint, currentHash, activelyExecuting);
+  return recoverPreparedProgress(workflow, checkpoint, currentHash, activelyExecuting, settings.workflows);
 }
-function recoverPreparedProgress(workflow, checkpoint, currentHash, activelyExecuting = false) {
+function recoverPreparedProgress(workflow, checkpoint, currentHash, activelyExecuting = false, workflows = []) {
   const terminal = ["completed", "failed", "abandoned"].includes(checkpoint.phase);
-  if (currentHash === checkpoint.definitionHash) return projectPreparedProgress(workflow, checkpoint, activelyExecuting);
+  if (currentHash === checkpoint.definitionHash) return projectPreparedProgress(workflow, checkpoint, activelyExecuting, workflows);
   return {
     ...workflow,
     ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
@@ -2119,14 +2308,21 @@ function projectWorkflowProgress(workflow, tasks, settings, checkpoint, expected
   validateProgressBinding(workflow, checkpoint, expectedRunId);
   const definition = prepareWorkflowDefinition(workflow, tasks, settings);
   if (checkpoint.definitionHash !== definition.hash) throw new Error("Progress identity or definition mismatch");
-  return projectPreparedProgress(workflow, checkpoint, activelyExecuting);
+  return projectPreparedProgress(workflow, checkpoint, activelyExecuting, definition.workflows);
 }
-function projectPreparedProgress(workflow, checkpoint, activelyExecuting = false) {
-  var _a;
-  const last = new Map(checkpoint.steps.map((step) => [step.stepId, step]));
-  if (checkpoint.steps.some((step) => !workflow.steps.some((known) => known.id === step.stepId))) throw new Error("Progress contains an unknown step");
-  if (checkpoint.nextStepId && !workflow.steps.some((known) => known.id === checkpoint.nextStepId)) throw new Error("Progress next step is absent");
-  const target = checkpoint.nextStepId || ((_a = checkpoint.steps[checkpoint.steps.length - 1]) == null ? void 0 : _a.stepId);
+function projectPreparedProgress(workflow, checkpoint, activelyExecuting = false, workflows = []) {
+  var _a, _b;
+  const plan = workflowExecutionPlan({ workflow, workflows: workflowClosure(workflow, workflows) });
+  const last = /* @__PURE__ */ new Map();
+  for (const step of checkpoint.steps) {
+    const scope = plan.scopes.get(step.stepId);
+    if (!scope) throw new Error("Progress contains an unknown step");
+    const internal = scope.path.length > 0 || scope.boundary === "enter";
+    last.set(scope.rootStepId, internal ? { ...step, status: checkpoint.phase === "failed" ? "failed" : "in_flight", output: checkpoint.phase === "failed" ? step.output : "" } : step);
+  }
+  if (checkpoint.nextStepId && !plan.scopes.has(checkpoint.nextStepId)) throw new Error("Progress next step is absent");
+  const targetId = checkpoint.nextStepId || ((_a = checkpoint.steps[checkpoint.steps.length - 1]) == null ? void 0 : _a.stepId);
+  const target = (_b = plan.scopes.get(targetId)) == null ? void 0 : _b.rootStepId;
   return {
     ...workflow,
     ...checkpoint.createdAt ? { lastRun: checkpoint.createdAt } : {},
@@ -2356,6 +2552,7 @@ var createAreaDashboardState = () => ({
   query: "",
   showDisabled: false,
   attentionOnly: false,
+  kindFilter: "all",
   collapsed: /* @__PURE__ */ new Set()
 });
 var needsAttention = (item, owned) => {
@@ -2403,6 +2600,7 @@ function dashboardItems(tasks, workflows, ownsExecution = () => false) {
     const children = workflow.steps.map((step, index) => {
       var _a;
       const task = byId.get(step.taskId || ""), code = step.stepKind === "code";
+      const nested = step.stepKind === "workflow", child = nested ? workflows.find((w) => w.id === step.workflowId) : void 0;
       const display = code ? codeStepDisplay(step) : step;
       const status = display.status || "pending";
       const binding = code && step.codeExecution && display.lastRun === step.codeExecution.lastRun ? step.codeExecution.runtimeExecution : step.runtimeExecution;
@@ -2411,17 +2609,17 @@ function dashboardItems(tasks, workflows, ownsExecution = () => false) {
         id: step.id,
         workflowId: workflow.id,
         taskId: code || step.stepKind === "delay" ? void 0 : step.taskId,
-        kind: code || (task == null ? void 0 : task.taskKind) === "code" ? "code" : step.stepKind === "delay" ? "delay" : "task",
-        name: ((_a = step.name) == null ? void 0 : _a.trim()) || (task == null ? void 0 : task.name) || (code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
+        kind: nested ? "workflow" : code || (task == null ? void 0 : task.taskKind) === "code" ? "code" : step.stepKind === "delay" ? "delay" : "task",
+        name: ((_a = step.name) == null ? void 0 : _a.trim()) || (child == null ? void 0 : child.name) || (task == null ? void 0 : task.name) || (nested ? "Missing workflow" : code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
         area: areaName(step.area || workflow.area),
         status,
-        disabled: !!(workflow.disabled || step.disabled || (task == null ? void 0 : task.disabled)),
-        attention: needsAttention({ ...step, status, runtimeExecution: binding }, owned(binding, workflow.id)) || !code && step.stepKind !== "delay" && !task,
+        disabled: !!(workflow.disabled || step.disabled || (task == null ? void 0 : task.disabled) || (child == null ? void 0 : child.disabled)),
+        attention: needsAttention({ ...step, status, runtimeExecution: binding }, owned(binding, workflow.id)) || (nested ? !child : !code && step.stepKind !== "delay" && !task),
         detail: `Step ${index + 1} \xB7 ${workflow.name}`,
         lastRun: display.lastRun
       };
     });
-    const blocked = workflowDisabledReason(workflow, tasks);
+    const blocked = workflowDisabledReason(workflow, tasks, workflows);
     return {
       key: JSON.stringify(["workflow", workflow.id]),
       id: workflow.id,
@@ -2441,13 +2639,14 @@ function dashboardItems(tasks, workflows, ownsExecution = () => false) {
 }
 function dashboardVisibleItems(items, state) {
   const query = state.query.trim().toLowerCase();
-  return items.filter((item) => (state.showDisabled || !item.disabled) && (!state.attentionOnly || item.attention) && (!query || [item.name, item.area, item.detail, ...(item.children || []).map((child) => `${child.name} ${child.area}`)].some((text) => text.toLowerCase().includes(query))));
+  return items.filter((item) => (state.kindFilter === "workflow" ? item.kind === "workflow" : state.kindFilter === "task" ? item.kind !== "workflow" : true) && (state.showDisabled || !item.disabled) && (!state.attentionOnly || item.attention) && (!query || [item.name, item.area, item.detail, ...(item.children || []).map((child) => `${child.name} ${child.area}`)].some((text) => text.toLowerCase().includes(query))));
 }
 var stateLabel = (item) => item.disabled ? "Disabled" : item.attention ? "Needs attention" : { pending: "Ready", running: "Running", completed: "Completed", failed: "Failed", abandoned: "Abandoned" }[item.status] || item.status;
 var AreaDashboard = class {
   constructor(parent, state, host) {
     this.state = state;
     this.host = host;
+    this.kindFilters = /* @__PURE__ */ new Map();
     this.items = [];
     this.signature = "";
     this.previous = /* @__PURE__ */ new Map();
@@ -2455,8 +2654,24 @@ var AreaDashboard = class {
     this.root = parent.createDiv("auto-oc-areas-dashboard");
     const heading = this.root.createDiv("auto-oc-areas-heading");
     heading.createEl("h2", { text: "Your areas" });
-    heading.createEl("p", { text: "Workflows, tasks and Code steps. Select a bubble to see its details." });
-    this.summary = this.root.createDiv("auto-oc-areas-summary");
+    heading.createEl("p", { text: "Select Workflows or Tasks to filter your areas, then select a bubble to see its details." });
+    const summary = this.root.createDiv("auto-oc-areas-summary");
+    const filters = summary.createDiv({ cls: "auto-oc-areas-kind-filters", attr: { role: "group", "aria-label": "Filter areas by item type" } });
+    for (const [kind, label] of [["all", "All"], ["workflow", "Workflows"], ["task", "Tasks"]]) {
+      const button = filters.createEl("button", { cls: "auto-oc-areas-kind-filter", attr: {
+        type: "button",
+        "data-area-kind-filter": kind,
+        "aria-label": kind === "all" ? "Show all items" : `Show ${label.toLowerCase()}`
+      } });
+      const count = button.createEl("strong");
+      button.createSpan({ text: label });
+      button.onclick = () => {
+        state.kindFilter = kind;
+        this.draw();
+      };
+      this.kindFilters.set(kind, { button, count });
+    }
+    this.metrics = summary.createDiv("auto-oc-areas-metrics");
     const tools = this.root.createDiv("auto-oc-areas-tools");
     const search = tools.createEl("input", { type: "search", placeholder: "Find a task, workflow or step", attr: { "aria-label": "Search Dashboard" } });
     search.value = state.query;
@@ -2516,10 +2731,14 @@ var AreaDashboard = class {
     })) {
       this.state.selected = (_a = visible.find((item) => !item.disabled && item.status === "running") || visible.find((item) => !item.disabled && item.attention) || visible[0]) == null ? void 0 : _a.key;
     }
-    this.summary.empty();
+    const workflowCount = this.items.filter((item) => item.kind === "workflow").length;
+    const counts = { all: this.items.length, workflow: workflowCount, task: this.items.length - workflowCount };
+    for (const [kind, { button, count }] of this.kindFilters) {
+      button.setAttr("aria-pressed", String(this.state.kindFilter === kind));
+      count.setText(String(counts[kind]));
+    }
+    this.metrics.empty();
     for (const [label, count] of [
-      ["workflows", this.items.filter((item) => item.kind === "workflow").length],
-      ["tasks", this.items.filter((item) => item.kind !== "workflow").length],
       ["Code steps", this.items.reduce((n, item) => {
         var _a2;
         return n + (((_a2 = item.children) == null ? void 0 : _a2.filter((child) => child.kind === "code").length) || 0);
@@ -2529,7 +2748,7 @@ var AreaDashboard = class {
       ["need attention", this.items.filter((item) => !item.disabled && item.attention).length],
       ["disabled", this.items.filter((item) => item.disabled).length]
     ]) {
-      const metric = this.summary.createSpan();
+      const metric = this.metrics.createSpan();
       metric.createEl("strong", { text: String(count) });
       metric.createSpan({ text: ` ${label}` });
     }
@@ -4553,7 +4772,7 @@ function buildDraftPrompt(guide, kind, goal, engine, version) {
 IN-APP DRAFT REQUEST
 Produce a definition only. Do not perform the requested task, inspect files, call tools or execute code.
 Return one JSON object, without Markdown or commentary. Use schemaVersion "1.6.0", pluginVersion ${JSON.stringify(version)} and exportedAt ${JSON.stringify((/* @__PURE__ */ new Date()).toISOString())}.
-` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops or conditional transitions.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
+` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops, conditional transitions or workflow steps. This creator does not receive existing workflow identities; the user can add existing workflows as steps in the editor.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
 AutoOC applies the model selected in the creator to tasks using that engine. Do not include model IDs in the JSON.
 CREATOR EXAMPLE (replace its content with the requested objective):
 ${JSON.stringify(example, null, 2)}
@@ -5717,11 +5936,12 @@ function executionAdmissionDiagnostic(error) {
 function resources(definition, vault) {
   var _a, _b;
   const { workflow, tasks, settings } = definition;
-  for (const item of [workflow, ...tasks]) validateConcurrency(item);
+  const workflows = [workflow, ...definition.workflows || []];
+  for (const item of [...workflows, ...tasks]) validateConcurrency(item);
   const standalone = workflow.id.startsWith("@task:");
   const policy = (_b = standalone ? (_a = tasks[0]) == null ? void 0 : _a.concurrency : workflow.concurrency) != null ? _b : concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
-  const result = { exclusive: policy === "exclusive" || !!workflow.handoffBranch, sharedWorkspace: policy === "parallel", tasks: new Set(tasks.map((t) => t.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
-  for (const item of [...workflow.steps.filter((s) => s.stepKind === "code"), ...tasks]) {
+  const result = { exclusive: policy === "exclusive" || workflows.some((w) => !!w.handoffBranch || w.concurrency === "exclusive"), sharedWorkspace: policy === "parallel" && !workflows.some((w) => w.concurrency === "independent"), tasks: new Set(tasks.map((t) => t.id)), workflows: new Set(workflows.map((w) => w.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
+  for (const item of [...workflows.flatMap((w) => w.steps).filter((s) => s.stepKind === "code"), ...tasks]) {
     if (item.branch || workflow.handoffBranch) result.exclusive = true;
     if (item.interactiveTerminal || item.taskKind === void 0 && item.stepKind !== "code" && settings.defaultInteractiveTerminal) result.exclusive = true;
     if (item.stepKind === "code" || item.taskKind === "code") {
@@ -5745,10 +5965,10 @@ function resources(definition, vault) {
       result.repositories.add(physicalPath(path17.resolve(gitRoot, common)));
     }
   }
-  if (!result.sharedWorkspace && workflow.steps.some((s) => {
+  if (!result.sharedWorkspace && workflows.some((w) => w.steps.some((s) => {
     var _a2;
     return s.transitionMode === "eval" || ((_a2 = s.transitions) == null ? void 0 : _a2.some((t) => t.mode === "eval"));
-  })) result.exclusive = true;
+  }))) result.exclusive = true;
   return result;
 }
 function canShareWorkspace(a, b) {
@@ -5814,7 +6034,7 @@ var ExecutionCoordinator = class {
     const known = [...this.sessions].find((s) => s.runId === checkpoint.runId && s.definition.workflow.id === checkpoint.workflowId && s.definition.hash === checkpoint.definitionHash);
     if (!known) return false;
     if (known.advancing) return true;
-    return canShareWorkspace(admission.resources, known.resources) && admission.definition.workflow.id !== known.definition.workflow.id && ![...admission.resources.tasks].some((id) => known.resources.tasks.has(id));
+    return canShareWorkspace(admission.resources, known.resources) && ![...admission.resources.workflows].some((id) => known.resources.workflows.has(id)) && ![...admission.resources.tasks].some((id) => known.resources.tasks.has(id));
   }
   admit(definition, vault, resumeRunId) {
     this.lease.assertOwned();
@@ -5834,7 +6054,7 @@ var ExecutionCoordinator = class {
       return previous;
     }
     for (const current of this.sessions) {
-      if (current.definition.workflow.id === definition.workflow.id || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
+      if ([...requested.workflows].some((id) => current.resources.workflows.has(id)) || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
       if (!current.advancing && !canShareWorkspace(requested, current.resources)) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
       if (requested.exclusive || current.resources.exclusive) throw new Error("Exclusive execution must finish before shared execution");
       if (!canShareWorkspace(requested, current.resources) && (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b))))) throw new Error("Execution resource is occupied (workspace or Git repository)");
@@ -5861,7 +6081,11 @@ function assertNoRetiredDependency(item) {
   const error = autoOCDependencyError(item);
   if (error) throw new Error(error);
 }
-function assertWorkflowDependencies(workflow, tasks) {
+function assertWorkflowDependencies(workflow, tasks, workflows = []) {
+  var _a;
+  if ((_a = workflow.steps) == null ? void 0 : _a.some((step) => step.stepKind === "workflow")) for (const child of workflowClosure(workflow, workflows)) {
+    assertWorkflowDependencies({ ...child, steps: child.steps.filter((step) => step.stepKind !== "workflow") }, tasks);
+  }
   assertNoRetiredDependency(workflow);
   for (const step of workflow.steps || []) {
     assertNoRetiredDependency(step);
@@ -6669,7 +6893,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
   const descriptor = path21.join(directory, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true });
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1 });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling;
@@ -7978,85 +8202,13 @@ function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations) {
 // code-workflow-host.ts
 var fs26 = __toESM(require("fs"));
 
-// workflow-routing.ts
-var vm = __toESM(require("vm"));
-function workflowStepTransitions(steps, index) {
-  var _a;
-  const step = steps[index];
-  if (!step) throw new Error("Workflow step is absent");
-  if ((_a = step.transitions) == null ? void 0 : _a.length) return step.transitions;
-  const next = steps[index + 1];
-  if (!next) return [];
-  if (step.stepKind === "code" || step.stepKind === "delay") return [{ toStepId: next.id, mode: "default" }];
-  return [{ toStepId: next.id, mode: step.transitionMode || "default", evaluatePrompt: step.evaluatePrompt, forceContinue: step.forceContinue }];
-}
-function findWorkflowEntry(steps) {
-  if (!steps.length) return null;
-  const incoming = new Set(steps.flatMap((step) => (step.transitions || []).map((t) => t.toStepId)));
-  const candidates = steps.filter((step) => !incoming.has(step.id));
-  if (!candidates.length) return steps[0];
-  return candidates.sort((a, b) => {
-    var _a, _b, _c, _d;
-    return ((_b = (_a = a.position) == null ? void 0 : _a.x) != null ? _b : 0) - ((_d = (_c = b.position) == null ? void 0 : _c.x) != null ? _d : 0);
-  })[0];
-}
-function evaluateWorkflowCondition(expression, input, outputs) {
-  if (!expression || !expression.trim()) return false;
-  const sandbox = {
-    input: input || "",
-    outputs,
-    String,
-    Number,
-    Boolean,
-    Array,
-    Object,
-    JSON,
-    Math,
-    Date,
-    RegExp,
-    console: { log: () => {
-    } }
-  };
-  const source = expression.trim().startsWith("return") ? `(function(){ ${expression} })()` : `(${expression})`;
-  return !!vm.runInNewContext(source, sandbox, { timeout: 500 });
-}
-async function resolveWorkflowTransition(steps, index, input, succeeded, transitions, outputs, host) {
-  var _a;
-  if (!(transitions == null ? void 0 : transitions.length)) {
-    const next = steps[index + 1];
-    return { nextStepId: (_a = next == null ? void 0 : next.id) != null ? _a : null, reason: next ? "linear" : "end" };
-  }
-  for (const transition of transitions) {
-    const target = steps.find((step) => step.id === transition.toStepId);
-    if (!target) continue;
-    if (transition.mode === "force" || transition.forceContinue) return { nextStepId: target.id, reason: "force" };
-    if (transition.mode === "default") {
-      if (succeeded) return { nextStepId: target.id, reason: "default" };
-    } else if (transition.mode === "eval") {
-      try {
-        const response = await host.evaluate(transition, target, input);
-        if (/\bYES\b/i.test(response) && !/\bNO\b/i.test(response)) return { nextStepId: target.id, reason: "eval:yes" };
-      } catch (error) {
-        host.onError("eval", error);
-      }
-    } else if (transition.mode === "conditional") {
-      try {
-        if (evaluateWorkflowCondition(transition.condition || "", input, outputs)) return { nextStepId: target.id, reason: "conditional:true" };
-      } catch (error) {
-        host.onError("condition", error);
-      }
-    }
-  }
-  return { nextStepId: null, reason: "no-match" };
-}
-
 // workflow-session.ts
 async function advanceWorkflowSession(journal, definition, host, options = {}) {
-  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k;
-  const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks, definition.settings);
+  var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+  const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks, { ...definition.settings, workflows: definition.workflows });
   const checkpoint = journal.snapshot();
   if (verified.hash !== definition.hash || checkpoint.definitionHash !== verified.hash || checkpoint.workflowId !== verified.workflow.id) throw new Error("Workflow definition does not match execution checkpoint");
-  const steps = verified.workflow.steps;
+  const plan = workflowExecutionPlan(verified), steps = plan.steps;
   if (new Set(steps.map((step) => step.id)).size !== steps.length) throw new Error("Duplicate workflow step identity");
   const limit = (_a = options.maxSteps) != null ? _a : 1e4;
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error("Invalid execution step limit");
@@ -8064,29 +8216,28 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
   for (let count = 0; count < limit; count++) {
     const state = journal.snapshot();
     const observed = state.phase === "in_flight" ? state.steps[state.steps.length - 1].result : void 0;
-    if (state.phase === "in_flight" && !observed) throw new Error("Interrupted step requires reconciliation before continuation");
-    if (!["ready", "in_flight"].includes(state.phase) || ((_c = options.signal) == null ? void 0 : _c.aborted)) return state;
+    if (state.phase === "in_flight" && !observed && !((_c = plan.scopes.get(state.nextStepId)) == null ? void 0 : _c.boundary)) throw new Error("Interrupted step requires reconciliation before continuation");
+    if (!["ready", "in_flight"].includes(state.phase) || ((_d = options.signal) == null ? void 0 : _d.aborted)) return state;
     const index = steps.findIndex((step2) => step2.id === state.nextStepId);
     if (index < 0) throw new Error("Checkpoint step is absent from workflow definition");
     const step = steps[index];
-    const outputs = /* @__PURE__ */ Object.create(null);
-    for (const previous of state.steps) outputs[previous.stepId] = previous.output || "";
-    const input = state.steps.length ? state.steps[state.steps.length - 1].output || "" : "";
-    if (!observed) {
+    const { outputs, input, scope } = workflowStepContext(plan, step.id, state);
+    if (state.phase === "ready") {
       await journal.begin(step.id);
       try {
-        await ((_d = host.onCheckpoint) == null ? void 0 : _d.call(host, journal.snapshot()));
+        await ((_e = host.onCheckpoint) == null ? void 0 : _e.call(host, journal.snapshot()));
       } catch (error) {
         await journal.finish(step.id, false, "[progress publication failed before step effects]", null);
         throw error;
       }
-      if ((_e = options.signal) == null ? void 0 : _e.aborted) {
+      if ((_f = options.signal) == null ? void 0 : _f.aborted) {
         await journal.finish(step.id, false, "[cancelled before step effects]", null);
-        await ((_f = host.onCheckpoint) == null ? void 0 : _f.call(host, journal.snapshot()));
+        await ((_g = host.onCheckpoint) == null ? void 0 : _g.call(host, journal.snapshot()));
         return journal.snapshot();
       }
     }
-    const result = observed || await host.execute(step, input, outputs, options.signal);
+    const last = state.steps.filter((item) => item.status !== "in_flight").slice(-1)[0];
+    const result = observed || (scope.boundary === "enter" ? { succeeded: true, output: input } : scope.boundary === "return" ? { succeeded: (last == null ? void 0 : last.status) === "completed", output: (last == null ? void 0 : last.output) || "", cancelled: (_h = last == null ? void 0 : last.result) == null ? void 0 : _h.cancelled } : await host.execute(step, input, outputs, options.signal));
     if (typeof result.succeeded !== "boolean" || typeof result.output !== "string") throw new Error("Invalid execution result");
     if (result.cancelled !== void 0 && (typeof result.cancelled !== "boolean" || result.cancelled && result.succeeded)) throw new Error("Invalid cancellation result");
     const output = observed ? result.output : host.redact(result.output);
@@ -8094,15 +8245,15 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
     if (!observed) await journal.recordResult({ ...result, output });
     if (result.cancelled) {
       await journal.finish(step.id, false, output, null);
-      await ((_g = host.onCheckpoint) == null ? void 0 : _g.call(host, journal.snapshot()));
-      return journal.snapshot();
-    }
-    if ((_h = options.signal) == null ? void 0 : _h.aborted) {
       await ((_i = host.onCheckpoint) == null ? void 0 : _i.call(host, journal.snapshot()));
       return journal.snapshot();
     }
-    outputs[step.id] = output;
-    const transitions = workflowStepTransitions(steps, index);
+    if ((_j = options.signal) == null ? void 0 : _j.aborted) {
+      await ((_k = host.onCheckpoint) == null ? void 0 : _k.call(host, journal.snapshot()));
+      return journal.snapshot();
+    }
+    outputs[scope.localId] = output;
+    const transitions = step.transitions || [];
     const next = await resolveWorkflowTransition(steps, index, output, result.succeeded, transitions, outputs, {
       evaluate: async (transition, target, input2) => {
         var _a2, _b2, _c2, _d2;
@@ -8123,9 +8274,9 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
         if (kind === "eval") throw error;
       }
     });
-    if ((_j = options.signal) == null ? void 0 : _j.aborted) return journal.snapshot();
-    await journal.finish(step.id, result.succeeded, output, next.nextStepId);
-    await ((_k = host.onCheckpoint) == null ? void 0 : _k.call(host, journal.snapshot()));
+    if ((_l = options.signal) == null ? void 0 : _l.aborted) return journal.snapshot();
+    await journal.finish(step.id, result.succeeded, output, workflowPlanNext(plan, step.id, next.nextStepId));
+    await ((_m = host.onCheckpoint) == null ? void 0 : _m.call(host, journal.snapshot()));
   }
   return journal.snapshot();
 }
@@ -8176,7 +8327,8 @@ function waitForWorkflowDelay(milliseconds, signal) {
 // workflow-recovery.ts
 async function reconcileWorkflowTask(journal, definition, read2, host) {
   const state = journal.snapshot();
-  const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks, definition.settings);
+  const verified = prepareWorkflowDefinition(definition.workflow, definition.tasks, { ...definition.settings, workflows: definition.workflows });
+  const plan = workflowExecutionPlan(verified);
   if (verified.hash !== definition.hash || state.definitionHash !== verified.hash || state.workflowId !== verified.workflow.id) throw new Error("Recovery definition mismatch");
   if (state.phase !== "in_flight") return state;
   const step = state.steps[state.steps.length - 1];
@@ -8185,23 +8337,22 @@ async function reconcileWorkflowTask(journal, definition, read2, host) {
   if (result.threadId !== step.codexThreadId || result.turnId !== step.codexTurnId) throw new Error("Recovery execution identity mismatch");
   if (!["completed", "failed", "interrupted"].includes(result.status)) return state;
   if (typeof result.output !== "string") throw new Error("Recovery output is unavailable");
-  const index = verified.workflow.steps.findIndex((item) => item.id === step.stepId);
+  const index = plan.steps.findIndex((item) => item.id === step.stepId);
   if (index < 0) throw new Error("Recovery step is missing");
   const output = host.redact(result.output);
   if (typeof output !== "string") throw new Error("Invalid redacted recovery output");
-  const outputs = /* @__PURE__ */ Object.create(null);
-  for (const item of state.steps) outputs[item.stepId] = item.output || "";
-  outputs[step.stepId] = output;
+  const { outputs, scope } = workflowStepContext(plan, step.stepId, state);
+  outputs[scope.localId] = output;
   const succeeded = result.status === "completed";
   await journal.recordResult({ succeeded, output, cancelled: result.status === "interrupted" });
   if (result.status === "interrupted") {
     await journal.finish(step.stepId, false, output, null);
     return journal.snapshot();
   }
-  const transitions = workflowStepTransitions(verified.workflow.steps, index);
+  const transitions = plan.steps[index].transitions || [];
   if (transitions.some((t) => t.mode === "eval")) return journal.snapshot();
   const next = await resolveWorkflowTransition(
-    verified.workflow.steps,
+    plan.steps,
     index,
     output,
     succeeded,
@@ -8211,7 +8362,7 @@ async function reconcileWorkflowTask(journal, definition, read2, host) {
       throw new Error("Reconciliation cannot launch a model evaluation");
     }, onError: host.onTransitionError.bind(host) }
   );
-  await journal.finish(step.stepId, succeeded, output, next.nextStepId);
+  await journal.finish(step.stepId, succeeded, output, workflowPlanNext(plan, step.stepId, next.nextStepId));
   return journal.snapshot();
 }
 
@@ -8341,18 +8492,18 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
 
 // code-workflow-host.ts
 function supportsSharedWorkflow(definition, tasks) {
-  assertWorkflowDependencies(definition.workflow, definition.tasks);
-  return !definition.workflow.requiresAutoOCSecrets && !definition.tasks.some((task) => task.requiresAutoOCSecrets) && !definition.workflow.steps.some((step) => !["code", "delay", "task"].includes(step.stepKind || "task")) && definition.tasks.every((task) => !!(tasks == null ? void 0 : tasks.supports(task)));
+  assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
+  return !definition.workflow.requiresAutoOCSecrets && !definition.tasks.some((task) => task.requiresAutoOCSecrets) && ![definition.workflow, ...definition.workflows || []].some((w) => w.steps.some((step) => !["code", "delay", "task", "workflow"].includes(step.stepKind || "task"))) && definition.tasks.every((task) => !!(tasks == null ? void 0 : tasks.supports(task)));
 }
 async function runCodeWorkflowHost(options) {
-  var _a, _b, _c, _d;
-  if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks);
-  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks);
-  const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks, options.definition.settings);
+  var _a, _b, _c, _d, _e;
+  if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks, options.definition.workflows);
+  assertWorkflowDependencies(options.definition.workflow, options.definition.tasks, options.definition.workflows);
+  const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks, { ...options.definition.settings, workflows: options.definition.workflows });
   if (definition.hash !== options.definition.hash) throw new Error("Workflow definition changed");
   if (options.reconcile && !options.resumeRunId) throw new Error("Reconciliation requires an existing run identity");
   if (options.maxSteps !== void 0 && (!Number.isSafeInteger(options.maxSteps) || options.maxSteps < 1)) throw new Error("Invalid execution step limit");
-  const steps = definition.workflow.steps;
+  const plan = workflowExecutionPlan(definition), steps = plan.steps;
   if (definition.tasks.some((task) => {
     var _a2;
     return !((_a2 = options.tasks) == null ? void 0 : _a2.supports(task));
@@ -8362,7 +8513,7 @@ async function runCodeWorkflowHost(options) {
     var _a2;
     return step.transitionMode === "eval" || ((_a2 = step.transitions) == null ? void 0 : _a2.some((t) => t.mode === "eval"));
   }) && !options.evaluate) throw new Error("Model evaluation adapter is required");
-  const entry = findWorkflowEntry(steps);
+  const entry = steps.find((step) => step.id === plan.entry);
   if (!entry) throw new Error("Workflow has no entry step");
   const lease = options.lease || acquireExecutionLease(options.runtimeDirectory);
   const ownsLease = !options.lease;
@@ -8387,7 +8538,7 @@ async function runCodeWorkflowHost(options) {
     if ((resumed == null ? void 0 : resumed.snapshot().phase) === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
     if (resumed) admission.bind(resumed.snapshot());
-    if (resumed && definition.workflow.handoffBranch && ["ready", "in_flight"].includes(resumed.snapshot().phase)) {
+    if (resumed && [definition.workflow, ...definition.workflows || []].some((w) => w.handoffBranch) && ["ready", "in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed, options.vaultBase);
     }
     if (resumed && ["completed", "failed"].includes(resumed.snapshot().phase)) {
@@ -8395,8 +8546,8 @@ async function runCodeWorkflowHost(options) {
       await ((_a = options.onCheckpoint) == null ? void 0 : _a.call(options, state));
       return state;
     }
-    if ((resumed == null ? void 0 : resumed.snapshot().phase) === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result) {
-      if (!options.reconcile || !((_b = options.tasks) == null ? void 0 : _b.reconcile)) throw new Error("Interrupted execution requires reconciliation; cannot replay effects");
+    if ((resumed == null ? void 0 : resumed.snapshot().phase) === "in_flight" && !resumed.snapshot().steps.slice(-1)[0].result && !((_b = plan.scopes.get(resumed.snapshot().nextStepId)) == null ? void 0 : _b.boundary)) {
+      if (!options.reconcile || !((_c = options.tasks) == null ? void 0 : _c.reconcile)) throw new Error("Interrupted execution requires reconciliation; cannot replay effects");
       const step = steps.find((step2) => step2.id === resumed.snapshot().nextStepId);
       const task = definition.tasks.find((task2) => task2.id === (step == null ? void 0 : step.taskId));
       if (!task) throw new Error("Interrupted step has no recoverable task");
@@ -8408,11 +8559,11 @@ async function runCodeWorkflowHost(options) {
         onTransitionError: () => {
         }
       });
-      await ((_c = options.onCheckpoint) == null ? void 0 : _c.call(options, JSON.parse(JSON.stringify(result))));
+      await ((_d = options.onCheckpoint) == null ? void 0 : _d.call(options, JSON.parse(JSON.stringify(result))));
       return result;
     }
     if (options.reconcile && resumed) {
-      await ((_d = options.onCheckpoint) == null ? void 0 : _d.call(options, resumed.snapshot()));
+      await ((_e = options.onCheckpoint) == null ? void 0 : _e.call(options, resumed.snapshot()));
       return resumed.snapshot();
     }
     const journal = await catalogTransaction(lease.directory + "/journal-admission", async () => {
@@ -8433,19 +8584,15 @@ async function runCodeWorkflowHost(options) {
     return await advanceWorkflowSession(journal, definition, {
       async execute(step, input, outputs, signal) {
         admission.assertOwned(lease, definition);
-        if (definition.workflow.handoffBranch) verifyWorkflowBranch(journal, options.vaultBase);
+        const context = workflowStepContext(plan, step.id, journal.snapshot());
+        const workflow = context.scope.workflow;
+        if ([definition.workflow, ...definition.workflows || []].some((w) => w.handoffBranch)) verifyWorkflowBranch(journal, options.vaultBase);
         if (!step.stepKind || step.stepKind === "task") {
           const task = definition.tasks.find((task2) => task2.id === step.taskId);
           if (!task || !options.tasks) throw new Error("Workflow task adapter is unavailable");
           const stepIndex = journal.snapshot().steps.length - 1;
-          await prepareTaskBranch(journal, task, task.workingDirectory || definition.settings.workingDirectory || options.vaultBase, options.vaultBase, !!definition.workflow.handoffBranch);
-          const completed = journal.snapshot().steps.filter((item) => item.status !== "in_flight");
-          const previous = completed[completed.length - 1];
-          const prompt = workflowTaskPrompt(
-            task.prompt || "",
-            definition.workflow,
-            previous ? { stepId: previous.stepId, output: previous.output || "" } : void 0
-          );
+          await prepareTaskBranch(journal, task, task.workingDirectory || definition.settings.workingDirectory || options.vaultBase, options.vaultBase, context.scope.handoffBranch);
+          const prompt = workflowTaskPrompt(task.prompt || "", workflow, context.previous);
           let observing = true;
           try {
             return await options.tasks.execute(task, prompt, signal, async (threadId, turnId) => {
@@ -8675,8 +8822,9 @@ async function persistWorkflowProgress(options) {
     }
     const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
     const observedTasks = /* @__PURE__ */ new Map();
+    const executionSteps = workflowExecutionPlan({ workflow, workflows: workflowClosure(workflow, config.workflows) }).steps;
     for (const [stepIndex, observed] of durable.steps.entries()) {
-      const step = workflow.steps.find((item) => item.id === observed.stepId);
+      const step = executionSteps.find((item) => item.id === observed.stepId);
       if ((step == null ? void 0 : step.taskId) && (!step.stepKind || step.stepKind === "task")) {
         observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
       }
@@ -8730,7 +8878,7 @@ async function persistWorkflowProgress(options) {
     } : step) } : projected;
     const next = { ...config, tasks, workflows: virtual ? config.workflows : config.workflows.map((workflow2) => workflow2 === matches[0] ? replacement : workflow2) };
     await writer.save(options.configurationFile, () => next);
-    if (options.vaultBase) persistTaskHistory(options.vaultBase, workflow, durable, config);
+    if (options.vaultBase) persistTaskHistory(options.vaultBase, { ...workflow, steps: executionSteps }, durable, config);
     const confirmed = {
       catalog: next,
       version: writer.confirmedVersion(options.configurationFile),
@@ -8772,7 +8920,7 @@ var fs29 = __toESM(require("fs"));
 var path29 = __toESM(require("path"));
 function preflightInstalledWorkflow(definition, vault) {
   var _a, _b;
-  assertWorkflowDependencies(definition.workflow, definition.tasks);
+  assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
   const root = physicalPath(vault);
   const checkDirectory = (value) => {
     if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
@@ -8783,7 +8931,7 @@ function preflightInstalledWorkflow(definition, vault) {
     if (!fs29.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
   };
   checkDirectory(definition.settings.workingDirectory);
-  for (const item of [definition.workflow, ...definition.workflow.steps, ...definition.tasks]) {
+  for (const item of [definition.workflow, ...definition.workflow.steps, ...(definition.workflows || []).flatMap((w) => [w, ...w.steps]), ...definition.tasks]) {
     if (item.workingDirectory !== void 0) checkDirectory(item.workingDirectory);
     if (item.interactiveTerminal !== void 0 && typeof item.interactiveTerminal !== "boolean") throw new Error("interactiveTerminal must be boolean");
     if (item.taskKind === "code" && item.interactiveTerminal === true) throw new Error("Code tasks cannot be interactive");
@@ -8868,7 +9016,7 @@ async function runInstalledWorkflow(options) {
       if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
         throw new Error("Workflow has a bound execution; select that identity explicitly");
       }
-      if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks);
+      if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks, config.workflows);
       const definition2 = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
       preflightInstalledWorkflow(definition2, vault);
       ensureInstalledWorkflowRuntime(location);
@@ -9128,7 +9276,7 @@ Canonical complete export format:
   "autoOCExport": {
     "schemaVersion": "1.6.0",
     "exportedAt": "YYYY-MM-DDTHH:mm:ss.sssZ",
-    "pluginVersion": "1.7.2",
+    "pluginVersion": "${PLUGIN_BUILD_VERSION}",
     "name": "Package name",
     "description": "Short description"
   },
@@ -9136,13 +9284,14 @@ Canonical complete export format:
   "workflows": []
 }
 
-For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", or "1.6.0". Exports containing Copilot tasks must use "1.6.0"; other new exports should use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
+For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", "1.6.0", or "1.7.0". Nested workflow packages must use "1.7.0"; Copilot packages without nesting use "1.6.0"; other exports may use "1.5.0". exportedAt must be an exact ISO-8601 UTC timestamp in the form YYYY-MM-DDTHH:mm:ss.sssZ.
 
 Available modules:
-AutoOC supports DAG workflows with three step kinds:
+AutoOC supports DAG workflows with four step kinds:
 1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
 2. code: runs trusted JavaScript with explicitly enabled capabilities. Node vm is not a security boundary.
 3. delay: pauses the workflow.
+4. workflow: runs a referenced workflow to completion, then uses its final output and success/failure for the parent transition. Use workflowExportId pointing to a workflow exportId in the same package (schema 1.7.0). Include every descendant workflow and task. Forward references and repeated child invocations are allowed; recursive cycles, missing references and more than 16 levels are rejected. Child schedules are ignored. Input reaches the first child step; outputs are local to each invocation. Stop/recovery belongs to the parent run; permissions are never inherited or expanded. The WorkFlows editor can select existing workflows as steps. In-app AI draft creators currently generate a single sequential workflow only: add existing workflows manually after generation; do not generate workflow steps for those creators.
 
 Tasks:
 A task is reusable and can be referenced by workflows.
@@ -9341,7 +9490,7 @@ Minimal valid workflow example:
   "autoOCExport": {
     "schemaVersion": "1.5.0",
     "exportedAt": "2026-07-06T00:00:00.000Z",
-    "pluginVersion": "1.7.2",
+    "pluginVersion": "${PLUGIN_BUILD_VERSION}",
     "name": "Example package",
     "description": "Example AutoOC import"
   },
@@ -9433,6 +9582,21 @@ Minimal valid workflow example:
         }
       ]
     }
+  ]
+}
+
+Nested workflow package example (schema 1.7.0):
+{
+  "autoOCExport": {"schemaVersion": "1.7.0", "pluginVersion": "${PLUGIN_BUILD_VERSION}", "exportedAt": "2026-11-05T00:00:00.000Z"},
+  "tasks": [],
+  "workflows": [
+    {"exportId": "parent", "name": "Prepare and reuse", "scheduleType": "manual", "steps": [
+      {"id": "prepare", "stepKind": "code", "code": "output = 'hello';", "transitions": [{"toStepId": "child", "mode": "default"}]},
+      {"id": "child", "stepKind": "workflow", "workflowExportId": "child", "transitions": []}
+    ]},
+    {"exportId": "child", "name": "Format input", "scheduleType": "manual", "steps": [
+      {"id": "format", "stepKind": "code", "code": "output = input.toUpperCase();", "transitions": []}
+    ]}
   ]
 }
 
@@ -9732,7 +9896,7 @@ function toExportTask(task, exportId) {
     workingDirectory: task.workingDirectory
   };
 }
-function toExportWorkflow(workflow, exportId, taskExportIdMap) {
+function toExportWorkflow(workflow, exportId, taskExportIdMap, workflowExportIdMap = /* @__PURE__ */ new Map()) {
   var _a, _b;
   return {
     exportId,
@@ -9760,6 +9924,7 @@ function toExportWorkflow(workflow, exportId, taskExportIdMap) {
         stepKind: step.stepKind || "task",
         name: step.name,
         area: step.area,
+        workflowExportId: step.stepKind === "workflow" ? workflowExportIdMap.get(step.workflowId || "") : void 0,
         taskExportId: step.taskId ? (_a2 = taskExportIdMap.get(step.taskId)) != null ? _a2 : "" : void 0,
         transitionMode: step.transitionMode,
         evaluatePrompt: step.evaluatePrompt,
@@ -10331,11 +10496,16 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   sharedExecution(workflowId, taskId, runId) {
     var _a;
     return [...((_a = this.sharedWorkflowExecutions) == null ? void 0 : _a.values()) || []].find((e) => {
-      var _a2;
-      return (!workflowId || e.workflowId === workflowId) && (!taskId || e.taskId === taskId || ((_a2 = e.checkpoint) == null ? void 0 : _a2.steps.some((s) => {
-        var _a3;
-        return (_a3 = this.settings.workflows.find((w) => w.id === e.workflowId)) == null ? void 0 : _a3.steps.some((step) => step.id === s.stepId && step.taskId === taskId);
-      }))) && (!runId || e.runId === runId);
+      var _a2, _b;
+      if (workflowId && e.workflowId !== workflowId || runId && e.runId !== runId) return false;
+      if (!taskId || e.taskId === taskId) return true;
+      const workflow = this.settings.workflows.find((w) => w.id === e.workflowId);
+      if (!workflow) return false;
+      try {
+        return [workflow, ...workflowClosure(workflow, this.settings.workflows)].some((w) => w.steps.some((step) => step.taskId === taskId && (!step.stepKind || step.stepKind === "task")));
+      } catch (e2) {
+        return ((_b = (_a2 = this.settings.tasks.find((t) => t.id === taskId)) == null ? void 0 : _a2.runtimeExecution) == null ? void 0 : _b.runId) === e.runId;
+      }
     });
   }
   lifecycleTimeout(callback, milliseconds) {
@@ -10969,7 +11139,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     return !!workflow && (!workflow.runtimeExecution || !!workflow.legacyExecution) && workflow.status === "running";
   }
   sharedWorkflowRecoveryMode(workflowId, expectedRunId) {
-    var _a;
+    var _a, _b;
     const workflow = this.settings.workflows.find((item) => item.id === workflowId);
     const execution = workflow == null ? void 0 : workflow.runtimeExecution;
     if (!execution || execution.runId !== expectedRunId) throw new Error("Recovery identity changed; reload the workflow");
@@ -10979,8 +11149,10 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     if (recovered.runtimeExecution.definitionChanged) return "blocked";
     if (!["ready", "in_flight"].includes(checkpoint.phase)) throw new Error("Execution does not require recovery");
     if (checkpoint.phase === "ready") return "resume";
+    const plan = workflowExecutionPlan(prepareWorkflowDefinition(workflow, this.settings.tasks, this.settings));
+    if ((_a = plan.scopes.get(checkpoint.nextStepId)) == null ? void 0 : _a.boundary) return "resume";
     const last = checkpoint.steps[checkpoint.steps.length - 1];
-    if ((_a = last.evaluations) == null ? void 0 : _a.some((item) => item.status === "in_flight")) return "blocked";
+    if ((_b = last.evaluations) == null ? void 0 : _b.some((item) => item.status === "in_flight")) return "blocked";
     return last.result ? "resume" : "reconcile";
   }
   async recoverSharedWorkflow(workflowId, expectedRunId) {
@@ -11046,8 +11218,8 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find((w) => w.id === workflowId);
     if (stepId && selected) selected = selectCodeStep(selected, stepId);
     if (selected) {
-      assertWorkflowDependencies(selected, this.settings.tasks);
-      if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks);
+      assertWorkflowDependencies(selected, this.settings.tasks, this.settings.workflows);
+      if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks, this.settings.workflows);
     }
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
@@ -11274,7 +11446,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   definitionDisabledReason(kind, id) {
     if (kind === "task") return taskDisabledReason(this.settings.tasks.find((item) => item.id === id));
     const workflow = this.settings.workflows.find((item) => item.id === id);
-    return workflow ? workflowDisabledReason(workflow, this.settings.tasks) : void 0;
+    return workflow ? workflowDisabledReason(workflow, this.settings.tasks, this.settings.workflows) : void 0;
   }
   hasUncertainLegacyTask(workflowId) {
     const workflow = this.settings.workflows.find((item) => item.id === workflowId);
@@ -11636,7 +11808,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
             }
             void this.runTask(item);
           } else {
-            assertWorkflowDependencies(item, this.settings.tasks);
+            assertWorkflowDependencies(item, this.settings.tasks, this.settings.workflows);
             const workflowPlayError = this.getMcpWorkflowPlayError(item);
             if (workflowPlayError) return send(workflowPlayError.status, workflowPlayError.body);
             void this.runWorkflow(item);
@@ -13592,7 +13764,7 @@ ${current.output}`;
     return binding ? { kind: "shared", taskId: task.id, runId: binding.runId, workflowId: binding.workflowId, stepId: binding.stepId, stepIndex: binding.stepIndex } : void 0;
   }
   async killTask(id, observed) {
-    var _a, _b, _c, _d, _e, _f;
+    var _a, _b, _c, _d, _e;
     const task = this.settings.tasks.find((item) => item.id === id);
     const registered = (_a = this.legacyAttempts) == null ? void 0 : _a.get(id);
     const attempt = ((_b = task == null ? void 0 : task.legacyExecution) == null ? void 0 : _b.token) === (registered == null ? void 0 : registered.identity.token) ? registered : void 0;
@@ -13643,7 +13815,12 @@ ${current.output}`;
       if (observed && observed.kind !== "shared") throw new Error("Task execution changed or is not owned here");
       const checkpoint = execution == null ? void 0 : execution.checkpoint;
       const active = checkpoint == null ? void 0 : checkpoint.steps[checkpoint.steps.length - 1];
-      const step = (_f = this.settings.workflows.find((workflow) => workflow.id === (observed == null ? void 0 : observed.workflowId))) == null ? void 0 : _f.steps.find((step2) => step2.id === (observed == null ? void 0 : observed.stepId));
+      const ownerWorkflow = this.settings.workflows.find((workflow) => workflow.id === (observed == null ? void 0 : observed.workflowId));
+      let step;
+      try {
+        if (ownerWorkflow) step = workflowExecutionPlan({ workflow: ownerWorkflow, workflows: workflowClosure(ownerWorkflow, this.settings.workflows) }).steps.find((item) => item.id === (observed == null ? void 0 : observed.stepId));
+      } catch (e) {
+      }
       const sameBinding = observed && binding && Object.keys(observed).every((key) => observed[key] === binding[key]);
       const referencesTask = (execution == null ? void 0 : execution.taskId) === id || (step == null ? void 0 : step.taskId) === id && (!step.stepKind || step.stepKind === "task");
       if (!observed || observed.taskId !== id || !observed.runId || !observed.workflowId || !observed.stepId || !Number.isSafeInteger(observed.stepIndex) || !sameBinding || !execution || !checkpoint || !this.ownsSharedRun(observed.workflowId, observed.runId) || checkpoint.runId !== observed.runId || checkpoint.workflowId !== observed.workflowId || checkpoint.phase !== "in_flight" || checkpoint.nextStepId !== observed.stepId || (active == null ? void 0 : active.stepId) !== observed.stepId || active.status !== "in_flight" || checkpoint.steps.length - 1 !== observed.stepIndex || !referencesTask) {
@@ -13716,7 +13893,7 @@ ${current.output}`;
       if (this.bulkCatalogMutationInProgress) return;
       if (this.definitionDisabledReason("workflow", dueWorkflows[i].id)) continue;
       try {
-        assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks);
+        assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks, this.settings.workflows);
       } catch (error) {
         new import_obsidian10.Notice(String(error));
         continue;
@@ -13832,6 +14009,13 @@ ${current.output}`;
     return candidate;
   }
   buildExportJson(tasks, workflows, name, description) {
+    var _a, _b;
+    const included = new Map(workflows.map((workflow) => [workflow.id, workflow]));
+    for (const workflow of workflows) for (const child of workflowClosure(workflow, ((_a = this.settings) == null ? void 0 : _a.workflows) || workflows)) included.set(child.id, child);
+    workflows = [...included.values()];
+    const taskIds = new Set(workflows.flatMap((w) => w.steps.filter((s) => s.stepKind === "task" || !s.stepKind).map((s) => s.taskId)));
+    tasks = [...new Map([...tasks, ...(((_b = this.settings) == null ? void 0 : _b.tasks) || []).filter((t) => taskIds.has(t.id))].map((t) => [t.id, t])).values()];
+    const workflowExportIdMap = new Map(workflows.map((w, i) => [w.id, `wf-${i}`]));
     const taskExportIdMap = /* @__PURE__ */ new Map();
     const exportTasks = tasks.map((t, i) => {
       const exportId = `task-${i}`;
@@ -13839,11 +14023,11 @@ ${current.output}`;
       return toExportTask(t, exportId);
     });
     const exportWorkflows = workflows.map(
-      (w, i) => toExportWorkflow(w, `wf-${i}`, taskExportIdMap)
+      (w, i) => toExportWorkflow(w, `wf-${i}`, taskExportIdMap, workflowExportIdMap)
     );
     const data = {
       autoOCExport: {
-        schemaVersion: tasks.some((task) => task.taskKind === "copilot") ? "1.6.0" : "1.5.0",
+        schemaVersion: workflows.some((w) => w.steps.some((s) => s.stepKind === "workflow")) ? "1.7.0" : tasks.some((task) => task.taskKind === "copilot") ? "1.6.0" : "1.5.0",
         exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
         pluginVersion: this.manifest.version,
         name,
@@ -13865,8 +14049,9 @@ ${current.output}`;
       });
       if (result.canceled || !result.filePath) return;
       fs33.writeFileSync(result.filePath, json, "utf8");
+      const exported = JSON.parse(json);
       new import_obsidian10.Notice(
-        `AutoOC: exported ${tasks.length} task(s) and ${workflows.length} workflow(s).`
+        `AutoOC: exported ${exported.tasks.length} task(s) and ${exported.workflows.length} workflow(s).`
       );
     } catch (e) {
       new import_obsidian10.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
@@ -13874,7 +14059,8 @@ ${current.output}`;
   }
   buildExportSelectionPayload(selectedTaskIds, selectedWorkflowIds) {
     const tasks = this.settings.tasks.filter((t) => selectedTaskIds.has(t.id));
-    const workflows = this.settings.workflows.filter((w) => selectedWorkflowIds.has(w.id));
+    const selected = this.settings.workflows.filter((w) => selectedWorkflowIds.has(w.id));
+    const workflows = [...new Map(selected.flatMap((w) => [w, ...workflowClosure(w, this.settings.workflows)]).map((w) => [w.id, w])).values()];
     const referencedTaskIds = /* @__PURE__ */ new Set();
     for (const wf of workflows) {
       for (const step of wf.steps) {
@@ -13901,7 +14087,7 @@ ${current.output}`;
       throw new Error("Invalid AutoOC export file (missing autoOCExport header).");
     }
     const sv = data.autoOCExport.schemaVersion;
-    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0" && sv !== "1.6.0") {
+    if (sv !== "1.0" && sv !== "1.4.0" && sv !== "1.5.0" && sv !== "1.6.0" && sv !== "1.7.0") {
       throw new Error(`Unsupported AutoOC export schema version: ${sv}.`);
     }
     for (const item of [...data.tasks || [], ...data.workflows || []]) {
@@ -13909,6 +14095,9 @@ ${current.output}`;
       validateDisabled(item);
     }
     for (const workflow of data.workflows || []) for (const step of workflow.steps || []) validateDisabled(step);
+    validateNestedWorkflowExport(data);
+    const importedWorkflowIds = new Map((data.workflows || []).map((w) => [w, generateId()]));
+    const exportIdToWorkflowId = new Map((data.workflows || []).map((w) => [w.exportId, importedWorkflowIds.get(w)]));
     const exportIdToTaskId = /* @__PURE__ */ new Map();
     let tasksImported = 0;
     for (const et of data.tasks || []) {
@@ -13982,6 +14171,7 @@ ${current.output}`;
           requiresAutoOCSecrets: s.requiresAutoOCSecrets,
           name: s.name,
           area: s.area || ew.area || "",
+          workflowId: s.workflowExportId ? exportIdToWorkflowId.get(s.workflowExportId) : void 0,
           taskId: s.taskExportId ? exportIdToTaskId.get(s.taskExportId) : void 0,
           transitionMode: s.transitionMode,
           evaluatePrompt: s.evaluatePrompt,
@@ -14005,7 +14195,7 @@ ${current.output}`;
       applyLegacyLinearTransitions(steps);
       if (steps.length === 0) continue;
       const workflow = {
-        id: generateId(),
+        id: importedWorkflowIds.get(ew),
         requiresAutoOCSecrets: ew.requiresAutoOCSecrets,
         name: this.ensureUniqueWorkflowName(ew.name),
         area: (_l = ew.area) != null ? _l : "",
@@ -14047,8 +14237,8 @@ ${current.output}`;
     return this.withDefinitionStart("workflow", workflow.id, (release) => this.executeWorkflow(workflow, release));
   }
   async executeWorkflow(workflow, releaseStart) {
-    assertWorkflowEnabled(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks);
-    assertWorkflowDependencies(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks);
+    assertWorkflowEnabled(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks, this.settings.workflows);
+    assertWorkflowDependencies(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks, this.settings.workflows);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -14095,6 +14285,7 @@ ${current.output}`;
         return;
       }
     }
+    if (wf.steps.some((step) => step.stepKind === "workflow")) throw new Error("Nested workflows require the shared runtime and compatible task adapters");
     if (this.sharedWorkflowExecution) throw new Error("Shared workflow owns the execution reservation");
     wf.legacyExecution = { token: require("crypto").randomUUID() };
     this.workflowRuntime = this.workflowRuntime || /* @__PURE__ */ new Map();
@@ -14135,7 +14326,7 @@ ${current.output}`;
     const wfIdx = this.settings.workflows.findIndex((w) => w.id === workflowId);
     if (wfIdx === -1) return;
     const wf = this.settings.workflows[wfIdx];
-    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     if (!wf || wf.status !== "running") return;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
@@ -14196,7 +14387,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     var _a, _b;
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
     const wf = this.settings.workflows[wfIdx];
-    if (wf) assertWorkflowDependencies(wf, this.settings.tasks);
+    if (wf) assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     if (!wf || wf.status !== "running") return;
     const step = wf.steps[stepIndex];
     if (!step) {
@@ -14224,7 +14415,7 @@ Reply ONLY with YES or NO.`, model, cwd);
   }
   async runDelayStep(wf, step, stepIndex) {
     var _a;
-    assertWorkflowDependencies(wf, this.settings.tasks);
+    assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     const spec = workflowDelay(step.delayValue, step.delayUnit);
     const ctx = this.workflowRuntime.get(wf.id);
     if (this.stoppingWorkflows.has(wf.id) || wf.status !== "running") return;
@@ -14243,7 +14434,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     }
   }
   async runCodeStep(wf, step, stepIndex) {
-    assertWorkflowDependencies(wf, this.settings.tasks);
+    assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     const ctx = this.workflowRuntime.get(wf.id);
     const inputVar = step.codeInputVar || "input";
     const outputVar = step.codeOutputVar || "output";
@@ -14278,7 +14469,7 @@ Reply ONLY with YES or NO.`, model, cwd);
   }
   async runTaskStep(wf, step, stepIndex) {
     var _a;
-    assertWorkflowDependencies(wf, this.settings.tasks);
+    assertWorkflowDependencies(wf, this.settings.tasks, this.settings.workflows);
     const executionContext = (_a = this.workflowRuntime) == null ? void 0 : _a.get(wf.id);
     const isCurrentExecution = () => {
       var _a2, _b;
@@ -15842,9 +16033,10 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         var _a;
         const area = ((_a = workflow.area) == null ? void 0 : _a.trim()) || "No area";
         const stepText = workflow.steps.map((step) => {
-          var _a2, _b;
+          var _a2, _b, _c;
+          if (step.stepKind === "workflow") return ((_a2 = this.plugin.settings.workflows.find((w) => w.id === step.workflowId)) == null ? void 0 : _a2.name) || "Missing workflow";
           if (step.stepKind === "code") return step.code || "code";
-          if (step.stepKind === "delay") return `${(_a2 = step.delayValue) != null ? _a2 : 5} ${(_b = step.delayUnit) != null ? _b : "minutes"}`;
+          if (step.stepKind === "delay") return `${(_b = step.delayValue) != null ? _b : 5} ${(_c = step.delayUnit) != null ? _c : "minutes"}`;
           const task = this.plugin.settings.tasks.find((candidate) => candidate.id === step.taskId);
           return task ? `${task.name} ${task.prompt} ${task.area || ""}` : "";
         }).join(" ");
@@ -15913,7 +16105,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
   renderWorkflowCard(parent, workflow) {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     try {
-      assertWorkflowDependencies(workflow, this.plugin.settings.tasks);
+      assertWorkflowDependencies(workflow, this.plugin.settings.tasks, this.plugin.settings.workflows);
     } catch (error) {
       parent.createEl("p", { text: String(error), cls: "mod-warning" });
     }
@@ -15995,10 +16187,11 @@ var AutoOCView = class extends import_obsidian10.ItemView {
     }
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
     const stepLabel = (step) => {
-      var _a2, _b2, _c2;
+      var _a2, _b2, _c2, _d2;
       if ((_a2 = step.name) == null ? void 0 : _a2.trim()) return step.name.trim();
+      if (step.stepKind === "workflow") return `Workflow: ${((_b2 = this.plugin.settings.workflows.find((w) => w.id === step.workflowId)) == null ? void 0 : _b2.name) || "Missing workflow"}`;
       if (step.stepKind === "code") return "{ } Code";
-      if (step.stepKind === "delay") return `\u23F1 ${(_b2 = step.delayValue) != null ? _b2 : 5} ${(_c2 = step.delayUnit) != null ? _c2 : "minutes"}`;
+      if (step.stepKind === "delay") return `\u23F1 ${(_c2 = step.delayValue) != null ? _c2 : 5} ${(_d2 = step.delayUnit) != null ? _d2 : "minutes"}`;
       const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
       return t ? t.name : "(deleted task)";
     };
@@ -16058,6 +16251,16 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         });
       }
       if (!task) {
+        if (step.stepKind === "workflow") {
+          stepItem.createDiv("auto-oc-workflow-task-meta").createSpan({ text: "Runs the child workflow before continuing." });
+          const actions2 = stepItem.createDiv("auto-oc-workflow-task-actions");
+          const log = actions2.createEl("button", { text: "\u{1F4C4} Log", cls: "auto-oc-btn-output" });
+          log.disabled = !step.output;
+          log.onclick = (event) => {
+            event.stopPropagation();
+            new TextPreviewModal(this.app, `${stepName} output`, step.output || "").open();
+          };
+        }
         if (step.stepKind === "delay") {
           const stepMeta = stepItem.createDiv("auto-oc-workflow-task-meta");
           stepMeta.createSpan({ text: `Pauses for ${(_g = step.delayValue) != null ? _g : 5} ${(_h = step.delayUnit) != null ? _h : "minutes"}` });
@@ -17157,7 +17360,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
     const guide = contentEl.createDiv("auto-oc-workflow-guide");
     guide.createEl("h4", { text: "How workflows work" });
     const guideList = guide.createEl("ol");
-    guideList.createEl("li", { text: "A workflow has its own schedule. When it runs, it executes the selected tasks in order." });
+    guideList.createEl("li", { text: "A workflow has its own schedule. Steps can run tasks, nested workflows, JavaScript or delays. Nested schedules are ignored; the parent waits for the child result." });
     guideList.createEl("li", { text: "Task schedules are ignored inside a workflow. A task can be reused even if its own schedule is manual, once, daily, weekly, monthly, completed, or pending." });
     guideList.createEl("li", { text: "Each transition controls what happens after a step finishes: continue on success, force continue, or ask AI to decide." });
     guideList.createEl("li", { text: "AI decides sends the previous task output plus your transition prompt to OpenCode. It must answer YES to continue; any NO/unclear answer stops the workflow." });
@@ -17311,7 +17514,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
     this.renderStepsList(stepsContainer);
     new import_obsidian10.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
-        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B;
+        var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
           new import_obsidian10.Notice("Name is required.");
           return;
@@ -17343,7 +17546,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
             name: ((_b2 = src.name) == null ? void 0 : _b2.trim()) || void 0,
             area: ((_c2 = src.area) == null ? void 0 : _c2.trim()) || workflowArea,
             transitions: [],
-            position: { x: 60 + idx * 280, y: 60 },
+            position: src.position || { x: 60 + idx * 280, y: 60 },
             transitionMode: config.transitionMode || "default",
             evaluatePrompt: config.evaluatePrompt,
             forceContinue: config.forceContinue
@@ -17358,6 +17561,13 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
             forceContinue: steps[i].forceContinue
           }];
         }
+        const candidate = { ...this.draft, id: ((_e = this.editWorkflow) == null ? void 0 : _e.id) || this.draft.id || "@draft", steps };
+        try {
+          workflowClosure(candidate, [...this.plugin.settings.workflows.filter((w) => w.id !== candidate.id), candidate]);
+        } catch (error) {
+          new import_obsidian10.Notice(error.message);
+          return;
+        }
         let updatedWorkflow = null;
         let areaChanged = false;
         if (this.editWorkflow) {
@@ -17366,51 +17576,51 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
           );
           if (idx !== -1) {
             const existing = this.plugin.settings.workflows[idx];
-            const previousArea = ((_e = existing.area) == null ? void 0 : _e.trim()) || "";
+            const previousArea = ((_f = existing.area) == null ? void 0 : _f.trim()) || "";
             this.plugin.settings.workflows[idx] = {
               ...this.editWorkflow,
               disabled: existing.disabled,
               concurrency: this.draft.concurrency,
               name: this.draft.name,
-              area: (_f = this.draft.area) != null ? _f : "",
+              area: (_g = this.draft.area) != null ? _g : "",
               description: this.draft.description,
               steps,
-              handoffBranch: (_g = this.draft.handoffBranch) != null ? _g : false,
-              handoffOutput: (_h = this.draft.handoffOutput) != null ? _h : false,
+              handoffBranch: (_h = this.draft.handoffBranch) != null ? _h : false,
+              handoffOutput: (_i = this.draft.handoffOutput) != null ? _i : false,
               status: existing.status,
               currentStep: existing.currentStep,
               lastRun: existing.lastRun,
-              scheduleType: (_i = this.draft.scheduleType) != null ? _i : "manual",
-              scheduleTime: (_j = this.draft.scheduleTime) != null ? _j : nowTimeString(),
-              scheduleDate: (_k = this.draft.scheduleDate) != null ? _k : "",
-              scheduleDays: (_l = this.draft.scheduleDays) != null ? _l : [],
-              scheduleMonthDays: (_m = this.draft.scheduleMonthDays) != null ? _m : [],
-              scheduleIntervalValue: (_n = this.draft.scheduleIntervalValue) != null ? _n : 10,
-              scheduleIntervalUnit: (_o = this.draft.scheduleIntervalUnit) != null ? _o : "minutes"
+              scheduleType: (_j = this.draft.scheduleType) != null ? _j : "manual",
+              scheduleTime: (_k = this.draft.scheduleTime) != null ? _k : nowTimeString(),
+              scheduleDate: (_l = this.draft.scheduleDate) != null ? _l : "",
+              scheduleDays: (_m = this.draft.scheduleDays) != null ? _m : [],
+              scheduleMonthDays: (_n = this.draft.scheduleMonthDays) != null ? _n : [],
+              scheduleIntervalValue: (_o = this.draft.scheduleIntervalValue) != null ? _o : 10,
+              scheduleIntervalUnit: (_p = this.draft.scheduleIntervalUnit) != null ? _p : "minutes"
             };
             updatedWorkflow = this.plugin.settings.workflows[idx];
-            areaChanged = previousArea !== (((_p = updatedWorkflow.area) == null ? void 0 : _p.trim()) || "");
+            areaChanged = previousArea !== (((_q = updatedWorkflow.area) == null ? void 0 : _q.trim()) || "");
           }
         } else {
           const workflow = {
             id: generateId(),
             concurrency: this.draft.concurrency,
             name: this.draft.name,
-            area: (_q = this.draft.area) != null ? _q : "",
-            description: (_r = this.draft.description) != null ? _r : "",
+            area: (_r = this.draft.area) != null ? _r : "",
+            description: (_s = this.draft.description) != null ? _s : "",
             steps,
             status: "pending",
             currentStep: -1,
             createdAt: (/* @__PURE__ */ new Date()).toISOString(),
-            handoffBranch: (_s = this.draft.handoffBranch) != null ? _s : false,
-            handoffOutput: (_t = this.draft.handoffOutput) != null ? _t : false,
-            scheduleType: (_u = this.draft.scheduleType) != null ? _u : "manual",
-            scheduleTime: (_v = this.draft.scheduleTime) != null ? _v : nowTimeString(),
-            scheduleDate: (_w = this.draft.scheduleDate) != null ? _w : todayString(),
-            scheduleDays: (_x = this.draft.scheduleDays) != null ? _x : [],
-            scheduleMonthDays: (_y = this.draft.scheduleMonthDays) != null ? _y : [],
-            scheduleIntervalValue: (_z = this.draft.scheduleIntervalValue) != null ? _z : 10,
-            scheduleIntervalUnit: (_A = this.draft.scheduleIntervalUnit) != null ? _A : "minutes"
+            handoffBranch: (_t = this.draft.handoffBranch) != null ? _t : false,
+            handoffOutput: (_u = this.draft.handoffOutput) != null ? _u : false,
+            scheduleType: (_v = this.draft.scheduleType) != null ? _v : "manual",
+            scheduleTime: (_w = this.draft.scheduleTime) != null ? _w : nowTimeString(),
+            scheduleDate: (_x = this.draft.scheduleDate) != null ? _x : todayString(),
+            scheduleDays: (_y = this.draft.scheduleDays) != null ? _y : [],
+            scheduleMonthDays: (_z = this.draft.scheduleMonthDays) != null ? _z : [],
+            scheduleIntervalValue: (_A = this.draft.scheduleIntervalValue) != null ? _A : 10,
+            scheduleIntervalUnit: (_B = this.draft.scheduleIntervalUnit) != null ? _B : "minutes"
           };
           if (this.generatedDraft) {
             if (this.savingGeneratedDraft) return;
@@ -17432,7 +17642,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
         }
         await this.plugin.saveSettings(!this.editWorkflow);
         if (updatedWorkflow) {
-          if (areaChanged) (_B = this.plugin.view) == null ? void 0 : _B.render();
+          if (areaChanged) (_C = this.plugin.view) == null ? void 0 : _C.render();
           this.plugin.emitWorkflowUpdated(updatedWorkflow);
         }
         new import_obsidian10.Notice(`Workflow "${this.draft.name}" saved.`);
@@ -17446,18 +17656,19 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
     return this.defaultWorkflowStepName(step);
   }
   defaultWorkflowStepName(step, index) {
-    var _a, _b;
+    var _a, _b, _c;
+    if (step.stepKind === "workflow") return `Workflow: ${((_a = this.plugin.settings.workflows.find((w) => w.id === step.workflowId)) == null ? void 0 : _a.name) || "Missing workflow"}`;
     if (step.stepKind === "code") return "{ } Code";
-    if (step.stepKind === "delay") return `\u23F1 ${(_a = step.delayValue) != null ? _a : 5} ${(_b = step.delayUnit) != null ? _b : "minutes"}`;
+    if (step.stepKind === "delay") return `\u23F1 ${(_b = step.delayValue) != null ? _b : 5} ${(_c = step.delayUnit) != null ? _c : "minutes"}`;
     const task = this.availableTasks().find((t) => t.id === step.taskId);
     return task ? `${(task.taskKind || "opencode") === "code" ? "{ }" : "\u{1F4CC}"} ${task.name}` : "\u274C Deleted task";
   }
   renderStepsList(container) {
-    var _a, _b, _c, _d, _e;
+    var _a, _b, _c, _d, _e, _f;
     container.empty();
     if (this.selectedSteps.length === 0) {
       container.createEl("p", {
-        text: "No steps added yet. Add a task, code, or delay step below.",
+        text: "No steps added yet. Add a task, workflow, code, or delay step below.",
         cls: "auto-oc-empty"
       });
     }
@@ -17518,6 +17729,17 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(((_a2 = this.draft.area) == null ? void 0 : _a2.trim()) || "No area").setValue(step.area || this.draft.area || "").onChange((v) => step.area = v.trim());
       });
+      if (step.stepKind === "workflow") {
+        new import_obsidian10.Setting(stepEl).setName("Workflow").setDesc("Runs to completion before continuing. Its schedule is ignored; permissions stay unchanged.").addDropdown((dd) => {
+          var _a2;
+          dd.addOption("", "Select a workflow");
+          for (const child of this.plugin.settings.workflows) if (child.id !== ((_a2 = this.editWorkflow) == null ? void 0 : _a2.id)) dd.addOption(child.id, child.name);
+          if (step.workflowId && !this.plugin.settings.workflows.some((w) => w.id === step.workflowId)) dd.addOption(step.workflowId, "Missing workflow");
+          dd.setValue(step.workflowId || "").onChange((value) => {
+            step.workflowId = value;
+          });
+        });
+      }
       if (step.stepKind === "code") {
         const initialCode = step.code || "";
         new import_obsidian10.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
@@ -17780,6 +18002,26 @@ Reply ONLY with YES or NO.`;
         }
       };
     }
+    const workflowSelect = addDiv.createEl("select", { cls: "auto-oc-status-select" });
+    workflowSelect.createEl("option", { text: "-- Add existing workflow --" }).value = "";
+    for (const child of this.plugin.settings.workflows) {
+      if (child.id === ((_f = this.editWorkflow) == null ? void 0 : _f.id)) continue;
+      try {
+        if (workflowClosure(child, this.plugin.settings.workflows).some((w) => {
+          var _a2;
+          return w.id === ((_a2 = this.editWorkflow) == null ? void 0 : _a2.id);
+        })) continue;
+      } catch (e) {
+        continue;
+      }
+      workflowSelect.createEl("option", { text: child.name }).value = child.id;
+    }
+    const addWorkflow = addDiv.createEl("button", { text: "Add Workflow Step", cls: "auto-oc-btn-secondary" });
+    addWorkflow.onclick = () => {
+      if (!workflowSelect.value) return;
+      this.selectedSteps.push({ id: generateId(), stepKind: "workflow", workflowId: workflowSelect.value, transitions: [] });
+      this.renderStepsList(container);
+    };
     const btnCode = addDiv.createEl("button", {
       text: "\u2795 Add Code Step",
       cls: "auto-oc-btn-secondary"
@@ -17926,10 +18168,11 @@ var ExportModal = class extends import_obsidian10.Modal {
         };
         label.createSpan({ text: ` ${wf.name}` });
         const stepNames = wf.steps.map((s) => {
-          var _a, _b, _c, _d;
+          var _a, _b, _c, _d, _e;
+          if (s.stepKind === "workflow") return `Workflow: ${((_a = this.plugin.settings.workflows.find((w) => w.id === s.workflowId)) == null ? void 0 : _a.name) || "Missing workflow"}`;
           if (s.stepKind === "code") return "{ } Code";
-          if (s.stepKind === "delay") return `\u23F1 ${(_a = s.delayValue) != null ? _a : 5} ${(_b = s.delayUnit) != null ? _b : "minutes"}`;
-          return (_d = (_c = this.plugin.settings.tasks.find((t) => t.id === s.taskId)) == null ? void 0 : _c.name) != null ? _d : "?";
+          if (s.stepKind === "delay") return `\u23F1 ${(_b = s.delayValue) != null ? _b : 5} ${(_c = s.delayUnit) != null ? _c : "minutes"}`;
+          return (_e = (_d = this.plugin.settings.tasks.find((t) => t.id === s.taskId)) == null ? void 0 : _d.name) != null ? _e : "?";
         }).join(" \u2192 ");
         label.title = wf.description ? `${wf.description}
 ${stepNames}` : stepNames;
@@ -17951,7 +18194,7 @@ ${stepNames}` : stepNames;
         (t) => this.selectedTaskIds.has(t.id)
       ).length;
       const autoTasks = payload.tasks.length - explicitTasks;
-      summary.textContent = `Will export ${explicitTasks} selected task(s)` + (autoTasks > 0 ? ` + ${autoTasks} task(s) required by workflows` : "") + ` and ${payload.workflows.length} selected workflow(s).`;
+      summary.textContent = `Will export ${explicitTasks} selected task(s)` + (autoTasks > 0 ? ` + ${autoTasks} task(s) required by workflows` : "") + ` and ${payload.workflows.length} workflow(s), including dependencies.`;
     };
     updateSummary();
     const btnRow = contentEl.createDiv("auto-oc-export-actions");
@@ -18371,7 +18614,7 @@ var ImportModal = class extends import_obsidian10.Modal {
       return { ok: false, errors: ["Missing `autoOCExport` header at the root of the JSON."], warnings: [] };
     }
     const sv = data.autoOCExport.schemaVersion;
-    const SUPPORTED = ["1.0", "1.4.0", "1.5.0", "1.6.0"];
+    const SUPPORTED = ["1.0", "1.4.0", "1.5.0", "1.6.0", "1.7.0"];
     if (!sv) {
       errors.push("`autoOCExport.schemaVersion` is missing. Expected one of: " + SUPPORTED.join(", "));
     } else if (!SUPPORTED.includes(sv)) {
@@ -18450,6 +18693,11 @@ var ImportModal = class extends import_obsidian10.Modal {
         }
       });
     }
+    try {
+      validateNestedWorkflowExport(data);
+    } catch (error) {
+      errors.push(error.message);
+    }
     if (Array.isArray(data.workflows)) {
       data.workflows.forEach((w, wi) => {
         const wwhere = "workflow[" + wi + "]";
@@ -18486,8 +18734,8 @@ var ImportModal = class extends import_obsidian10.Modal {
             return;
           }
           const kind = s.stepKind || "task";
-          if (!["task", "delay", "code"].includes(kind)) {
-            errors.push(swhere + '.stepKind "' + kind + '" is invalid. Expected: task, delay, or code.');
+          if (!["task", "delay", "code", "workflow"].includes(kind)) {
+            errors.push(swhere + '.stepKind "' + kind + '" is invalid. Expected: task, workflow, delay, or code.');
           }
           if (kind === "task") {
             if (typeof s.taskExportId !== "string" || !s.taskExportId.trim()) {

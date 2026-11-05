@@ -5,6 +5,12 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Workflows anidados (candidato de desarrollo)
+
+Comprobar `version.nestedWorkflows: 1` y la capacidad del propietario cargado antes de atribuir este contrato a una instalación. Un paso `workflow` referencia `workflowId` en el catálogo; un paquete importable usa `workflowExportId` y esquema `1.7.0`, incluyendo los descendientes y sus tareas. El editor WorkFlows permite seleccionar hijos existentes; `edit-workflow` mantiene su alcance de edición de texto y no permite crear referencias estructurales.
+
+Ejecutar, detener, reanudar o reconciliar mediante el ID del padre y su `runId`. Todo el árbol comparte journal y reserva; no lanzar al hijo separadamente para continuar un padre. La programación del hijo no se utiliza en esta invocación. Su primera entrada es la salida previa del padre, sus `outputs` son locales a la invocación y su última salida/estado alimentan la transición del padre. Se conservan el historial independiente del hijo, las identidades de tareas internas y la prohibición de repetir efectos inciertos. Una modificación de descendientes cambia el hash del padre. Se rechazan ciclos, referencias ausentes o ambiguas, más de 16 niveles y planes de más de 10.000 pasos internos. Desactivación y dependencias se validan recursivamente; los permisos Code no se amplían. Estas fuentes no acreditan instalación ni publicación.
+
 ## Recuperación directa en la interfaz (candidato 1.7.18)
 
 `Resolve blocked executions` está disponible en el panel de consulta, ajustes y paleta, además de las tarjetas bloqueadas. Revisa tanto intentos vinculados como antiguos. `Reconnect execution controls` conserva los intentos y no reanuda tareas. `Reset this attempt…` cierra únicamente el intento observado mediante abandono/disposición oficial, con motivo y confirmación de que el trabajo externo terminó y de que sus efectos no verificados siguen desconocidos. Conserva historial, resultados y definiciones; un `Run` posterior es trabajo nuevo que puede repetir efectos.

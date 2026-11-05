@@ -82,7 +82,7 @@ export async function runInstalledWorkflow(options: {
   if (matches[0].runtimeExecution && matches[0].runtimeExecution.runId !== options.resumeRunId && !options.newExecution) {
     throw new Error("Workflow has a bound execution; select that identity explicitly");
   }
-  if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks);
+  if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks, config.workflows);
   const definition = prepareWorkflowDefinition(virtual || matches[0],config.tasks,config);
   preflightInstalledWorkflow(definition,vault);
   ensureInstalledWorkflowRuntime(location);

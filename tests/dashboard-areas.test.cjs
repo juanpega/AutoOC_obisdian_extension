@@ -84,6 +84,72 @@ test('search finds workflow steps, attention excludes healthy items, disabled it
   state.attentionOnly=false;state.query='SPECIAL';assert.deepEqual(Array.from(h.dashboardVisibleItems(items,state),i=>i.id),['w']);
 });
 
+test('Dashboard type buttons filter their areas, include Code tasks and preserve focus and choice across updates',()=>{
+  const h=harness(),root=new h.Element(),state=h.createAreaDashboardState();
+  const tasks=[task('a'),task('code',{taskKind:'code',area:'Operations'}),task('off',{disabled:true,area:''})];
+  const workflows=[flow('parent',[{id:'nested',stepKind:'workflow',workflowId:'child'},code('inline')]),flow('child',[],{area:'Marketing'})];
+  const before=JSON.stringify([tasks,workflows]);
+  const dashboard=new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,workflows),diameter:()=>32,open(){},log(){},history(){}});
+  const filter=kind=>root.all().find(el=>el.attrs['data-area-kind-filter']===kind);
+  const nodes=()=>root.all().filter(el=>el.classes.has('auto-oc-area-node'));
+  const areas=()=>root.all().filter(el=>el.classes.has('auto-oc-area-group')).map(el=>el.children[0].children[0].textContent);
+  const ids=()=>nodes().map(el=>JSON.parse(el.attrs['data-area-item-key'])[1]).sort();
+  assert.equal(filter('all').attrs['aria-pressed'],'true');
+  assert.deepEqual(ids(),['a','child','code','parent']);
+  assert.equal(filter('task').children[0].textContent,'3');
+  filter('workflow').onclick();
+  assert.deepEqual(ids(),['child','parent']);assert.deepEqual(areas(),['Engineering','Marketing']);
+  root.all().find(el=>el.classes.has('auto-oc-area-step')).onclick();
+  assert.equal(JSON.parse(state.selected)[0],'step');
+  const tasksButton=filter('task');tasksButton.focus();tasksButton.onclick();
+  assert.deepEqual(ids(),['a','code']);assert.deepEqual(areas(),['Engineering','Operations']);
+  assert.equal(JSON.parse(state.selected)[0],'task');
+  assert.equal(root.all().filter(el=>el.classes.has('auto-oc-area-step')).length,0);
+  assert.equal(tasksButton.attrs['aria-pressed'],'true');assert.equal(filter('workflow').attrs['aria-pressed'],'false');
+  assert.equal(h.doc.activeElement,tasksButton);assert.equal(JSON.stringify([tasks,workflows]),before);
+  const operations=root.all().find(el=>el.classes.has('auto-oc-area-group')&&el.children[0].children[0].textContent==='Operations');
+  operations.open=false;operations.ontoggle();
+  filter('workflow').onclick();filter('task').onclick();
+  assert.ok(state.collapsed.has('Operations'));assert.deepEqual(ids(),['a']);
+  tasks[0].status='running';dashboard.update();
+  assert.equal(filter('task'),tasksButton);assert.equal(h.doc.activeElement,tasksButton);
+  assert.equal(state.kindFilter,'task');assert.deepEqual(areas(),['Engineering','Operations']);
+  assert.deepEqual(ids(),['a']);
+  filter('all').onclick();assert.deepEqual(ids(),['a','child','parent']);
+  assert.equal(filter('all').attrs['aria-pressed'],'true');assert.equal(filter('task').attrs['aria-pressed'],'false');
+  const reopened=new h.Element();
+  state.kindFilter='workflow';
+  new h.AreaDashboard(reopened,state,{items:()=>h.dashboardItems(tasks,workflows),diameter:()=>32,open(){},log(){},history(){}});
+  assert.equal(reopened.all().find(el=>el.attrs['data-area-kind-filter']==='workflow').attrs['aria-pressed'],'true');
+  assert.equal(reopened.all().filter(el=>el.classes.has('auto-oc-area-node')).length,2);
+});
+
+test('Dashboard type filters combine with search, attention and disabled toggles and clear hidden details',()=>{
+  const h=harness(),root=new h.Element(),state=h.createAreaDashboardState();
+  const tasks=[task('code',{taskKind:'code',name:'Needle Code',status:'failed'}),task('off',{disabled:true,name:'Needle off',status:'failed'}),task('ready',{name:'Needle ready'})];
+  const workflows=[flow('w',[code('needle')],{status:'failed'}),flow('off',[code('needle')],{disabled:true,status:'failed'})];
+  new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,workflows),diameter:()=>32,open(){},log(){},history(){}});
+  const filter=kind=>root.all().find(el=>el.attrs['data-area-kind-filter']===kind);
+  const ids=()=>root.all().filter(el=>el.classes.has('auto-oc-area-node')).map(el=>JSON.parse(el.attrs['data-area-item-key'])[1]).sort();
+  const toggle=(label,checked)=>{
+    const wrapper=root.all().find(el=>el.tag==='label'&&el.children.some(child=>child.textContent===label));
+    const input=wrapper.children.find(el=>el.tag==='input');input.checked=checked;input.onchange();
+  };
+  const search=root.all().find(el=>el.attrs['aria-label']==='Search Dashboard');
+  search.value='NEEDLE';search.oninput();toggle('Needs attention',true);
+  filter('workflow').onclick();assert.deepEqual(ids(),['w']);
+  toggle('Show disabled',true);assert.deepEqual(ids(),['off','w']);
+  filter('task').onclick();assert.deepEqual(ids(),['code','off']);
+  assert.equal(search.value,'NEEDLE');assert.equal(state.attentionOnly,true);
+  toggle('Show disabled',false);assert.deepEqual(ids(),['code']);
+  search.value='missing';search.oninput();assert.deepEqual(ids(),[]);assert.equal(state.selected,undefined);
+  assert.ok(!root.all().some(el=>el.classes.has('auto-oc-area-group')));
+  const inspector=root.all().find(el=>el.classes.has('auto-oc-areas-inspector'));
+  assert.ok(!inspector.all().some(el=>el.tag==='h3'||el.tag==='button'));
+  assert.equal(filter('task').attrs['aria-pressed'],'true');assert.equal(filter('task').children[0].textContent,'3');
+  search.value='';search.oninput();filter('all').onclick();assert.deepEqual(ids(),['code','w']);
+});
+
 test('area Dashboard renders bounded Code detail, keeps toolbar, selection, focus and collapse across events without writes',()=>{
   const h=harness(),root=new h.Element(),state=h.createAreaDashboardState(),tasks=[task('a')];
   const wf=flow('w',Array.from({length:120},(_,i)=>code(String(i))));

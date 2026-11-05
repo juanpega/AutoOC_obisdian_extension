@@ -15,6 +15,8 @@ mod._compile(fs.readFileSync(file,'utf8')+'\nmodule.exports.internals={LegacyOut
 const Plugin=mod.exports.default,{LegacyOutputRedaction,CreateTaskModal,CreateWorkflowModal,toExportTask,toExportWorkflow}=mod.exports.internals;
 function sourceModule(name){
   const filename=path.join(root,name),m=new Module(filename,module);m.filename=filename;m.paths=Module._nodeModulePaths(root);
+  const original=m.require.bind(m);
+  m.require=id=>id.startsWith('./') && fs.existsSync(path.join(root,id+'.ts')) ? sourceModule(id+'.ts') : original(id);
   m._compile(transformSync(fs.readFileSync(filename,'utf8'),{loader:'ts',format:'cjs'}).code,filename);return m.exports;
 }
 const {assertWorkflowDependencies}=sourceModule('retired-dependency.ts');
