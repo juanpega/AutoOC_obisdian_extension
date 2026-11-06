@@ -23,13 +23,13 @@ function harness(overrides = {}) {
     setButtonText(value) { this.buttonEl.textContent = value; return this; }
     setDisabled(value) { this.buttonEl.disabled = value; return this; }
     addOption(value, label) { const option=this.selectEl.createEl('option',{text:label});option.value=value;return this; }
-    setCta() { return this; } setPlaceholder() { return this; } addOptions() { return this; } setTooltip() { return this; }
+    setCta() { return this; } setWarning() { return this; } setPlaceholder() { return this; } addOptions() { return this; } setTooltip() { return this; }
     onChange(callback) { this.inputEl.change = callback; return this; }
     onClick(callback) { this.buttonEl.onclick = callback; return this; }
   }
   class Setting {
     constructor(parent) { this.settingEl = parent.createDiv(); this.controlEl = this.settingEl; this.infoEl = this.settingEl; }
-    setName(name) { this.settingEl.name = name; return this; } setDesc() { return this; } setHeading() { return this; }
+    setName(name) { this.settingEl.name = name; return this; } setDesc(desc) { this.settingEl.desc = desc; return this; } setHeading() { return this; }
     add(tag, callback) { callback(new Control(this.settingEl.createEl(tag))); return this; }
     addTextArea(cb) { return this.add('textarea', cb); } addText(cb) { return this.add('input', cb); }
     addDropdown(cb) { return this.add('select', cb); } addToggle(cb) { return this.add('input', cb); }
@@ -42,7 +42,7 @@ function harness(overrides = {}) {
     Modal: class { constructor(app) { this.app = app; this.contentEl = new Element(); } open() { opened.push(this); this.onOpen(); } close() { this.onClose(); } },
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') +
-    '\nmodule.exports.draftTest = {AiDraftModal, CreateTaskModal, CreateWorkflowModal, buildDraftPrompt, parseGeneratedDraft, saveGeneratedDefinition, generateDraftText, toExportTask, AUTOOC_WORKFLOW_PROMPT, openAiDraft: AutoOCPlugin.prototype.openAiDraft};',
+    '\nmodule.exports.draftTest = {AiDraftModal, CreateTaskModal, CreateWorkflowModal, AutoOCSettingTab, buildDraftPrompt, parseGeneratedDraft, saveGeneratedDefinition, generateDraftText, toExportTask, AUTOOC_WORKFLOW_PROMPT, openAiDraft: AutoOCPlugin.prototype.openAiDraft};',
     { module, exports: module.exports, require: id => id === 'obsidian' ? obsidian : overrides[id] || require(id),
       process: overrides.process || process, Buffer, console, setTimeout, clearTimeout, setInterval, clearInterval, AbortController,
       window: { setTimeout, clearTimeout }, document: { createTextNode: text => new Element({ text }) } });
@@ -262,6 +262,7 @@ test('the actual shipped creator prompt contains a valid example for each engine
     const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,version);
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
     assert.match(prompt,/Do not include model IDs in the JSON/);
+    assert.match(prompt,/OpenCode 2 drafts use the configured default agent/);
     assert.match(prompt,/add existing workflows as steps in the editor|add existing workflows manually/);
     const example=prompt.split('CREATOR EXAMPLE (replace its content with the requested objective):\n')[1].split('\n\nThe following JSON string')[0];
     assert.equal(JSON.parse(example).autoOCExport.pluginVersion,version);
@@ -350,6 +351,122 @@ test('OpenCode 2 drafts remain editable and preserve their version and defaults 
   editor.open();assert.equal(editor.draft.taskKind,'opencode2');editor.draft.name='Reviewed v2 task';
   const save=editor.contentEl.all().find(el=>el.tag==='button'&&/Save|Apply/.test(el.textContent));
   await save.onclick();assert.equal(h.plugin.settings.tasks[0].taskKind,'opencode2');assert.equal(h.plugin.settings.tasks[0].model,'provider/v2');
+});
+
+test('OpenCode 2 pickers share Settings choices with tasks and use the current project for refresh', async () => {
+  const commands = [];
+  const h = harness({child_process: {...require('node:child_process'), execFile(bin, args, options, callback) {
+    assert.equal(bin, process.execPath);
+    const command = args.join(' ');
+    if (command === '--version') return callback(null, 'opencode v2.0.21');
+    commands.push([command, options.cwd]);
+    if (command === 'models') return callback(null, 'provider/listed\r\nprovider/listed\r\n');
+    assert.equal(command, 'debug agents');
+    callback(null, JSON.stringify([
+      {id:'review', name:'Project reviewer', mode:'primary'}, {id:'helper', mode:'subagent'}, {id:'summary', hidden:true}
+    ]));
+  }}});
+  Object.assign(h.plugin.settings, {defaultAiEngine:'opencode', defaultModel:'legacy/model', opencodePath:'wrong-version-1', opencode2Path:process.execPath,
+    defaultOpencode2Model:'provider/custom', workingDirectory:'/default-project'});
+  const row = (root, name) => root.all().find(el => el.name === name);
+  const control = (root, name, tag) => row(root, name).children.find(el => el.tag === tag);
+  const values = select => select.children.map(el => el.value);
+  const settings = new h.AutoOCSettingTab(h.plugin.app, h.plugin);
+  settings.containerEl = new h.Element();
+  h.plugin.isRalphLoopEnabled = () => false;
+  settings.display();
+  const settingsRoot = settings.containerEl;
+  const labels = settingsRoot.children.map(el => el.name || el.textContent);
+  const engineRow = labels.indexOf('Default AI engine');
+  assert.ok(engineRow >= 0);
+  assert.deepEqual(labels.slice(engineRow + 1, engineRow + 3), ['OpenCode 2 task defaults', 'Default OpenCode 2 model']);
+  assert.ok(control(settingsRoot, 'Default OpenCode 1 model', 'select'));
+  await control(settingsRoot, 'Default OpenCode 2 model', 'button').onclick();
+  assert.deepEqual(values(control(settingsRoot, 'Default OpenCode 2 model', 'select')), ['provider/listed','provider/custom','']);
+  assert.equal(h.writes(), 0);
+  control(settingsRoot, 'Default OpenCode 2 model', 'select').change('provider/listed');
+  assert.equal(h.writes(), 1);
+  assert.equal(h.plugin.settings.defaultOpencode2Model, 'provider/listed');
+  assert.equal(h.plugin.settings.defaultModel, 'legacy/model');
+  await control(settingsRoot, 'Default AI engine', 'select').change('opencode2');
+  settings.display();
+  assert.equal(control(settingsRoot, 'Default OpenCode 2 model', 'select').value, 'provider/listed');
+  const editor = new h.CreateTaskModal(h.plugin.app, h.plugin);
+  editor.open();
+  assert.deepEqual(values(control(editor.contentEl, 'OpenCode 2 model', 'select')), ['provider/listed','']);
+  control(editor.contentEl, 'Project Path', 'input').change('/another-project');
+  await h.button(editor, 'Refresh Agents').onclick();
+  const agents = control(editor.contentEl, 'OpenCode 2 agent', 'select');
+  assert.deepEqual(values(agents), ['review','build','']);
+  assert.equal(agents.children[0].textContent, 'Project reviewer');
+  agents.change('review');
+  control(editor.contentEl, 'Task type', 'select').change('cli2');
+  assert.equal(editor.draft.agent, 'review');
+  assert.equal(editor.draft.interactiveTerminal, true);
+  const model = control(editor.contentEl, 'OpenCode 2 model', 'select');
+  model.change('');
+  control(editor.contentEl, 'OpenCode 2 model', 'input').change('provider/manual');
+  await h.button(editor, 'Refresh Models').onclick();
+  assert.equal(model.value, 'provider/manual');
+  editor.draft.name = 'Picker test';
+  editor.draft.prompt = 'Synthetic';
+  await h.button(editor, 'Create Task').onclick();
+  assert.equal(h.plugin.settings.tasks[0].model, 'provider/manual');
+  assert.equal(h.plugin.settings.tasks[0].agent, 'review');
+  assert.deepEqual(commands, [
+    ['models','/default-project'], ['models','/default-project'],
+    ['debug agents','/another-project'], ['debug agents','/another-project'],
+    ['models','/another-project'], ['models','/another-project']
+  ]);
+});
+
+test('wrong CLI or malformed agent output leaves a saved OpenCode 2 selection intact', async () => {
+  let version = '1.19.0';
+  const discovery = [];
+  const h = harness({child_process:{...require('node:child_process'), execFile(_bin, args, _options, callback) {
+    if (args[0] === '--version') return callback(null, version);
+    discovery.push(args.join(' '));
+    callback(null, '{invalid');
+  }}});
+  h.plugin.settings.opencode2Path = process.execPath;
+  const editor = new h.CreateTaskModal(h.plugin.app, h.plugin, {...task(),taskKind:'opencode2',agent:'saved',model:'provider/saved'});
+  editor.open();
+  const row = editor.contentEl.all().find(el => el.name === 'OpenCode 2 agent');
+  await h.button(editor,'Refresh Agents').onclick();
+  assert.match(row.desc,/requires version 2/);
+  assert.deepEqual(discovery,[]);
+  version = '2.0.21';
+  await h.button(editor,'Refresh Agents').onclick();
+  assert.match(row.desc,/Could not read OpenCode 2 agents/);
+  assert.deepEqual(discovery,['debug agents']);
+  assert.equal(editor.draft.agent,'saved');
+  assert.equal(editor.draft.model,'provider/saved');
+  assert.equal(h.writes(),0);
+});
+
+test('a cold OpenCode 2 catalog settles after built-ins load and stays in its original folder', async () => {
+  let calls = 0;
+  let started;
+  const first = new Promise(resolve => { started = resolve; });
+  const h = harness({child_process:{...require('node:child_process'), execFile(_bin, args, _options, callback) {
+    if (args[0] === '--version') return callback(null, '2.0.21');
+    calls++;
+    started();
+    const builtIn = {id:'build',mode:'primary'};
+    callback(null, JSON.stringify(calls === 1 ? [] : calls === 2 ? [builtIn] : [builtIn,{id:'first-project',mode:'primary'}]));
+  }}});
+  Object.assign(h.plugin.settings,{defaultAiEngine:'opencode2',opencode2Path:process.execPath,workingDirectory:'/first'});
+  const editor = new h.CreateTaskModal(h.plugin.app,h.plugin);
+  editor.open();
+  const refresh = h.button(editor,'Refresh Agents').onclick();
+  await first;
+  editor.contentEl.all().find(el => el.name === 'Project Path').children[0].change('/second');
+  await refresh;
+  const agents = editor.contentEl.all().find(el => el.name === 'OpenCode 2 agent').children[0];
+  assert.deepEqual(agents.children.map(el => el.value), ['build','']);
+  assert.deepEqual(Array.from(h.plugin.openCode2Catalog.choices(process.execPath,'/first','agents'), a => a.value), ['build','first-project']);
+  assert.equal(calls,4);
+  assert.equal(h.writes(),0);
 });
 
 test('OpenCode 2 import/export preserves the selected harness and uses only its model default',async()=>{

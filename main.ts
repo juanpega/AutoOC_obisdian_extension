@@ -26,6 +26,8 @@ import {applyWorkflowEdit} from "./workflow-edit";
 import { buildOpenCodeScript } from "./opencode-script";
 import { isOpenCodeTask, openCodeRunArgs, openCodeInteractiveArgs } from "./opencode-profile";
 import { assertOpenCode2 } from "./opencode-version";
+import { OpenCode2Catalog } from "./opencode2-catalog";
+import { addOpenCode2Picker } from "./opencode2-picker";
 import { createOpenCodeWorkflowAdapter } from "./cli-workflow-adapters";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease, hasCompleteInstalledReleaseAsync } from "./release-update";
 import { assertPackageMaintenanceSafe } from "./package-maintenance";
@@ -131,6 +133,7 @@ Concurrency for tasks and workflows is optional: omit it to inherit the vault se
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
 - taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- For OpenCode 2 tasks, the editor can refresh models and selectable agents for the task's project. Use an agent ID when specifying an agent in a portable task.
 - copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
@@ -1604,7 +1607,8 @@ export default class AutoOCPlugin extends Plugin {
       kind, guide: AUTOOC_WORKFLOW_PROMPT, version: this.manifest.version,
       engine: this.settings.defaultAiEngine, objective,
       models: engine => [
-        ...(engine === "codex" ? this.availableCodexModels : engine === "opencode" ? this.availableModels : []),
+        ...(engine === "codex" ? this.availableCodexModels : engine === "opencode" ? this.availableModels :
+          engine === "opencode2" ? this.openCode2Catalog.choices(this.settings.opencode2Path || "opencode", this.openCode2Location().cwd, "models") : []),
         ...this.settings.tasks.filter(task => (task.taskKind || "opencode") === engine && task.model?.trim())
           .map(task => ({ value: task.model, label: task.model })),
       ],
@@ -1651,6 +1655,11 @@ export default class AutoOCPlugin extends Plugin {
   view?: AutoOCView;
   availableModels: { value: string; label: string }[] = FALLBACK_MODELS;
   availableAgents: { value: string; label: string }[] = FALLBACK_AGENTS;
+  readonly openCode2Catalog = new OpenCode2Catalog();
+  openCode2Location(project?: string) {
+    return { executable: this.settings.opencode2Path || "opencode",
+      cwd: project || this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || "." };
+  }
   availableCodexModels: CodexModelOption[] = [];
   private taskUpdatedCallbacks = new Set<(task: ScheduledTask) => void>();
   private workflowUpdatedCallbacks = new Set<(workflow: Workflow) => void>();
@@ -7959,8 +7968,10 @@ class CreateTaskModal extends Modal {
             this.draft.branch = "";
             this.draft.createBranch = false;
           } else if (v === "opencode2" || v === "cli2") {
-            this.draft.model = this.plugin.settings.defaultOpencode2Model || "";
-            this.draft.agent = this.plugin.settings.defaultOpencode2Agent || "build";
+            if (taskKind !== "opencode2") {
+              this.draft.model = this.plugin.settings.defaultOpencode2Model || "";
+              this.draft.agent = this.plugin.settings.defaultOpencode2Agent || "build";
+            }
             this.draft.useRalphLoop = false;
           } else if (v === "opencode" || v === "cli") {
             this.draft.model = this.plugin.getEffectiveDefaultModel();
@@ -8204,13 +8215,11 @@ class CreateTaskModal extends Modal {
     } else if (taskKind === "opencode2") {
       this.draft.model ||= this.plugin.settings.defaultOpencode2Model || "";
       this.draft.agent ||= this.plugin.settings.defaultOpencode2Agent || "build";
-      new Setting(contentEl).setName("OpenCode 2 model")
-        .setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.")
-        .addText(text => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "")
-          .onChange(value => { this.draft.model = value.trim(); }));
-      new Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.")
-        .addText(text => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build")
-          .onChange(value => { this.draft.agent = value.trim(); }));
+      const location = () => this.plugin.openCode2Location(this.draft.workingDirectory);
+      addOpenCode2Picker(new Setting(contentEl).setName("OpenCode 2 model"), "models", this.plugin.openCode2Catalog,
+        location, () => this.draft.model || "", value => { this.draft.model = value; });
+      addOpenCode2Picker(new Setting(contentEl).setName("OpenCode 2 agent"), "agents", this.plugin.openCode2Catalog,
+        location, () => this.draft.agent || "", value => { this.draft.agent = value; });
       new Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.")
         .addToggle(toggle => toggle.setValue(!!this.draft.forceModel).onChange(value => { this.draft.forceModel = value; }));
       contentEl.createEl("p", { text: this.draft.interactiveTerminal
@@ -11072,17 +11081,17 @@ class AutoOCSettingTab extends PluginSettingTab {
           }
         }));
 
-    addInteractiveCliSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
-    containerEl.createEl("p", { text: "Select OpenCode 2 in a task's Task type to use these settings. Existing OpenCode 1 tasks keep their engine. The executable path is configured under OpenCode 2 CLI above.", cls: "setting-item-description" });
-    new Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.")
-      .addText(text => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async value => {
-        this.plugin.settings.defaultOpencode2Model = value.trim(); await this.plugin.saveSettings(false);
-      }));
-    new Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.")
-      .addText(text => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async value => {
-        this.plugin.settings.defaultOpencode2Agent = value.trim() || "build"; await this.plugin.saveSettings(false);
-      }));
+    const location = () => this.plugin.openCode2Location();
+    addOpenCode2Picker(new Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Refresh Models lists models from the OpenCode 2 CLI configured under Interactive CLI launchers. New OpenCode 2 tasks use the model you choose here."),
+      "models", this.plugin.openCode2Catalog, location, () => this.plugin.settings.defaultOpencode2Model || "", async value => {
+        this.plugin.settings.defaultOpencode2Model = value; await this.plugin.saveSettings(false);
+      });
+    addOpenCode2Picker(new Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Default: build."),
+      "agents", this.plugin.openCode2Catalog, location, () => this.plugin.settings.defaultOpencode2Agent || "build", async value => {
+        this.plugin.settings.defaultOpencode2Agent = value || "build"; await this.plugin.saveSettings(false);
+      });
+    addInteractiveCliSettings(containerEl, this.plugin);
     addCopilotGlobalSettings(containerEl, this.plugin);
 
     containerEl.createEl("h3", { text: "Codex task defaults" });
@@ -11301,7 +11310,7 @@ class AutoOCSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
-      .setName("Default Agent")
+      .setName("Default OpenCode 1 agent")
       .setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`)
       .addDropdown((dd) => {
         const agents = this.plugin.availableAgents;
@@ -11317,7 +11326,7 @@ class AutoOCSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "Available Agents" });
+    containerEl.createEl("h3", { text: "Available OpenCode 1 agents" });
     const refreshAgentsBtn = containerEl.createEl("button", {
       text: "🔄 Reload Agent List",
       cls: "auto-oc-btn-secondary",
@@ -11343,7 +11352,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     });
 
     new Setting(containerEl)
-      .setName("Default OpenCode Model")
+      .setName("Default OpenCode 1 model")
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
@@ -11360,7 +11369,7 @@ class AutoOCSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "Available Models" });
+    containerEl.createEl("h3", { text: "Available OpenCode 1 models" });
     const refreshBtn = containerEl.createEl("button", {
       text: "🔄 Reload Model List",
       cls: "auto-oc-btn-secondary",

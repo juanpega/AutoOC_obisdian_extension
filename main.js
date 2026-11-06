@@ -718,7 +718,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.19",
+      version: "1.7.20",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -4219,20 +4219,26 @@ function parseOpenCodeVersion(text) {
   const match = text.trim().match(/^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?$/i);
   return match ? { version: match[0], major: Number(match[1]) } : void 0;
 }
-async function detectOpenCodeVersion(bin) {
+function readOpenCodeOutput(bin, args, cwd, timeout, maxBuffer) {
   if (!bin || !path7.isAbsolute(bin) && !/^[\w.-]+$/.test(bin)) throw new Error("Choose an absolute OpenCode executable path or a command name without arguments.");
-  let command = bin, args = ["--version"];
+  let command = bin;
   if (process.platform === "win32" && !/\.exe$/i.test(bin)) {
     command = path7.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const script = `$ErrorActionPreference = 'Stop'; & '${bin.replace(/'/g, "''")}' --version; exit $LASTEXITCODE`;
+    const invocation = [bin, ...args].map((value) => `'${value.replace(/'/g, "''")}'`).join(" ");
+    const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ${invocation}; exit $LASTEXITCODE`;
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
   }
-  const output = await new Promise((resolve10, reject) => (0, import_child_process4.execFile)(
+  return new Promise((resolve10, reject) => (0, import_child_process4.execFile)(
     command,
     args,
-    { cwd: os3.tmpdir(), windowsHide: true, timeout: 1e4, maxBuffer: 65536, encoding: "utf8" },
-    (error, stdout) => error ? reject(new Error("Could not check the OpenCode version. Check its executable path in AutoOC Settings.")) : resolve10(stdout)
+    { cwd, windowsHide: true, timeout, maxBuffer, encoding: "utf8" },
+    (error, stdout) => error ? reject(error) : resolve10(stdout)
   ));
+}
+async function detectOpenCodeVersion(bin) {
+  const output = await readOpenCodeOutput(bin, ["--version"], os3.tmpdir(), 1e4, 65536).catch(() => {
+    throw new Error("Could not check the OpenCode version. Check its executable path in AutoOC Settings.");
+  });
   const detected = parseOpenCodeVersion(output);
   if (!detected) throw new Error("The executable did not report a supported OpenCode version. Check its path in AutoOC Settings.");
   return detected;
@@ -4774,6 +4780,7 @@ Produce a definition only. Do not perform the requested task, inspect files, cal
 Return one JSON object, without Markdown or commentary. Use schemaVersion "1.6.0", pluginVersion ${JSON.stringify(version)} and exportedAt ${JSON.stringify((/* @__PURE__ */ new Date()).toISOString())}.
 ` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops, conditional transitions or workflow steps. This creator does not receive existing workflow identities; the user can add existing workflows as steps in the editor.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
 AutoOC applies the model selected in the creator to tasks using that engine. Do not include model IDs in the JSON.
+OpenCode 2 drafts use the configured default agent. Omit the agent field in these drafts. The user can select a project agent in the task editor.
 CREATOR EXAMPLE (replace its content with the requested objective):
 ${JSON.stringify(example, null, 2)}
 
@@ -7127,6 +7134,128 @@ function buildOpenCodeScript(options) {
   return launchScript;
 }
 
+// opencode2-catalog.ts
+function parseChoices(kind, output) {
+  const choices = /* @__PURE__ */ new Map();
+  if (kind === "models") {
+    for (const line of output.split(/\r?\n/)) {
+      const id = line.trim();
+      if (/^[^/\s]+\/\S+$/.test(id)) choices.set(id, id);
+    }
+  } else {
+    const agents = JSON.parse(output);
+    if (!Array.isArray(agents)) throw new Error("Expected a list of agents.");
+    for (const agent of agents) {
+      if (typeof (agent == null ? void 0 : agent.id) !== "string" || !agent.id || agent.hidden || agent.disabled || agent.mode === "subagent") continue;
+      choices.set(agent.id, typeof agent.name === "string" && agent.name ? agent.name : agent.id);
+    }
+  }
+  return Array.from(choices, ([value, label]) => ({ value, label }));
+}
+var OpenCode2Catalog = class {
+  constructor() {
+    this.lists = /* @__PURE__ */ new Map();
+    this.pending = /* @__PURE__ */ new Map();
+  }
+  choices(path32, cwd, kind) {
+    return this.lists.get(JSON.stringify([path32, cwd, kind])) || [];
+  }
+  refresh(path32, cwd, kind) {
+    const key = JSON.stringify([path32, cwd, kind]);
+    const pending = this.pending.get(key);
+    if (pending) return pending;
+    const request = this.discover(path32, cwd, kind, this.lists.get(key)).then((choices) => {
+      this.lists.set(key, choices);
+      return choices;
+    }).finally(() => this.pending.delete(key));
+    this.pending.set(key, request);
+    return request;
+  }
+  async discover(path32, cwd, kind, previous) {
+    const bin = resolveInteractiveCli("opencode2", path32);
+    if (!bin) throw new Error("Set the OpenCode 2 CLI executable in AutoOC Settings.");
+    await assertOpenCode2(bin);
+    const args = kind === "models" ? ["models"] : ["debug", "agents"];
+    const query = async () => parseChoices(kind, await readOpenCodeOutput(bin, args, cwd, 2e4, 4 * 1024 * 1024));
+    try {
+      let choices = [];
+      for (const waitMs of [0, 1e3, 1200, 1800]) {
+        if (waitMs) await new Promise((resolve10) => setTimeout(resolve10, waitMs));
+        choices = await query();
+        if (choices.length && (previous == null ? void 0 : previous.length) === choices.length && choices.every((choice, i) => choice.value === previous[i].value && choice.label === previous[i].label)) break;
+        previous = choices;
+      }
+      return choices;
+    } catch (e) {
+      throw new Error(`Could not read OpenCode 2 ${kind}. Check the project folder and run \u201C${args.join(" ")}\u201D with the OpenCode 2 executable selected in Settings.`);
+    }
+  }
+};
+
+// opencode2-picker.ts
+function addOpenCode2Picker(row, kind, catalog, location, value, change) {
+  const label = kind === "models" ? "model" : "agent";
+  let dropdown, manual;
+  let shown = location();
+  const changedLocation = () => {
+    const current = location();
+    return shown.executable !== current.executable || shown.cwd !== current.cwd;
+  };
+  const fill = () => {
+    shown = location();
+    const choices = catalog.choices(shown.executable, shown.cwd, kind);
+    const current = value();
+    dropdown.selectEl.empty();
+    for (const choice of choices) dropdown.addOption(choice.value, choice.label);
+    if (current && !choices.some((choice) => choice.value === current)) dropdown.addOption(current, current);
+    dropdown.addOption("", "Enter manually\u2026").setValue(current);
+    manual.setValue(current);
+    manual.inputEl.hidden = !!current;
+  };
+  row.addDropdown((select) => {
+    dropdown = select;
+    select.selectEl.setAttribute("aria-label", `Select OpenCode 2 ${label}`);
+    select.selectEl.addEventListener("focus", () => {
+      if (changedLocation()) {
+        fill();
+        row.setDesc(`Refresh to load OpenCode 2 ${kind} for this project.`);
+      }
+    });
+    select.onChange((selected) => {
+      manual.inputEl.hidden = !!selected;
+      if (selected) {
+        manual.setValue(selected);
+        change(selected);
+      } else manual.inputEl.focus();
+    });
+  }).addText((text) => {
+    manual = text;
+    text.inputEl.setAttribute("aria-label", `Custom OpenCode 2 ${label}`);
+    text.setPlaceholder(kind === "models" ? "provider/model" : "Agent ID").onChange((input) => change(input.trim()));
+  }).addButton((button) => button.setButtonText(kind === "models" ? "Refresh Models" : "Refresh Agents").onClick(async () => {
+    button.setDisabled(true);
+    const { executable: executable2, cwd } = location();
+    const isCurrent = () => executable2 === location().executable && cwd === location().cwd;
+    row.setDesc(`Loading OpenCode 2 ${kind}\u2026`);
+    try {
+      const choices = await catalog.refresh(executable2, cwd, kind);
+      if (isCurrent()) {
+        fill();
+        row.setDesc(choices.length ? `${choices.length} OpenCode 2 ${kind} available for this project.` : kind === "models" ? "OpenCode 2 returned no models. Check the provider connection or enter a model ID." : "OpenCode 2 returned no selectable agents. Check the project configuration or enter an agent ID.");
+      }
+    } catch (error) {
+      if (isCurrent()) row.setDesc(error.message);
+    } finally {
+      button.setDisabled(false);
+      if (!isCurrent()) {
+        fill();
+        row.setDesc(`Refresh to load OpenCode 2 ${kind} for this project.`);
+      }
+    }
+  }));
+  fill();
+}
+
 // cli-workflow-adapters.ts
 var fs21 = __toESM(require("fs"));
 var path22 = __toESM(require("path"));
@@ -9300,6 +9429,7 @@ Concurrency for tasks and workflows is optional: omit it to inherit the vault se
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
 - taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- For OpenCode 2 tasks, the editor can refresh models and selectable agents for the task's project. Use an agent ID when specifying an agent in a portable task.
 - copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
@@ -10352,6 +10482,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     });
     this.availableModels = FALLBACK_MODELS;
     this.availableAgents = FALLBACK_AGENTS;
+    this.openCode2Catalog = new OpenCode2Catalog();
     this.availableCodexModels = [];
     this.taskUpdatedCallbacks = /* @__PURE__ */ new Set();
     this.workflowUpdatedCallbacks = /* @__PURE__ */ new Set();
@@ -10429,7 +10560,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       engine: this.settings.defaultAiEngine,
       objective,
       models: (engine) => [
-        ...engine === "codex" ? this.availableCodexModels : engine === "opencode" ? this.availableModels : [],
+        ...engine === "codex" ? this.availableCodexModels : engine === "opencode" ? this.availableModels : engine === "opencode2" ? this.openCode2Catalog.choices(this.settings.opencode2Path || "opencode", this.openCode2Location().cwd, "models") : [],
         ...this.settings.tasks.filter((task) => {
           var _a;
           return (task.taskKind || "opencode") === engine && ((_a = task.model) == null ? void 0 : _a.trim());
@@ -10482,6 +10613,12 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     this.draftModals.add(modal);
     modal.open();
     return modal;
+  }
+  openCode2Location(project) {
+    return {
+      executable: this.settings.opencode2Path || "opencode",
+      cwd: project || this.settings.workingDirectory || this.app.vault.adapter.basePath || "."
+    };
   }
   // Compatibility for exclusive maintenance reservations and existing observers.
   get sharedWorkflowExecution() {
@@ -16731,8 +16868,10 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
           this.draft.branch = "";
           this.draft.createBranch = false;
         } else if (v === "opencode2" || v === "cli2") {
-          this.draft.model = this.plugin.settings.defaultOpencode2Model || "";
-          this.draft.agent = this.plugin.settings.defaultOpencode2Agent || "build";
+          if (taskKind !== "opencode2") {
+            this.draft.model = this.plugin.settings.defaultOpencode2Model || "";
+            this.draft.agent = this.plugin.settings.defaultOpencode2Agent || "build";
+          }
           this.draft.useRalphLoop = false;
         } else if (v === "opencode" || v === "cli") {
           this.draft.model = this.plugin.getEffectiveDefaultModel();
@@ -16911,12 +17050,27 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
     } else if (taskKind === "opencode2") {
       (_b = this.draft).model || (_b.model = this.plugin.settings.defaultOpencode2Model || "");
       (_c = this.draft).agent || (_c.agent = this.plugin.settings.defaultOpencode2Agent || "build");
-      new import_obsidian10.Setting(contentEl).setName("OpenCode 2 model").setDesc("Enter a provider/model ID from your OpenCode 2 installation. Run opencode models to see its available models.").addText((text) => text.setPlaceholder("provider/model").setValue(this.draft.model || this.plugin.settings.defaultOpencode2Model || "").onChange((value) => {
-        this.draft.model = value.trim();
-      }));
-      new import_obsidian10.Setting(contentEl).setName("OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build").onChange((value) => {
-        this.draft.agent = value.trim();
-      }));
+      const location = () => this.plugin.openCode2Location(this.draft.workingDirectory);
+      addOpenCode2Picker(
+        new import_obsidian10.Setting(contentEl).setName("OpenCode 2 model"),
+        "models",
+        this.plugin.openCode2Catalog,
+        location,
+        () => this.draft.model || "",
+        (value) => {
+          this.draft.model = value;
+        }
+      );
+      addOpenCode2Picker(
+        new import_obsidian10.Setting(contentEl).setName("OpenCode 2 agent"),
+        "agents",
+        this.plugin.openCode2Catalog,
+        location,
+        () => this.draft.agent || "",
+        (value) => {
+          this.draft.agent = value;
+        }
+      );
       new import_obsidian10.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
         this.draft.forceModel = value;
       }));
@@ -19392,17 +19546,31 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
         await this.plugin.saveSettings();
       }
     }));
-    addInteractiveCliSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
-    containerEl.createEl("p", { text: "Select OpenCode 2 in a task's Task type to use these settings. Existing OpenCode 1 tasks keep their engine. The executable path is configured under OpenCode 2 CLI above.", cls: "setting-item-description" });
-    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Provider/model ID from your OpenCode 2 installation. Required for automated tasks.").addText((text) => text.setPlaceholder("provider/model").setValue(this.plugin.settings.defaultOpencode2Model || "").onChange(async (value) => {
-      this.plugin.settings.defaultOpencode2Model = value.trim();
-      await this.plugin.saveSettings(false);
-    }));
-    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Agent configured in OpenCode 2. Default: build.").addText((text) => text.setValue(this.plugin.settings.defaultOpencode2Agent || "build").onChange(async (value) => {
-      this.plugin.settings.defaultOpencode2Agent = value.trim() || "build";
-      await this.plugin.saveSettings(false);
-    }));
+    const location = () => this.plugin.openCode2Location();
+    addOpenCode2Picker(
+      new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Refresh Models lists models from the OpenCode 2 CLI configured under Interactive CLI launchers. New OpenCode 2 tasks use the model you choose here."),
+      "models",
+      this.plugin.openCode2Catalog,
+      location,
+      () => this.plugin.settings.defaultOpencode2Model || "",
+      async (value) => {
+        this.plugin.settings.defaultOpencode2Model = value;
+        await this.plugin.saveSettings(false);
+      }
+    );
+    addOpenCode2Picker(
+      new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Default: build."),
+      "agents",
+      this.plugin.openCode2Catalog,
+      location,
+      () => this.plugin.settings.defaultOpencode2Agent || "build",
+      async (value) => {
+        this.plugin.settings.defaultOpencode2Agent = value || "build";
+        await this.plugin.saveSettings(false);
+      }
+    );
+    addInteractiveCliSettings(containerEl, this.plugin);
     addCopilotGlobalSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "Codex task defaults" });
     new import_obsidian10.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
@@ -19550,7 +19718,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         new import_obsidian10.Notice(`Ralph state file: ${statePath}`);
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Default Agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 1 agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       const agents = this.plugin.availableAgents;
       agents.forEach((a) => dd.addOption(a.value, a.label));
       const current = this.plugin.getEffectiveAgent();
@@ -19563,7 +19731,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: "Available Agents" });
+    containerEl.createEl("h3", { text: "Available OpenCode 1 agents" });
     const refreshAgentsBtn = containerEl.createEl("button", {
       text: "\u{1F504} Reload Agent List",
       cls: "auto-oc-btn-secondary"
@@ -19587,7 +19755,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = agentsBody.createEl("tr");
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
-    new import_obsidian10.Setting(containerEl).setName("Default OpenCode Model").addDropdown((dd) => {
+    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 1 model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
       const current = this.plugin.getEffectiveDefaultModel();
@@ -19602,7 +19770,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: "Available Models" });
+    containerEl.createEl("h3", { text: "Available OpenCode 1 models" });
     const refreshBtn = containerEl.createEl("button", {
       text: "\u{1F504} Reload Model List",
       cls: "auto-oc-btn-secondary"

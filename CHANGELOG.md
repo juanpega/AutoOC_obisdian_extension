@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.7.20] - Candidato
+
+- En Ajustes, **Default OpenCode 2 model** aparece debajo de **Default AI engine**. **Refresh Models** carga los modelos de la CLI de OpenCode 2 configurada y permite elegir el predeterminado para tareas nuevas. Los ajustes de OpenCode 1 llevan su número de versión.
+- Las tareas automáticas e interactivas de OpenCode 2 permiten seleccionar modelos y agentes del proyecto, usar un identificador manual y conservar la selección al cambiar de modo.
+
 ## [1.7.19] - Candidato
 
 - WorkFlows permite añadir workflows existentes como pasos. El padre espera su resultado y conserva las transiciones, con entrada/salida y estados separados por invocación. Se rechazan referencias inválidas, ciclos y anidamientos que exceden los límites admitidos.
