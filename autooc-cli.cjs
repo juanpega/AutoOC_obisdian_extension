@@ -3596,20 +3596,26 @@ function parseOpenCodeVersion(text) {
   const match = text.trim().match(/^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?$/i);
   return match ? { version: match[0], major: Number(match[1]) } : void 0;
 }
-async function detectOpenCodeVersion(bin) {
+function readOpenCodeOutput(bin, args, cwd, timeout, maxBuffer) {
   if (!bin || !path12.isAbsolute(bin) && !/^[\w.-]+$/.test(bin)) throw new Error("Choose an absolute OpenCode executable path or a command name without arguments.");
-  let command = bin, args = ["--version"];
+  let command = bin;
   if (process.platform === "win32" && !/\.exe$/i.test(bin)) {
     command = path12.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const script = `$ErrorActionPreference = 'Stop'; & '${bin.replace(/'/g, "''")}' --version; exit $LASTEXITCODE`;
+    const invocation = [bin, ...args].map((value) => `'${value.replace(/'/g, "''")}'`).join(" ");
+    const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ${invocation}; exit $LASTEXITCODE`;
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
   }
-  const output = await new Promise((resolve8, reject) => (0, import_child_process6.execFile)(
+  return new Promise((resolve8, reject) => (0, import_child_process6.execFile)(
     command,
     args,
-    { cwd: os4.tmpdir(), windowsHide: true, timeout: 1e4, maxBuffer: 65536, encoding: "utf8" },
-    (error, stdout) => error ? reject(new Error("Could not check the OpenCode version. Check its executable path in AutoOC Settings.")) : resolve8(stdout)
+    { cwd, windowsHide: true, timeout, maxBuffer, encoding: "utf8" },
+    (error, stdout) => error ? reject(error) : resolve8(stdout)
   ));
+}
+async function detectOpenCodeVersion(bin) {
+  const output = await readOpenCodeOutput(bin, ["--version"], os4.tmpdir(), 1e4, 65536).catch(() => {
+    throw new Error("Could not check the OpenCode version. Check its executable path in AutoOC Settings.");
+  });
   const detected = parseOpenCodeVersion(output);
   if (!detected) throw new Error("The executable did not report a supported OpenCode version. Check its path in AutoOC Settings.");
   return detected;
@@ -5709,7 +5715,7 @@ function summarizeCliCatalog(config, includeStatus) {
 }
 
 // autooc-cli.ts
-var version = "1.7.19";
+var version = "1.7.20";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "inspect-settings-write" || command === "recover-settings-write") {

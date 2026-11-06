@@ -93,6 +93,18 @@ test('wrong version fails before a task or terminal launch',()=>fixture(async({r
   assert.equal(fs.existsSync(legacy.record),false);assert.equal(fs.existsSync(path.join(root,'.autooc')),false);
 }));
 
+test('catalog refresh reads project agents with Unicode labels through a CLI shim', () => fixture(async ({root, local}) => {
+  const windows = process.platform === 'win32';
+  const bin = path.join(root, windows ? 'catalog.ps1' : 'catalog.sh');
+  const output = JSON.stringify([{id:'review',name:'Revisión',mode:'primary'}]);
+  fs.writeFileSync(path.join(root, 'agents.json'), output);
+  fs.writeFileSync(bin, windows
+    ? "if ($args[0] -eq '--version') { '2.0.21'; exit 0 }\nif (($args -join ' ') -eq 'debug agents') { Get-Content -LiteralPath agents.json -Raw -Encoding UTF8; exit 0 }; exit 1"
+    : '#!/bin/sh\ncase "$*" in --version) echo 2.0.21 ;; "debug agents") cat agents.json ;; *) exit 1 ;; esac\n', {mode:0o700});
+  const catalog = new (local('opencode2-catalog').OpenCode2Catalog)();
+  assert.deepEqual(await catalog.refresh(bin, root, 'agents'), [{value:'review',label:'Revisión'}]);
+}));
+
 test('a shared workflow can mix both OpenCode versions without rewriting either task',()=>fixture(async({root,local,makeCli})=>{
   const v1=makeCli(1),v2=makeCli(2);
   const tasks=[{id:'old',taskKind:'opencode',prompt:'first',model:'fixture/old'},{id:'new',taskKind:'opencode2',prompt:'second',model:'fixture/new'}];

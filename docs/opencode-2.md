@@ -5,8 +5,8 @@ AutoOC permite seleccionar **OpenCode 1** y **OpenCode 2** como motores distinto
 ## Configuración
 
 1. En **Settings → AutoOC → Interactive CLI launchers**, configura **OpenCode 2 CLI executable** con el ejecutable de la versión 2. **Check version** comprueba su versión y explica si corresponde al motor elegido. No cambia tareas ni configuración.
-2. En **OpenCode 2 task defaults**, indica **Default OpenCode 2 model** (`provider/model`) y, si corresponde, **Default OpenCode 2 agent**. El agente inicial es `build`. Estos campos son independientes de OpenCode 1.
-3. En el editor de la tarea, selecciona **OpenCode 2 task** para ejecución automática o **OpenCode 2 CLI task (interactive)** para abrir una sesión con el prompt. Guarda la tarea después de revisar modelo y agente.
+2. Justo debajo de **Default AI engine** está **OpenCode 2 task defaults**. En la fila **Default OpenCode 2 model**, pulsa **Refresh Models** y elige el modelo que usarán las tareas nuevas de OpenCode 2. Para elegir el agente predeterminado, pulsa **Refresh Agents** en la fila siguiente. También puedes elegir **Enter manually…** y escribir el identificador. El agente inicial es `build`.
+3. En el editor de la tarea, selecciona **OpenCode 2 task** para ejecución automática u **OpenCode 2 CLI task (interactive)** para abrir una sesión con el prompt. Indica **Project Path** si la tarea usa otro proyecto. Los dos botones de recarga consultan los modelos y agentes de esa carpeta. Elige los que quieras usar y guarda la tarea.
 4. Opcionalmente, selecciona **OpenCode 2** en **Default AI engine** para las nuevas tareas. Esa elección también hace que las evaluaciones de transiciones de workflows usen el modelo y el agente de OpenCode 2. Las tareas ya guardadas mantienen su motor.
 
 Las dos versiones pueden proporcionar un comando llamado `opencode`. Si conviven, usa rutas completas distintas; **Auto-detect** localiza un ejecutable, mientras **Check version** comprueba qué versión contiene. No se instala ni actualiza la CLI desde AutoOC. Cada instalación necesita su propia autenticación y modelos disponibles.

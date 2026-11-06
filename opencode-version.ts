@@ -7,18 +7,24 @@ export function parseOpenCodeVersion(text: string): { version: string; major: nu
   return match ? { version: match[0], major: Number(match[1]) } : undefined;
 }
 
-/** Read-only version probe, never a task or a retry of a task. No shell expansion. */
-export async function detectOpenCodeVersion(bin: string): Promise<{ version: string; major: number }> {
+/** Run a read-only CLI query. Quote each argument separately for Windows shims. */
+export function readOpenCodeOutput(bin: string, args: string[], cwd: string, timeout: number, maxBuffer: number): Promise<string> {
   if (!bin || !path.isAbsolute(bin) && !/^[\w.-]+$/.test(bin)) throw new Error("Choose an absolute OpenCode executable path or a command name without arguments.");
-  let command = bin, args = ["--version"];
+  let command = bin;
   if (process.platform === "win32" && !/\.exe$/i.test(bin)) {
     command = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
-    const script = `$ErrorActionPreference = 'Stop'; & '${bin.replace(/'/g, "''")}' --version; exit $LASTEXITCODE`;
+    const invocation = [bin, ...args].map(value => `'${value.replace(/'/g, "''")}'`).join(" ");
+    const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ${invocation}; exit $LASTEXITCODE`;
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
   }
-  const output = await new Promise<string>((resolve, reject) => execFile(command, args,
-    { cwd: os.tmpdir(), windowsHide: true, timeout: 10000, maxBuffer: 65536, encoding: "utf8" },
-    (error, stdout) => error ? reject(new Error("Could not check the OpenCode version. Check its executable path in AutoOC Settings.")) : resolve(stdout)));
+  return new Promise((resolve, reject) => execFile(command, args,
+    { cwd, windowsHide: true, timeout, maxBuffer, encoding: "utf8" },
+    (error, stdout) => error ? reject(error) : resolve(stdout)));
+}
+
+export async function detectOpenCodeVersion(bin: string): Promise<{ version: string; major: number }> {
+  const output = await readOpenCodeOutput(bin, ["--version"], os.tmpdir(), 10000, 65536)
+    .catch(() => { throw new Error("Could not check the OpenCode version. Check its executable path in AutoOC Settings."); });
   const detected = parseOpenCodeVersion(output);
   if (!detected) throw new Error("The executable did not report a supported OpenCode version. Check its path in AutoOC Settings.");
   return detected;
