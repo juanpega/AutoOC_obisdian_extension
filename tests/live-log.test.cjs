@@ -6,6 +6,21 @@ const root=path.resolve(__dirname,'..');
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(predicate,message){const deadline=Date.now()+10000;while(!predicate()){assert.ok(Date.now()<deadline,message);await delay(25);}}
 
+const streamingFixture = `
+  const fs = require('node:fs'), path = require('node:path');
+  const dir = process.argv[1];
+  const file = name => path.join(dir, name);
+  fs.writeFileSync(file('stdout.txt'), 'Primera salida TOKEN_PRIVADO');
+  fs.writeFileSync(file('stderr.txt'), 'Primera traza');
+  process.send('logs-written');
+  const timer = setInterval(() => {
+    if (!fs.existsSync(file('finish-test'))) return;
+    clearInterval(timer);
+    fs.unlinkSync(file('finish-test'));
+    fs.appendFileSync(file('stdout.txt'), '\\nResultado final');
+  }, 20);
+`;
+
 for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`OpenCode live log renders before completion through ${entry}`,async()=>{
   const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-live-log-'));
   const installation=path.join(vault,'.obsidian/plugins/auto-oc');fs.mkdirSync(installation,{recursive:true});
@@ -13,6 +28,8 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
   fs.writeFileSync(configFile,JSON.stringify({logsEnabled:true,tasks:[{id:'t',name:'Stream task',taskKind:'opencode',model:'fixture/model',prompt:'stream',status:'pending'}],
     workflows:[{id:'w',name:'Stream workflow',steps:[{id:'a',stepKind:'task',taskId:'t'}]}]}));
   const rendered=[],children=[],childClosures=[];let folder,job,p,modal,receiver,settled=false,closing=false;
+  let signalReady, failStartup, fixtureChild, startupTimer;
+  const fixtureReady = new Promise((resolve, reject) => { signalReady = resolve; failStartup = reject; });
   const trackChild=child=>{
     children.push(child);
     childClosures.push(new Promise(resolve=>child.once('close',resolve)));
@@ -26,11 +43,19 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
   });
   bundle.exports.setLauncher(script=>{
     folder=path.dirname(script);
-    // A slow deferred start can reach the launcher after until() has already
-    // failed. Its fixture must still finish so finally can report that failure.
-    if(closing)fs.writeFileSync(path.join(folder,'finish-test'),'');
-    const child=spawn(process.execPath,['-e',`const fs=require('fs'),path=require('path');const dir=process.argv[1];fs.writeFileSync(path.join(dir,'stdout.txt'),'Primera salida TOKEN_PRIVADO');fs.writeFileSync(path.join(dir,'stderr.txt'),'Primera traza');const timer=setInterval(()=>{if(fs.existsSync(path.join(dir,'finish-test'))){clearInterval(timer);fs.unlinkSync(path.join(dir,'finish-test'));fs.appendFileSync(path.join(dir,'stdout.txt'),'\\nResultado final');fs.writeFileSync(path.join(dir,'done.txt'),'0');}},20);`,folder],{windowsHide:true,stdio:'ignore'});
+    const child = spawn(process.execPath, ['-e', streamingFixture, folder], {
+      windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+    });
+    fixtureChild = child;
+    child.once('message', signalReady);
+    child.once('error', failStartup);
+    child.once('close', (code, signal) => {
+      // As in the real launcher, publish the exit code after the provider exits.
+      if (fs.existsSync(folder)) fs.writeFileSync(path.join(folder, 'done.txt'), String(code ?? 1));
+      failStartup(new Error(`Log fixture exited before reporting readiness (${signal || code})`));
+    });
     trackChild(child);
+    if (closing) child.kill();
     return {onError(fn){child.once('error',fn);},kill(){child.kill();},cleanup(){}};
   });
   try{
@@ -43,7 +68,17 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
       job=new Promise((resolve,reject)=>{let stdout='',stderr='';child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>stderr+=s);child.on('error',reject);child.on('close',code=>{try{assert.equal(code,0,stderr);resolve(JSON.parse(stdout));}catch(error){reject(error);}});});
     }else job=entry.startsWith('task')?p.runTask(p.settings.tasks[0]):p.runWorkflow(p.settings.workflows[0]);
     job=job.finally(()=>{settled=true;});void job.catch(()=>{});
-    await until(()=>folder&&fs.existsSync(path.join(folder,'stdout.txt')),'fixture must produce output while task is running');
+    // Give a cold runner time to start the provider. The live-render deadline
+    // below begins only after the provider has actually written its streams.
+    const ready = await Promise.race([
+      fixtureReady,
+      job.then(() => { throw new Error('Task finished before the log fixture was ready'); }),
+      new Promise((_, reject) => {
+        startupTimer = setTimeout(() => reject(new Error('Log fixture did not report readiness within 60s')), 60_000);
+      }),
+    ]);
+    clearTimeout(startupTimer);
+    assert.equal(ready, 'logs-written');
     const before=fs.readFileSync(configFile),runtime=path.join(installation,'runtime');
     const journal=fs.readdirSync(runtime).find(name=>/^[a-f0-9-]+\.json$/.test(name));const checkpoint=fs.readFileSync(path.join(runtime,journal));
     // stdout and stderr are independent writes. A valid first snapshot can
@@ -63,7 +98,8 @@ for(const entry of ['task UI','workflow UI','task CLI','workflow CLI'])test(`Ope
     assert.ok(!rendered.at(-1).includes('TOKEN_PRIVADO'));assert.match(JSON.parse(fs.readFileSync(configFile)).tasks[0].output,/Resultado final/);
   }finally{
     closing=true;
-    if(folder&&fs.existsSync(folder)&&!settled)fs.writeFileSync(path.join(folder,'finish-test'),'');
+    clearTimeout(startupTimer);
+    if (fixtureChild && !settled && fixtureChild.exitCode === null && fixtureChild.signalCode === null) fixtureChild.kill();
     if(job)await job.catch(()=>{});
     clearInterval(receiver);
     try {
