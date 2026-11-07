@@ -2015,3 +2015,53 @@ textarea.auto-oc-code-editor[hidden] { display: none !important; }
   .auto-oc-areas-inspector { max-height: 42vh; }
 }
 @media (prefers-reduced-motion: reduce) { .auto-oc-areas-dashboard .auto-oc-area-changed { animation: none; } }
+.auto-oc-terminals {
+  display: flex;
+  flex-direction: column;
+  padding: 0 !important;
+  overflow: hidden;
+  height: 100%;
+  min-width: 0;
+}
+.auto-oc-terminal-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+.auto-oc-terminal-tabs {
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+.auto-oc-terminal-tab {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  border-bottom: 2px solid transparent;
+}
+.auto-oc-terminal-tab.is-active { border-bottom-color: var(--interactive-accent); }
+.auto-oc-terminal-tab button {
+  box-shadow: none;
+  background: transparent;
+  font-size: var(--font-ui-small);
+}
+.auto-oc-terminal-tab:not(.is-active) button { color: var(--text-muted); }
+.auto-oc-terminal-status {
+  padding: 8px 12px;
+  font-size: var(--font-ui-smaller);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+.auto-oc-terminal-host { flex: 1; min-height: 0; min-width: 0; overflow: hidden; }
+.auto-oc-terminal-screen { height: 100%; padding: 8px; }
+.auto-oc-terminal-screen .xterm { height: 100%; }
+.auto-oc-terminal-empty { max-width: 480px; margin: 48px auto; padding: 24px; }
+.auto-oc-terminal-empty p { color: var(--text-muted); }

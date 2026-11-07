@@ -40,9 +40,9 @@ function fixture(t) {
   const Plugin=loadPlugin(path.join(directory,'main.js'));
   const create=()=>{
     const p=new Plugin();p.manifest=JSON.parse(fs.readFileSync(path.join(directory,'manifest.json')));
-    p.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{detachLeavesOfType(){},onLayoutReady(){}}};
+    p.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{detachLeavesOfType(){},getLeavesOfType(){return[];},onLayoutReady(){}}};
     p.settings={tasks:[],workflows:[]};
-    p.loadSettings=async()=>{};p.registerView=(type,factory)=>{p.createDashboard=factory;};p.addRibbonIcon=()=>{};p.addCommand=()=>{};p.addSettingTab=()=>{};p.registerInterval=()=>{};p.register=()=>{};
+    p.loadSettings=async()=>{};p.registerView=(type,factory)=>{if(type==='auto-oc-view')p.createDashboard=factory;};p.addRibbonIcon=()=>{};p.addCommand=()=>{};p.addSettingTab=()=>{};p.registerInterval=()=>{};p.register=()=>{};
     p.refreshModels=()=>{};p.refreshAgents=()=>{};p.refreshCodexModels=async()=>{};p.checkForUpdates=async()=>{};
     return p;
   };

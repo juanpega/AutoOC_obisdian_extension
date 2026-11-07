@@ -43,9 +43,11 @@ function definitionPayload(workflow: {id:string;steps:RoutingStep[]}, tasks: Arr
     if (!id || matches.length !== 1) throw new Error("Missing or ambiguous referenced task");
     return withoutRuntime(matches[0]);
   });
-  const usesOpenCode2 = selected.some(task => task.taskKind === 'opencode2') || settings.defaultAiEngine === 'opencode2';
+  const usesOpenCode2 = selected.some(task => task.taskKind === 'opencode2' || task.taskKind === 'cli' && task.cliProvider === 'opencode2') || settings.defaultAiEngine === 'opencode2';
+  const effectiveSettings = effectiveExecutionSettings(settings, usesOpenCode2);
+  if (selected.some(task=>task.taskKind === 'cli' && task.cliProvider === 'claude')) effectiveSettings.claudePath = settings.claudePath || 'claude';
   const clean = (w: typeof workflow) => ({...withoutRuntime(w),steps:w.steps.map(s => withoutRuntime(s as any))});
-  return canonical({workflow:clean(workflow),...(children.length ? {workflows:children.map(clean)} : {}),tasks:selected,settings:effectiveExecutionSettings(settings, usesOpenCode2)});
+  return canonical({workflow:clean(workflow),...(children.length ? {workflows:children.map(clean)} : {}),tasks:selected,settings:effectiveSettings});
 }
 
 // Retain availability for execution guards while keeping historical hashes stable.

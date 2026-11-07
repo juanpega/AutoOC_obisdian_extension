@@ -2,6 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import type { PreparedWorkflow } from "./workflow-definition";
 import type { WorkflowTaskAdapter } from "./code-workflow-host";
+import type { InteractiveTaskTerminalOptions } from "./interactive-task-terminal";
+import { prepareCliTask, launchExternalCliTask } from "./interactive-cli-task";
 import { CopilotCliClient, resolveCopilotBin } from "./copilot-client";
 import { buildOpenCodeScript } from "./opencode-script";
 import { isOpenCodeTask, openCodeInteractiveArgs } from "./opencode-profile";
@@ -9,6 +11,18 @@ import { assertOpenCode2 } from "./opencode-version";
 import { formatTaskOutput, decodeCommandBuffer } from "./command-output";
 import { createAuxiliaryDirectory, completeAuxiliaryDirectory } from './execution-files';
 import { resolveOpencodeBin, launchHidden, writeUtf8BomFile, scriptExt, openOpencodeCli, openOpencodeCliLongPromptWindows } from "./cli-launchers";
+
+export function createInteractiveCliWorkflowAdapter(definition:PreparedWorkflow,vault:string,terminal?:InteractiveTaskTerminalOptions):WorkflowTaskAdapter {
+  return {supports:task=>task.taskKind === 'cli',async execute(task,prompt,signal) {
+    const cwd = task.workingDirectory || definition.settings.workingDirectory || vault;
+    const request = prepareCliTask(task,definition.settings,cwd,prompt,signal);
+    if (terminal?.destination === 'integrated') {
+      if (!terminal.launch) throw new Error('Integrated CLI tasks require a loaded Obsidian terminal host. No external terminal was started.');
+      await terminal.launch(request);
+    } else await launchExternalCliTask(request,definition.settings.linuxTerminal);
+    return {succeeded:true,output:'[opened interactive CLI with preloaded prompt; interactive task result is not observed]'};
+  }};
+}
 
 export function createCopilotWorkflowAdapter(definition:PreparedWorkflow,vault:string):WorkflowTaskAdapter {
   const supports=(task:Readonly<Record<string,any>>)=>task.taskKind==='copilot' && !task.interactiveTerminal && !task.branch && !task.createBranch && (task.copilotAllowAllTools===undefined || typeof task.copilotAllowAllTools==='boolean');
@@ -26,7 +40,7 @@ export function createCopilotWorkflowAdapter(definition:PreparedWorkflow,vault:s
   }};
 }
 
-export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:string):WorkflowTaskAdapter {
+export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:string,terminal?:InteractiveTaskTerminalOptions):WorkflowTaskAdapter {
   const supports=(task:Readonly<Record<string,any>>)=>isOpenCodeTask(task.taskKind);
   return {supports,async execute(task,prompt,signal,_recordThread,interaction) {
     if(!supports(task)) throw new Error("Unsupported OpenCode task");
@@ -49,6 +63,12 @@ export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:
       // launch effect. Persist it as failed rather than an uncertain run that
       // would unnecessarily require reconciliation. Timeouts remain uncertain.
       if(path.isAbsolute(bin) && !fs.existsSync(bin)) return {succeeded:false,output:'[interactive OpenCode executable is unavailable; nothing was launched]'};
+      if (terminal?.destination === 'integrated') {
+        if (!terminal.launch) throw new Error('Integrated CLI tasks require a loaded Obsidian terminal host. No external terminal was started.');
+        await terminal.launch({bin,cwd:taskCwd,label:task.name || `OpenCode ${major} CLI task`,major,
+          model,agent:task.forceModel?'':agent,prompt,signal});
+        return {succeeded:true,output:'[opened integrated OpenCode CLI with preloaded prompt; interactive task result is not observed]'};
+      }
       // Completion describes the OS launch acknowledgement, never the result
       // of the human's interactive session, matching the plugin's contract.
       await new Promise<void>((resolve,reject)=>{

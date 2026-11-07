@@ -7,6 +7,9 @@ interface CliSettingsHost {
   settings: InteractiveCliSettings;
   saveSettings(refreshView?: boolean): Promise<void>;
   isLifecycleStopped(): boolean;
+  openIntegratedCli?(provider: InteractiveCliProvider, cwd: string): Promise<void>;
+  installCliTerminalSupport?(): Promise<void>;
+  showCliTerminals?(): Promise<void>;
 }
 
 export function openCliLauncher(app: App, host: CliSettingsHost, selected?: InteractiveCliProvider) {
@@ -22,6 +25,45 @@ export function openCliLauncher(app: App, host: CliSettingsHost, selected?: Inte
 export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHost) {
   root.createEl("h3", { text: "Interactive CLI launchers" });
   root.createEl("p", { text: "Choose which CLIs appear under 💻 CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
+  new Setting(root).setName("CLI terminal destination")
+    .setDesc("Where manual CLIs and interactive CLI tasks for all harnesses open, including workflow steps. Background tasks, the Codex app and existing terminals are unchanged. Integrated tasks require Obsidian to be open.")
+    .addDropdown(dropdown => {
+      let saving = false;
+      dropdown.addOption("external", "External window").addOption("integrated", "Integrated in Obsidian")
+        .setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external")
+        .onChange(async value => {
+          if (saving || host.isLifecycleStopped() || (value !== "integrated" && value !== "external")) {
+            dropdown.setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external"); return;
+          }
+          const previous = host.settings.cliTerminalDestination;
+          saving = true; dropdown.setDisabled(true); host.settings.cliTerminalDestination = value;
+          try { await host.saveSettings(false); }
+          catch {
+            if (host.settings.cliTerminalDestination === value) host.settings.cliTerminalDestination = previous;
+            new Notice("Terminal destination could not be saved. Try again.");
+          } finally {
+            saving = false; dropdown.setDisabled(false);
+            dropdown.setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external");
+          }
+        });
+    });
+  if (host.installCliTerminalSupport) {
+    const support = new Setting(root).setName("Integrated terminal support")
+      .setDesc("Windows x64 only. Runs with your user permissions; closing AutoOC stops its integrated sessions. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
+    let installing = false;
+    support.addButton(button => button.setButtonText("Download and install terminal support").onClick(async () => {
+      if (installing || host.isLifecycleStopped()) return;
+      installing = true; button.setDisabled(true); support.setDesc("Installing verified terminal support...");
+      try { await host.installCliTerminalSupport!(); support.setDesc("Terminal support is ready. New CLI sessions use the destination selected above."); }
+      catch (error) { support.setDesc(`Terminal support could not be installed. ${String(error)}`); }
+      finally { installing = false; button.setDisabled(false); }
+    }));
+    if (host.showCliTerminals) support.addButton(button => button.setButtonText("Show existing terminals").onClick(async () => {
+      if (host.isLifecycleStopped()) return;
+      try { await host.showCliTerminals!(); }
+      catch (error) { new Notice(String(error)); }
+    }));
+  }
   for (const cli of INTERACTIVE_CLIS) {
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
     new Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.")
@@ -99,6 +141,8 @@ export class CliLauncherModal extends Modal {
       });
     });
     else root.createEl("p", { text: "No configured CLI is available. Open Settings to enable one and set its executable path." });
+    const integrated = this.host.settings.cliTerminalDestination === "integrated";
+    root.createEl("p", { text: `Terminal: ${integrated ? "Integrated in Obsidian" : "External window"}. Change the destination in AutoOC Settings.`, cls: "setting-item-description" });
     const missing = configured.filter(cli => !cli.executable);
     if (missing.length) root.createEl("p", { text: `Not found: ${missing.map(cli => cli.label).join(", ")}. Configure their paths in Settings.`, cls: "setting-item-description" });
     const feedback = root.createDiv(); feedback.setAttr("role", "alert");
@@ -117,7 +161,10 @@ export class CliLauncherModal extends Modal {
       if (this.host.isLifecycleStopped()) { feedback.setText("AutoOC has closed. Reopen the plugin before launching a CLI."); return; }
       this.launching = true; open.disabled = choose.disabled = true; feedback.setText("Opening terminal…");
       try {
-        await launchInteractiveCli(this.selected, cwd, this.host.settings);
+        if (integrated) {
+          if (!this.host.openIntegratedCli) throw new Error("Integrated terminals are unavailable. Check AutoOC Settings; no external session was started.");
+          await this.host.openIntegratedCli(this.selected, cwd);
+        } else await launchInteractiveCli(this.selected, cwd, this.host.settings);
         if (!this.closed) this.close();
       } catch (error) {
         if (!this.closed) feedback.setText(error instanceof Error ? error.message : String(error));

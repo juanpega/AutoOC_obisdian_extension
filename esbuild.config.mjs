@@ -9,7 +9,11 @@ const prod = process.argv[2] === "production";
 const context = await esbuild.context({
   entryPoints: ["main.ts"],
   bundle: true,
+  loader: { ".css": "text" },
+  banner: { js: ["@xterm/xterm", "@xterm/addon-fit"].map(name =>
+    `/*! ${name}\n${readFileSync(new URL(`./node_modules/${name}/LICENSE`, import.meta.url), "utf8")}\n*/`).join("\n") },
   external: [
+    "node:*",
     "obsidian",
     "electron",
     "@codemirror/autocomplete",

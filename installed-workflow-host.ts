@@ -19,6 +19,8 @@ import { preflightInstalledWorkflow } from "./workflow-preflight";
 import { validateProgressBinding } from "./workflow-progress";
 import { createWorkflowEvaluator } from "./workflow-evaluation";
 import type { VaultMutationBatchFactory } from "./code-vault-mutations";
+import type { InteractiveTaskTerminalOptions, InteractiveTaskTerminalRequest } from "./interactive-task-terminal";
+import { isOpenCodeTask } from "./opencode-profile";
 import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime } from "./installed-workflow-location";
 
 const preparingInstallations = new Set<string>();
@@ -43,6 +45,7 @@ export async function runInstalledWorkflow(options: {
   vaultMutations?: VaultMutationBatchFactory;
   catalogWriter?: SettingsWriter;
   catalogVersion?: ()=>ObservedVersion;
+  launchInteractiveTerminal?: (request:InteractiveTaskTerminalRequest)=>Promise<void>;
   // Opt in at presentation boundaries. The default result remains a reusable
   // durable checkpoint for runtime callers and strict progress validation.
   includePresentation?: boolean;
@@ -85,6 +88,12 @@ export async function runInstalledWorkflow(options: {
   if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks, config.workflows);
   const definition = prepareWorkflowDefinition(virtual || matches[0],config.tasks,config);
   preflightInstalledWorkflow(definition,vault);
+  // Terminal placement is a host preference, not part of historical fingerprints.
+  const terminal:InteractiveTaskTerminalOptions = {destination:config.cliTerminalDestination === 'integrated' ? 'integrated' : 'external',launch:options.launchInteractiveTerminal};
+  if (!options.reconcile && terminal.destination === 'integrated' && !terminal.launch &&
+      definition.tasks.some(task=>task.taskKind === 'cli' || isOpenCodeTask(task.taskKind) && task.interactiveTerminal)) {
+    throw new Error('Integrated CLI tasks require a loaded Obsidian plugin. Open Obsidian or select External window in AutoOC Settings. No workflow steps were started.');
+  }
   ensureInstalledWorkflowRuntime(location);
   if (!options.lease && !ownedLease) ownedLease = acquireExecutionLease(runtimeDirectory);
   await reader.assertUnchanged(configurationFile);
@@ -101,9 +110,9 @@ export async function runInstalledWorkflow(options: {
     }
   }
   admission=coordinator?.admit(definition,vault,options.resumeRunId);
-  return {definition,replaceCompletedRunId};
+  return {definition,replaceCompletedRunId,terminal};
   });
-  const {definition,replaceCompletedRunId}=prepared;
+  const {definition,replaceCompletedRunId,terminal}=prepared;
   const presentation=executionPresentation(definition.workflow,options.taskId);
   // Only the frozen selected definition is needed while the host is suspended.
   // Do not retain unrelated large workflows through every checkpoint.
@@ -131,7 +140,7 @@ export async function runInstalledWorkflow(options: {
     lease:options.lease || ownedLease,
     vaultMutations:options.vaultMutations,
     onTaskOutput:options.onTaskOutput,
-    tasks:createWorkflowTaskAdapter(definition,vault,options.vaultMutations),
+    tasks:createWorkflowTaskAdapter(definition,vault,options.vaultMutations,terminal),
     evaluate:createWorkflowEvaluator(definition,vault,controller.signal),
     onCheckpoint:async checkpoint=>{
       admission?.bind(checkpoint);

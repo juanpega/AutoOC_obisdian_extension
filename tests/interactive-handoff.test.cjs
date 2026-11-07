@@ -145,7 +145,7 @@ function pluginHarness(payload) {
   const obsidian = { Plugin: Stub, Notice: Stub, Modal: Stub, Setting: Stub, ItemView: Stub, PluginSettingTab: Stub };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../main.js'), 'utf8') + '\nmodule.exports.setVersionCheck = fn => { assertOpenCode2 = fn; };', {
     exports, module: bundleModule, require: name => name === 'obsidian' ? obsidian : h.overrides[name] || require(name),
-    process: { ...process, platform: 'win32' }, Buffer, console, ...h.globals,
+    process: { ...process, platform: 'win32' }, Buffer, console, AbortController, ...h.globals,
   });
   const plugin = Object.create(bundleModule.exports.default.prototype);
   const task = { id: 'interactive', name: 'Interactive', taskKind: 'opencode', interactiveTerminal: true, model: 'test/model', agent: 'plan', prompt: 'Read data', status: 'pending', output: '' };
@@ -969,12 +969,26 @@ test('late callbacks after stop or deletion cannot complete an attempt; uncertai
   }
 });
 
-test('launcher failure fails task and workflow exactly once', async () => {
+test('unconfirmed launcher exit blocks task and workflow continuation and another launch', async () => {
   const h = pluginHarness('data');
   await h.plugin.runWorkflowStep(0, 0);
   h.timers.find(t => t.ms === 200).fn(); await drain();
   h.signal(0, { status: 'ended', ended: true, confirmed: false }); await drain();
   assert.equal(h.task.status, 'failed'); assert.equal(h.workflow.status, 'failed');
+  assert.equal(h.task.legacyExecution.stopState, 'unconfirmed');
+  assert.notEqual(h.workflow.steps[1].status, 'completed');
+  assert.equal(h.plugin.workflowRuntime.has(h.workflow.id), false);
+  await assert.rejects(h.plugin.runTask(h.task), /outcome is unconfirmed/);
+  assert.equal(h.calls.length, 1);
+});
+
+test('known observer spawn failure fails task and workflow exactly once', async () => {
+  const h = pluginHarness('data');
+  await h.plugin.runWorkflowStep(0, 0);
+  h.timers.find(t => t.ms === 200).fn(); await drain();
+  h.children[0].emit('error', new Error('synthetic spawn failure')); await drain();
+  assert.equal(h.task.status, 'failed'); assert.equal(h.workflow.status, 'failed');
+  assert.equal(h.task.legacyExecution.stopState, undefined);
   assert.equal(h.workflow.steps[1].status, 'failed'); assert.equal(h.calls.length, 1);
 });
 

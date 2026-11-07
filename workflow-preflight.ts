@@ -6,6 +6,7 @@ import type { PreparedWorkflow } from "./workflow-definition";
 import { validateBranchOptions, branchRepository, preflightTaskBranch } from "./workflow-branch";
 import { assertWorkflowDependencies } from "./retired-dependency";
 import { isOpenCodeTask } from "./opencode-profile";
+import { getCliTaskValidationError, prepareCliTask } from "./interactive-cli-task";
 
 // Validate all steps before the journal or first Code effect. The installed
 // catalog is trusted input, but an explicit vault does not authorize other roots.
@@ -33,6 +34,12 @@ export function preflightInstalledWorkflow(definition:PreparedWorkflow,vault:str
     if(definition.workflow.id.startsWith('@task:')) preflightTaskBranch(item,item.workingDirectory || definition.settings.workingDirectory || root,root);
   }
   for (const task of definition.tasks) {
+    const cliError = getCliTaskValidationError(task);
+    if (cliError) throw new Error(cliError);
+    if (task.taskKind === 'cli') {
+      prepareCliTask(task,definition.settings,task.workingDirectory || definition.settings.workingDirectory || root,task.prompt);
+      continue;
+    }
     if(task.taskKind==='code') continue;
     if(typeof task.prompt!=='string' || !task.prompt.trim()) throw new Error("Task prompt must be nonempty before execution");
     if(isOpenCodeTask(task.taskKind) && !(task.model || (task.taskKind==='opencode2' ? definition.settings.defaultOpencode2Model : definition.settings.defaultModel))?.trim()) throw new Error("OpenCode model must be selected before execution");

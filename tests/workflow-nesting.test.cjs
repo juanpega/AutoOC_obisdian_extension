@@ -212,7 +212,7 @@ test('built plugin exports descendants and imports forward references with new i
 
 test('actual shared generation guide nested example passes the real importer validator',()=>{
   const {AUTOOC_WORKFLOW_PROMPT:guide,ImportModal}=pluginHarness();
-  const data=JSON.parse(guide.split('Nested workflow package example (schema 1.7.0):\n')[1].split('\n\nNow write')[0]);
+  const data=JSON.parse(guide.split('Nested workflow package example (schema 1.7.0):\n')[1].split('\n\nGeneric interactive CLI import example')[0].split('\n\nNow write')[0]);
   assert.equal(data.autoOCExport.pluginVersion,JSON.parse(fs.readFileSync(path.resolve(__dirname,'../manifest.json'),'utf8')).version);
   const result=ImportModal.prototype.validateExport.call({},data);assert.equal(result.ok,true,result.errors.join('\n'));
 });
