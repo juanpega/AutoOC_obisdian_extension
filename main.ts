@@ -3,7 +3,9 @@ import { setupCodeTextarea, renderCodePreview } from "./code-editor";
 import { loadDashboardBubbleDiameter, saveDashboardBubbleDiameter, applyDashboardBubbleDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
-import type { InteractiveCliProvider } from "./interactive-cli";
+import { INTERACTIVE_CLIS, type InteractiveCliProvider } from "./interactive-cli";
+import { prepareCliTask, launchExternalCliTask, getCliTaskValidationError as getInteractiveCliTaskValidationError } from "./interactive-cli-task";
+import { IntegratedTerminals } from "./integrated-terminal";
 import type {ExecutionPresentation} from "./execution-presentation";
 import { workflowCodeEntries, matchesWorkflowCodeEntry, type WorkflowCodeEntry } from "./workflow-code-entries";
 import { applyBulkCatalogAction, captureBulkSelection, type BulkAction, type BulkSelection, type CatalogKind } from "./catalog-bulk";
@@ -100,7 +102,7 @@ import type { PersistedWorkflowCatalog } from "./workflow-catalog-progress";
 import { findWorkflowEntry, resolveWorkflowTransition, evaluateWorkflowCondition, workflowStepTransitions } from "./workflow-routing";
 import { resolveOpencodeBin, psSingleQuoted, commandPreviewArg, shSingleQuoted, buildPowerShellEnvLines, SAFE_CLI_PROMPT_LENGTH, isWindows, scriptExt, buildShEnvLines, buildPosixLaunchCommand, appleScriptQuoted, LINUX_TERMINAL_CANDIDATES, commandExists, resolveLinuxTerminal, CliLaunchOptions, openOpencodeCli, openOpencodeCliLongPromptWindows, ProcessHandle, HiddenProcessHandle, launchHiddenPS, launchHiddenSh, launchHidden, writeUtf8BomFile, psUtf8Prelude } from "./cli-launchers";
 
-const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot tasks and workflows, and can launch interactive OpenCode, Codex, Copilot and Claude Code CLIs. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
@@ -121,7 +123,7 @@ For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", "1.
 
 Available modules:
 AutoOC supports DAG workflows with four step kinds:
-1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
+1. task: runs an OpenCode, Codex or GitHub Copilot task prompt, or launches a generic interactive CLI task. A workflow may mix engines; interactive CLI steps acknowledge launch only.
 2. code: runs trusted JavaScript with explicitly enabled capabilities. Node vm is not a security boundary.
 3. delay: pauses the workflow.
 4. workflow: runs a referenced workflow to completion, then uses its final output and success/failure for the parent transition. Use workflowExportId pointing to a workflow exportId in the same package (schema 1.7.0). Include every descendant workflow and task. Forward references and repeated child invocations are allowed; recursive cycles, missing references and more than 16 levels are rejected. Child schedules are ignored. Input reaches the first child step; outputs are local to each invocation. Stop/recovery belongs to the parent run; permissions are never inherited or expanded. The WorkFlows editor can select existing workflows as steps. In-app AI draft creators currently generate a single sequential workflow only: add existing workflows manually after generation; do not generate workflow steps for those creators.
@@ -132,14 +134,17 @@ Concurrency for tasks and workflows is optional: omit it to inherit the vault se
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for background GitHub Copilot CLI, "code" for a reusable JavaScript task, or "cli" for a generic interactive CLI task.
+- taskKind "cli" requires cliProvider: "opencode", "opencode2", "codex", "copilot", or "claude", and interactiveTerminal: true. cliProvider is forbidden on other task kinds. This is separate from the legacy OpenCode interactive kinds and from Codex App. The in-app AI draft creators do NOT support generating taskKind "cli" yet; use this type only for direct JSON imports/manual editing, not in creator responses.
+- Generic interactive CLI tasks require a prompt; model is optional and empty/omitted uses the provider's native default, never an AutoOC background default. agent is optional only for OpenCode providers (otherwise omit or use ""); empty uses the native agent. forceModel can omit the agent override. reasoningEffort is optional only for cliProvider "codex". Do not enable Code permissions, copilotAllowAllTools, useRalphLoop, branch or createBranch on generic interactive CLI tasks. Use native CLI authentication and permission prompts; never add automatic approval or permission-bypass flags.
 - For OpenCode 2 tasks, the editor can refresh models and selectable agents for the task's project. Use an agent ID when specifying an agent in a portable task.
 - copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
-- interactiveTerminal: true opens the interactive client for an AI task: OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
-- reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested.
+- interactiveTerminal: true is required for taskKind "cli"; for legacy AI tasks it opens OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
+- Interactive OpenCode tasks and all generic taskKind "cli" providers, including workflow steps, use the vault's CLI terminal destination setting (integrated in Obsidian or external window). Do not export cliTerminalDestination as a task/workflow field. Integrated tasks require a loaded Obsidian plugin; autonomous execution without that host rejects before starting workflow steps. Interactive CLI completion only confirms terminal launch, not the human task result. Background tasks, Code, background Copilot and the Codex app are unchanged.
+- reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested. Also optional for taskKind "cli" with cliProvider "codex", where the value must be supported by the selected native CLI/model.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -148,14 +153,14 @@ Task fields:
 - scheduleMonthDays: array 1-31.
 - scheduleIntervalValue: number, usually 10.
 - scheduleIntervalUnit: "seconds" | "minutes" | "hours", usually "minutes".
-- useRalphLoop: true only when the task may need iterations until completion.
-- agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
-- forceModel: true forces the selected model and does not apply the agent; otherwise false.
+- useRalphLoop: true only for legacy OpenCode 1 tasks when the task may need iterations until completion; never for taskKind "cli".
+- agent: "build" by default for legacy OpenCode tasks, "plan" for analysis only, or a custom agent if requested. Generic CLI tasks use the native default instead.
+- forceModel: true forces the selected model and does not apply the agent; otherwise false. Generic CLI tasks may omit model and keep native defaults regardless.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
 - workingDirectory: optional absolute path where this task should run.
 
-Do not include model or forceModel in importable tasks unless the user explicitly asks for them. AutoOC will use the system default model on import.
+Do not include model or forceModel in importable tasks unless the user explicitly asks for them. AutoOC will use the system default model on import for legacy task kinds; generic taskKind "cli" uses the provider's native default instead.
 
 Code steps and code tasks:
 Code runs with vm.runInContext and must always assign output.
@@ -381,13 +386,13 @@ Minimal valid workflow example:
             {
               "toStepId": "step-1",
               "mode": "conditional",
-              "condition": "JSON.parse(input).FOUND === \"YES\"",
+              "condition": "JSON.parse(input).FOUND === 'YES'",
               "conditionLang": "javascript"
             },
             {
               "toStepId": "step-noop",
               "mode": "conditional",
-              "condition": "JSON.parse(input).FOUND !== \"YES\"",
+              "condition": "JSON.parse(input).FOUND !== 'YES'",
               "conditionLang": "javascript"
             }
           ]
@@ -434,6 +439,20 @@ Nested workflow package example (schema 1.7.0):
   ]
 }
 
+Generic interactive CLI import example (direct imports only, not in-app AI draft creators):
+{
+  "autoOCExport": {"schemaVersion": "1.7.0", "pluginVersion": "${PLUGIN_BUILD_VERSION}", "exportedAt": "2026-11-07T00:00:00.000Z"},
+  "tasks": [{
+    "exportId": "interactive-codex", "taskKind": "cli", "cliProvider": "codex",
+    "name": "interactive_review", "prompt": "Review this project with me. Ask before modifying files or running commands.",
+    "interactiveTerminal": true, "scheduleType": "manual", "scheduleTime": "09:00",
+    "scheduleDate": "", "scheduleDays": [], "scheduleMonthDays": [],
+    "scheduleIntervalValue": 10, "scheduleIntervalUnit": "minutes",
+    "useRalphLoop": false, "forceModel": false, "agent": "", "branch": "", "createBranch": false
+  }],
+  "workflows": []
+}
+
 Now write the objective for the AutoOC workflow or task you want to generate:`;
 
 async function copyTextToClipboard(text: string): Promise<void> {
@@ -456,7 +475,8 @@ async function copyTextToClipboard(text: string): Promise<void> {
 type ScheduleType = "manual" | "once" | "daily" | "weekly" | "monthly" | "interval";
 type TaskStatus = "pending" | "running" | "completed" | "failed" | "abandoned";
 type IntervalUnit = "seconds" | "minutes" | "hours";
-type TaskKind = "opencode" | "opencode2" | "codex" | "copilot" | "code";
+type TaskKind = "opencode" | "opencode2" | "codex" | "copilot" | "code" | "cli";
+const CLI_TASK_COMMAND_NOTICE = "Interactive CLI tasks use a provider-specific launcher and a private prompt file; no directly copyable command is available.";
 type LegacyOwner = { workflowId: string; stepId: string; stepIndex: number; context: object };
 type LegacyStopIdentity = { kind: "legacy"; token: string; taskId: string; workflowId?: string; stepId?: string; stepIndex?: number };
 type SharedStopIdentity = { kind: "shared"; taskId: string; runId: string; workflowId: string; stepId: string; stepIndex: number };
@@ -524,6 +544,7 @@ interface ScheduledTask {
   legacyExecution?: LegacyStopIdentity & { startedAt: string; finishedAt?: string; stopState?: "requested" | "unconfirmed" | "error"; stopError?: string };
   id: string;
   taskKind?: TaskKind;
+  cliProvider?: InteractiveCliProvider;
   name: string;
   area?: string;
   prompt: string;
@@ -603,6 +624,7 @@ interface AutoOCSettings {
   copilotPath: string;
   claudePath?: string;
   cliLauncherEnabled?: Partial<Record<InteractiveCliProvider, boolean>>;
+  cliTerminalDestination?: "integrated" | "external";
   defaultCopilotModel: string;
   defaultAiEngine: DefaultAiEngine;
   defaultModel: string;
@@ -670,13 +692,15 @@ function renderAreaSuggestions(
 // Portable representation for import / export.
 // Intentionally excludes machine/runtime-specific fields:
 //   - internal id, status, lastRun, output, createdAt
-//   - model (taken from the importer's system default)
+//   - model for legacy kinds (taken from the importer's system default)
 interface ExportTask {
   disabled?: boolean;
   concurrency?: ConcurrencyPolicy;
   exportId: string;
   requiresAutoOCSecrets?: boolean;
   taskKind?: TaskKind;
+  cliProvider?: InteractiveCliProvider;
+  model?: string;
   copilotAllowAllTools?: boolean;
   name: string;
   area?: string;
@@ -715,7 +739,7 @@ interface ExportWorkflowTransition {
 }
 
 function getCopilotTaskValidationError(task: { taskKind?: unknown; copilotAllowAllTools?: unknown; interactiveTerminal?: unknown }): string | null {
-  if (task.copilotAllowAllTools !== undefined && (task.taskKind !== "copilot" || typeof task.copilotAllowAllTools !== "boolean")) {
+  if (task.copilotAllowAllTools !== undefined && !(task.taskKind === "cli" && task.copilotAllowAllTools === false) && (task.taskKind !== "copilot" || typeof task.copilotAllowAllTools !== "boolean")) {
     return "copilotAllowAllTools must be a boolean and is only valid for Copilot tasks.";
   }
   if (task.taskKind === "copilot" && task.interactiveTerminal === true) {
@@ -1052,9 +1076,13 @@ function generateId(): string {
 }
 
 function toExportTask(task: ScheduledTask, exportId: string): ExportTask {
+  const cliError = getInteractiveCliTaskValidationError(task);
+  if (cliError) throw new Error(`Task "${task.name}": ${cliError}`);
   return {
     exportId,
     taskKind: task.taskKind,
+    cliProvider: task.cliProvider,
+    model: task.taskKind === "cli" ? task.model || "" : undefined,
     concurrency: task.concurrency,
     disabled: task.disabled,
     copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : undefined,
@@ -1568,6 +1596,23 @@ function isWorkflowDue(wf: Workflow): boolean {
 // ─── Plugin ───────────────────────────────────────────────────────────────────
 
 export default class AutoOCPlugin extends Plugin {
+  private cliTerminals?: IntegratedTerminals;
+  private terminalCloseDrain?: Promise<void>;
+
+  async openIntegratedCli(provider: InteractiveCliProvider, cwd: string): Promise<void> {
+    if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
+    await this.cliTerminals.open(provider, cwd);
+  }
+
+  async installCliTerminalSupport(): Promise<void> {
+    if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
+    await this.cliTerminals.installSupport();
+  }
+
+  async showCliTerminals(): Promise<void> {
+    if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
+    await this.cliTerminals.show();
+  }
   private bulkCatalogMutationInProgress = false;
 
   async applyBulkSelection(selection: BulkSelection[], action: BulkAction): Promise<void> {
@@ -1964,6 +2009,7 @@ export default class AutoOCPlugin extends Plugin {
         this.view = new AutoOCView(leaf, this);
         return this.view;
       });
+      this.cliTerminals = new IntegratedTerminals(this, () => openCliLauncher(this.app, this));
 
       this.addRibbonIcon("workflow", "AutoOC — Task Scheduler", () => {
         this.toggleView();
@@ -2103,6 +2149,18 @@ export default class AutoOCPlugin extends Plugin {
         }
         return;
       }
+      if (this.cliTerminals?.hasRunningSessions || this.terminalCloseDrain) {
+        event.preventDefault(); (event as any).returnValue = false;
+        if (!this.terminalCloseDrain) {
+          new Notice("AutoOC is stopping integrated terminals. Close or reload again after they stop.", 8000);
+          this.terminalCloseDrain = this.cliTerminals!.stopAll().then(() => {
+            new Notice("AutoOC: terminal sessions stopped. You can close or reload the window.");
+          }).catch(error => {
+            new Notice(`AutoOC could not confirm terminal cleanup. The window was kept open. ${String(error)}`, 15000);
+          }).finally(() => { this.terminalCloseDrain = undefined; });
+        }
+        return;
+      }
       void this.onunload().catch(error=>console.warn('AutoOC window cleanup retained reservation',error));
     };
     window.addEventListener('beforeunload',close);
@@ -2110,6 +2168,10 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async onunload() {
+    const closingTerminals = this.cliTerminals;
+    const terminalCleanup = closingTerminals?.dispose();
+    // Attach rejection handling immediately; preserve the manager on an uncertain stop.
+    void terminalCleanup?.catch(error => console.warn("AutoOC terminal cleanup is uncertain", error));
     for (const modal of this.draftModals || []) modal.close();
     this.draftModals?.clear();
     for (const controller of this.draftControllers || []) controller.abort();
@@ -2185,6 +2247,8 @@ export default class AutoOCPlugin extends Plugin {
       });
     }
     await closingBridge;
+    await terminalCleanup;
+    if (this.cliTerminals === closingTerminals) this.cliTerminals = undefined;
   }
 
   private stopStartupWait(): void {
@@ -2463,6 +2527,10 @@ export default class AutoOCPlugin extends Plugin {
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations:()=>this.createVaultMutationBatch(),
+        launchInteractiveTerminal:request=>{
+          if (!this.cliTerminals) return Promise.reject(new Error("Integrated terminals are unavailable. No external terminal was started."));
+          return this.cliTerminals.openTask(request);
+        },
         redact:output=>this.redactSecrets(output),
         onTaskOutput:event=>{
           if (this.lifecycleStopped || this.sharedWorkflowExecutions.get(workflowId) !== execution || execution.controller.signal.aborted ||
@@ -2776,10 +2844,12 @@ export default class AutoOCPlugin extends Plugin {
   private getMcpRawTaskPayloadError(payload: Record<string, unknown>): string | null {
     if ("steps" in payload) return "Raw task payloads must not include workflow steps; use kind \"workflow\".";
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(taskKind)) return "payload.taskKind must be opencode, opencode2, codex, copilot, or code.";
+    if (!["opencode", "opencode2", "codex", "copilot", "code", "cli"].includes(taskKind)) return "payload.taskKind must be opencode, opencode2, codex, copilot, code, or cli.";
+    const cliError = getInteractiveCliTaskValidationError(payload);
+    if (cliError) return cliError;
     const copilotError = getCopilotTaskValidationError(payload);
     if (copilotError) return copilotError;
-    if (payload.reasoningEffort !== undefined && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
+    if (payload.reasoningEffort !== undefined && ((taskKind !== "codex" && !(taskKind === "cli" && payload.cliProvider === "codex")) || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
       return "payload.reasoningEffort is only valid as a non-empty string for taskKind \"codex\".";
     }
     if (payload.interactiveTerminal !== undefined && typeof payload.interactiveTerminal !== "boolean") return "payload.interactiveTerminal must be a boolean when provided.";
@@ -3751,6 +3821,7 @@ export default class AutoOCPlugin extends Plugin {
 
   // Keep CLI options before "--" so prompt text cannot be parsed as opencode flags.
   buildArgs(task: ScheduledTask): string[] {
+    if (task.taskKind === "cli") throw new Error(CLI_TASK_COMMAND_NOTICE);
     if (task.taskKind === "opencode2" && task.interactiveTerminal) return [resolveOpencodeBin(this.settings.opencode2Path || "opencode"),
       ...openCodeInteractiveArgs(2, task.model || this.settings.defaultOpencode2Model || "", task.forceModel ? "" : task.agent || this.settings.defaultOpencode2Agent || "build", task.prompt)];
     if (task.taskKind === "opencode2") return [resolveOpencodeBin(this.settings.opencode2Path || "opencode"),
@@ -4095,6 +4166,11 @@ export default class AutoOCPlugin extends Plugin {
     const selectedTask = this.settings.tasks[idx];
     const effectiveTask: ScheduledTask = { ...selectedTask, ...overrides };
     assertNoRetiredDependency(effectiveTask);
+    const cliError = getInteractiveCliTaskValidationError(effectiveTask);
+    if (cliError) throw new Error(cliError);
+    // Validate before either shared dispatch or legacy launch mutates execution state.
+    if (effectiveTask.taskKind === "cli") prepareCliTask(effectiveTask, this.settings,
+      effectiveTask.workingDirectory || this.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".", effectiveTask.prompt);
 
     const binding=(effectiveTask as any).runtimeExecution;
     if(!owner && binding?.requiresReconciliation) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
@@ -4185,7 +4261,7 @@ export default class AutoOCPlugin extends Plugin {
       return;
     }
 
-    if (!effectiveTask.model?.trim()) {
+    if (effectiveTask.taskKind !== "cli" && !effectiveTask.model?.trim()) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = new Date().toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
@@ -4200,23 +4276,31 @@ export default class AutoOCPlugin extends Plugin {
     const secretEnv = {};
 
     if (effectiveTask.interactiveTerminal) {
+      const cliLabel = effectiveTask.taskKind === "cli"
+        ? INTERACTIVE_CLIS.find(cli => cli.id === effectiveTask.cliProvider)!.label : "OpenCode CLI";
       const current = this.settings.tasks[idx];
       let settled = false;
       let cancelled = false;
+      const launchController = new AbortController();
       // Identity, not just task ID/status, prevents late callbacks from a
       // stopped, deleted or relaunched task from completing another attempt.
-      const controller = { kill: () => { cancelled = true; settled = true; } };
+      const controller = { kill: () => { cancelled = true; settled = true; launchController.abort(); } };
       attempt.handle = controller;
       this.runningProcesses.set(task.id, controller);
       const isCurrent = () => this.isLegacyCurrent(attempt) && !settled && this.runningProcesses.get(task.id) === controller &&
         this.settings.tasks.find((candidate) => candidate.id === task.id) === current && current.status === "running";
       const finish = async (error?: Error) => {
         if (!isCurrent()) return;
+        if ((error as Error & {code?:string})?.code === "AUTOOC_TERMINAL_UNCERTAIN") {
+          current.output = this.redactSecrets(`[AutoOC] Interactive terminal outcome is unconfirmed: ${String(error)}`);
+          await this.killTask(task.id, {...attempt.identity});
+          return;
+        }
         settled = true;
         current.status = error ? "failed" : "completed";
         current.output = error
-          ? `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}`
-          : "[interactive OpenCode CLI launch confirmed; agent task completion is not tracked]";
+          ? `[AutoOC] Could not open interactive ${cliLabel}: ${String(error)}`
+          : `[interactive ${cliLabel} launch confirmed; agent task completion is not tracked]`;
         if (error) this.view?.startGradualSink(task.id);
         await this.saveSettings();
         // A stop/delete/relaunch during persistence invalidates continuation.
@@ -4228,13 +4312,24 @@ export default class AutoOCPlugin extends Plugin {
       };
       current.status = "running";
       current.lastRun = new Date().toISOString();
-      current.output = "[opening interactive OpenCode CLI...]";
+      current.output = `[opening interactive ${cliLabel}...]`;
       this.view?.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
       this.finishLegacyStart(attempt);
 
       try {
+        if (effectiveTask.taskKind === "cli") {
+          const request = prepareCliTask(effectiveTask, this.settings, taskCwd, effectiveTask.prompt, launchController.signal);
+          if (this.settings.cliTerminalDestination === "integrated") {
+            if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. No external terminal was started.");
+            await this.cliTerminals.openTask(request);
+          } else {
+            await launchExternalCliTask(request, this.settings.linuxTerminal);
+          }
+          await finish();
+          return;
+        }
         let prompt = effectiveTask.prompt;
         if (effectiveTask.useRalphLoop) {
           prompt = `/ralph-loop ${prompt}`;
@@ -4242,6 +4337,13 @@ export default class AutoOCPlugin extends Plugin {
         const major = effectiveTask.taskKind === "opencode2" ? 2 : 1;
         const bin = checkedOpenCode2Bin || resolveOpencodeBin(this.settings.opencodePath);
         const agent = major === 2 ? effectiveTask.agent || this.settings.defaultOpencode2Agent || "build" : this.getEffectiveAgent(effectiveTask.agent);
+        if (this.settings.cliTerminalDestination === "integrated") {
+          if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. No external terminal was started.");
+          await this.cliTerminals.openTask({bin,cwd:taskCwd,label:effectiveTask.name,major,
+            model:effectiveTask.model,agent:effectiveTask.forceModel ? "" : agent,prompt,signal:launchController.signal});
+          await finish();
+          return;
+        }
         const launchOptions = {
           onError: (error: Error) => { void finish(error); },
           onLaunched: () => { void finish(); },
@@ -5269,6 +5371,19 @@ export default class AutoOCPlugin extends Plugin {
     for(const item of [...(data.tasks || []),...(data.workflows || [])]) { validateConcurrency(item); validateDisabled(item); }
     for (const workflow of data.workflows || []) for (const step of workflow.steps || []) validateDisabled(step);
     validateNestedWorkflowExport(data);
+    for (const task of data.tasks || []) {
+      const cliError = getInteractiveCliTaskValidationError(task);
+      if (cliError) throw new Error(`Task "${task.name}": ${cliError}`);
+      const kind = task.taskKind || "opencode";
+      if (!["opencode", "opencode2", "codex", "copilot", "code", "cli"].includes(kind)) throw new Error(`Unsupported taskKind: ${String(kind)}.`);
+      if (kind === "opencode2" && task.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks.");
+      const copilotError = getCopilotTaskValidationError(task);
+      if (copilotError) throw new Error(`Task "${task.name}": ${copilotError}`);
+      if (task.reasoningEffort !== undefined && ((kind !== "codex" && !(kind === "cli" && task.cliProvider === "codex")) || typeof task.reasoningEffort !== "string" || !task.reasoningEffort.trim())) {
+        throw new Error(`Task "${task.name}" has reasoningEffort outside a Codex task.`);
+      }
+      if (kind === "code" && task.interactiveTerminal === true) throw new Error(`Task "${task.name}" cannot combine Code with interactiveTerminal.`);
+    }
     const importedWorkflowIds = new Map((data.workflows || []).map(w => [w, generateId()]));
     const exportIdToWorkflowId = new Map((data.workflows || []).map(w => [w.exportId, importedWorkflowIds.get(w)!]));
     const exportIdToTaskId = new Map<string, string>();
@@ -5276,31 +5391,20 @@ export default class AutoOCPlugin extends Plugin {
 
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
-      if (importedTaskKind === "opencode2" && et.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks.");
-      if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(importedTaskKind)) {
-        throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
-      }
-      const copilotError = getCopilotTaskValidationError(et);
-      if (copilotError) throw new Error(`Task "${et.name}": ${copilotError}`);
-      if (et.reasoningEffort !== undefined && (importedTaskKind !== "codex" || typeof et.reasoningEffort !== "string" || !et.reasoningEffort.trim())) {
-        throw new Error(`Task "${et.name}" has reasoningEffort outside a Codex task.`);
-      }
-      if (importedTaskKind === "code" && et.interactiveTerminal === true) {
-        throw new Error(`Task "${et.name}" cannot combine Code with interactiveTerminal.`);
-      }
       const task: ScheduledTask = {
         id: generateId(),
         taskKind: importedTaskKind,
+        cliProvider: importedTaskKind === "cli" ? et.cliProvider : undefined,
         requiresAutoOCSecrets: et.requiresAutoOCSecrets,
         name: this.ensureUniqueTaskName(et.name),
         area: et.area ?? "",
         prompt: importedTaskKind === "code" ? (et.code || et.prompt || "") : et.prompt,
-        model: importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : importedTaskKind === "opencode2" ? this.settings.defaultOpencode2Model || "" : this.getEffectiveDefaultModel(),
+        model: importedTaskKind === "cli" ? et.model || "" : importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : importedTaskKind === "opencode2" ? this.settings.defaultOpencode2Model || "" : this.getEffectiveDefaultModel(),
         copilotAllowAllTools: importedTaskKind === "copilot" ? et.copilotAllowAllTools === true : undefined,
-        agent: importedTaskKind === "opencode2" ? et.agent || this.settings.defaultOpencode2Agent || "build" : importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
-        reasoningEffort: importedTaskKind === "codex" ? (et.reasoningEffort || this.settings.defaultCodexReasoningEffort) : undefined,
+        agent: importedTaskKind === "cli" ? et.agent || "" : importedTaskKind === "opencode2" ? et.agent || this.settings.defaultOpencode2Agent || "build" : importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
+        reasoningEffort: importedTaskKind === "cli" ? et.reasoningEffort : importedTaskKind === "codex" ? (et.reasoningEffort || this.settings.defaultCodexReasoningEffort) : undefined,
         useRalphLoop: importedTaskKind === "opencode" ? (et.useRalphLoop ?? false) : false,
-        forceModel: isOpenCodeTask(importedTaskKind) ? (et.forceModel ?? false) : false,
+        forceModel: importedTaskKind === "cli" || isOpenCodeTask(importedTaskKind) ? (et.forceModel ?? false) : false,
         scheduleType: et.scheduleType ?? "manual",
         scheduleTime: et.scheduleTime ?? nowTimeString(),
         scheduleDate: et.scheduleDate ?? "",
@@ -6981,6 +7085,7 @@ class AutoOCView extends ItemView {
     summary.createEl("span", {
       text: (task.taskKind || "opencode") === "code"
         ? "Code"
+        : task.taskKind === "cli" ? INTERACTIVE_CLIS.find(cli => cli.id === task.cliProvider)?.label || "Invalid CLI provider"
         : task.taskKind === "codex"
           ? (task.interactiveTerminal ? "ChatGPT / Codex" : "Codex")
           : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.taskKind === "opencode2" ? "OpenCode 2 CLI" : task.interactiveTerminal ? "OpenCode 1 CLI" : "OpenCode 1",
@@ -7053,13 +7158,18 @@ class AutoOCView extends ItemView {
     details.style.display = isExpanded ? "block" : "none";
 
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = task.taskKind === "codex"
+    const modelLabel = task.taskKind === "cli" ? task.model || "Native default" : task.taskKind === "codex"
       ? this.plugin.availableCodexModels.find((m) => m.value === task.model)?.label ?? task.model ?? "Automatic"
       : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic"
         : this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
     meta.createEl("span", { text: `🗂 ${task.area?.trim() || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
+    } else if (task.taskKind === "cli") {
+      meta.createEl("span", { text: `${INTERACTIVE_CLIS.find(cli => cli.id === task.cliProvider)?.label || "Invalid CLI provider"} (interactive)` });
+      meta.createEl("span", { text: `Model: ${modelLabel}` });
+      if (isOpenCodeTask(task.cliProvider)) meta.createEl("span", { text: `Agent: ${task.forceModel ? "Native default" : task.agent || "Native default"}` });
+      if (task.cliProvider === "codex" && task.reasoningEffort) meta.createEl("span", { text: `Reasoning: ${task.reasoningEffort}` });
     } else if (task.taskKind === "codex") {
       meta.createEl("span", { text: `✦ Codex · ${modelLabel || "Automatic"}` });
       if (task.interactiveTerminal) meta.createEl("span", { text: "ChatGPT app task" });
@@ -7189,8 +7299,11 @@ class AutoOCView extends ItemView {
       text: "🔍 Command",
       cls: "auto-oc-btn-cmd",
     });
+    btnCmd.disabled = task.taskKind === "cli";
+    if (btnCmd.disabled) btnCmd.title = CLI_TASK_COMMAND_NOTICE;
     btnCmd.onclick = (e) => {
       e.stopPropagation();
+      if (task.taskKind === "cli") return;
       const cmd = this.plugin.buildCommand(task);
       new CommandPreviewModal(this.app, task.name, cmd).open();
     };
@@ -7539,6 +7652,10 @@ class AutoOCView extends ItemView {
       const modelLabel = this.plugin.availableModels.find((m) => m.value === task.model)?.label ?? task.model;
       if ((task.taskKind || "opencode") === "code") {
         taskMeta.createSpan({ text: "{ } Code task" });
+      } else if (task.taskKind === "cli") {
+        taskMeta.createSpan({ text: `${INTERACTIVE_CLIS.find(cli => cli.id === task.cliProvider)?.label || "Invalid CLI provider"} (interactive)` });
+        taskMeta.createSpan({ text: `Model: ${task.model || "Native default"}` });
+        if (isOpenCodeTask(task.cliProvider)) taskMeta.createSpan({ text: `Agent: ${task.forceModel ? "Native default" : task.agent || "Native default"}` });
       } else {
         taskMeta.createSpan({ text: `🤖 ${modelLabel || "(no model)"}` });
         taskMeta.createSpan({ text: `⚙️ ${this.plugin.getEffectiveAgent(task.agent)}` });
@@ -7586,8 +7703,11 @@ class AutoOCView extends ItemView {
         text: "🔍 Command",
         cls: "auto-oc-btn-cmd",
       });
+      btnCmd.disabled = task.taskKind === "cli";
+      if (btnCmd.disabled) btnCmd.title = CLI_TASK_COMMAND_NOTICE;
       btnCmd.onclick = (e) => {
         e.stopPropagation();
+        if (task.taskKind === "cli") return;
         new CommandPreviewModal(this.app, task.name, this.plugin.buildCommand(task)).open();
       };
 
@@ -7919,7 +8039,7 @@ class CreateTaskModal extends Modal {
     // Header with X button
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = (this.draft.taskKind || "opencode") as TaskKind;
-    const taskType = taskKind === "opencode2" && this.draft.interactiveTerminal ? "cli2" : taskKind === "opencode" && this.draft.interactiveTerminal
+    const taskType = taskKind === "cli" ? "interactive-cli" : taskKind === "opencode2" && this.draft.interactiveTerminal ? "cli2" : taskKind === "opencode" && this.draft.interactiveTerminal
       ? "cli"
       : taskKind === "codex" && this.draft.interactiveTerminal
         ? "codex-app"
@@ -7952,11 +8072,25 @@ class CreateTaskModal extends Modal {
         dd.addOption("code", "Code task");
         dd.addOption("cli", "OpenCode 1 CLI task (interactive)");
         dd.addOption("cli2", "OpenCode 2 CLI task (interactive)");
+        dd.addOption("interactive-cli", "CLI task (interactive)");
         dd.setValue(taskType);
         dd.onChange((v) => {
-          this.draft.taskKind = v === "opencode2" || v === "cli2" ? "opencode2" : v === "code" ? "code" : v === "copilot" ? "copilot" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
-          this.draft.interactiveTerminal = v === "cli" || v === "cli2" || v === "codex-app";
-          if (v === "codex" || v === "codex-app") {
+          this.draft.taskKind = v === "interactive-cli" ? "cli" : v === "opencode2" || v === "cli2" ? "opencode2" : v === "code" ? "code" : v === "copilot" ? "copilot" : (v === "codex" || v === "codex-app") ? "codex" : "opencode";
+          this.draft.interactiveTerminal = v === "interactive-cli" || v === "cli" || v === "cli2" || v === "codex-app";
+          this.draft.cliProvider = v === "interactive-cli" ? "opencode" : undefined;
+          if (v === "interactive-cli") {
+            this.draft.model = "";
+            this.draft.agent = "";
+            this.draft.reasoningEffort = undefined;
+            this.draft.useRalphLoop = false;
+            this.draft.forceModel = false;
+            this.draft.branch = "";
+            this.draft.createBranch = false;
+            this.draft.copilotAllowAllTools = undefined;
+            this.draft.codeAllowVault = undefined;
+            this.draft.codeAllowFiles = undefined;
+            this.draft.codeAllowTerminal = undefined;
+          } else if (v === "codex" || v === "codex-app") {
             this.draft.model = "";
             this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
           } else if (v === "copilot") {
@@ -7982,6 +8116,31 @@ class CreateTaskModal extends Modal {
           this.onOpen();
         });
       });
+
+    if (taskKind === "cli") {
+      new Setting(contentEl).setName("Harness")
+        .setDesc("Uses the selected CLI's native authentication and permission prompts. No automatic approval is enabled.")
+        .addDropdown(dd => {
+          INTERACTIVE_CLIS.forEach(cli => dd.addOption(cli.id, cli.label));
+          dd.setValue(this.draft.cliProvider || "");
+          dd.onChange(value => {
+            this.draft.cliProvider = value as InteractiveCliProvider;
+            this.draft.model = "";
+            this.draft.agent = "";
+            this.draft.reasoningEffort = undefined;
+            this.draft.forceModel = false;
+            this.draft.useRalphLoop = false;
+            this.draft.branch = "";
+            this.draft.createBranch = false;
+            this.draft.copilotAllowAllTools = undefined;
+            this.draft.codeAllowVault = undefined;
+            this.draft.codeAllowFiles = undefined;
+            this.draft.codeAllowTerminal = undefined;
+            this.draft.interactiveTerminal = true;
+            this.onOpen();
+          });
+        });
+    }
 
     new Setting(contentEl)
       .setName("Concurrency")
@@ -8045,7 +8204,7 @@ class CreateTaskModal extends Modal {
       promptNotice.style.display = "none";
       new Setting(contentEl)
         .setName("Prompt / Goal")
-        .setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`)
+        .setDesc(`Text to send to ${taskKind === "cli" ? INTERACTIVE_CLIS.find(cli => cli.id === this.draft.cliProvider)?.label || "the selected CLI" : taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`)
         .addTextArea((ta) => {
           const updatePromptNotice = (value: string) => {
             if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
@@ -8129,7 +8288,34 @@ class CreateTaskModal extends Modal {
         });
     }
 
-    if (taskKind === "opencode") {
+    if (taskKind === "cli") {
+      new Setting(contentEl).setName("Model (optional)")
+        .setDesc("Empty uses the selected CLI's native default, not AutoOC's background model.")
+        .addText(text => text.setValue(this.draft.model || "").setPlaceholder("Native default")
+          .onChange(value => { this.draft.model = value.trim(); }));
+      if (isOpenCodeTask(this.draft.cliProvider)) {
+        new Setting(contentEl).setName("Agent (optional)")
+          .setDesc("OpenCode agent ID. Empty uses the CLI's native default.")
+          .addText(text => text.setValue(this.draft.agent || "").setPlaceholder("Native default")
+            .onChange(value => { this.draft.agent = value.trim(); }));
+        new Setting(contentEl).setName("Force model")
+          .setDesc("Omit the agent override. An empty model still uses the CLI's native default.")
+          .addToggle(toggle => toggle.setValue(!!this.draft.forceModel)
+            .onChange(value => { this.draft.forceModel = value; }));
+      }
+      if (this.draft.cliProvider === "codex") {
+        new Setting(contentEl).setName("Reasoning effort (optional)")
+          .addDropdown(dd => {
+            dd.addOption("", "Native default");
+            const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
+            efforts.forEach(effort => dd.addOption(effort, effort));
+            const current = this.draft.reasoningEffort || "";
+            if (current && !efforts.includes(current)) dd.addOption(current, current);
+            dd.setValue(current).onChange(value => { this.draft.reasoningEffort = value || undefined; });
+          });
+      }
+      contentEl.createEl("p", { text: "Uses the global CLI terminal destination. AutoOC confirms launch only, not completion of the human-controlled session.", cls: "setting-item-description" });
+    } else if (taskKind === "opencode") {
       const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || (this.app.vault.adapter as any).basePath || ".";
       const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
 
@@ -8407,6 +8593,9 @@ class CreateTaskModal extends Modal {
             return;
           }
           const savingTaskKind = (this.draft.taskKind || "opencode") as TaskKind;
+          if (savingTaskKind === "cli") this.draft.interactiveTerminal = true;
+          const cliError = getInteractiveCliTaskValidationError(this.draft);
+          if (cliError) { new Notice(cliError); return; }
           if (savingTaskKind !== "code" && !this.draft.prompt?.trim()) {
             new Notice("Prompt is required.");
             return;
@@ -8466,8 +8655,9 @@ class CreateTaskModal extends Modal {
                 prompt: savingTaskKind === "code" ? (this.draft.code || "") : (this.draft.prompt || ""),
                 concurrency: this.draft.concurrency,
                 taskKind: savingTaskKind,
+                cliProvider: savingTaskKind === "cli" ? this.draft.cliProvider : undefined,
                 interactiveTerminal: savingTaskKind === "code" ? undefined : !!this.draft.interactiveTerminal,
-                reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : undefined,
+                reasoningEffort: savingTaskKind === "codex" || (savingTaskKind === "cli" && this.draft.cliProvider === "codex") ? this.draft.reasoningEffort : undefined,
                 copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
                 ...(existing ? {runtimeExecution:(existing as any).runtimeExecution,legacyExecution:existing.legacyExecution} : {}),
                 status: existing.status,
@@ -8481,16 +8671,17 @@ class CreateTaskModal extends Modal {
             const task: ScheduledTask = {
               id: generateId(),
               taskKind: savingTaskKind,
+              cliProvider: savingTaskKind === "cli" ? this.draft.cliProvider : undefined,
               concurrency: this.draft.concurrency,
               name: this.draft.name!,
               prompt: savingTaskKind === "code" ? (this.draft.code || "") : this.draft.prompt!,
-              model: savingTaskKind === "code" ? "" : this.draft.model!,
+              model: savingTaskKind === "code" ? "" : this.draft.model || "",
               area: this.draft.area ?? "",
-              agent: savingTaskKind === "opencode2" ? this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build" : savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
-              reasoningEffort: savingTaskKind === "codex" ? (this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
+              agent: savingTaskKind === "cli" ? this.draft.agent || "" : savingTaskKind === "opencode2" ? this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build" : savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
+              reasoningEffort: savingTaskKind === "cli" && this.draft.cliProvider === "codex" ? this.draft.reasoningEffort : savingTaskKind === "codex" ? (this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort) : undefined,
               copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : undefined,
               useRalphLoop: savingTaskKind === "opencode" ? (this.draft.useRalphLoop ?? false) : false,
-              forceModel: isOpenCodeTask(savingTaskKind) ? (this.draft.forceModel ?? false) : false,
+              forceModel: savingTaskKind === "cli" || isOpenCodeTask(savingTaskKind) ? (this.draft.forceModel ?? false) : false,
               scheduleType: this.draft.scheduleType ?? "manual",
               scheduleTime: this.draft.scheduleTime ?? nowTimeString(),
               scheduleDate: this.draft.scheduleDate ?? "",
@@ -10243,12 +10434,14 @@ class ImportModal extends Modal {
           errors.push(where + ".prompt is missing or empty.");
         }
         const taskKind = t.taskKind || "opencode";
-        if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(taskKind)) {
-          errors.push(where + ".taskKind is invalid. Expected opencode, opencode2, codex, copilot, or code.");
+        if (!["opencode", "opencode2", "codex", "copilot", "code", "cli"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, opencode2, codex, copilot, code, or cli.");
         }
+        const cliError = getInteractiveCliTaskValidationError(t);
+        if (cliError) errors.push(where + ": " + cliError);
         const copilotError = getCopilotTaskValidationError(t);
         if (copilotError) errors.push(where + ": " + copilotError);
-        if (t.reasoningEffort !== undefined && (taskKind !== "codex" || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
+        if (t.reasoningEffort !== undefined && ((taskKind !== "codex" && !(taskKind === "cli" && t.cliProvider === "codex")) || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
           errors.push(where + ".reasoningEffort is only valid for Codex tasks.");
         }
         if (t.interactiveTerminal !== undefined && typeof t.interactiveTerminal !== "boolean") {

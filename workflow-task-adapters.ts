@@ -1,9 +1,10 @@
 import type { WorkflowTaskAdapter } from "./code-workflow-host";
 import type { PreparedWorkflow } from "./workflow-definition";
 import type { VaultMutationBatchFactory } from "./code-vault-mutations";
+import type { InteractiveTaskTerminalOptions } from "./interactive-task-terminal";
 import { createCodeWorkflowAdapter } from "./code-workflow-adapter";
 import { createCodexWorkflowAdapter } from "./codex-workflow-adapter";
-import { createCopilotWorkflowAdapter,createOpenCodeWorkflowAdapter } from "./cli-workflow-adapters";
+import { createCopilotWorkflowAdapter,createOpenCodeWorkflowAdapter,createInteractiveCliWorkflowAdapter } from "./cli-workflow-adapters";
 
 // Select exactly one implementation. Never fall back to another executor after
 // a failure: the first executor may already have performed durable effects.
@@ -26,11 +27,12 @@ export function combineWorkflowTaskAdapters(adapters:readonly WorkflowTaskAdapte
   };
 }
 
-export function createWorkflowTaskAdapter(definition:PreparedWorkflow,vaultBase:string,vaultMutations?:VaultMutationBatchFactory):WorkflowTaskAdapter {
+export function createWorkflowTaskAdapter(definition:PreparedWorkflow,vaultBase:string,vaultMutations?:VaultMutationBatchFactory,terminal?:InteractiveTaskTerminalOptions):WorkflowTaskAdapter {
   return combineWorkflowTaskAdapters([
     createCodeWorkflowAdapter(vaultBase,definition.settings.workingDirectory || vaultBase,vaultMutations),
     createCodexWorkflowAdapter(definition,vaultBase),
     createCopilotWorkflowAdapter(definition,vaultBase),
-    createOpenCodeWorkflowAdapter(definition,vaultBase),
+    createOpenCodeWorkflowAdapter(definition,vaultBase,terminal),
+    createInteractiveCliWorkflowAdapter(definition,vaultBase,terminal),
   ]);
 }

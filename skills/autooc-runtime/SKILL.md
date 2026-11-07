@@ -5,6 +5,47 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Terminales CLI integradas (candidato 1.7.21)
+
+`Settings > AutoOC > Interactive CLI launchers > CLI terminal destination` elige
+terminal integrada o ventana externa para sesiones manuales y tareas CLI
+interactivas de todos los harness, tambien dentro de workflows. No cambia tareas en
+segundo plano, Code ni la apertura de la aplicacion Codex. Las integradas
+requieren Windows x64, soporte PTY instalado expresamente y AutoOC cargado.
+
+El editor ofrece `CLI task (interactive)` con un selector `Harness`: OpenCode 1,
+OpenCode 2, Codex CLI, GitHub Copilot CLI y Claude Code CLI. Se guarda/exporta como
+`taskKind:"cli"`, `cliProvider:"opencode"|"opencode2"|"codex"|"copilot"|"claude"`
+y `interactiveTerminal:true`. Prompt obligatorio; modelo opcional, vacio usa el
+default nativo del proveedor. Agente solo para OpenCode; reasoning opcional solo
+para Codex CLI. No admite permisos Code, copilotAllowAllTools, Ralph Loop ni cambios
+de rama. No confundir esta tarea con Codex App o Copilot en segundo plano existentes.
+Los tipos CLI OpenCode anteriores siguen funcionando sin migracion.
+
+El destino es global y no se exporta. Las definiciones CLI genericas nuevas usan
+el esquema de paquete existente (1.6.0, o 1.7.0 si anidan workflows), pero requieren
+este candidato: un plugin anterior no reconoce taskKind cli aunque comparta version.
+Los creadores IA siguen generando tareas no interactivas; el usuario puede crear
+o seleccionar manualmente una tarea CLI, o importar una definicion revisada.
+
+Una peticion CLI delegada al propietario Obsidian usa ese mismo destino. El host
+autonomo sin plugin no puede crear una vista Obsidian: si la instalacion pide modo
+integrado y el workflow contiene tareas CLI interactivas, rechaza antes de
+crear el journal o ejecutar pasos, sin fallback externo. Abrir Obsidian o cambiar
+el destino mediante Settings; no modificar el catalogo para forzar un reintento.
+El destino no se exporta como campo de tarea/workflow ni invalida sus checkpoints.
+
+En una tarea CLI interactiva, completar el paso confirma solo la apertura de la
+terminal con su prompt/modelo/agente: el resultado humano sigue sin observarse y
+el workflow conserva su contrato de continuacion. El prompt completo se mantiene
+en un auxiliar propio hasta confirmar la salida/parada del proceso. Si la apertura
+o parada queda incierta se conserva evidencia, sin relanzar ni limpiar por timeout.
+Copilot usa --interactive, nunca su modo no interactivo -p; Codex y Claude reciben
+una instruccion posicional. No se añaden autoaprobaciones o bypasses de permisos.
+Las pestañas permiten cerrar sesiones con confirmacion; descargar AutoOC las
+detiene, a diferencia de una ventana externa. Comprobar hashes del candidato y su
+carga real: compartir version con una publicacion anterior no acredita esta funcion.
+
 ## Workflows anidados (candidato de desarrollo)
 
 Comprobar `version.nestedWorkflows: 1` y la capacidad del propietario cargado antes de atribuir este contrato a una instalación. Un paso `workflow` referencia `workflowId` en el catálogo; un paquete importable usa `workflowExportId` y esquema `1.7.0`, incluyendo los descendientes y sus tareas. El editor WorkFlows permite seleccionar hijos existentes; `edit-workflow` mantiene su alcance de edición de texto y no permite crear referencias estructurales.

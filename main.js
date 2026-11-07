@@ -1,3 +1,49 @@
+/*! @xterm/xterm
+Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
+Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+*/
+/*! @xterm/addon-fit
+Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+*/
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -436,14 +482,14 @@ var require_dist2 = __commonJS({
     }
     function pathFor(read2, member, name) {
       var _a;
-      let path32 = [];
+      let path35 = [];
       for (; ; ) {
         let obj = member.firstChild, prop;
         if ((obj === null || obj === void 0 ? void 0 : obj.name) == "VariableName") {
-          path32.push(read2(obj));
-          return { path: path32.reverse(), name };
+          path35.push(read2(obj));
+          return { path: path35.reverse(), name };
         } else if ((obj === null || obj === void 0 ? void 0 : obj.name) == "MemberExpression" && ((_a = prop = obj.lastChild) === null || _a === void 0 ? void 0 : _a.name) == "PropertyName") {
-          path32.push(read2(prop));
+          path35.push(read2(prop));
           member = obj;
         } else {
           return null;
@@ -496,20 +542,20 @@ var require_dist2 = __commonJS({
     function scopeCompletionSource(scope) {
       let cache2 = /* @__PURE__ */ new Map();
       return (context) => {
-        let path32 = completionPath(context);
-        if (!path32)
+        let path35 = completionPath(context);
+        if (!path35)
           return null;
         let target = scope;
-        for (let step of path32.path) {
+        for (let step of path35.path) {
           target = target[step];
           if (!target)
             return null;
         }
         let options = cache2.get(target);
         if (!options)
-          cache2.set(target, options = enumeratePropertyCompletions(target, !path32.path.length));
+          cache2.set(target, options = enumeratePropertyCompletions(target, !path35.path.length));
         return {
-          from: context.pos - path32.name.length,
+          from: context.pos - path35.name.length,
           options,
           validFor: Identifier
         };
@@ -712,13 +758,6404 @@ var require_dist2 = __commonJS({
   }
 });
 
+// node_modules/@xterm/xterm/lib/xterm.js
+var require_xterm = __commonJS({
+  "node_modules/@xterm/xterm/lib/xterm.js"(exports, module2) {
+    !function(e, t) {
+      if ("object" == typeof exports && "object" == typeof module2) module2.exports = t();
+      else if ("function" == typeof define && define.amd) define([], t);
+      else {
+        var i = t();
+        for (var s in i) ("object" == typeof exports ? exports : e)[s] = i[s];
+      }
+    }(globalThis, () => (() => {
+      "use strict";
+      var e = { 4567: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.AccessibilityManager = void 0;
+        const n = i2(9042), o = i2(9924), a = i2(844), h = i2(4725), c = i2(2585), l = i2(3656);
+        let d = t2.AccessibilityManager = class extends a.Disposable {
+          constructor(e3, t3, i3, s3) {
+            super(), this._terminal = e3, this._coreBrowserService = i3, this._renderService = s3, this._rowColumns = /* @__PURE__ */ new WeakMap(), this._liveRegionLineCount = 0, this._charsToConsume = [], this._charsToAnnounce = "", this._accessibilityContainer = this._coreBrowserService.mainDocument.createElement("div"), this._accessibilityContainer.classList.add("xterm-accessibility"), this._rowContainer = this._coreBrowserService.mainDocument.createElement("div"), this._rowContainer.setAttribute("role", "list"), this._rowContainer.classList.add("xterm-accessibility-tree"), this._rowElements = [];
+            for (let e4 = 0; e4 < this._terminal.rows; e4++) this._rowElements[e4] = this._createAccessibilityTreeNode(), this._rowContainer.appendChild(this._rowElements[e4]);
+            if (this._topBoundaryFocusListener = (e4) => this._handleBoundaryFocus(e4, 0), this._bottomBoundaryFocusListener = (e4) => this._handleBoundaryFocus(e4, 1), this._rowElements[0].addEventListener("focus", this._topBoundaryFocusListener), this._rowElements[this._rowElements.length - 1].addEventListener("focus", this._bottomBoundaryFocusListener), this._refreshRowsDimensions(), this._accessibilityContainer.appendChild(this._rowContainer), this._liveRegion = this._coreBrowserService.mainDocument.createElement("div"), this._liveRegion.classList.add("live-region"), this._liveRegion.setAttribute("aria-live", "assertive"), this._accessibilityContainer.appendChild(this._liveRegion), this._liveRegionDebouncer = this.register(new o.TimeBasedDebouncer(this._renderRows.bind(this))), !this._terminal.element) throw new Error("Cannot enable accessibility before Terminal.open");
+            this._terminal.element.insertAdjacentElement("afterbegin", this._accessibilityContainer), this.register(this._terminal.onResize((e4) => this._handleResize(e4.rows))), this.register(this._terminal.onRender((e4) => this._refreshRows(e4.start, e4.end))), this.register(this._terminal.onScroll(() => this._refreshRows())), this.register(this._terminal.onA11yChar((e4) => this._handleChar(e4))), this.register(this._terminal.onLineFeed(() => this._handleChar("\n"))), this.register(this._terminal.onA11yTab((e4) => this._handleTab(e4))), this.register(this._terminal.onKey((e4) => this._handleKey(e4.key))), this.register(this._terminal.onBlur(() => this._clearLiveRegion())), this.register(this._renderService.onDimensionsChange(() => this._refreshRowsDimensions())), this.register((0, l.addDisposableDomListener)(document, "selectionchange", () => this._handleSelectionChange())), this.register(this._coreBrowserService.onDprChange(() => this._refreshRowsDimensions())), this._refreshRows(), this.register((0, a.toDisposable)(() => {
+              this._accessibilityContainer.remove(), this._rowElements.length = 0;
+            }));
+          }
+          _handleTab(e3) {
+            for (let t3 = 0; t3 < e3; t3++) this._handleChar(" ");
+          }
+          _handleChar(e3) {
+            this._liveRegionLineCount < 21 && (this._charsToConsume.length > 0 ? this._charsToConsume.shift() !== e3 && (this._charsToAnnounce += e3) : this._charsToAnnounce += e3, "\n" === e3 && (this._liveRegionLineCount++, 21 === this._liveRegionLineCount && (this._liveRegion.textContent += n.tooMuchOutput)));
+          }
+          _clearLiveRegion() {
+            this._liveRegion.textContent = "", this._liveRegionLineCount = 0;
+          }
+          _handleKey(e3) {
+            this._clearLiveRegion(), /\p{Control}/u.test(e3) || this._charsToConsume.push(e3);
+          }
+          _refreshRows(e3, t3) {
+            this._liveRegionDebouncer.refresh(e3, t3, this._terminal.rows);
+          }
+          _renderRows(e3, t3) {
+            const i3 = this._terminal.buffer, s3 = i3.lines.length.toString();
+            for (let r2 = e3; r2 <= t3; r2++) {
+              const e4 = i3.lines.get(i3.ydisp + r2), t4 = [], n2 = (e4 == null ? void 0 : e4.translateToString(true, void 0, void 0, t4)) || "", o2 = (i3.ydisp + r2 + 1).toString(), a2 = this._rowElements[r2];
+              a2 && (0 === n2.length ? (a2.innerText = "\xA0", this._rowColumns.set(a2, [0, 1])) : (a2.textContent = n2, this._rowColumns.set(a2, t4)), a2.setAttribute("aria-posinset", o2), a2.setAttribute("aria-setsize", s3));
+            }
+            this._announceCharacters();
+          }
+          _announceCharacters() {
+            0 !== this._charsToAnnounce.length && (this._liveRegion.textContent += this._charsToAnnounce, this._charsToAnnounce = "");
+          }
+          _handleBoundaryFocus(e3, t3) {
+            const i3 = e3.target, s3 = this._rowElements[0 === t3 ? 1 : this._rowElements.length - 2];
+            if (i3.getAttribute("aria-posinset") === (0 === t3 ? "1" : `${this._terminal.buffer.lines.length}`)) return;
+            if (e3.relatedTarget !== s3) return;
+            let r2, n2;
+            if (0 === t3 ? (r2 = i3, n2 = this._rowElements.pop(), this._rowContainer.removeChild(n2)) : (r2 = this._rowElements.shift(), n2 = i3, this._rowContainer.removeChild(r2)), r2.removeEventListener("focus", this._topBoundaryFocusListener), n2.removeEventListener("focus", this._bottomBoundaryFocusListener), 0 === t3) {
+              const e4 = this._createAccessibilityTreeNode();
+              this._rowElements.unshift(e4), this._rowContainer.insertAdjacentElement("afterbegin", e4);
+            } else {
+              const e4 = this._createAccessibilityTreeNode();
+              this._rowElements.push(e4), this._rowContainer.appendChild(e4);
+            }
+            this._rowElements[0].addEventListener("focus", this._topBoundaryFocusListener), this._rowElements[this._rowElements.length - 1].addEventListener("focus", this._bottomBoundaryFocusListener), this._terminal.scrollLines(0 === t3 ? -1 : 1), this._rowElements[0 === t3 ? 1 : this._rowElements.length - 2].focus(), e3.preventDefault(), e3.stopImmediatePropagation();
+          }
+          _handleSelectionChange() {
+            var _a, _b;
+            if (0 === this._rowElements.length) return;
+            const e3 = document.getSelection();
+            if (!e3) return;
+            if (e3.isCollapsed) return void (this._rowContainer.contains(e3.anchorNode) && this._terminal.clearSelection());
+            if (!e3.anchorNode || !e3.focusNode) return void console.error("anchorNode and/or focusNode are null");
+            let t3 = { node: e3.anchorNode, offset: e3.anchorOffset }, i3 = { node: e3.focusNode, offset: e3.focusOffset };
+            if ((t3.node.compareDocumentPosition(i3.node) & Node.DOCUMENT_POSITION_PRECEDING || t3.node === i3.node && t3.offset > i3.offset) && ([t3, i3] = [i3, t3]), t3.node.compareDocumentPosition(this._rowElements[0]) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_FOLLOWING) && (t3 = { node: this._rowElements[0].childNodes[0], offset: 0 }), !this._rowContainer.contains(t3.node)) return;
+            const s3 = this._rowElements.slice(-1)[0];
+            if (i3.node.compareDocumentPosition(s3) & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_PRECEDING) && (i3 = { node: s3, offset: (_b = (_a = s3.textContent) == null ? void 0 : _a.length) != null ? _b : 0 }), !this._rowContainer.contains(i3.node)) return;
+            const r2 = ({ node: e4, offset: t4 }) => {
+              const i4 = e4 instanceof Text ? e4.parentNode : e4;
+              let s4 = parseInt(i4 == null ? void 0 : i4.getAttribute("aria-posinset"), 10) - 1;
+              if (isNaN(s4)) return console.warn("row is invalid. Race condition?"), null;
+              const r3 = this._rowColumns.get(i4);
+              if (!r3) return console.warn("columns is null. Race condition?"), null;
+              let n3 = t4 < r3.length ? r3[t4] : r3.slice(-1)[0] + 1;
+              return n3 >= this._terminal.cols && (++s4, n3 = 0), { row: s4, column: n3 };
+            }, n2 = r2(t3), o2 = r2(i3);
+            if (n2 && o2) {
+              if (n2.row > o2.row || n2.row === o2.row && n2.column >= o2.column) throw new Error("invalid range");
+              this._terminal.select(n2.column, n2.row, (o2.row - n2.row) * this._terminal.cols - n2.column + o2.column);
+            }
+          }
+          _handleResize(e3) {
+            this._rowElements[this._rowElements.length - 1].removeEventListener("focus", this._bottomBoundaryFocusListener);
+            for (let e4 = this._rowContainer.children.length; e4 < this._terminal.rows; e4++) this._rowElements[e4] = this._createAccessibilityTreeNode(), this._rowContainer.appendChild(this._rowElements[e4]);
+            for (; this._rowElements.length > e3; ) this._rowContainer.removeChild(this._rowElements.pop());
+            this._rowElements[this._rowElements.length - 1].addEventListener("focus", this._bottomBoundaryFocusListener), this._refreshRowsDimensions();
+          }
+          _createAccessibilityTreeNode() {
+            const e3 = this._coreBrowserService.mainDocument.createElement("div");
+            return e3.setAttribute("role", "listitem"), e3.tabIndex = -1, this._refreshRowDimensions(e3), e3;
+          }
+          _refreshRowsDimensions() {
+            if (this._renderService.dimensions.css.cell.height) {
+              this._accessibilityContainer.style.width = `${this._renderService.dimensions.css.canvas.width}px`, this._rowElements.length !== this._terminal.rows && this._handleResize(this._terminal.rows);
+              for (let e3 = 0; e3 < this._terminal.rows; e3++) this._refreshRowDimensions(this._rowElements[e3]);
+            }
+          }
+          _refreshRowDimensions(e3) {
+            e3.style.height = `${this._renderService.dimensions.css.cell.height}px`;
+          }
+        };
+        t2.AccessibilityManager = d = s2([r(1, c.IInstantiationService), r(2, h.ICoreBrowserService), r(3, h.IRenderService)], d);
+      }, 3614: (e2, t2) => {
+        function i2(e3) {
+          return e3.replace(/\r?\n/g, "\r");
+        }
+        function s2(e3, t3) {
+          return t3 ? "\x1B[200~" + e3 + "\x1B[201~" : e3;
+        }
+        function r(e3, t3, r2, n2) {
+          e3 = s2(e3 = i2(e3), r2.decPrivateModes.bracketedPasteMode && true !== n2.rawOptions.ignoreBracketedPasteMode), r2.triggerDataEvent(e3, true), t3.value = "";
+        }
+        function n(e3, t3, i3) {
+          const s3 = i3.getBoundingClientRect(), r2 = e3.clientX - s3.left - 10, n2 = e3.clientY - s3.top - 10;
+          t3.style.width = "20px", t3.style.height = "20px", t3.style.left = `${r2}px`, t3.style.top = `${n2}px`, t3.style.zIndex = "1000", t3.focus();
+        }
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.rightClickHandler = t2.moveTextAreaUnderMouseCursor = t2.paste = t2.handlePasteEvent = t2.copyHandler = t2.bracketTextForPaste = t2.prepareTextForTerminal = void 0, t2.prepareTextForTerminal = i2, t2.bracketTextForPaste = s2, t2.copyHandler = function(e3, t3) {
+          e3.clipboardData && e3.clipboardData.setData("text/plain", t3.selectionText), e3.preventDefault();
+        }, t2.handlePasteEvent = function(e3, t3, i3, s3) {
+          e3.stopPropagation(), e3.clipboardData && r(e3.clipboardData.getData("text/plain"), t3, i3, s3);
+        }, t2.paste = r, t2.moveTextAreaUnderMouseCursor = n, t2.rightClickHandler = function(e3, t3, i3, s3, r2) {
+          n(e3, t3, i3), r2 && s3.rightClickSelect(e3), t3.value = s3.selectionText, t3.select();
+        };
+      }, 7239: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.ColorContrastCache = void 0;
+        const s2 = i2(1505);
+        t2.ColorContrastCache = class {
+          constructor() {
+            this._color = new s2.TwoKeyMap(), this._css = new s2.TwoKeyMap();
+          }
+          setCss(e3, t3, i3) {
+            this._css.set(e3, t3, i3);
+          }
+          getCss(e3, t3) {
+            return this._css.get(e3, t3);
+          }
+          setColor(e3, t3, i3) {
+            this._color.set(e3, t3, i3);
+          }
+          getColor(e3, t3) {
+            return this._color.get(e3, t3);
+          }
+          clear() {
+            this._color.clear(), this._css.clear();
+          }
+        };
+      }, 3656: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.addDisposableDomListener = void 0, t2.addDisposableDomListener = function(e3, t3, i2, s2) {
+          e3.addEventListener(t3, i2, s2);
+          let r = false;
+          return { dispose: () => {
+            r || (r = true, e3.removeEventListener(t3, i2, s2));
+          } };
+        };
+      }, 3551: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Linkifier = void 0;
+        const n = i2(3656), o = i2(8460), a = i2(844), h = i2(2585), c = i2(4725);
+        let l = t2.Linkifier = class extends a.Disposable {
+          get currentLink() {
+            return this._currentLink;
+          }
+          constructor(e3, t3, i3, s3, r2) {
+            super(), this._element = e3, this._mouseService = t3, this._renderService = i3, this._bufferService = s3, this._linkProviderService = r2, this._linkCacheDisposables = [], this._isMouseOut = true, this._wasResized = false, this._activeLine = -1, this._onShowLinkUnderline = this.register(new o.EventEmitter()), this.onShowLinkUnderline = this._onShowLinkUnderline.event, this._onHideLinkUnderline = this.register(new o.EventEmitter()), this.onHideLinkUnderline = this._onHideLinkUnderline.event, this.register((0, a.getDisposeArrayDisposable)(this._linkCacheDisposables)), this.register((0, a.toDisposable)(() => {
+              var _a;
+              this._lastMouseEvent = void 0, (_a = this._activeProviderReplies) == null ? void 0 : _a.clear();
+            })), this.register(this._bufferService.onResize(() => {
+              this._clearCurrentLink(), this._wasResized = true;
+            })), this.register((0, n.addDisposableDomListener)(this._element, "mouseleave", () => {
+              this._isMouseOut = true, this._clearCurrentLink();
+            })), this.register((0, n.addDisposableDomListener)(this._element, "mousemove", this._handleMouseMove.bind(this))), this.register((0, n.addDisposableDomListener)(this._element, "mousedown", this._handleMouseDown.bind(this))), this.register((0, n.addDisposableDomListener)(this._element, "mouseup", this._handleMouseUp.bind(this)));
+          }
+          _handleMouseMove(e3) {
+            this._lastMouseEvent = e3;
+            const t3 = this._positionFromMouseEvent(e3, this._element, this._mouseService);
+            if (!t3) return;
+            this._isMouseOut = false;
+            const i3 = e3.composedPath();
+            for (let e4 = 0; e4 < i3.length; e4++) {
+              const t4 = i3[e4];
+              if (t4.classList.contains("xterm")) break;
+              if (t4.classList.contains("xterm-hover")) return;
+            }
+            this._lastBufferCell && t3.x === this._lastBufferCell.x && t3.y === this._lastBufferCell.y || (this._handleHover(t3), this._lastBufferCell = t3);
+          }
+          _handleHover(e3) {
+            if (this._activeLine !== e3.y || this._wasResized) return this._clearCurrentLink(), this._askForLink(e3, false), void (this._wasResized = false);
+            this._currentLink && this._linkAtPosition(this._currentLink.link, e3) || (this._clearCurrentLink(), this._askForLink(e3, true));
+          }
+          _askForLink(e3, t3) {
+            var _a, _b;
+            this._activeProviderReplies && t3 || ((_a = this._activeProviderReplies) == null ? void 0 : _a.forEach((e4) => {
+              e4 == null ? void 0 : e4.forEach((e5) => {
+                e5.link.dispose && e5.link.dispose();
+              });
+            }), this._activeProviderReplies = /* @__PURE__ */ new Map(), this._activeLine = e3.y);
+            let i3 = false;
+            for (const [s3, r2] of this._linkProviderService.linkProviders.entries()) if (t3) {
+              const t4 = (_b = this._activeProviderReplies) == null ? void 0 : _b.get(s3);
+              t4 && (i3 = this._checkLinkProviderResult(s3, e3, i3));
+            } else r2.provideLinks(e3.y, (t4) => {
+              var _a2, _b2;
+              if (this._isMouseOut) return;
+              const r3 = t4 == null ? void 0 : t4.map((e4) => ({ link: e4 }));
+              (_a2 = this._activeProviderReplies) == null ? void 0 : _a2.set(s3, r3), i3 = this._checkLinkProviderResult(s3, e3, i3), ((_b2 = this._activeProviderReplies) == null ? void 0 : _b2.size) === this._linkProviderService.linkProviders.length && this._removeIntersectingLinks(e3.y, this._activeProviderReplies);
+            });
+          }
+          _removeIntersectingLinks(e3, t3) {
+            const i3 = /* @__PURE__ */ new Set();
+            for (let s3 = 0; s3 < t3.size; s3++) {
+              const r2 = t3.get(s3);
+              if (r2) for (let t4 = 0; t4 < r2.length; t4++) {
+                const s4 = r2[t4], n2 = s4.link.range.start.y < e3 ? 0 : s4.link.range.start.x, o2 = s4.link.range.end.y > e3 ? this._bufferService.cols : s4.link.range.end.x;
+                for (let e4 = n2; e4 <= o2; e4++) {
+                  if (i3.has(e4)) {
+                    r2.splice(t4--, 1);
+                    break;
+                  }
+                  i3.add(e4);
+                }
+              }
+            }
+          }
+          _checkLinkProviderResult(e3, t3, i3) {
+            var _a;
+            if (!this._activeProviderReplies) return i3;
+            const s3 = this._activeProviderReplies.get(e3);
+            let r2 = false;
+            for (let t4 = 0; t4 < e3; t4++) this._activeProviderReplies.has(t4) && !this._activeProviderReplies.get(t4) || (r2 = true);
+            if (!r2 && s3) {
+              const e4 = s3.find((e5) => this._linkAtPosition(e5.link, t3));
+              e4 && (i3 = true, this._handleNewLink(e4));
+            }
+            if (this._activeProviderReplies.size === this._linkProviderService.linkProviders.length && !i3) for (let e4 = 0; e4 < this._activeProviderReplies.size; e4++) {
+              const s4 = (_a = this._activeProviderReplies.get(e4)) == null ? void 0 : _a.find((e5) => this._linkAtPosition(e5.link, t3));
+              if (s4) {
+                i3 = true, this._handleNewLink(s4);
+                break;
+              }
+            }
+            return i3;
+          }
+          _handleMouseDown() {
+            this._mouseDownLink = this._currentLink;
+          }
+          _handleMouseUp(e3) {
+            if (!this._currentLink) return;
+            const t3 = this._positionFromMouseEvent(e3, this._element, this._mouseService);
+            t3 && this._mouseDownLink === this._currentLink && this._linkAtPosition(this._currentLink.link, t3) && this._currentLink.link.activate(e3, this._currentLink.link.text);
+          }
+          _clearCurrentLink(e3, t3) {
+            this._currentLink && this._lastMouseEvent && (!e3 || !t3 || this._currentLink.link.range.start.y >= e3 && this._currentLink.link.range.end.y <= t3) && (this._linkLeave(this._element, this._currentLink.link, this._lastMouseEvent), this._currentLink = void 0, (0, a.disposeArray)(this._linkCacheDisposables));
+          }
+          _handleNewLink(e3) {
+            if (!this._lastMouseEvent) return;
+            const t3 = this._positionFromMouseEvent(this._lastMouseEvent, this._element, this._mouseService);
+            t3 && this._linkAtPosition(e3.link, t3) && (this._currentLink = e3, this._currentLink.state = { decorations: { underline: void 0 === e3.link.decorations || e3.link.decorations.underline, pointerCursor: void 0 === e3.link.decorations || e3.link.decorations.pointerCursor }, isHovered: true }, this._linkHover(this._element, e3.link, this._lastMouseEvent), e3.link.decorations = {}, Object.defineProperties(e3.link.decorations, { pointerCursor: { get: () => {
+              var _a, _b;
+              return (_b = (_a = this._currentLink) == null ? void 0 : _a.state) == null ? void 0 : _b.decorations.pointerCursor;
+            }, set: (e4) => {
+              var _a;
+              ((_a = this._currentLink) == null ? void 0 : _a.state) && this._currentLink.state.decorations.pointerCursor !== e4 && (this._currentLink.state.decorations.pointerCursor = e4, this._currentLink.state.isHovered && this._element.classList.toggle("xterm-cursor-pointer", e4));
+            } }, underline: { get: () => {
+              var _a, _b;
+              return (_b = (_a = this._currentLink) == null ? void 0 : _a.state) == null ? void 0 : _b.decorations.underline;
+            }, set: (t4) => {
+              var _a, _b, _c;
+              ((_a = this._currentLink) == null ? void 0 : _a.state) && ((_c = (_b = this._currentLink) == null ? void 0 : _b.state) == null ? void 0 : _c.decorations.underline) !== t4 && (this._currentLink.state.decorations.underline = t4, this._currentLink.state.isHovered && this._fireUnderlineEvent(e3.link, t4));
+            } } }), this._linkCacheDisposables.push(this._renderService.onRenderedViewportChange((e4) => {
+              if (!this._currentLink) return;
+              const t4 = 0 === e4.start ? 0 : e4.start + 1 + this._bufferService.buffer.ydisp, i3 = this._bufferService.buffer.ydisp + 1 + e4.end;
+              if (this._currentLink.link.range.start.y >= t4 && this._currentLink.link.range.end.y <= i3 && (this._clearCurrentLink(t4, i3), this._lastMouseEvent)) {
+                const e5 = this._positionFromMouseEvent(this._lastMouseEvent, this._element, this._mouseService);
+                e5 && this._askForLink(e5, false);
+              }
+            })));
+          }
+          _linkHover(e3, t3, i3) {
+            var _a;
+            ((_a = this._currentLink) == null ? void 0 : _a.state) && (this._currentLink.state.isHovered = true, this._currentLink.state.decorations.underline && this._fireUnderlineEvent(t3, true), this._currentLink.state.decorations.pointerCursor && e3.classList.add("xterm-cursor-pointer")), t3.hover && t3.hover(i3, t3.text);
+          }
+          _fireUnderlineEvent(e3, t3) {
+            const i3 = e3.range, s3 = this._bufferService.buffer.ydisp, r2 = this._createLinkUnderlineEvent(i3.start.x - 1, i3.start.y - s3 - 1, i3.end.x, i3.end.y - s3 - 1, void 0);
+            (t3 ? this._onShowLinkUnderline : this._onHideLinkUnderline).fire(r2);
+          }
+          _linkLeave(e3, t3, i3) {
+            var _a;
+            ((_a = this._currentLink) == null ? void 0 : _a.state) && (this._currentLink.state.isHovered = false, this._currentLink.state.decorations.underline && this._fireUnderlineEvent(t3, false), this._currentLink.state.decorations.pointerCursor && e3.classList.remove("xterm-cursor-pointer")), t3.leave && t3.leave(i3, t3.text);
+          }
+          _linkAtPosition(e3, t3) {
+            const i3 = e3.range.start.y * this._bufferService.cols + e3.range.start.x, s3 = e3.range.end.y * this._bufferService.cols + e3.range.end.x, r2 = t3.y * this._bufferService.cols + t3.x;
+            return i3 <= r2 && r2 <= s3;
+          }
+          _positionFromMouseEvent(e3, t3, i3) {
+            const s3 = i3.getCoords(e3, t3, this._bufferService.cols, this._bufferService.rows);
+            if (s3) return { x: s3[0], y: s3[1] + this._bufferService.buffer.ydisp };
+          }
+          _createLinkUnderlineEvent(e3, t3, i3, s3, r2) {
+            return { x1: e3, y1: t3, x2: i3, y2: s3, cols: this._bufferService.cols, fg: r2 };
+          }
+        };
+        t2.Linkifier = l = s2([r(1, c.IMouseService), r(2, c.IRenderService), r(3, h.IBufferService), r(4, c.ILinkProviderService)], l);
+      }, 9042: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.tooMuchOutput = t2.promptLabel = void 0, t2.promptLabel = "Terminal input", t2.tooMuchOutput = "Too much output to announce, navigate to rows manually to read";
+      }, 3730: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.OscLinkProvider = void 0;
+        const n = i2(511), o = i2(2585);
+        let a = t2.OscLinkProvider = class {
+          constructor(e3, t3, i3) {
+            this._bufferService = e3, this._optionsService = t3, this._oscLinkService = i3;
+          }
+          provideLinks(e3, t3) {
+            var _a;
+            const i3 = this._bufferService.buffer.lines.get(e3 - 1);
+            if (!i3) return void t3(void 0);
+            const s3 = [], r2 = this._optionsService.rawOptions.linkHandler, o2 = new n.CellData(), a2 = i3.getTrimmedLength();
+            let c = -1, l = -1, d = false;
+            for (let t4 = 0; t4 < a2; t4++) if (-1 !== l || i3.hasContent(t4)) {
+              if (i3.loadCell(t4, o2), o2.hasExtendedAttrs() && o2.extended.urlId) {
+                if (-1 === l) {
+                  l = t4, c = o2.extended.urlId;
+                  continue;
+                }
+                d = o2.extended.urlId !== c;
+              } else -1 !== l && (d = true);
+              if (d || -1 !== l && t4 === a2 - 1) {
+                const i4 = (_a = this._oscLinkService.getLinkData(c)) == null ? void 0 : _a.uri;
+                if (i4) {
+                  const n2 = { start: { x: l + 1, y: e3 }, end: { x: t4 + (d || t4 !== a2 - 1 ? 0 : 1), y: e3 } };
+                  let o3 = false;
+                  if (!(r2 == null ? void 0 : r2.allowNonHttpProtocols)) try {
+                    const e4 = new URL(i4);
+                    ["http:", "https:"].includes(e4.protocol) || (o3 = true);
+                  } catch (e4) {
+                    o3 = true;
+                  }
+                  o3 || s3.push({ text: i4, range: n2, activate: (e4, t5) => r2 ? r2.activate(e4, t5, n2) : h(0, t5), hover: (e4, t5) => {
+                    var _a2;
+                    return (_a2 = r2 == null ? void 0 : r2.hover) == null ? void 0 : _a2.call(r2, e4, t5, n2);
+                  }, leave: (e4, t5) => {
+                    var _a2;
+                    return (_a2 = r2 == null ? void 0 : r2.leave) == null ? void 0 : _a2.call(r2, e4, t5, n2);
+                  } });
+                }
+                d = false, o2.hasExtendedAttrs() && o2.extended.urlId ? (l = t4, c = o2.extended.urlId) : (l = -1, c = -1);
+              }
+            }
+            t3(s3);
+          }
+        };
+        function h(e3, t3) {
+          if (confirm(`Do you want to navigate to ${t3}?
+
+WARNING: This link could potentially be dangerous`)) {
+            const e4 = window.open();
+            if (e4) {
+              try {
+                e4.opener = null;
+              } catch (e5) {
+              }
+              e4.location.href = t3;
+            } else console.warn("Opening link blocked as opener could not be cleared");
+          }
+        }
+        t2.OscLinkProvider = a = s2([r(0, o.IBufferService), r(1, o.IOptionsService), r(2, o.IOscLinkService)], a);
+      }, 6193: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.RenderDebouncer = void 0, t2.RenderDebouncer = class {
+          constructor(e3, t3) {
+            this._renderCallback = e3, this._coreBrowserService = t3, this._refreshCallbacks = [];
+          }
+          dispose() {
+            this._animationFrame && (this._coreBrowserService.window.cancelAnimationFrame(this._animationFrame), this._animationFrame = void 0);
+          }
+          addRefreshCallback(e3) {
+            return this._refreshCallbacks.push(e3), this._animationFrame || (this._animationFrame = this._coreBrowserService.window.requestAnimationFrame(() => this._innerRefresh())), this._animationFrame;
+          }
+          refresh(e3, t3, i2) {
+            this._rowCount = i2, e3 = void 0 !== e3 ? e3 : 0, t3 = void 0 !== t3 ? t3 : this._rowCount - 1, this._rowStart = void 0 !== this._rowStart ? Math.min(this._rowStart, e3) : e3, this._rowEnd = void 0 !== this._rowEnd ? Math.max(this._rowEnd, t3) : t3, this._animationFrame || (this._animationFrame = this._coreBrowserService.window.requestAnimationFrame(() => this._innerRefresh()));
+          }
+          _innerRefresh() {
+            if (this._animationFrame = void 0, void 0 === this._rowStart || void 0 === this._rowEnd || void 0 === this._rowCount) return void this._runRefreshCallbacks();
+            const e3 = Math.max(this._rowStart, 0), t3 = Math.min(this._rowEnd, this._rowCount - 1);
+            this._rowStart = void 0, this._rowEnd = void 0, this._renderCallback(e3, t3), this._runRefreshCallbacks();
+          }
+          _runRefreshCallbacks() {
+            for (const e3 of this._refreshCallbacks) e3(0);
+            this._refreshCallbacks = [];
+          }
+        };
+      }, 3236: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Terminal = void 0;
+        const s2 = i2(3614), r = i2(3656), n = i2(3551), o = i2(9042), a = i2(3730), h = i2(1680), c = i2(3107), l = i2(5744), d = i2(2950), _ = i2(1296), u = i2(428), f = i2(4269), v = i2(5114), p = i2(8934), g = i2(3230), m = i2(9312), S = i2(4725), C = i2(6731), b = i2(8055), w = i2(8969), y = i2(8460), E = i2(844), k = i2(6114), L = i2(8437), D = i2(2584), R = i2(7399), x = i2(5941), A = i2(9074), B = i2(2585), T = i2(5435), M = i2(4567), O = i2(779);
+        class P extends w.CoreTerminal {
+          get onFocus() {
+            return this._onFocus.event;
+          }
+          get onBlur() {
+            return this._onBlur.event;
+          }
+          get onA11yChar() {
+            return this._onA11yCharEmitter.event;
+          }
+          get onA11yTab() {
+            return this._onA11yTabEmitter.event;
+          }
+          get onWillOpen() {
+            return this._onWillOpen.event;
+          }
+          constructor(e3 = {}) {
+            super(e3), this.browser = k, this._keyDownHandled = false, this._keyDownSeen = false, this._keyPressHandled = false, this._unprocessedDeadKey = false, this._accessibilityManager = this.register(new E.MutableDisposable()), this._onCursorMove = this.register(new y.EventEmitter()), this.onCursorMove = this._onCursorMove.event, this._onKey = this.register(new y.EventEmitter()), this.onKey = this._onKey.event, this._onRender = this.register(new y.EventEmitter()), this.onRender = this._onRender.event, this._onSelectionChange = this.register(new y.EventEmitter()), this.onSelectionChange = this._onSelectionChange.event, this._onTitleChange = this.register(new y.EventEmitter()), this.onTitleChange = this._onTitleChange.event, this._onBell = this.register(new y.EventEmitter()), this.onBell = this._onBell.event, this._onFocus = this.register(new y.EventEmitter()), this._onBlur = this.register(new y.EventEmitter()), this._onA11yCharEmitter = this.register(new y.EventEmitter()), this._onA11yTabEmitter = this.register(new y.EventEmitter()), this._onWillOpen = this.register(new y.EventEmitter()), this._setup(), this._decorationService = this._instantiationService.createInstance(A.DecorationService), this._instantiationService.setService(B.IDecorationService, this._decorationService), this._linkProviderService = this._instantiationService.createInstance(O.LinkProviderService), this._instantiationService.setService(S.ILinkProviderService, this._linkProviderService), this._linkProviderService.registerLinkProvider(this._instantiationService.createInstance(a.OscLinkProvider)), this.register(this._inputHandler.onRequestBell(() => this._onBell.fire())), this.register(this._inputHandler.onRequestRefreshRows((e4, t3) => this.refresh(e4, t3))), this.register(this._inputHandler.onRequestSendFocus(() => this._reportFocus())), this.register(this._inputHandler.onRequestReset(() => this.reset())), this.register(this._inputHandler.onRequestWindowsOptionsReport((e4) => this._reportWindowsOptions(e4))), this.register(this._inputHandler.onColor((e4) => this._handleColorEvent(e4))), this.register((0, y.forwardEvent)(this._inputHandler.onCursorMove, this._onCursorMove)), this.register((0, y.forwardEvent)(this._inputHandler.onTitleChange, this._onTitleChange)), this.register((0, y.forwardEvent)(this._inputHandler.onA11yChar, this._onA11yCharEmitter)), this.register((0, y.forwardEvent)(this._inputHandler.onA11yTab, this._onA11yTabEmitter)), this.register(this._bufferService.onResize((e4) => this._afterResize(e4.cols, e4.rows))), this.register((0, E.toDisposable)(() => {
+              var _a, _b;
+              this._customKeyEventHandler = void 0, (_b = (_a = this.element) == null ? void 0 : _a.parentNode) == null ? void 0 : _b.removeChild(this.element);
+            }));
+          }
+          _handleColorEvent(e3) {
+            if (this._themeService) for (const t3 of e3) {
+              let e4, i3 = "";
+              switch (t3.index) {
+                case 256:
+                  e4 = "foreground", i3 = "10";
+                  break;
+                case 257:
+                  e4 = "background", i3 = "11";
+                  break;
+                case 258:
+                  e4 = "cursor", i3 = "12";
+                  break;
+                default:
+                  e4 = "ansi", i3 = "4;" + t3.index;
+              }
+              switch (t3.type) {
+                case 0:
+                  const s3 = b.color.toColorRGB("ansi" === e4 ? this._themeService.colors.ansi[t3.index] : this._themeService.colors[e4]);
+                  this.coreService.triggerDataEvent(`${D.C0.ESC}]${i3};${(0, x.toRgbString)(s3)}${D.C1_ESCAPED.ST}`);
+                  break;
+                case 1:
+                  if ("ansi" === e4) this._themeService.modifyColors((e5) => e5.ansi[t3.index] = b.channels.toColor(...t3.color));
+                  else {
+                    const i4 = e4;
+                    this._themeService.modifyColors((e5) => e5[i4] = b.channels.toColor(...t3.color));
+                  }
+                  break;
+                case 2:
+                  this._themeService.restoreColor(t3.index);
+              }
+            }
+          }
+          _setup() {
+            super._setup(), this._customKeyEventHandler = void 0;
+          }
+          get buffer() {
+            return this.buffers.active;
+          }
+          focus() {
+            this.textarea && this.textarea.focus({ preventScroll: true });
+          }
+          _handleScreenReaderModeOptionChange(e3) {
+            e3 ? !this._accessibilityManager.value && this._renderService && (this._accessibilityManager.value = this._instantiationService.createInstance(M.AccessibilityManager, this)) : this._accessibilityManager.clear();
+          }
+          _handleTextAreaFocus(e3) {
+            this.coreService.decPrivateModes.sendFocus && this.coreService.triggerDataEvent(D.C0.ESC + "[I"), this.element.classList.add("focus"), this._showCursor(), this._onFocus.fire();
+          }
+          blur() {
+            var _a;
+            return (_a = this.textarea) == null ? void 0 : _a.blur();
+          }
+          _handleTextAreaBlur() {
+            this.textarea.value = "", this.refresh(this.buffer.y, this.buffer.y), this.coreService.decPrivateModes.sendFocus && this.coreService.triggerDataEvent(D.C0.ESC + "[O"), this.element.classList.remove("focus"), this._onBlur.fire();
+          }
+          _syncTextArea() {
+            if (!this.textarea || !this.buffer.isCursorInViewport || this._compositionHelper.isComposing || !this._renderService) return;
+            const e3 = this.buffer.ybase + this.buffer.y, t3 = this.buffer.lines.get(e3);
+            if (!t3) return;
+            const i3 = Math.min(this.buffer.x, this.cols - 1), s3 = this._renderService.dimensions.css.cell.height, r2 = t3.getWidth(i3), n2 = this._renderService.dimensions.css.cell.width * r2, o2 = this.buffer.y * this._renderService.dimensions.css.cell.height, a2 = i3 * this._renderService.dimensions.css.cell.width;
+            this.textarea.style.left = a2 + "px", this.textarea.style.top = o2 + "px", this.textarea.style.width = n2 + "px", this.textarea.style.height = s3 + "px", this.textarea.style.lineHeight = s3 + "px", this.textarea.style.zIndex = "-5";
+          }
+          _initGlobal() {
+            this._bindKeys(), this.register((0, r.addDisposableDomListener)(this.element, "copy", (e4) => {
+              this.hasSelection() && (0, s2.copyHandler)(e4, this._selectionService);
+            }));
+            const e3 = (e4) => (0, s2.handlePasteEvent)(e4, this.textarea, this.coreService, this.optionsService);
+            this.register((0, r.addDisposableDomListener)(this.textarea, "paste", e3)), this.register((0, r.addDisposableDomListener)(this.element, "paste", e3)), k.isFirefox ? this.register((0, r.addDisposableDomListener)(this.element, "mousedown", (e4) => {
+              2 === e4.button && (0, s2.rightClickHandler)(e4, this.textarea, this.screenElement, this._selectionService, this.options.rightClickSelectsWord);
+            })) : this.register((0, r.addDisposableDomListener)(this.element, "contextmenu", (e4) => {
+              (0, s2.rightClickHandler)(e4, this.textarea, this.screenElement, this._selectionService, this.options.rightClickSelectsWord);
+            })), k.isLinux && this.register((0, r.addDisposableDomListener)(this.element, "auxclick", (e4) => {
+              1 === e4.button && (0, s2.moveTextAreaUnderMouseCursor)(e4, this.textarea, this.screenElement);
+            }));
+          }
+          _bindKeys() {
+            this.register((0, r.addDisposableDomListener)(this.textarea, "keyup", (e3) => this._keyUp(e3), true)), this.register((0, r.addDisposableDomListener)(this.textarea, "keydown", (e3) => this._keyDown(e3), true)), this.register((0, r.addDisposableDomListener)(this.textarea, "keypress", (e3) => this._keyPress(e3), true)), this.register((0, r.addDisposableDomListener)(this.textarea, "compositionstart", () => this._compositionHelper.compositionstart())), this.register((0, r.addDisposableDomListener)(this.textarea, "compositionupdate", (e3) => this._compositionHelper.compositionupdate(e3))), this.register((0, r.addDisposableDomListener)(this.textarea, "compositionend", () => this._compositionHelper.compositionend())), this.register((0, r.addDisposableDomListener)(this.textarea, "input", (e3) => this._inputEvent(e3), true)), this.register(this.onRender(() => this._compositionHelper.updateCompositionElements()));
+          }
+          open(e3) {
+            var _a, _b, _c;
+            if (!e3) throw new Error("Terminal requires a parent element.");
+            if (e3.isConnected || this._logService.debug("Terminal.open was called on an element that was not attached to the DOM"), ((_a = this.element) == null ? void 0 : _a.ownerDocument.defaultView) && this._coreBrowserService) return void (this.element.ownerDocument.defaultView !== this._coreBrowserService.window && (this._coreBrowserService.window = this.element.ownerDocument.defaultView));
+            this._document = e3.ownerDocument, this.options.documentOverride && this.options.documentOverride instanceof Document && (this._document = this.optionsService.rawOptions.documentOverride), this.element = this._document.createElement("div"), this.element.dir = "ltr", this.element.classList.add("terminal"), this.element.classList.add("xterm"), e3.appendChild(this.element);
+            const t3 = this._document.createDocumentFragment();
+            this._viewportElement = this._document.createElement("div"), this._viewportElement.classList.add("xterm-viewport"), t3.appendChild(this._viewportElement), this._viewportScrollArea = this._document.createElement("div"), this._viewportScrollArea.classList.add("xterm-scroll-area"), this._viewportElement.appendChild(this._viewportScrollArea), this.screenElement = this._document.createElement("div"), this.screenElement.classList.add("xterm-screen"), this.register((0, r.addDisposableDomListener)(this.screenElement, "mousemove", (e4) => this.updateCursorStyle(e4))), this._helperContainer = this._document.createElement("div"), this._helperContainer.classList.add("xterm-helpers"), this.screenElement.appendChild(this._helperContainer), t3.appendChild(this.screenElement), this.textarea = this._document.createElement("textarea"), this.textarea.classList.add("xterm-helper-textarea"), this.textarea.setAttribute("aria-label", o.promptLabel), k.isChromeOS || this.textarea.setAttribute("aria-multiline", "false"), this.textarea.setAttribute("autocorrect", "off"), this.textarea.setAttribute("autocapitalize", "off"), this.textarea.setAttribute("spellcheck", "false"), this.textarea.tabIndex = 0, this._coreBrowserService = this.register(this._instantiationService.createInstance(v.CoreBrowserService, this.textarea, (_b = e3.ownerDocument.defaultView) != null ? _b : window, ((_c = this._document) != null ? _c : "undefined" != typeof window) ? window.document : null)), this._instantiationService.setService(S.ICoreBrowserService, this._coreBrowserService), this.register((0, r.addDisposableDomListener)(this.textarea, "focus", (e4) => this._handleTextAreaFocus(e4))), this.register((0, r.addDisposableDomListener)(this.textarea, "blur", () => this._handleTextAreaBlur())), this._helperContainer.appendChild(this.textarea), this._charSizeService = this._instantiationService.createInstance(u.CharSizeService, this._document, this._helperContainer), this._instantiationService.setService(S.ICharSizeService, this._charSizeService), this._themeService = this._instantiationService.createInstance(C.ThemeService), this._instantiationService.setService(S.IThemeService, this._themeService), this._characterJoinerService = this._instantiationService.createInstance(f.CharacterJoinerService), this._instantiationService.setService(S.ICharacterJoinerService, this._characterJoinerService), this._renderService = this.register(this._instantiationService.createInstance(g.RenderService, this.rows, this.screenElement)), this._instantiationService.setService(S.IRenderService, this._renderService), this.register(this._renderService.onRenderedViewportChange((e4) => this._onRender.fire(e4))), this.onResize((e4) => this._renderService.resize(e4.cols, e4.rows)), this._compositionView = this._document.createElement("div"), this._compositionView.classList.add("composition-view"), this._compositionHelper = this._instantiationService.createInstance(d.CompositionHelper, this.textarea, this._compositionView), this._helperContainer.appendChild(this._compositionView), this._mouseService = this._instantiationService.createInstance(p.MouseService), this._instantiationService.setService(S.IMouseService, this._mouseService), this.linkifier = this.register(this._instantiationService.createInstance(n.Linkifier, this.screenElement)), this.element.appendChild(t3);
+            try {
+              this._onWillOpen.fire(this.element);
+            } catch (e4) {
+            }
+            this._renderService.hasRenderer() || this._renderService.setRenderer(this._createRenderer()), this.viewport = this._instantiationService.createInstance(h.Viewport, this._viewportElement, this._viewportScrollArea), this.viewport.onRequestScrollLines((e4) => this.scrollLines(e4.amount, e4.suppressScrollEvent, 1)), this.register(this._inputHandler.onRequestSyncScrollBar(() => this.viewport.syncScrollArea())), this.register(this.viewport), this.register(this.onCursorMove(() => {
+              this._renderService.handleCursorMove(), this._syncTextArea();
+            })), this.register(this.onResize(() => this._renderService.handleResize(this.cols, this.rows))), this.register(this.onBlur(() => this._renderService.handleBlur())), this.register(this.onFocus(() => this._renderService.handleFocus())), this.register(this._renderService.onDimensionsChange(() => this.viewport.syncScrollArea())), this._selectionService = this.register(this._instantiationService.createInstance(m.SelectionService, this.element, this.screenElement, this.linkifier)), this._instantiationService.setService(S.ISelectionService, this._selectionService), this.register(this._selectionService.onRequestScrollLines((e4) => this.scrollLines(e4.amount, e4.suppressScrollEvent))), this.register(this._selectionService.onSelectionChange(() => this._onSelectionChange.fire())), this.register(this._selectionService.onRequestRedraw((e4) => this._renderService.handleSelectionChanged(e4.start, e4.end, e4.columnSelectMode))), this.register(this._selectionService.onLinuxMouseSelection((e4) => {
+              this.textarea.value = e4, this.textarea.focus(), this.textarea.select();
+            })), this.register(this._onScroll.event((e4) => {
+              this.viewport.syncScrollArea(), this._selectionService.refresh();
+            })), this.register((0, r.addDisposableDomListener)(this._viewportElement, "scroll", () => this._selectionService.refresh())), this.register(this._instantiationService.createInstance(c.BufferDecorationRenderer, this.screenElement)), this.register((0, r.addDisposableDomListener)(this.element, "mousedown", (e4) => this._selectionService.handleMouseDown(e4))), this.coreMouseService.areMouseEventsActive ? (this._selectionService.disable(), this.element.classList.add("enable-mouse-events")) : this._selectionService.enable(), this.options.screenReaderMode && (this._accessibilityManager.value = this._instantiationService.createInstance(M.AccessibilityManager, this)), this.register(this.optionsService.onSpecificOptionChange("screenReaderMode", (e4) => this._handleScreenReaderModeOptionChange(e4))), this.options.overviewRulerWidth && (this._overviewRulerRenderer = this.register(this._instantiationService.createInstance(l.OverviewRulerRenderer, this._viewportElement, this.screenElement))), this.optionsService.onSpecificOptionChange("overviewRulerWidth", (e4) => {
+              !this._overviewRulerRenderer && e4 && this._viewportElement && this.screenElement && (this._overviewRulerRenderer = this.register(this._instantiationService.createInstance(l.OverviewRulerRenderer, this._viewportElement, this.screenElement)));
+            }), this._charSizeService.measure(), this.refresh(0, this.rows - 1), this._initGlobal(), this.bindMouse();
+          }
+          _createRenderer() {
+            return this._instantiationService.createInstance(_.DomRenderer, this, this._document, this.element, this.screenElement, this._viewportElement, this._helperContainer, this.linkifier);
+          }
+          bindMouse() {
+            const e3 = this, t3 = this.element;
+            function i3(t4) {
+              const i4 = e3._mouseService.getMouseReportCoords(t4, e3.screenElement);
+              if (!i4) return false;
+              let s4, r2;
+              switch (t4.overrideType || t4.type) {
+                case "mousemove":
+                  r2 = 32, void 0 === t4.buttons ? (s4 = 3, void 0 !== t4.button && (s4 = t4.button < 3 ? t4.button : 3)) : s4 = 1 & t4.buttons ? 0 : 4 & t4.buttons ? 1 : 2 & t4.buttons ? 2 : 3;
+                  break;
+                case "mouseup":
+                  r2 = 0, s4 = t4.button < 3 ? t4.button : 3;
+                  break;
+                case "mousedown":
+                  r2 = 1, s4 = t4.button < 3 ? t4.button : 3;
+                  break;
+                case "wheel":
+                  if (e3._customWheelEventHandler && false === e3._customWheelEventHandler(t4)) return false;
+                  if (0 === e3.viewport.getLinesScrolled(t4)) return false;
+                  r2 = t4.deltaY < 0 ? 0 : 1, s4 = 4;
+                  break;
+                default:
+                  return false;
+              }
+              return !(void 0 === r2 || void 0 === s4 || s4 > 4) && e3.coreMouseService.triggerMouseEvent({ col: i4.col, row: i4.row, x: i4.x, y: i4.y, button: s4, action: r2, ctrl: t4.ctrlKey, alt: t4.altKey, shift: t4.shiftKey });
+            }
+            const s3 = { mouseup: null, wheel: null, mousedrag: null, mousemove: null }, n2 = { mouseup: (e4) => (i3(e4), e4.buttons || (this._document.removeEventListener("mouseup", s3.mouseup), s3.mousedrag && this._document.removeEventListener("mousemove", s3.mousedrag)), this.cancel(e4)), wheel: (e4) => (i3(e4), this.cancel(e4, true)), mousedrag: (e4) => {
+              e4.buttons && i3(e4);
+            }, mousemove: (e4) => {
+              e4.buttons || i3(e4);
+            } };
+            this.register(this.coreMouseService.onProtocolChange((e4) => {
+              e4 ? ("debug" === this.optionsService.rawOptions.logLevel && this._logService.debug("Binding to mouse events:", this.coreMouseService.explainEvents(e4)), this.element.classList.add("enable-mouse-events"), this._selectionService.disable()) : (this._logService.debug("Unbinding from mouse events."), this.element.classList.remove("enable-mouse-events"), this._selectionService.enable()), 8 & e4 ? s3.mousemove || (t3.addEventListener("mousemove", n2.mousemove), s3.mousemove = n2.mousemove) : (t3.removeEventListener("mousemove", s3.mousemove), s3.mousemove = null), 16 & e4 ? s3.wheel || (t3.addEventListener("wheel", n2.wheel, { passive: false }), s3.wheel = n2.wheel) : (t3.removeEventListener("wheel", s3.wheel), s3.wheel = null), 2 & e4 ? s3.mouseup || (s3.mouseup = n2.mouseup) : (this._document.removeEventListener("mouseup", s3.mouseup), s3.mouseup = null), 4 & e4 ? s3.mousedrag || (s3.mousedrag = n2.mousedrag) : (this._document.removeEventListener("mousemove", s3.mousedrag), s3.mousedrag = null);
+            })), this.coreMouseService.activeProtocol = this.coreMouseService.activeProtocol, this.register((0, r.addDisposableDomListener)(t3, "mousedown", (e4) => {
+              if (e4.preventDefault(), this.focus(), this.coreMouseService.areMouseEventsActive && !this._selectionService.shouldForceSelection(e4)) return i3(e4), s3.mouseup && this._document.addEventListener("mouseup", s3.mouseup), s3.mousedrag && this._document.addEventListener("mousemove", s3.mousedrag), this.cancel(e4);
+            })), this.register((0, r.addDisposableDomListener)(t3, "wheel", (e4) => {
+              if (!s3.wheel) {
+                if (this._customWheelEventHandler && false === this._customWheelEventHandler(e4)) return false;
+                if (!this.buffer.hasScrollback) {
+                  const t4 = this.viewport.getLinesScrolled(e4);
+                  if (0 === t4) return;
+                  const i4 = D.C0.ESC + (this.coreService.decPrivateModes.applicationCursorKeys ? "O" : "[") + (e4.deltaY < 0 ? "A" : "B");
+                  let s4 = "";
+                  for (let e5 = 0; e5 < Math.abs(t4); e5++) s4 += i4;
+                  return this.coreService.triggerDataEvent(s4, true), this.cancel(e4, true);
+                }
+                return this.viewport.handleWheel(e4) ? this.cancel(e4) : void 0;
+              }
+            }, { passive: false })), this.register((0, r.addDisposableDomListener)(t3, "touchstart", (e4) => {
+              if (!this.coreMouseService.areMouseEventsActive) return this.viewport.handleTouchStart(e4), this.cancel(e4);
+            }, { passive: true })), this.register((0, r.addDisposableDomListener)(t3, "touchmove", (e4) => {
+              if (!this.coreMouseService.areMouseEventsActive) return this.viewport.handleTouchMove(e4) ? void 0 : this.cancel(e4);
+            }, { passive: false }));
+          }
+          refresh(e3, t3) {
+            var _a;
+            (_a = this._renderService) == null ? void 0 : _a.refreshRows(e3, t3);
+          }
+          updateCursorStyle(e3) {
+            var _a;
+            ((_a = this._selectionService) == null ? void 0 : _a.shouldColumnSelect(e3)) ? this.element.classList.add("column-select") : this.element.classList.remove("column-select");
+          }
+          _showCursor() {
+            this.coreService.isCursorInitialized || (this.coreService.isCursorInitialized = true, this.refresh(this.buffer.y, this.buffer.y));
+          }
+          scrollLines(e3, t3, i3 = 0) {
+            var _a;
+            1 === i3 ? (super.scrollLines(e3, t3, i3), this.refresh(0, this.rows - 1)) : (_a = this.viewport) == null ? void 0 : _a.scrollLines(e3);
+          }
+          paste(e3) {
+            (0, s2.paste)(e3, this.textarea, this.coreService, this.optionsService);
+          }
+          attachCustomKeyEventHandler(e3) {
+            this._customKeyEventHandler = e3;
+          }
+          attachCustomWheelEventHandler(e3) {
+            this._customWheelEventHandler = e3;
+          }
+          registerLinkProvider(e3) {
+            return this._linkProviderService.registerLinkProvider(e3);
+          }
+          registerCharacterJoiner(e3) {
+            if (!this._characterJoinerService) throw new Error("Terminal must be opened first");
+            const t3 = this._characterJoinerService.register(e3);
+            return this.refresh(0, this.rows - 1), t3;
+          }
+          deregisterCharacterJoiner(e3) {
+            if (!this._characterJoinerService) throw new Error("Terminal must be opened first");
+            this._characterJoinerService.deregister(e3) && this.refresh(0, this.rows - 1);
+          }
+          get markers() {
+            return this.buffer.markers;
+          }
+          registerMarker(e3) {
+            return this.buffer.addMarker(this.buffer.ybase + this.buffer.y + e3);
+          }
+          registerDecoration(e3) {
+            return this._decorationService.registerDecoration(e3);
+          }
+          hasSelection() {
+            return !!this._selectionService && this._selectionService.hasSelection;
+          }
+          select(e3, t3, i3) {
+            this._selectionService.setSelection(e3, t3, i3);
+          }
+          getSelection() {
+            return this._selectionService ? this._selectionService.selectionText : "";
+          }
+          getSelectionPosition() {
+            if (this._selectionService && this._selectionService.hasSelection) return { start: { x: this._selectionService.selectionStart[0], y: this._selectionService.selectionStart[1] }, end: { x: this._selectionService.selectionEnd[0], y: this._selectionService.selectionEnd[1] } };
+          }
+          clearSelection() {
+            var _a;
+            (_a = this._selectionService) == null ? void 0 : _a.clearSelection();
+          }
+          selectAll() {
+            var _a;
+            (_a = this._selectionService) == null ? void 0 : _a.selectAll();
+          }
+          selectLines(e3, t3) {
+            var _a;
+            (_a = this._selectionService) == null ? void 0 : _a.selectLines(e3, t3);
+          }
+          _keyDown(e3) {
+            if (this._keyDownHandled = false, this._keyDownSeen = true, this._customKeyEventHandler && false === this._customKeyEventHandler(e3)) return false;
+            const t3 = this.browser.isMac && this.options.macOptionIsMeta && e3.altKey;
+            if (!t3 && !this._compositionHelper.keydown(e3)) return this.options.scrollOnUserInput && this.buffer.ybase !== this.buffer.ydisp && this.scrollToBottom(), false;
+            t3 || "Dead" !== e3.key && "AltGraph" !== e3.key || (this._unprocessedDeadKey = true);
+            const i3 = (0, R.evaluateKeyboardEvent)(e3, this.coreService.decPrivateModes.applicationCursorKeys, this.browser.isMac, this.options.macOptionIsMeta);
+            if (this.updateCursorStyle(e3), 3 === i3.type || 2 === i3.type) {
+              const t4 = this.rows - 1;
+              return this.scrollLines(2 === i3.type ? -t4 : t4), this.cancel(e3, true);
+            }
+            return 1 === i3.type && this.selectAll(), !!this._isThirdLevelShift(this.browser, e3) || (i3.cancel && this.cancel(e3, true), !i3.key || !!(e3.key && !e3.ctrlKey && !e3.altKey && !e3.metaKey && 1 === e3.key.length && e3.key.charCodeAt(0) >= 65 && e3.key.charCodeAt(0) <= 90) || (this._unprocessedDeadKey ? (this._unprocessedDeadKey = false, true) : (i3.key !== D.C0.ETX && i3.key !== D.C0.CR || (this.textarea.value = ""), this._onKey.fire({ key: i3.key, domEvent: e3 }), this._showCursor(), this.coreService.triggerDataEvent(i3.key, true), !this.optionsService.rawOptions.screenReaderMode || e3.altKey || e3.ctrlKey ? this.cancel(e3, true) : void (this._keyDownHandled = true))));
+          }
+          _isThirdLevelShift(e3, t3) {
+            const i3 = e3.isMac && !this.options.macOptionIsMeta && t3.altKey && !t3.ctrlKey && !t3.metaKey || e3.isWindows && t3.altKey && t3.ctrlKey && !t3.metaKey || e3.isWindows && t3.getModifierState("AltGraph");
+            return "keypress" === t3.type ? i3 : i3 && (!t3.keyCode || t3.keyCode > 47);
+          }
+          _keyUp(e3) {
+            this._keyDownSeen = false, this._customKeyEventHandler && false === this._customKeyEventHandler(e3) || (function(e4) {
+              return 16 === e4.keyCode || 17 === e4.keyCode || 18 === e4.keyCode;
+            }(e3) || this.focus(), this.updateCursorStyle(e3), this._keyPressHandled = false);
+          }
+          _keyPress(e3) {
+            let t3;
+            if (this._keyPressHandled = false, this._keyDownHandled) return false;
+            if (this._customKeyEventHandler && false === this._customKeyEventHandler(e3)) return false;
+            if (this.cancel(e3), e3.charCode) t3 = e3.charCode;
+            else if (null === e3.which || void 0 === e3.which) t3 = e3.keyCode;
+            else {
+              if (0 === e3.which || 0 === e3.charCode) return false;
+              t3 = e3.which;
+            }
+            return !(!t3 || (e3.altKey || e3.ctrlKey || e3.metaKey) && !this._isThirdLevelShift(this.browser, e3) || (t3 = String.fromCharCode(t3), this._onKey.fire({ key: t3, domEvent: e3 }), this._showCursor(), this.coreService.triggerDataEvent(t3, true), this._keyPressHandled = true, this._unprocessedDeadKey = false, 0));
+          }
+          _inputEvent(e3) {
+            if (e3.data && "insertText" === e3.inputType && (!e3.composed || !this._keyDownSeen) && !this.optionsService.rawOptions.screenReaderMode) {
+              if (this._keyPressHandled) return false;
+              this._unprocessedDeadKey = false;
+              const t3 = e3.data;
+              return this.coreService.triggerDataEvent(t3, true), this.cancel(e3), true;
+            }
+            return false;
+          }
+          resize(e3, t3) {
+            e3 !== this.cols || t3 !== this.rows ? super.resize(e3, t3) : this._charSizeService && !this._charSizeService.hasValidSize && this._charSizeService.measure();
+          }
+          _afterResize(e3, t3) {
+            var _a, _b;
+            (_a = this._charSizeService) == null ? void 0 : _a.measure(), (_b = this.viewport) == null ? void 0 : _b.syncScrollArea(true);
+          }
+          clear() {
+            var _a;
+            if (0 !== this.buffer.ybase || 0 !== this.buffer.y) {
+              this.buffer.clearAllMarkers(), this.buffer.lines.set(0, this.buffer.lines.get(this.buffer.ybase + this.buffer.y)), this.buffer.lines.length = 1, this.buffer.ydisp = 0, this.buffer.ybase = 0, this.buffer.y = 0;
+              for (let e3 = 1; e3 < this.rows; e3++) this.buffer.lines.push(this.buffer.getBlankLine(L.DEFAULT_ATTR_DATA));
+              this._onScroll.fire({ position: this.buffer.ydisp, source: 0 }), (_a = this.viewport) == null ? void 0 : _a.reset(), this.refresh(0, this.rows - 1);
+            }
+          }
+          reset() {
+            var _a, _b;
+            this.options.rows = this.rows, this.options.cols = this.cols;
+            const e3 = this._customKeyEventHandler;
+            this._setup(), super.reset(), (_a = this._selectionService) == null ? void 0 : _a.reset(), this._decorationService.reset(), (_b = this.viewport) == null ? void 0 : _b.reset(), this._customKeyEventHandler = e3, this.refresh(0, this.rows - 1);
+          }
+          clearTextureAtlas() {
+            var _a;
+            (_a = this._renderService) == null ? void 0 : _a.clearTextureAtlas();
+          }
+          _reportFocus() {
+            var _a;
+            ((_a = this.element) == null ? void 0 : _a.classList.contains("focus")) ? this.coreService.triggerDataEvent(D.C0.ESC + "[I") : this.coreService.triggerDataEvent(D.C0.ESC + "[O");
+          }
+          _reportWindowsOptions(e3) {
+            if (this._renderService) switch (e3) {
+              case T.WindowsOptionsReportType.GET_WIN_SIZE_PIXELS:
+                const e4 = this._renderService.dimensions.css.canvas.width.toFixed(0), t3 = this._renderService.dimensions.css.canvas.height.toFixed(0);
+                this.coreService.triggerDataEvent(`${D.C0.ESC}[4;${t3};${e4}t`);
+                break;
+              case T.WindowsOptionsReportType.GET_CELL_SIZE_PIXELS:
+                const i3 = this._renderService.dimensions.css.cell.width.toFixed(0), s3 = this._renderService.dimensions.css.cell.height.toFixed(0);
+                this.coreService.triggerDataEvent(`${D.C0.ESC}[6;${s3};${i3}t`);
+            }
+          }
+          cancel(e3, t3) {
+            if (this.options.cancelEvents || t3) return e3.preventDefault(), e3.stopPropagation(), false;
+          }
+        }
+        t2.Terminal = P;
+      }, 9924: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.TimeBasedDebouncer = void 0, t2.TimeBasedDebouncer = class {
+          constructor(e3, t3 = 1e3) {
+            this._renderCallback = e3, this._debounceThresholdMS = t3, this._lastRefreshMs = 0, this._additionalRefreshRequested = false;
+          }
+          dispose() {
+            this._refreshTimeoutID && clearTimeout(this._refreshTimeoutID);
+          }
+          refresh(e3, t3, i2) {
+            this._rowCount = i2, e3 = void 0 !== e3 ? e3 : 0, t3 = void 0 !== t3 ? t3 : this._rowCount - 1, this._rowStart = void 0 !== this._rowStart ? Math.min(this._rowStart, e3) : e3, this._rowEnd = void 0 !== this._rowEnd ? Math.max(this._rowEnd, t3) : t3;
+            const s2 = Date.now();
+            if (s2 - this._lastRefreshMs >= this._debounceThresholdMS) this._lastRefreshMs = s2, this._innerRefresh();
+            else if (!this._additionalRefreshRequested) {
+              const e4 = s2 - this._lastRefreshMs, t4 = this._debounceThresholdMS - e4;
+              this._additionalRefreshRequested = true, this._refreshTimeoutID = window.setTimeout(() => {
+                this._lastRefreshMs = Date.now(), this._innerRefresh(), this._additionalRefreshRequested = false, this._refreshTimeoutID = void 0;
+              }, t4);
+            }
+          }
+          _innerRefresh() {
+            if (void 0 === this._rowStart || void 0 === this._rowEnd || void 0 === this._rowCount) return;
+            const e3 = Math.max(this._rowStart, 0), t3 = Math.min(this._rowEnd, this._rowCount - 1);
+            this._rowStart = void 0, this._rowEnd = void 0, this._renderCallback(e3, t3);
+          }
+        };
+      }, 1680: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Viewport = void 0;
+        const n = i2(3656), o = i2(4725), a = i2(8460), h = i2(844), c = i2(2585);
+        let l = t2.Viewport = class extends h.Disposable {
+          constructor(e3, t3, i3, s3, r2, o2, h2, c2) {
+            super(), this._viewportElement = e3, this._scrollArea = t3, this._bufferService = i3, this._optionsService = s3, this._charSizeService = r2, this._renderService = o2, this._coreBrowserService = h2, this.scrollBarWidth = 0, this._currentRowHeight = 0, this._currentDeviceCellHeight = 0, this._lastRecordedBufferLength = 0, this._lastRecordedViewportHeight = 0, this._lastRecordedBufferHeight = 0, this._lastTouchY = 0, this._lastScrollTop = 0, this._wheelPartialScroll = 0, this._refreshAnimationFrame = null, this._ignoreNextScrollEvent = false, this._smoothScrollState = { startTime: 0, origin: -1, target: -1 }, this._onRequestScrollLines = this.register(new a.EventEmitter()), this.onRequestScrollLines = this._onRequestScrollLines.event, this.scrollBarWidth = this._viewportElement.offsetWidth - this._scrollArea.offsetWidth || 15, this.register((0, n.addDisposableDomListener)(this._viewportElement, "scroll", this._handleScroll.bind(this))), this._activeBuffer = this._bufferService.buffer, this.register(this._bufferService.buffers.onBufferActivate((e4) => this._activeBuffer = e4.activeBuffer)), this._renderDimensions = this._renderService.dimensions, this.register(this._renderService.onDimensionsChange((e4) => this._renderDimensions = e4)), this._handleThemeChange(c2.colors), this.register(c2.onChangeColors((e4) => this._handleThemeChange(e4))), this.register(this._optionsService.onSpecificOptionChange("scrollback", () => this.syncScrollArea())), setTimeout(() => this.syncScrollArea());
+          }
+          _handleThemeChange(e3) {
+            this._viewportElement.style.backgroundColor = e3.background.css;
+          }
+          reset() {
+            this._currentRowHeight = 0, this._currentDeviceCellHeight = 0, this._lastRecordedBufferLength = 0, this._lastRecordedViewportHeight = 0, this._lastRecordedBufferHeight = 0, this._lastTouchY = 0, this._lastScrollTop = 0, this._coreBrowserService.window.requestAnimationFrame(() => this.syncScrollArea());
+          }
+          _refresh(e3) {
+            if (e3) return this._innerRefresh(), void (null !== this._refreshAnimationFrame && this._coreBrowserService.window.cancelAnimationFrame(this._refreshAnimationFrame));
+            null === this._refreshAnimationFrame && (this._refreshAnimationFrame = this._coreBrowserService.window.requestAnimationFrame(() => this._innerRefresh()));
+          }
+          _innerRefresh() {
+            if (this._charSizeService.height > 0) {
+              this._currentRowHeight = this._renderDimensions.device.cell.height / this._coreBrowserService.dpr, this._currentDeviceCellHeight = this._renderDimensions.device.cell.height, this._lastRecordedViewportHeight = this._viewportElement.offsetHeight;
+              const e4 = Math.round(this._currentRowHeight * this._lastRecordedBufferLength) + (this._lastRecordedViewportHeight - this._renderDimensions.css.canvas.height);
+              this._lastRecordedBufferHeight !== e4 && (this._lastRecordedBufferHeight = e4, this._scrollArea.style.height = this._lastRecordedBufferHeight + "px");
+            }
+            const e3 = this._bufferService.buffer.ydisp * this._currentRowHeight;
+            this._viewportElement.scrollTop !== e3 && (this._ignoreNextScrollEvent = true, this._viewportElement.scrollTop = e3), this._refreshAnimationFrame = null;
+          }
+          syncScrollArea(e3 = false) {
+            if (this._lastRecordedBufferLength !== this._bufferService.buffer.lines.length) return this._lastRecordedBufferLength = this._bufferService.buffer.lines.length, void this._refresh(e3);
+            this._lastRecordedViewportHeight === this._renderService.dimensions.css.canvas.height && this._lastScrollTop === this._activeBuffer.ydisp * this._currentRowHeight && this._renderDimensions.device.cell.height === this._currentDeviceCellHeight || this._refresh(e3);
+          }
+          _handleScroll(e3) {
+            if (this._lastScrollTop = this._viewportElement.scrollTop, !this._viewportElement.offsetParent) return;
+            if (this._ignoreNextScrollEvent) return this._ignoreNextScrollEvent = false, void this._onRequestScrollLines.fire({ amount: 0, suppressScrollEvent: true });
+            const t3 = Math.round(this._lastScrollTop / this._currentRowHeight) - this._bufferService.buffer.ydisp;
+            this._onRequestScrollLines.fire({ amount: t3, suppressScrollEvent: true });
+          }
+          _smoothScroll() {
+            if (this._isDisposed || -1 === this._smoothScrollState.origin || -1 === this._smoothScrollState.target) return;
+            const e3 = this._smoothScrollPercent();
+            this._viewportElement.scrollTop = this._smoothScrollState.origin + Math.round(e3 * (this._smoothScrollState.target - this._smoothScrollState.origin)), e3 < 1 ? this._coreBrowserService.window.requestAnimationFrame(() => this._smoothScroll()) : this._clearSmoothScrollState();
+          }
+          _smoothScrollPercent() {
+            return this._optionsService.rawOptions.smoothScrollDuration && this._smoothScrollState.startTime ? Math.max(Math.min((Date.now() - this._smoothScrollState.startTime) / this._optionsService.rawOptions.smoothScrollDuration, 1), 0) : 1;
+          }
+          _clearSmoothScrollState() {
+            this._smoothScrollState.startTime = 0, this._smoothScrollState.origin = -1, this._smoothScrollState.target = -1;
+          }
+          _bubbleScroll(e3, t3) {
+            const i3 = this._viewportElement.scrollTop + this._lastRecordedViewportHeight;
+            return !(t3 < 0 && 0 !== this._viewportElement.scrollTop || t3 > 0 && i3 < this._lastRecordedBufferHeight) || (e3.cancelable && e3.preventDefault(), false);
+          }
+          handleWheel(e3) {
+            const t3 = this._getPixelsScrolled(e3);
+            return 0 !== t3 && (this._optionsService.rawOptions.smoothScrollDuration ? (this._smoothScrollState.startTime = Date.now(), this._smoothScrollPercent() < 1 ? (this._smoothScrollState.origin = this._viewportElement.scrollTop, -1 === this._smoothScrollState.target ? this._smoothScrollState.target = this._viewportElement.scrollTop + t3 : this._smoothScrollState.target += t3, this._smoothScrollState.target = Math.max(Math.min(this._smoothScrollState.target, this._viewportElement.scrollHeight), 0), this._smoothScroll()) : this._clearSmoothScrollState()) : this._viewportElement.scrollTop += t3, this._bubbleScroll(e3, t3));
+          }
+          scrollLines(e3) {
+            if (0 !== e3) if (this._optionsService.rawOptions.smoothScrollDuration) {
+              const t3 = e3 * this._currentRowHeight;
+              this._smoothScrollState.startTime = Date.now(), this._smoothScrollPercent() < 1 ? (this._smoothScrollState.origin = this._viewportElement.scrollTop, this._smoothScrollState.target = this._smoothScrollState.origin + t3, this._smoothScrollState.target = Math.max(Math.min(this._smoothScrollState.target, this._viewportElement.scrollHeight), 0), this._smoothScroll()) : this._clearSmoothScrollState();
+            } else this._onRequestScrollLines.fire({ amount: e3, suppressScrollEvent: false });
+          }
+          _getPixelsScrolled(e3) {
+            if (0 === e3.deltaY || e3.shiftKey) return 0;
+            let t3 = this._applyScrollModifier(e3.deltaY, e3);
+            return e3.deltaMode === WheelEvent.DOM_DELTA_LINE ? t3 *= this._currentRowHeight : e3.deltaMode === WheelEvent.DOM_DELTA_PAGE && (t3 *= this._currentRowHeight * this._bufferService.rows), t3;
+          }
+          getBufferElements(e3, t3) {
+            var _a;
+            let i3, s3 = "";
+            const r2 = [], n2 = t3 != null ? t3 : this._bufferService.buffer.lines.length, o2 = this._bufferService.buffer.lines;
+            for (let t4 = e3; t4 < n2; t4++) {
+              const e4 = o2.get(t4);
+              if (!e4) continue;
+              const n3 = (_a = o2.get(t4 + 1)) == null ? void 0 : _a.isWrapped;
+              if (s3 += e4.translateToString(!n3), !n3 || t4 === o2.length - 1) {
+                const e5 = document.createElement("div");
+                e5.textContent = s3, r2.push(e5), s3.length > 0 && (i3 = e5), s3 = "";
+              }
+            }
+            return { bufferElements: r2, cursorElement: i3 };
+          }
+          getLinesScrolled(e3) {
+            if (0 === e3.deltaY || e3.shiftKey) return 0;
+            let t3 = this._applyScrollModifier(e3.deltaY, e3);
+            return e3.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? (t3 /= this._currentRowHeight + 0, this._wheelPartialScroll += t3, t3 = Math.floor(Math.abs(this._wheelPartialScroll)) * (this._wheelPartialScroll > 0 ? 1 : -1), this._wheelPartialScroll %= 1) : e3.deltaMode === WheelEvent.DOM_DELTA_PAGE && (t3 *= this._bufferService.rows), t3;
+          }
+          _applyScrollModifier(e3, t3) {
+            const i3 = this._optionsService.rawOptions.fastScrollModifier;
+            return "alt" === i3 && t3.altKey || "ctrl" === i3 && t3.ctrlKey || "shift" === i3 && t3.shiftKey ? e3 * this._optionsService.rawOptions.fastScrollSensitivity * this._optionsService.rawOptions.scrollSensitivity : e3 * this._optionsService.rawOptions.scrollSensitivity;
+          }
+          handleTouchStart(e3) {
+            this._lastTouchY = e3.touches[0].pageY;
+          }
+          handleTouchMove(e3) {
+            const t3 = this._lastTouchY - e3.touches[0].pageY;
+            return this._lastTouchY = e3.touches[0].pageY, 0 !== t3 && (this._viewportElement.scrollTop += t3, this._bubbleScroll(e3, t3));
+          }
+        };
+        t2.Viewport = l = s2([r(2, c.IBufferService), r(3, c.IOptionsService), r(4, o.ICharSizeService), r(5, o.IRenderService), r(6, o.ICoreBrowserService), r(7, o.IThemeService)], l);
+      }, 3107: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferDecorationRenderer = void 0;
+        const n = i2(4725), o = i2(844), a = i2(2585);
+        let h = t2.BufferDecorationRenderer = class extends o.Disposable {
+          constructor(e3, t3, i3, s3, r2) {
+            super(), this._screenElement = e3, this._bufferService = t3, this._coreBrowserService = i3, this._decorationService = s3, this._renderService = r2, this._decorationElements = /* @__PURE__ */ new Map(), this._altBufferIsActive = false, this._dimensionsChanged = false, this._container = document.createElement("div"), this._container.classList.add("xterm-decoration-container"), this._screenElement.appendChild(this._container), this.register(this._renderService.onRenderedViewportChange(() => this._doRefreshDecorations())), this.register(this._renderService.onDimensionsChange(() => {
+              this._dimensionsChanged = true, this._queueRefresh();
+            })), this.register(this._coreBrowserService.onDprChange(() => this._queueRefresh())), this.register(this._bufferService.buffers.onBufferActivate(() => {
+              this._altBufferIsActive = this._bufferService.buffer === this._bufferService.buffers.alt;
+            })), this.register(this._decorationService.onDecorationRegistered(() => this._queueRefresh())), this.register(this._decorationService.onDecorationRemoved((e4) => this._removeDecoration(e4))), this.register((0, o.toDisposable)(() => {
+              this._container.remove(), this._decorationElements.clear();
+            }));
+          }
+          _queueRefresh() {
+            void 0 === this._animationFrame && (this._animationFrame = this._renderService.addRefreshCallback(() => {
+              this._doRefreshDecorations(), this._animationFrame = void 0;
+            }));
+          }
+          _doRefreshDecorations() {
+            for (const e3 of this._decorationService.decorations) this._renderDecoration(e3);
+            this._dimensionsChanged = false;
+          }
+          _renderDecoration(e3) {
+            this._refreshStyle(e3), this._dimensionsChanged && this._refreshXPosition(e3);
+          }
+          _createElement(e3) {
+            var _a, _b;
+            const t3 = this._coreBrowserService.mainDocument.createElement("div");
+            t3.classList.add("xterm-decoration"), t3.classList.toggle("xterm-decoration-top-layer", "top" === ((_a = e3 == null ? void 0 : e3.options) == null ? void 0 : _a.layer)), t3.style.width = `${Math.round((e3.options.width || 1) * this._renderService.dimensions.css.cell.width)}px`, t3.style.height = (e3.options.height || 1) * this._renderService.dimensions.css.cell.height + "px", t3.style.top = (e3.marker.line - this._bufferService.buffers.active.ydisp) * this._renderService.dimensions.css.cell.height + "px", t3.style.lineHeight = `${this._renderService.dimensions.css.cell.height}px`;
+            const i3 = (_b = e3.options.x) != null ? _b : 0;
+            return i3 && i3 > this._bufferService.cols && (t3.style.display = "none"), this._refreshXPosition(e3, t3), t3;
+          }
+          _refreshStyle(e3) {
+            const t3 = e3.marker.line - this._bufferService.buffers.active.ydisp;
+            if (t3 < 0 || t3 >= this._bufferService.rows) e3.element && (e3.element.style.display = "none", e3.onRenderEmitter.fire(e3.element));
+            else {
+              let i3 = this._decorationElements.get(e3);
+              i3 || (i3 = this._createElement(e3), e3.element = i3, this._decorationElements.set(e3, i3), this._container.appendChild(i3), e3.onDispose(() => {
+                this._decorationElements.delete(e3), i3.remove();
+              })), i3.style.top = t3 * this._renderService.dimensions.css.cell.height + "px", i3.style.display = this._altBufferIsActive ? "none" : "block", e3.onRenderEmitter.fire(i3);
+            }
+          }
+          _refreshXPosition(e3, t3 = e3.element) {
+            var _a;
+            if (!t3) return;
+            const i3 = (_a = e3.options.x) != null ? _a : 0;
+            "right" === (e3.options.anchor || "left") ? t3.style.right = i3 ? i3 * this._renderService.dimensions.css.cell.width + "px" : "" : t3.style.left = i3 ? i3 * this._renderService.dimensions.css.cell.width + "px" : "";
+          }
+          _removeDecoration(e3) {
+            var _a;
+            (_a = this._decorationElements.get(e3)) == null ? void 0 : _a.remove(), this._decorationElements.delete(e3), e3.dispose();
+          }
+        };
+        t2.BufferDecorationRenderer = h = s2([r(1, a.IBufferService), r(2, n.ICoreBrowserService), r(3, a.IDecorationService), r(4, n.IRenderService)], h);
+      }, 5871: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.ColorZoneStore = void 0, t2.ColorZoneStore = class {
+          constructor() {
+            this._zones = [], this._zonePool = [], this._zonePoolIndex = 0, this._linePadding = { full: 0, left: 0, center: 0, right: 0 };
+          }
+          get zones() {
+            return this._zonePool.length = Math.min(this._zonePool.length, this._zones.length), this._zones;
+          }
+          clear() {
+            this._zones.length = 0, this._zonePoolIndex = 0;
+          }
+          addDecoration(e3) {
+            if (e3.options.overviewRulerOptions) {
+              for (const t3 of this._zones) if (t3.color === e3.options.overviewRulerOptions.color && t3.position === e3.options.overviewRulerOptions.position) {
+                if (this._lineIntersectsZone(t3, e3.marker.line)) return;
+                if (this._lineAdjacentToZone(t3, e3.marker.line, e3.options.overviewRulerOptions.position)) return void this._addLineToZone(t3, e3.marker.line);
+              }
+              if (this._zonePoolIndex < this._zonePool.length) return this._zonePool[this._zonePoolIndex].color = e3.options.overviewRulerOptions.color, this._zonePool[this._zonePoolIndex].position = e3.options.overviewRulerOptions.position, this._zonePool[this._zonePoolIndex].startBufferLine = e3.marker.line, this._zonePool[this._zonePoolIndex].endBufferLine = e3.marker.line, void this._zones.push(this._zonePool[this._zonePoolIndex++]);
+              this._zones.push({ color: e3.options.overviewRulerOptions.color, position: e3.options.overviewRulerOptions.position, startBufferLine: e3.marker.line, endBufferLine: e3.marker.line }), this._zonePool.push(this._zones[this._zones.length - 1]), this._zonePoolIndex++;
+            }
+          }
+          setPadding(e3) {
+            this._linePadding = e3;
+          }
+          _lineIntersectsZone(e3, t3) {
+            return t3 >= e3.startBufferLine && t3 <= e3.endBufferLine;
+          }
+          _lineAdjacentToZone(e3, t3, i2) {
+            return t3 >= e3.startBufferLine - this._linePadding[i2 || "full"] && t3 <= e3.endBufferLine + this._linePadding[i2 || "full"];
+          }
+          _addLineToZone(e3, t3) {
+            e3.startBufferLine = Math.min(e3.startBufferLine, t3), e3.endBufferLine = Math.max(e3.endBufferLine, t3);
+          }
+        };
+      }, 5744: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.OverviewRulerRenderer = void 0;
+        const n = i2(5871), o = i2(4725), a = i2(844), h = i2(2585), c = { full: 0, left: 0, center: 0, right: 0 }, l = { full: 0, left: 0, center: 0, right: 0 }, d = { full: 0, left: 0, center: 0, right: 0 };
+        let _ = t2.OverviewRulerRenderer = class extends a.Disposable {
+          get _width() {
+            return this._optionsService.options.overviewRulerWidth || 0;
+          }
+          constructor(e3, t3, i3, s3, r2, o2, h2) {
+            var _a;
+            super(), this._viewportElement = e3, this._screenElement = t3, this._bufferService = i3, this._decorationService = s3, this._renderService = r2, this._optionsService = o2, this._coreBrowserService = h2, this._colorZoneStore = new n.ColorZoneStore(), this._shouldUpdateDimensions = true, this._shouldUpdateAnchor = true, this._lastKnownBufferLength = 0, this._canvas = this._coreBrowserService.mainDocument.createElement("canvas"), this._canvas.classList.add("xterm-decoration-overview-ruler"), this._refreshCanvasDimensions(), (_a = this._viewportElement.parentElement) == null ? void 0 : _a.insertBefore(this._canvas, this._viewportElement);
+            const c2 = this._canvas.getContext("2d");
+            if (!c2) throw new Error("Ctx cannot be null");
+            this._ctx = c2, this._registerDecorationListeners(), this._registerBufferChangeListeners(), this._registerDimensionChangeListeners(), this.register((0, a.toDisposable)(() => {
+              var _a2;
+              (_a2 = this._canvas) == null ? void 0 : _a2.remove();
+            }));
+          }
+          _registerDecorationListeners() {
+            this.register(this._decorationService.onDecorationRegistered(() => this._queueRefresh(void 0, true))), this.register(this._decorationService.onDecorationRemoved(() => this._queueRefresh(void 0, true)));
+          }
+          _registerBufferChangeListeners() {
+            this.register(this._renderService.onRenderedViewportChange(() => this._queueRefresh())), this.register(this._bufferService.buffers.onBufferActivate(() => {
+              this._canvas.style.display = this._bufferService.buffer === this._bufferService.buffers.alt ? "none" : "block";
+            })), this.register(this._bufferService.onScroll(() => {
+              this._lastKnownBufferLength !== this._bufferService.buffers.normal.lines.length && (this._refreshDrawHeightConstants(), this._refreshColorZonePadding());
+            }));
+          }
+          _registerDimensionChangeListeners() {
+            this.register(this._renderService.onRender(() => {
+              this._containerHeight && this._containerHeight === this._screenElement.clientHeight || (this._queueRefresh(true), this._containerHeight = this._screenElement.clientHeight);
+            })), this.register(this._optionsService.onSpecificOptionChange("overviewRulerWidth", () => this._queueRefresh(true))), this.register(this._coreBrowserService.onDprChange(() => this._queueRefresh(true))), this._queueRefresh(true);
+          }
+          _refreshDrawConstants() {
+            const e3 = Math.floor(this._canvas.width / 3), t3 = Math.ceil(this._canvas.width / 3);
+            l.full = this._canvas.width, l.left = e3, l.center = t3, l.right = e3, this._refreshDrawHeightConstants(), d.full = 0, d.left = 0, d.center = l.left, d.right = l.left + l.center;
+          }
+          _refreshDrawHeightConstants() {
+            c.full = Math.round(2 * this._coreBrowserService.dpr);
+            const e3 = this._canvas.height / this._bufferService.buffer.lines.length, t3 = Math.round(Math.max(Math.min(e3, 12), 6) * this._coreBrowserService.dpr);
+            c.left = t3, c.center = t3, c.right = t3;
+          }
+          _refreshColorZonePadding() {
+            this._colorZoneStore.setPadding({ full: Math.floor(this._bufferService.buffers.active.lines.length / (this._canvas.height - 1) * c.full), left: Math.floor(this._bufferService.buffers.active.lines.length / (this._canvas.height - 1) * c.left), center: Math.floor(this._bufferService.buffers.active.lines.length / (this._canvas.height - 1) * c.center), right: Math.floor(this._bufferService.buffers.active.lines.length / (this._canvas.height - 1) * c.right) }), this._lastKnownBufferLength = this._bufferService.buffers.normal.lines.length;
+          }
+          _refreshCanvasDimensions() {
+            this._canvas.style.width = `${this._width}px`, this._canvas.width = Math.round(this._width * this._coreBrowserService.dpr), this._canvas.style.height = `${this._screenElement.clientHeight}px`, this._canvas.height = Math.round(this._screenElement.clientHeight * this._coreBrowserService.dpr), this._refreshDrawConstants(), this._refreshColorZonePadding();
+          }
+          _refreshDecorations() {
+            this._shouldUpdateDimensions && this._refreshCanvasDimensions(), this._ctx.clearRect(0, 0, this._canvas.width, this._canvas.height), this._colorZoneStore.clear();
+            for (const e4 of this._decorationService.decorations) this._colorZoneStore.addDecoration(e4);
+            this._ctx.lineWidth = 1;
+            const e3 = this._colorZoneStore.zones;
+            for (const t3 of e3) "full" !== t3.position && this._renderColorZone(t3);
+            for (const t3 of e3) "full" === t3.position && this._renderColorZone(t3);
+            this._shouldUpdateDimensions = false, this._shouldUpdateAnchor = false;
+          }
+          _renderColorZone(e3) {
+            this._ctx.fillStyle = e3.color, this._ctx.fillRect(d[e3.position || "full"], Math.round((this._canvas.height - 1) * (e3.startBufferLine / this._bufferService.buffers.active.lines.length) - c[e3.position || "full"] / 2), l[e3.position || "full"], Math.round((this._canvas.height - 1) * ((e3.endBufferLine - e3.startBufferLine) / this._bufferService.buffers.active.lines.length) + c[e3.position || "full"]));
+          }
+          _queueRefresh(e3, t3) {
+            this._shouldUpdateDimensions = e3 || this._shouldUpdateDimensions, this._shouldUpdateAnchor = t3 || this._shouldUpdateAnchor, void 0 === this._animationFrame && (this._animationFrame = this._coreBrowserService.window.requestAnimationFrame(() => {
+              this._refreshDecorations(), this._animationFrame = void 0;
+            }));
+          }
+        };
+        t2.OverviewRulerRenderer = _ = s2([r(2, h.IBufferService), r(3, h.IDecorationService), r(4, o.IRenderService), r(5, h.IOptionsService), r(6, o.ICoreBrowserService)], _);
+      }, 2950: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CompositionHelper = void 0;
+        const n = i2(4725), o = i2(2585), a = i2(2584);
+        let h = t2.CompositionHelper = class {
+          get isComposing() {
+            return this._isComposing;
+          }
+          constructor(e3, t3, i3, s3, r2, n2) {
+            this._textarea = e3, this._compositionView = t3, this._bufferService = i3, this._optionsService = s3, this._coreService = r2, this._renderService = n2, this._isComposing = false, this._isSendingComposition = false, this._compositionPosition = { start: 0, end: 0 }, this._dataAlreadySent = "";
+          }
+          compositionstart() {
+            this._isComposing = true, this._compositionPosition.start = this._textarea.value.length, this._compositionView.textContent = "", this._dataAlreadySent = "", this._compositionView.classList.add("active");
+          }
+          compositionupdate(e3) {
+            this._compositionView.textContent = e3.data, this.updateCompositionElements(), setTimeout(() => {
+              this._compositionPosition.end = this._textarea.value.length;
+            }, 0);
+          }
+          compositionend() {
+            this._finalizeComposition(true);
+          }
+          keydown(e3) {
+            if (this._isComposing || this._isSendingComposition) {
+              if (229 === e3.keyCode) return false;
+              if (16 === e3.keyCode || 17 === e3.keyCode || 18 === e3.keyCode) return false;
+              this._finalizeComposition(false);
+            }
+            return 229 !== e3.keyCode || (this._handleAnyTextareaChanges(), false);
+          }
+          _finalizeComposition(e3) {
+            if (this._compositionView.classList.remove("active"), this._isComposing = false, e3) {
+              const e4 = { start: this._compositionPosition.start, end: this._compositionPosition.end };
+              this._isSendingComposition = true, setTimeout(() => {
+                if (this._isSendingComposition) {
+                  let t3;
+                  this._isSendingComposition = false, e4.start += this._dataAlreadySent.length, t3 = this._isComposing ? this._textarea.value.substring(e4.start, e4.end) : this._textarea.value.substring(e4.start), t3.length > 0 && this._coreService.triggerDataEvent(t3, true);
+                }
+              }, 0);
+            } else {
+              this._isSendingComposition = false;
+              const e4 = this._textarea.value.substring(this._compositionPosition.start, this._compositionPosition.end);
+              this._coreService.triggerDataEvent(e4, true);
+            }
+          }
+          _handleAnyTextareaChanges() {
+            const e3 = this._textarea.value;
+            setTimeout(() => {
+              if (!this._isComposing) {
+                const t3 = this._textarea.value, i3 = t3.replace(e3, "");
+                this._dataAlreadySent = i3, t3.length > e3.length ? this._coreService.triggerDataEvent(i3, true) : t3.length < e3.length ? this._coreService.triggerDataEvent(`${a.C0.DEL}`, true) : t3.length === e3.length && t3 !== e3 && this._coreService.triggerDataEvent(t3, true);
+              }
+            }, 0);
+          }
+          updateCompositionElements(e3) {
+            if (this._isComposing) {
+              if (this._bufferService.buffer.isCursorInViewport) {
+                const e4 = Math.min(this._bufferService.buffer.x, this._bufferService.cols - 1), t3 = this._renderService.dimensions.css.cell.height, i3 = this._bufferService.buffer.y * this._renderService.dimensions.css.cell.height, s3 = e4 * this._renderService.dimensions.css.cell.width;
+                this._compositionView.style.left = s3 + "px", this._compositionView.style.top = i3 + "px", this._compositionView.style.height = t3 + "px", this._compositionView.style.lineHeight = t3 + "px", this._compositionView.style.fontFamily = this._optionsService.rawOptions.fontFamily, this._compositionView.style.fontSize = this._optionsService.rawOptions.fontSize + "px";
+                const r2 = this._compositionView.getBoundingClientRect();
+                this._textarea.style.left = s3 + "px", this._textarea.style.top = i3 + "px", this._textarea.style.width = Math.max(r2.width, 1) + "px", this._textarea.style.height = Math.max(r2.height, 1) + "px", this._textarea.style.lineHeight = r2.height + "px";
+              }
+              e3 || setTimeout(() => this.updateCompositionElements(true), 0);
+            }
+          }
+        };
+        t2.CompositionHelper = h = s2([r(2, o.IBufferService), r(3, o.IOptionsService), r(4, o.ICoreService), r(5, n.IRenderService)], h);
+      }, 9806: (e2, t2) => {
+        function i2(e3, t3, i3) {
+          const s2 = i3.getBoundingClientRect(), r = e3.getComputedStyle(i3), n = parseInt(r.getPropertyValue("padding-left")), o = parseInt(r.getPropertyValue("padding-top"));
+          return [t3.clientX - s2.left - n, t3.clientY - s2.top - o];
+        }
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.getCoords = t2.getCoordsRelativeToElement = void 0, t2.getCoordsRelativeToElement = i2, t2.getCoords = function(e3, t3, s2, r, n, o, a, h, c) {
+          if (!o) return;
+          const l = i2(e3, t3, s2);
+          return l ? (l[0] = Math.ceil((l[0] + (c ? a / 2 : 0)) / a), l[1] = Math.ceil(l[1] / h), l[0] = Math.min(Math.max(l[0], 1), r + (c ? 1 : 0)), l[1] = Math.min(Math.max(l[1], 1), n), l) : void 0;
+        };
+      }, 9504: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.moveToCellSequence = void 0;
+        const s2 = i2(2584);
+        function r(e3, t3, i3, s3) {
+          const r2 = e3 - n(e3, i3), a2 = t3 - n(t3, i3), l = Math.abs(r2 - a2) - function(e4, t4, i4) {
+            let s4 = 0;
+            const r3 = e4 - n(e4, i4), a3 = t4 - n(t4, i4);
+            for (let n2 = 0; n2 < Math.abs(r3 - a3); n2++) {
+              const a4 = "A" === o(e4, t4) ? -1 : 1, h2 = i4.buffer.lines.get(r3 + a4 * n2);
+              (h2 == null ? void 0 : h2.isWrapped) && s4++;
+            }
+            return s4;
+          }(e3, t3, i3);
+          return c(l, h(o(e3, t3), s3));
+        }
+        function n(e3, t3) {
+          let i3 = 0, s3 = t3.buffer.lines.get(e3), r2 = s3 == null ? void 0 : s3.isWrapped;
+          for (; r2 && e3 >= 0 && e3 < t3.rows; ) i3++, s3 = t3.buffer.lines.get(--e3), r2 = s3 == null ? void 0 : s3.isWrapped;
+          return i3;
+        }
+        function o(e3, t3) {
+          return e3 > t3 ? "A" : "B";
+        }
+        function a(e3, t3, i3, s3, r2, n2) {
+          let o2 = e3, a2 = t3, h2 = "";
+          for (; o2 !== i3 || a2 !== s3; ) o2 += r2 ? 1 : -1, r2 && o2 > n2.cols - 1 ? (h2 += n2.buffer.translateBufferLineToString(a2, false, e3, o2), o2 = 0, e3 = 0, a2++) : !r2 && o2 < 0 && (h2 += n2.buffer.translateBufferLineToString(a2, false, 0, e3 + 1), o2 = n2.cols - 1, e3 = o2, a2--);
+          return h2 + n2.buffer.translateBufferLineToString(a2, false, e3, o2);
+        }
+        function h(e3, t3) {
+          const i3 = t3 ? "O" : "[";
+          return s2.C0.ESC + i3 + e3;
+        }
+        function c(e3, t3) {
+          e3 = Math.floor(e3);
+          let i3 = "";
+          for (let s3 = 0; s3 < e3; s3++) i3 += t3;
+          return i3;
+        }
+        t2.moveToCellSequence = function(e3, t3, i3, s3) {
+          const o2 = i3.buffer.x, l = i3.buffer.y;
+          if (!i3.buffer.hasScrollback) return function(e4, t4, i4, s4, o3, l2) {
+            return 0 === r(t4, s4, o3, l2).length ? "" : c(a(e4, t4, e4, t4 - n(t4, o3), false, o3).length, h("D", l2));
+          }(o2, l, 0, t3, i3, s3) + r(l, t3, i3, s3) + function(e4, t4, i4, s4, o3, l2) {
+            let d2;
+            d2 = r(t4, s4, o3, l2).length > 0 ? s4 - n(s4, o3) : t4;
+            const _2 = s4, u = function(e5, t5, i5, s5, o4, a2) {
+              let h2;
+              return h2 = r(i5, s5, o4, a2).length > 0 ? s5 - n(s5, o4) : t5, e5 < i5 && h2 <= s5 || e5 >= i5 && h2 < s5 ? "C" : "D";
+            }(e4, t4, i4, s4, o3, l2);
+            return c(a(e4, d2, i4, _2, "C" === u, o3).length, h(u, l2));
+          }(o2, l, e3, t3, i3, s3);
+          let d;
+          if (l === t3) return d = o2 > e3 ? "D" : "C", c(Math.abs(o2 - e3), h(d, s3));
+          d = l > t3 ? "D" : "C";
+          const _ = Math.abs(l - t3);
+          return c(function(e4, t4) {
+            return t4.cols - e4;
+          }(l > t3 ? e3 : o2, i3) + (_ - 1) * i3.cols + 1 + ((l > t3 ? o2 : e3) - 1), h(d, s3));
+        };
+      }, 1296: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.DomRenderer = void 0;
+        const n = i2(3787), o = i2(2550), a = i2(2223), h = i2(6171), c = i2(6052), l = i2(4725), d = i2(8055), _ = i2(8460), u = i2(844), f = i2(2585), v = "xterm-dom-renderer-owner-", p = "xterm-rows", g = "xterm-fg-", m = "xterm-bg-", S = "xterm-focus", C = "xterm-selection";
+        let b = 1, w = t2.DomRenderer = class extends u.Disposable {
+          constructor(e3, t3, i3, s3, r2, a2, l2, d2, f2, g2, m2, S2, w2) {
+            super(), this._terminal = e3, this._document = t3, this._element = i3, this._screenElement = s3, this._viewportElement = r2, this._helperContainer = a2, this._linkifier2 = l2, this._charSizeService = f2, this._optionsService = g2, this._bufferService = m2, this._coreBrowserService = S2, this._themeService = w2, this._terminalClass = b++, this._rowElements = [], this._selectionRenderModel = (0, c.createSelectionRenderModel)(), this.onRequestRedraw = this.register(new _.EventEmitter()).event, this._rowContainer = this._document.createElement("div"), this._rowContainer.classList.add(p), this._rowContainer.style.lineHeight = "normal", this._rowContainer.setAttribute("aria-hidden", "true"), this._refreshRowElements(this._bufferService.cols, this._bufferService.rows), this._selectionContainer = this._document.createElement("div"), this._selectionContainer.classList.add(C), this._selectionContainer.setAttribute("aria-hidden", "true"), this.dimensions = (0, h.createRenderDimensions)(), this._updateDimensions(), this.register(this._optionsService.onOptionChange(() => this._handleOptionsChanged())), this.register(this._themeService.onChangeColors((e4) => this._injectCss(e4))), this._injectCss(this._themeService.colors), this._rowFactory = d2.createInstance(n.DomRendererRowFactory, document), this._element.classList.add(v + this._terminalClass), this._screenElement.appendChild(this._rowContainer), this._screenElement.appendChild(this._selectionContainer), this.register(this._linkifier2.onShowLinkUnderline((e4) => this._handleLinkHover(e4))), this.register(this._linkifier2.onHideLinkUnderline((e4) => this._handleLinkLeave(e4))), this.register((0, u.toDisposable)(() => {
+              this._element.classList.remove(v + this._terminalClass), this._rowContainer.remove(), this._selectionContainer.remove(), this._widthCache.dispose(), this._themeStyleElement.remove(), this._dimensionsStyleElement.remove();
+            })), this._widthCache = new o.WidthCache(this._document, this._helperContainer), this._widthCache.setFont(this._optionsService.rawOptions.fontFamily, this._optionsService.rawOptions.fontSize, this._optionsService.rawOptions.fontWeight, this._optionsService.rawOptions.fontWeightBold), this._setDefaultSpacing();
+          }
+          _updateDimensions() {
+            const e3 = this._coreBrowserService.dpr;
+            this.dimensions.device.char.width = this._charSizeService.width * e3, this.dimensions.device.char.height = Math.ceil(this._charSizeService.height * e3), this.dimensions.device.cell.width = this.dimensions.device.char.width + Math.round(this._optionsService.rawOptions.letterSpacing), this.dimensions.device.cell.height = Math.floor(this.dimensions.device.char.height * this._optionsService.rawOptions.lineHeight), this.dimensions.device.char.left = 0, this.dimensions.device.char.top = 0, this.dimensions.device.canvas.width = this.dimensions.device.cell.width * this._bufferService.cols, this.dimensions.device.canvas.height = this.dimensions.device.cell.height * this._bufferService.rows, this.dimensions.css.canvas.width = Math.round(this.dimensions.device.canvas.width / e3), this.dimensions.css.canvas.height = Math.round(this.dimensions.device.canvas.height / e3), this.dimensions.css.cell.width = this.dimensions.css.canvas.width / this._bufferService.cols, this.dimensions.css.cell.height = this.dimensions.css.canvas.height / this._bufferService.rows;
+            for (const e4 of this._rowElements) e4.style.width = `${this.dimensions.css.canvas.width}px`, e4.style.height = `${this.dimensions.css.cell.height}px`, e4.style.lineHeight = `${this.dimensions.css.cell.height}px`, e4.style.overflow = "hidden";
+            this._dimensionsStyleElement || (this._dimensionsStyleElement = this._document.createElement("style"), this._screenElement.appendChild(this._dimensionsStyleElement));
+            const t3 = `${this._terminalSelector} .${p} span { display: inline-block; height: 100%; vertical-align: top;}`;
+            this._dimensionsStyleElement.textContent = t3, this._selectionContainer.style.height = this._viewportElement.style.height, this._screenElement.style.width = `${this.dimensions.css.canvas.width}px`, this._screenElement.style.height = `${this.dimensions.css.canvas.height}px`;
+          }
+          _injectCss(e3) {
+            this._themeStyleElement || (this._themeStyleElement = this._document.createElement("style"), this._screenElement.appendChild(this._themeStyleElement));
+            let t3 = `${this._terminalSelector} .${p} { color: ${e3.foreground.css}; font-family: ${this._optionsService.rawOptions.fontFamily}; font-size: ${this._optionsService.rawOptions.fontSize}px; font-kerning: none; white-space: pre}`;
+            t3 += `${this._terminalSelector} .${p} .xterm-dim { color: ${d.color.multiplyOpacity(e3.foreground, 0.5).css};}`, t3 += `${this._terminalSelector} span:not(.xterm-bold) { font-weight: ${this._optionsService.rawOptions.fontWeight};}${this._terminalSelector} span.xterm-bold { font-weight: ${this._optionsService.rawOptions.fontWeightBold};}${this._terminalSelector} span.xterm-italic { font-style: italic;}`;
+            const i3 = `blink_underline_${this._terminalClass}`, s3 = `blink_bar_${this._terminalClass}`, r2 = `blink_block_${this._terminalClass}`;
+            t3 += `@keyframes ${i3} { 50% {  border-bottom-style: hidden; }}`, t3 += `@keyframes ${s3} { 50% {  box-shadow: none; }}`, t3 += `@keyframes ${r2} { 0% {  background-color: ${e3.cursor.css};  color: ${e3.cursorAccent.css}; } 50% {  background-color: inherit;  color: ${e3.cursor.css}; }}`, t3 += `${this._terminalSelector} .${p}.${S} .xterm-cursor.xterm-cursor-blink.xterm-cursor-underline { animation: ${i3} 1s step-end infinite;}${this._terminalSelector} .${p}.${S} .xterm-cursor.xterm-cursor-blink.xterm-cursor-bar { animation: ${s3} 1s step-end infinite;}${this._terminalSelector} .${p}.${S} .xterm-cursor.xterm-cursor-blink.xterm-cursor-block { animation: ${r2} 1s step-end infinite;}${this._terminalSelector} .${p} .xterm-cursor.xterm-cursor-block { background-color: ${e3.cursor.css}; color: ${e3.cursorAccent.css};}${this._terminalSelector} .${p} .xterm-cursor.xterm-cursor-block:not(.xterm-cursor-blink) { background-color: ${e3.cursor.css} !important; color: ${e3.cursorAccent.css} !important;}${this._terminalSelector} .${p} .xterm-cursor.xterm-cursor-outline { outline: 1px solid ${e3.cursor.css}; outline-offset: -1px;}${this._terminalSelector} .${p} .xterm-cursor.xterm-cursor-bar { box-shadow: ${this._optionsService.rawOptions.cursorWidth}px 0 0 ${e3.cursor.css} inset;}${this._terminalSelector} .${p} .xterm-cursor.xterm-cursor-underline { border-bottom: 1px ${e3.cursor.css}; border-bottom-style: solid; height: calc(100% - 1px);}`, t3 += `${this._terminalSelector} .${C} { position: absolute; top: 0; left: 0; z-index: 1; pointer-events: none;}${this._terminalSelector}.focus .${C} div { position: absolute; background-color: ${e3.selectionBackgroundOpaque.css};}${this._terminalSelector} .${C} div { position: absolute; background-color: ${e3.selectionInactiveBackgroundOpaque.css};}`;
+            for (const [i4, s4] of e3.ansi.entries()) t3 += `${this._terminalSelector} .${g}${i4} { color: ${s4.css}; }${this._terminalSelector} .${g}${i4}.xterm-dim { color: ${d.color.multiplyOpacity(s4, 0.5).css}; }${this._terminalSelector} .${m}${i4} { background-color: ${s4.css}; }`;
+            t3 += `${this._terminalSelector} .${g}${a.INVERTED_DEFAULT_COLOR} { color: ${d.color.opaque(e3.background).css}; }${this._terminalSelector} .${g}${a.INVERTED_DEFAULT_COLOR}.xterm-dim { color: ${d.color.multiplyOpacity(d.color.opaque(e3.background), 0.5).css}; }${this._terminalSelector} .${m}${a.INVERTED_DEFAULT_COLOR} { background-color: ${e3.foreground.css}; }`, this._themeStyleElement.textContent = t3;
+          }
+          _setDefaultSpacing() {
+            const e3 = this.dimensions.css.cell.width - this._widthCache.get("W", false, false);
+            this._rowContainer.style.letterSpacing = `${e3}px`, this._rowFactory.defaultSpacing = e3;
+          }
+          handleDevicePixelRatioChange() {
+            this._updateDimensions(), this._widthCache.clear(), this._setDefaultSpacing();
+          }
+          _refreshRowElements(e3, t3) {
+            for (let e4 = this._rowElements.length; e4 <= t3; e4++) {
+              const e5 = this._document.createElement("div");
+              this._rowContainer.appendChild(e5), this._rowElements.push(e5);
+            }
+            for (; this._rowElements.length > t3; ) this._rowContainer.removeChild(this._rowElements.pop());
+          }
+          handleResize(e3, t3) {
+            this._refreshRowElements(e3, t3), this._updateDimensions(), this.handleSelectionChanged(this._selectionRenderModel.selectionStart, this._selectionRenderModel.selectionEnd, this._selectionRenderModel.columnSelectMode);
+          }
+          handleCharSizeChanged() {
+            this._updateDimensions(), this._widthCache.clear(), this._setDefaultSpacing();
+          }
+          handleBlur() {
+            this._rowContainer.classList.remove(S), this.renderRows(0, this._bufferService.rows - 1);
+          }
+          handleFocus() {
+            this._rowContainer.classList.add(S), this.renderRows(this._bufferService.buffer.y, this._bufferService.buffer.y);
+          }
+          handleSelectionChanged(e3, t3, i3) {
+            if (this._selectionContainer.replaceChildren(), this._rowFactory.handleSelectionChanged(e3, t3, i3), this.renderRows(0, this._bufferService.rows - 1), !e3 || !t3) return;
+            this._selectionRenderModel.update(this._terminal, e3, t3, i3);
+            const s3 = this._selectionRenderModel.viewportStartRow, r2 = this._selectionRenderModel.viewportEndRow, n2 = this._selectionRenderModel.viewportCappedStartRow, o2 = this._selectionRenderModel.viewportCappedEndRow;
+            if (n2 >= this._bufferService.rows || o2 < 0) return;
+            const a2 = this._document.createDocumentFragment();
+            if (i3) {
+              const i4 = e3[0] > t3[0];
+              a2.appendChild(this._createSelectionElement(n2, i4 ? t3[0] : e3[0], i4 ? e3[0] : t3[0], o2 - n2 + 1));
+            } else {
+              const i4 = s3 === n2 ? e3[0] : 0, h2 = n2 === r2 ? t3[0] : this._bufferService.cols;
+              a2.appendChild(this._createSelectionElement(n2, i4, h2));
+              const c2 = o2 - n2 - 1;
+              if (a2.appendChild(this._createSelectionElement(n2 + 1, 0, this._bufferService.cols, c2)), n2 !== o2) {
+                const e4 = r2 === o2 ? t3[0] : this._bufferService.cols;
+                a2.appendChild(this._createSelectionElement(o2, 0, e4));
+              }
+            }
+            this._selectionContainer.appendChild(a2);
+          }
+          _createSelectionElement(e3, t3, i3, s3 = 1) {
+            const r2 = this._document.createElement("div"), n2 = t3 * this.dimensions.css.cell.width;
+            let o2 = this.dimensions.css.cell.width * (i3 - t3);
+            return n2 + o2 > this.dimensions.css.canvas.width && (o2 = this.dimensions.css.canvas.width - n2), r2.style.height = s3 * this.dimensions.css.cell.height + "px", r2.style.top = e3 * this.dimensions.css.cell.height + "px", r2.style.left = `${n2}px`, r2.style.width = `${o2}px`, r2;
+          }
+          handleCursorMove() {
+          }
+          _handleOptionsChanged() {
+            this._updateDimensions(), this._injectCss(this._themeService.colors), this._widthCache.setFont(this._optionsService.rawOptions.fontFamily, this._optionsService.rawOptions.fontSize, this._optionsService.rawOptions.fontWeight, this._optionsService.rawOptions.fontWeightBold), this._setDefaultSpacing();
+          }
+          clear() {
+            for (const e3 of this._rowElements) e3.replaceChildren();
+          }
+          renderRows(e3, t3) {
+            const i3 = this._bufferService.buffer, s3 = i3.ybase + i3.y, r2 = Math.min(i3.x, this._bufferService.cols - 1), n2 = this._optionsService.rawOptions.cursorBlink, o2 = this._optionsService.rawOptions.cursorStyle, a2 = this._optionsService.rawOptions.cursorInactiveStyle;
+            for (let h2 = e3; h2 <= t3; h2++) {
+              const e4 = h2 + i3.ydisp, t4 = this._rowElements[h2], c2 = i3.lines.get(e4);
+              if (!t4 || !c2) break;
+              t4.replaceChildren(...this._rowFactory.createRow(c2, e4, e4 === s3, o2, a2, r2, n2, this.dimensions.css.cell.width, this._widthCache, -1, -1));
+            }
+          }
+          get _terminalSelector() {
+            return `.${v}${this._terminalClass}`;
+          }
+          _handleLinkHover(e3) {
+            this._setCellUnderline(e3.x1, e3.x2, e3.y1, e3.y2, e3.cols, true);
+          }
+          _handleLinkLeave(e3) {
+            this._setCellUnderline(e3.x1, e3.x2, e3.y1, e3.y2, e3.cols, false);
+          }
+          _setCellUnderline(e3, t3, i3, s3, r2, n2) {
+            i3 < 0 && (e3 = 0), s3 < 0 && (t3 = 0);
+            const o2 = this._bufferService.rows - 1;
+            i3 = Math.max(Math.min(i3, o2), 0), s3 = Math.max(Math.min(s3, o2), 0), r2 = Math.min(r2, this._bufferService.cols);
+            const a2 = this._bufferService.buffer, h2 = a2.ybase + a2.y, c2 = Math.min(a2.x, r2 - 1), l2 = this._optionsService.rawOptions.cursorBlink, d2 = this._optionsService.rawOptions.cursorStyle, _2 = this._optionsService.rawOptions.cursorInactiveStyle;
+            for (let o3 = i3; o3 <= s3; ++o3) {
+              const u2 = o3 + a2.ydisp, f2 = this._rowElements[o3], v2 = a2.lines.get(u2);
+              if (!f2 || !v2) break;
+              f2.replaceChildren(...this._rowFactory.createRow(v2, u2, u2 === h2, d2, _2, c2, l2, this.dimensions.css.cell.width, this._widthCache, n2 ? o3 === i3 ? e3 : 0 : -1, n2 ? (o3 === s3 ? t3 : r2) - 1 : -1));
+            }
+          }
+        };
+        t2.DomRenderer = w = s2([r(7, f.IInstantiationService), r(8, l.ICharSizeService), r(9, f.IOptionsService), r(10, f.IBufferService), r(11, l.ICoreBrowserService), r(12, l.IThemeService)], w);
+      }, 3787: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.DomRendererRowFactory = void 0;
+        const n = i2(2223), o = i2(643), a = i2(511), h = i2(2585), c = i2(8055), l = i2(4725), d = i2(4269), _ = i2(6171), u = i2(3734);
+        let f = t2.DomRendererRowFactory = class {
+          constructor(e3, t3, i3, s3, r2, n2, o2) {
+            this._document = e3, this._characterJoinerService = t3, this._optionsService = i3, this._coreBrowserService = s3, this._coreService = r2, this._decorationService = n2, this._themeService = o2, this._workCell = new a.CellData(), this._columnSelectMode = false, this.defaultSpacing = 0;
+          }
+          handleSelectionChanged(e3, t3, i3) {
+            this._selectionStart = e3, this._selectionEnd = t3, this._columnSelectMode = i3;
+          }
+          createRow(e3, t3, i3, s3, r2, a2, h2, l2, _2, f2, p) {
+            const g = [], m = this._characterJoinerService.getJoinedCharacters(t3), S = this._themeService.colors;
+            let C, b = e3.getNoBgTrimmedLength();
+            i3 && b < a2 + 1 && (b = a2 + 1);
+            let w = 0, y = "", E = 0, k = 0, L = 0, D = false, R = 0, x = false, A = 0;
+            const B = [], T = -1 !== f2 && -1 !== p;
+            for (let M = 0; M < b; M++) {
+              e3.loadCell(M, this._workCell);
+              let b2 = this._workCell.getWidth();
+              if (0 === b2) continue;
+              let O = false, P = M, I = this._workCell;
+              if (m.length > 0 && M === m[0][0]) {
+                O = true;
+                const t4 = m.shift();
+                I = new d.JoinedCellData(this._workCell, e3.translateToString(true, t4[0], t4[1]), t4[1] - t4[0]), P = t4[1] - 1, b2 = I.getWidth();
+              }
+              const H = this._isCellInSelection(M, t3), F = i3 && M === a2, W = T && M >= f2 && M <= p;
+              let U = false;
+              this._decorationService.forEachDecorationAtCell(M, t3, void 0, (e4) => {
+                U = true;
+              });
+              let N = I.getChars() || o.WHITESPACE_CELL_CHAR;
+              if (" " === N && (I.isUnderline() || I.isOverline()) && (N = "\xA0"), A = b2 * l2 - _2.get(N, I.isBold(), I.isItalic()), C) {
+                if (w && (H && x || !H && !x && I.bg === E) && (H && x && S.selectionForeground || I.fg === k) && I.extended.ext === L && W === D && A === R && !F && !O && !U) {
+                  I.isInvisible() ? y += o.WHITESPACE_CELL_CHAR : y += N, w++;
+                  continue;
+                }
+                w && (C.textContent = y), C = this._document.createElement("span"), w = 0, y = "";
+              } else C = this._document.createElement("span");
+              if (E = I.bg, k = I.fg, L = I.extended.ext, D = W, R = A, x = H, O && a2 >= M && a2 <= P && (a2 = M), !this._coreService.isCursorHidden && F && this._coreService.isCursorInitialized) {
+                if (B.push("xterm-cursor"), this._coreBrowserService.isFocused) h2 && B.push("xterm-cursor-blink"), B.push("bar" === s3 ? "xterm-cursor-bar" : "underline" === s3 ? "xterm-cursor-underline" : "xterm-cursor-block");
+                else if (r2) switch (r2) {
+                  case "outline":
+                    B.push("xterm-cursor-outline");
+                    break;
+                  case "block":
+                    B.push("xterm-cursor-block");
+                    break;
+                  case "bar":
+                    B.push("xterm-cursor-bar");
+                    break;
+                  case "underline":
+                    B.push("xterm-cursor-underline");
+                }
+              }
+              if (I.isBold() && B.push("xterm-bold"), I.isItalic() && B.push("xterm-italic"), I.isDim() && B.push("xterm-dim"), y = I.isInvisible() ? o.WHITESPACE_CELL_CHAR : I.getChars() || o.WHITESPACE_CELL_CHAR, I.isUnderline() && (B.push(`xterm-underline-${I.extended.underlineStyle}`), " " === y && (y = "\xA0"), !I.isUnderlineColorDefault())) if (I.isUnderlineColorRGB()) C.style.textDecorationColor = `rgb(${u.AttributeData.toColorRGB(I.getUnderlineColor()).join(",")})`;
+              else {
+                let e4 = I.getUnderlineColor();
+                this._optionsService.rawOptions.drawBoldTextInBrightColors && I.isBold() && e4 < 8 && (e4 += 8), C.style.textDecorationColor = S.ansi[e4].css;
+              }
+              I.isOverline() && (B.push("xterm-overline"), " " === y && (y = "\xA0")), I.isStrikethrough() && B.push("xterm-strikethrough"), W && (C.style.textDecoration = "underline");
+              let $ = I.getFgColor(), j = I.getFgColorMode(), z = I.getBgColor(), K = I.getBgColorMode();
+              const q = !!I.isInverse();
+              if (q) {
+                const e4 = $;
+                $ = z, z = e4;
+                const t4 = j;
+                j = K, K = t4;
+              }
+              let V, G, X, J = false;
+              switch (this._decorationService.forEachDecorationAtCell(M, t3, void 0, (e4) => {
+                "top" !== e4.options.layer && J || (e4.backgroundColorRGB && (K = 50331648, z = e4.backgroundColorRGB.rgba >> 8 & 16777215, V = e4.backgroundColorRGB), e4.foregroundColorRGB && (j = 50331648, $ = e4.foregroundColorRGB.rgba >> 8 & 16777215, G = e4.foregroundColorRGB), J = "top" === e4.options.layer);
+              }), !J && H && (V = this._coreBrowserService.isFocused ? S.selectionBackgroundOpaque : S.selectionInactiveBackgroundOpaque, z = V.rgba >> 8 & 16777215, K = 50331648, J = true, S.selectionForeground && (j = 50331648, $ = S.selectionForeground.rgba >> 8 & 16777215, G = S.selectionForeground)), J && B.push("xterm-decoration-top"), K) {
+                case 16777216:
+                case 33554432:
+                  X = S.ansi[z], B.push(`xterm-bg-${z}`);
+                  break;
+                case 50331648:
+                  X = c.channels.toColor(z >> 16, z >> 8 & 255, 255 & z), this._addStyle(C, `background-color:#${v((z >>> 0).toString(16), "0", 6)}`);
+                  break;
+                default:
+                  q ? (X = S.foreground, B.push(`xterm-bg-${n.INVERTED_DEFAULT_COLOR}`)) : X = S.background;
+              }
+              switch (V || I.isDim() && (V = c.color.multiplyOpacity(X, 0.5)), j) {
+                case 16777216:
+                case 33554432:
+                  I.isBold() && $ < 8 && this._optionsService.rawOptions.drawBoldTextInBrightColors && ($ += 8), this._applyMinimumContrast(C, X, S.ansi[$], I, V, void 0) || B.push(`xterm-fg-${$}`);
+                  break;
+                case 50331648:
+                  const e4 = c.channels.toColor($ >> 16 & 255, $ >> 8 & 255, 255 & $);
+                  this._applyMinimumContrast(C, X, e4, I, V, G) || this._addStyle(C, `color:#${v($.toString(16), "0", 6)}`);
+                  break;
+                default:
+                  this._applyMinimumContrast(C, X, S.foreground, I, V, G) || q && B.push(`xterm-fg-${n.INVERTED_DEFAULT_COLOR}`);
+              }
+              B.length && (C.className = B.join(" "), B.length = 0), F || O || U ? C.textContent = y : w++, A !== this.defaultSpacing && (C.style.letterSpacing = `${A}px`), g.push(C), M = P;
+            }
+            return C && w && (C.textContent = y), g;
+          }
+          _applyMinimumContrast(e3, t3, i3, s3, r2, n2) {
+            if (1 === this._optionsService.rawOptions.minimumContrastRatio || (0, _.treatGlyphAsBackgroundColor)(s3.getCode())) return false;
+            const o2 = this._getContrastCache(s3);
+            let a2;
+            if (r2 || n2 || (a2 = o2.getColor(t3.rgba, i3.rgba)), void 0 === a2) {
+              const e4 = this._optionsService.rawOptions.minimumContrastRatio / (s3.isDim() ? 2 : 1);
+              a2 = c.color.ensureContrastRatio(r2 || t3, n2 || i3, e4), o2.setColor((r2 || t3).rgba, (n2 || i3).rgba, a2 != null ? a2 : null);
+            }
+            return !!a2 && (this._addStyle(e3, `color:${a2.css}`), true);
+          }
+          _getContrastCache(e3) {
+            return e3.isDim() ? this._themeService.colors.halfContrastCache : this._themeService.colors.contrastCache;
+          }
+          _addStyle(e3, t3) {
+            e3.setAttribute("style", `${e3.getAttribute("style") || ""}${t3};`);
+          }
+          _isCellInSelection(e3, t3) {
+            const i3 = this._selectionStart, s3 = this._selectionEnd;
+            return !(!i3 || !s3) && (this._columnSelectMode ? i3[0] <= s3[0] ? e3 >= i3[0] && t3 >= i3[1] && e3 < s3[0] && t3 <= s3[1] : e3 < i3[0] && t3 >= i3[1] && e3 >= s3[0] && t3 <= s3[1] : t3 > i3[1] && t3 < s3[1] || i3[1] === s3[1] && t3 === i3[1] && e3 >= i3[0] && e3 < s3[0] || i3[1] < s3[1] && t3 === s3[1] && e3 < s3[0] || i3[1] < s3[1] && t3 === i3[1] && e3 >= i3[0]);
+          }
+        };
+        function v(e3, t3, i3) {
+          for (; e3.length < i3; ) e3 = t3 + e3;
+          return e3;
+        }
+        t2.DomRendererRowFactory = f = s2([r(1, l.ICharacterJoinerService), r(2, h.IOptionsService), r(3, l.ICoreBrowserService), r(4, h.ICoreService), r(5, h.IDecorationService), r(6, l.IThemeService)], f);
+      }, 2550: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.WidthCache = void 0, t2.WidthCache = class {
+          constructor(e3, t3) {
+            this._flat = new Float32Array(256), this._font = "", this._fontSize = 0, this._weight = "normal", this._weightBold = "bold", this._measureElements = [], this._container = e3.createElement("div"), this._container.classList.add("xterm-width-cache-measure-container"), this._container.setAttribute("aria-hidden", "true"), this._container.style.whiteSpace = "pre", this._container.style.fontKerning = "none";
+            const i2 = e3.createElement("span");
+            i2.classList.add("xterm-char-measure-element");
+            const s2 = e3.createElement("span");
+            s2.classList.add("xterm-char-measure-element"), s2.style.fontWeight = "bold";
+            const r = e3.createElement("span");
+            r.classList.add("xterm-char-measure-element"), r.style.fontStyle = "italic";
+            const n = e3.createElement("span");
+            n.classList.add("xterm-char-measure-element"), n.style.fontWeight = "bold", n.style.fontStyle = "italic", this._measureElements = [i2, s2, r, n], this._container.appendChild(i2), this._container.appendChild(s2), this._container.appendChild(r), this._container.appendChild(n), t3.appendChild(this._container), this.clear();
+          }
+          dispose() {
+            this._container.remove(), this._measureElements.length = 0, this._holey = void 0;
+          }
+          clear() {
+            this._flat.fill(-9999), this._holey = /* @__PURE__ */ new Map();
+          }
+          setFont(e3, t3, i2, s2) {
+            e3 === this._font && t3 === this._fontSize && i2 === this._weight && s2 === this._weightBold || (this._font = e3, this._fontSize = t3, this._weight = i2, this._weightBold = s2, this._container.style.fontFamily = this._font, this._container.style.fontSize = `${this._fontSize}px`, this._measureElements[0].style.fontWeight = `${i2}`, this._measureElements[1].style.fontWeight = `${s2}`, this._measureElements[2].style.fontWeight = `${i2}`, this._measureElements[3].style.fontWeight = `${s2}`, this.clear());
+          }
+          get(e3, t3, i2) {
+            let s2 = 0;
+            if (!t3 && !i2 && 1 === e3.length && (s2 = e3.charCodeAt(0)) < 256) {
+              if (-9999 !== this._flat[s2]) return this._flat[s2];
+              const t4 = this._measure(e3, 0);
+              return t4 > 0 && (this._flat[s2] = t4), t4;
+            }
+            let r = e3;
+            t3 && (r += "B"), i2 && (r += "I");
+            let n = this._holey.get(r);
+            if (void 0 === n) {
+              let s3 = 0;
+              t3 && (s3 |= 1), i2 && (s3 |= 2), n = this._measure(e3, s3), n > 0 && this._holey.set(r, n);
+            }
+            return n;
+          }
+          _measure(e3, t3) {
+            const i2 = this._measureElements[t3];
+            return i2.textContent = e3.repeat(32), i2.offsetWidth / 32;
+          }
+        };
+      }, 2223: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.TEXT_BASELINE = t2.DIM_OPACITY = t2.INVERTED_DEFAULT_COLOR = void 0;
+        const s2 = i2(6114);
+        t2.INVERTED_DEFAULT_COLOR = 257, t2.DIM_OPACITY = 0.5, t2.TEXT_BASELINE = s2.isFirefox || s2.isLegacyEdge ? "bottom" : "ideographic";
+      }, 6171: (e2, t2) => {
+        function i2(e3) {
+          return 57508 <= e3 && e3 <= 57558;
+        }
+        function s2(e3) {
+          return e3 >= 128512 && e3 <= 128591 || e3 >= 127744 && e3 <= 128511 || e3 >= 128640 && e3 <= 128767 || e3 >= 9728 && e3 <= 9983 || e3 >= 9984 && e3 <= 10175 || e3 >= 65024 && e3 <= 65039 || e3 >= 129280 && e3 <= 129535 || e3 >= 127462 && e3 <= 127487;
+        }
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.computeNextVariantOffset = t2.createRenderDimensions = t2.treatGlyphAsBackgroundColor = t2.allowRescaling = t2.isEmoji = t2.isRestrictedPowerlineGlyph = t2.isPowerlineGlyph = t2.throwIfFalsy = void 0, t2.throwIfFalsy = function(e3) {
+          if (!e3) throw new Error("value must not be falsy");
+          return e3;
+        }, t2.isPowerlineGlyph = i2, t2.isRestrictedPowerlineGlyph = function(e3) {
+          return 57520 <= e3 && e3 <= 57527;
+        }, t2.isEmoji = s2, t2.allowRescaling = function(e3, t3, r, n) {
+          return 1 === t3 && r > Math.ceil(1.5 * n) && void 0 !== e3 && e3 > 255 && !s2(e3) && !i2(e3) && !function(e4) {
+            return 57344 <= e4 && e4 <= 63743;
+          }(e3);
+        }, t2.treatGlyphAsBackgroundColor = function(e3) {
+          return i2(e3) || function(e4) {
+            return 9472 <= e4 && e4 <= 9631;
+          }(e3);
+        }, t2.createRenderDimensions = function() {
+          return { css: { canvas: { width: 0, height: 0 }, cell: { width: 0, height: 0 } }, device: { canvas: { width: 0, height: 0 }, cell: { width: 0, height: 0 }, char: { width: 0, height: 0, left: 0, top: 0 } } };
+        }, t2.computeNextVariantOffset = function(e3, t3, i3 = 0) {
+          return (e3 - (2 * Math.round(t3) - i3)) % (2 * Math.round(t3));
+        };
+      }, 6052: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.createSelectionRenderModel = void 0;
+        class i2 {
+          constructor() {
+            this.clear();
+          }
+          clear() {
+            this.hasSelection = false, this.columnSelectMode = false, this.viewportStartRow = 0, this.viewportEndRow = 0, this.viewportCappedStartRow = 0, this.viewportCappedEndRow = 0, this.startCol = 0, this.endCol = 0, this.selectionStart = void 0, this.selectionEnd = void 0;
+          }
+          update(e3, t3, i3, s2 = false) {
+            if (this.selectionStart = t3, this.selectionEnd = i3, !t3 || !i3 || t3[0] === i3[0] && t3[1] === i3[1]) return void this.clear();
+            const r = e3.buffers.active.ydisp, n = t3[1] - r, o = i3[1] - r, a = Math.max(n, 0), h = Math.min(o, e3.rows - 1);
+            a >= e3.rows || h < 0 ? this.clear() : (this.hasSelection = true, this.columnSelectMode = s2, this.viewportStartRow = n, this.viewportEndRow = o, this.viewportCappedStartRow = a, this.viewportCappedEndRow = h, this.startCol = t3[0], this.endCol = i3[0]);
+          }
+          isCellSelected(e3, t3, i3) {
+            return !!this.hasSelection && (i3 -= e3.buffer.active.viewportY, this.columnSelectMode ? this.startCol <= this.endCol ? t3 >= this.startCol && i3 >= this.viewportCappedStartRow && t3 < this.endCol && i3 <= this.viewportCappedEndRow : t3 < this.startCol && i3 >= this.viewportCappedStartRow && t3 >= this.endCol && i3 <= this.viewportCappedEndRow : i3 > this.viewportStartRow && i3 < this.viewportEndRow || this.viewportStartRow === this.viewportEndRow && i3 === this.viewportStartRow && t3 >= this.startCol && t3 < this.endCol || this.viewportStartRow < this.viewportEndRow && i3 === this.viewportEndRow && t3 < this.endCol || this.viewportStartRow < this.viewportEndRow && i3 === this.viewportStartRow && t3 >= this.startCol);
+          }
+        }
+        t2.createSelectionRenderModel = function() {
+          return new i2();
+        };
+      }, 456: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.SelectionModel = void 0, t2.SelectionModel = class {
+          constructor(e3) {
+            this._bufferService = e3, this.isSelectAllActive = false, this.selectionStartLength = 0;
+          }
+          clearSelection() {
+            this.selectionStart = void 0, this.selectionEnd = void 0, this.isSelectAllActive = false, this.selectionStartLength = 0;
+          }
+          get finalSelectionStart() {
+            return this.isSelectAllActive ? [0, 0] : this.selectionEnd && this.selectionStart && this.areSelectionValuesReversed() ? this.selectionEnd : this.selectionStart;
+          }
+          get finalSelectionEnd() {
+            if (this.isSelectAllActive) return [this._bufferService.cols, this._bufferService.buffer.ybase + this._bufferService.rows - 1];
+            if (this.selectionStart) {
+              if (!this.selectionEnd || this.areSelectionValuesReversed()) {
+                const e3 = this.selectionStart[0] + this.selectionStartLength;
+                return e3 > this._bufferService.cols ? e3 % this._bufferService.cols == 0 ? [this._bufferService.cols, this.selectionStart[1] + Math.floor(e3 / this._bufferService.cols) - 1] : [e3 % this._bufferService.cols, this.selectionStart[1] + Math.floor(e3 / this._bufferService.cols)] : [e3, this.selectionStart[1]];
+              }
+              if (this.selectionStartLength && this.selectionEnd[1] === this.selectionStart[1]) {
+                const e3 = this.selectionStart[0] + this.selectionStartLength;
+                return e3 > this._bufferService.cols ? [e3 % this._bufferService.cols, this.selectionStart[1] + Math.floor(e3 / this._bufferService.cols)] : [Math.max(e3, this.selectionEnd[0]), this.selectionEnd[1]];
+              }
+              return this.selectionEnd;
+            }
+          }
+          areSelectionValuesReversed() {
+            const e3 = this.selectionStart, t3 = this.selectionEnd;
+            return !(!e3 || !t3) && (e3[1] > t3[1] || e3[1] === t3[1] && e3[0] > t3[0]);
+          }
+          handleTrim(e3) {
+            return this.selectionStart && (this.selectionStart[1] -= e3), this.selectionEnd && (this.selectionEnd[1] -= e3), this.selectionEnd && this.selectionEnd[1] < 0 ? (this.clearSelection(), true) : (this.selectionStart && this.selectionStart[1] < 0 && (this.selectionStart[1] = 0), false);
+          }
+        };
+      }, 428: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CharSizeService = void 0;
+        const n = i2(2585), o = i2(8460), a = i2(844);
+        let h = t2.CharSizeService = class extends a.Disposable {
+          get hasValidSize() {
+            return this.width > 0 && this.height > 0;
+          }
+          constructor(e3, t3, i3) {
+            super(), this._optionsService = i3, this.width = 0, this.height = 0, this._onCharSizeChange = this.register(new o.EventEmitter()), this.onCharSizeChange = this._onCharSizeChange.event;
+            try {
+              this._measureStrategy = this.register(new d(this._optionsService));
+            } catch (e4) {
+              this._measureStrategy = this.register(new l(e3, t3, this._optionsService));
+            }
+            this.register(this._optionsService.onMultipleOptionChange(["fontFamily", "fontSize"], () => this.measure()));
+          }
+          measure() {
+            const e3 = this._measureStrategy.measure();
+            e3.width === this.width && e3.height === this.height || (this.width = e3.width, this.height = e3.height, this._onCharSizeChange.fire());
+          }
+        };
+        t2.CharSizeService = h = s2([r(2, n.IOptionsService)], h);
+        class c extends a.Disposable {
+          constructor() {
+            super(...arguments), this._result = { width: 0, height: 0 };
+          }
+          _validateAndSet(e3, t3) {
+            void 0 !== e3 && e3 > 0 && void 0 !== t3 && t3 > 0 && (this._result.width = e3, this._result.height = t3);
+          }
+        }
+        class l extends c {
+          constructor(e3, t3, i3) {
+            super(), this._document = e3, this._parentElement = t3, this._optionsService = i3, this._measureElement = this._document.createElement("span"), this._measureElement.classList.add("xterm-char-measure-element"), this._measureElement.textContent = "W".repeat(32), this._measureElement.setAttribute("aria-hidden", "true"), this._measureElement.style.whiteSpace = "pre", this._measureElement.style.fontKerning = "none", this._parentElement.appendChild(this._measureElement);
+          }
+          measure() {
+            return this._measureElement.style.fontFamily = this._optionsService.rawOptions.fontFamily, this._measureElement.style.fontSize = `${this._optionsService.rawOptions.fontSize}px`, this._validateAndSet(Number(this._measureElement.offsetWidth) / 32, Number(this._measureElement.offsetHeight)), this._result;
+          }
+        }
+        class d extends c {
+          constructor(e3) {
+            super(), this._optionsService = e3, this._canvas = new OffscreenCanvas(100, 100), this._ctx = this._canvas.getContext("2d");
+            const t3 = this._ctx.measureText("W");
+            if (!("width" in t3 && "fontBoundingBoxAscent" in t3 && "fontBoundingBoxDescent" in t3)) throw new Error("Required font metrics not supported");
+          }
+          measure() {
+            this._ctx.font = `${this._optionsService.rawOptions.fontSize}px ${this._optionsService.rawOptions.fontFamily}`;
+            const e3 = this._ctx.measureText("W");
+            return this._validateAndSet(e3.width, e3.fontBoundingBoxAscent + e3.fontBoundingBoxDescent), this._result;
+          }
+        }
+      }, 4269: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CharacterJoinerService = t2.JoinedCellData = void 0;
+        const n = i2(3734), o = i2(643), a = i2(511), h = i2(2585);
+        class c extends n.AttributeData {
+          constructor(e3, t3, i3) {
+            super(), this.content = 0, this.combinedData = "", this.fg = e3.fg, this.bg = e3.bg, this.combinedData = t3, this._width = i3;
+          }
+          isCombined() {
+            return 2097152;
+          }
+          getWidth() {
+            return this._width;
+          }
+          getChars() {
+            return this.combinedData;
+          }
+          getCode() {
+            return 2097151;
+          }
+          setFromCharData(e3) {
+            throw new Error("not implemented");
+          }
+          getAsCharData() {
+            return [this.fg, this.getChars(), this.getWidth(), this.getCode()];
+          }
+        }
+        t2.JoinedCellData = c;
+        let l = t2.CharacterJoinerService = class e3 {
+          constructor(e4) {
+            this._bufferService = e4, this._characterJoiners = [], this._nextCharacterJoinerId = 0, this._workCell = new a.CellData();
+          }
+          register(e4) {
+            const t3 = { id: this._nextCharacterJoinerId++, handler: e4 };
+            return this._characterJoiners.push(t3), t3.id;
+          }
+          deregister(e4) {
+            for (let t3 = 0; t3 < this._characterJoiners.length; t3++) if (this._characterJoiners[t3].id === e4) return this._characterJoiners.splice(t3, 1), true;
+            return false;
+          }
+          getJoinedCharacters(e4) {
+            if (0 === this._characterJoiners.length) return [];
+            const t3 = this._bufferService.buffer.lines.get(e4);
+            if (!t3 || 0 === t3.length) return [];
+            const i3 = [], s3 = t3.translateToString(true);
+            let r2 = 0, n2 = 0, a2 = 0, h2 = t3.getFg(0), c2 = t3.getBg(0);
+            for (let e5 = 0; e5 < t3.getTrimmedLength(); e5++) if (t3.loadCell(e5, this._workCell), 0 !== this._workCell.getWidth()) {
+              if (this._workCell.fg !== h2 || this._workCell.bg !== c2) {
+                if (e5 - r2 > 1) {
+                  const e6 = this._getJoinedRanges(s3, a2, n2, t3, r2);
+                  for (let t4 = 0; t4 < e6.length; t4++) i3.push(e6[t4]);
+                }
+                r2 = e5, a2 = n2, h2 = this._workCell.fg, c2 = this._workCell.bg;
+              }
+              n2 += this._workCell.getChars().length || o.WHITESPACE_CELL_CHAR.length;
+            }
+            if (this._bufferService.cols - r2 > 1) {
+              const e5 = this._getJoinedRanges(s3, a2, n2, t3, r2);
+              for (let t4 = 0; t4 < e5.length; t4++) i3.push(e5[t4]);
+            }
+            return i3;
+          }
+          _getJoinedRanges(t3, i3, s3, r2, n2) {
+            const o2 = t3.substring(i3, s3);
+            let a2 = [];
+            try {
+              a2 = this._characterJoiners[0].handler(o2);
+            } catch (e4) {
+              console.error(e4);
+            }
+            for (let t4 = 1; t4 < this._characterJoiners.length; t4++) try {
+              const i4 = this._characterJoiners[t4].handler(o2);
+              for (let t5 = 0; t5 < i4.length; t5++) e3._mergeRanges(a2, i4[t5]);
+            } catch (e4) {
+              console.error(e4);
+            }
+            return this._stringRangesToCellRanges(a2, r2, n2), a2;
+          }
+          _stringRangesToCellRanges(e4, t3, i3) {
+            let s3 = 0, r2 = false, n2 = 0, a2 = e4[s3];
+            if (a2) {
+              for (let h2 = i3; h2 < this._bufferService.cols; h2++) {
+                const i4 = t3.getWidth(h2), c2 = t3.getString(h2).length || o.WHITESPACE_CELL_CHAR.length;
+                if (0 !== i4) {
+                  if (!r2 && a2[0] <= n2 && (a2[0] = h2, r2 = true), a2[1] <= n2) {
+                    if (a2[1] = h2, a2 = e4[++s3], !a2) break;
+                    a2[0] <= n2 ? (a2[0] = h2, r2 = true) : r2 = false;
+                  }
+                  n2 += c2;
+                }
+              }
+              a2 && (a2[1] = this._bufferService.cols);
+            }
+          }
+          static _mergeRanges(e4, t3) {
+            let i3 = false;
+            for (let s3 = 0; s3 < e4.length; s3++) {
+              const r2 = e4[s3];
+              if (i3) {
+                if (t3[1] <= r2[0]) return e4[s3 - 1][1] = t3[1], e4;
+                if (t3[1] <= r2[1]) return e4[s3 - 1][1] = Math.max(t3[1], r2[1]), e4.splice(s3, 1), e4;
+                e4.splice(s3, 1), s3--;
+              } else {
+                if (t3[1] <= r2[0]) return e4.splice(s3, 0, t3), e4;
+                if (t3[1] <= r2[1]) return r2[0] = Math.min(t3[0], r2[0]), e4;
+                t3[0] < r2[1] && (r2[0] = Math.min(t3[0], r2[0]), i3 = true);
+              }
+            }
+            return i3 ? e4[e4.length - 1][1] = t3[1] : e4.push(t3), e4;
+          }
+        };
+        t2.CharacterJoinerService = l = s2([r(0, h.IBufferService)], l);
+      }, 5114: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CoreBrowserService = void 0;
+        const s2 = i2(844), r = i2(8460), n = i2(3656);
+        class o extends s2.Disposable {
+          constructor(e3, t3, i3) {
+            super(), this._textarea = e3, this._window = t3, this.mainDocument = i3, this._isFocused = false, this._cachedIsFocused = void 0, this._screenDprMonitor = new a(this._window), this._onDprChange = this.register(new r.EventEmitter()), this.onDprChange = this._onDprChange.event, this._onWindowChange = this.register(new r.EventEmitter()), this.onWindowChange = this._onWindowChange.event, this.register(this.onWindowChange((e4) => this._screenDprMonitor.setWindow(e4))), this.register((0, r.forwardEvent)(this._screenDprMonitor.onDprChange, this._onDprChange)), this._textarea.addEventListener("focus", () => this._isFocused = true), this._textarea.addEventListener("blur", () => this._isFocused = false);
+          }
+          get window() {
+            return this._window;
+          }
+          set window(e3) {
+            this._window !== e3 && (this._window = e3, this._onWindowChange.fire(this._window));
+          }
+          get dpr() {
+            return this.window.devicePixelRatio;
+          }
+          get isFocused() {
+            return void 0 === this._cachedIsFocused && (this._cachedIsFocused = this._isFocused && this._textarea.ownerDocument.hasFocus(), queueMicrotask(() => this._cachedIsFocused = void 0)), this._cachedIsFocused;
+          }
+        }
+        t2.CoreBrowserService = o;
+        class a extends s2.Disposable {
+          constructor(e3) {
+            super(), this._parentWindow = e3, this._windowResizeListener = this.register(new s2.MutableDisposable()), this._onDprChange = this.register(new r.EventEmitter()), this.onDprChange = this._onDprChange.event, this._outerListener = () => this._setDprAndFireIfDiffers(), this._currentDevicePixelRatio = this._parentWindow.devicePixelRatio, this._updateDpr(), this._setWindowResizeListener(), this.register((0, s2.toDisposable)(() => this.clearListener()));
+          }
+          setWindow(e3) {
+            this._parentWindow = e3, this._setWindowResizeListener(), this._setDprAndFireIfDiffers();
+          }
+          _setWindowResizeListener() {
+            this._windowResizeListener.value = (0, n.addDisposableDomListener)(this._parentWindow, "resize", () => this._setDprAndFireIfDiffers());
+          }
+          _setDprAndFireIfDiffers() {
+            this._parentWindow.devicePixelRatio !== this._currentDevicePixelRatio && this._onDprChange.fire(this._parentWindow.devicePixelRatio), this._updateDpr();
+          }
+          _updateDpr() {
+            var _a2;
+            this._outerListener && ((_a2 = this._resolutionMediaMatchList) == null ? void 0 : _a2.removeListener(this._outerListener), this._currentDevicePixelRatio = this._parentWindow.devicePixelRatio, this._resolutionMediaMatchList = this._parentWindow.matchMedia(`screen and (resolution: ${this._parentWindow.devicePixelRatio}dppx)`), this._resolutionMediaMatchList.addListener(this._outerListener));
+          }
+          clearListener() {
+            this._resolutionMediaMatchList && this._outerListener && (this._resolutionMediaMatchList.removeListener(this._outerListener), this._resolutionMediaMatchList = void 0, this._outerListener = void 0);
+          }
+        }
+      }, 779: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.LinkProviderService = void 0;
+        const s2 = i2(844);
+        class r extends s2.Disposable {
+          constructor() {
+            super(), this.linkProviders = [], this.register((0, s2.toDisposable)(() => this.linkProviders.length = 0));
+          }
+          registerLinkProvider(e3) {
+            return this.linkProviders.push(e3), { dispose: () => {
+              const t3 = this.linkProviders.indexOf(e3);
+              -1 !== t3 && this.linkProviders.splice(t3, 1);
+            } };
+          }
+        }
+        t2.LinkProviderService = r;
+      }, 8934: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.MouseService = void 0;
+        const n = i2(4725), o = i2(9806);
+        let a = t2.MouseService = class {
+          constructor(e3, t3) {
+            this._renderService = e3, this._charSizeService = t3;
+          }
+          getCoords(e3, t3, i3, s3, r2) {
+            return (0, o.getCoords)(window, e3, t3, i3, s3, this._charSizeService.hasValidSize, this._renderService.dimensions.css.cell.width, this._renderService.dimensions.css.cell.height, r2);
+          }
+          getMouseReportCoords(e3, t3) {
+            const i3 = (0, o.getCoordsRelativeToElement)(window, e3, t3);
+            if (this._charSizeService.hasValidSize) return i3[0] = Math.min(Math.max(i3[0], 0), this._renderService.dimensions.css.canvas.width - 1), i3[1] = Math.min(Math.max(i3[1], 0), this._renderService.dimensions.css.canvas.height - 1), { col: Math.floor(i3[0] / this._renderService.dimensions.css.cell.width), row: Math.floor(i3[1] / this._renderService.dimensions.css.cell.height), x: Math.floor(i3[0]), y: Math.floor(i3[1]) };
+          }
+        };
+        t2.MouseService = a = s2([r(0, n.IRenderService), r(1, n.ICharSizeService)], a);
+      }, 3230: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.RenderService = void 0;
+        const n = i2(6193), o = i2(4725), a = i2(8460), h = i2(844), c = i2(7226), l = i2(2585);
+        let d = t2.RenderService = class extends h.Disposable {
+          get dimensions() {
+            return this._renderer.value.dimensions;
+          }
+          constructor(e3, t3, i3, s3, r2, o2, l2, d2) {
+            super(), this._rowCount = e3, this._charSizeService = s3, this._renderer = this.register(new h.MutableDisposable()), this._pausedResizeTask = new c.DebouncedIdleTask(), this._observerDisposable = this.register(new h.MutableDisposable()), this._isPaused = false, this._needsFullRefresh = false, this._isNextRenderRedrawOnly = true, this._needsSelectionRefresh = false, this._canvasWidth = 0, this._canvasHeight = 0, this._selectionState = { start: void 0, end: void 0, columnSelectMode: false }, this._onDimensionsChange = this.register(new a.EventEmitter()), this.onDimensionsChange = this._onDimensionsChange.event, this._onRenderedViewportChange = this.register(new a.EventEmitter()), this.onRenderedViewportChange = this._onRenderedViewportChange.event, this._onRender = this.register(new a.EventEmitter()), this.onRender = this._onRender.event, this._onRefreshRequest = this.register(new a.EventEmitter()), this.onRefreshRequest = this._onRefreshRequest.event, this._renderDebouncer = new n.RenderDebouncer((e4, t4) => this._renderRows(e4, t4), l2), this.register(this._renderDebouncer), this.register(l2.onDprChange(() => this.handleDevicePixelRatioChange())), this.register(o2.onResize(() => this._fullRefresh())), this.register(o2.buffers.onBufferActivate(() => {
+              var _a;
+              return (_a = this._renderer.value) == null ? void 0 : _a.clear();
+            })), this.register(i3.onOptionChange(() => this._handleOptionsChanged())), this.register(this._charSizeService.onCharSizeChange(() => this.handleCharSizeChanged())), this.register(r2.onDecorationRegistered(() => this._fullRefresh())), this.register(r2.onDecorationRemoved(() => this._fullRefresh())), this.register(i3.onMultipleOptionChange(["customGlyphs", "drawBoldTextInBrightColors", "letterSpacing", "lineHeight", "fontFamily", "fontSize", "fontWeight", "fontWeightBold", "minimumContrastRatio", "rescaleOverlappingGlyphs"], () => {
+              this.clear(), this.handleResize(o2.cols, o2.rows), this._fullRefresh();
+            })), this.register(i3.onMultipleOptionChange(["cursorBlink", "cursorStyle"], () => this.refreshRows(o2.buffer.y, o2.buffer.y, true))), this.register(d2.onChangeColors(() => this._fullRefresh())), this._registerIntersectionObserver(l2.window, t3), this.register(l2.onWindowChange((e4) => this._registerIntersectionObserver(e4, t3)));
+          }
+          _registerIntersectionObserver(e3, t3) {
+            if ("IntersectionObserver" in e3) {
+              const i3 = new e3.IntersectionObserver((e4) => this._handleIntersectionChange(e4[e4.length - 1]), { threshold: 0 });
+              i3.observe(t3), this._observerDisposable.value = (0, h.toDisposable)(() => i3.disconnect());
+            }
+          }
+          _handleIntersectionChange(e3) {
+            this._isPaused = void 0 === e3.isIntersecting ? 0 === e3.intersectionRatio : !e3.isIntersecting, this._isPaused || this._charSizeService.hasValidSize || this._charSizeService.measure(), !this._isPaused && this._needsFullRefresh && (this._pausedResizeTask.flush(), this.refreshRows(0, this._rowCount - 1), this._needsFullRefresh = false);
+          }
+          refreshRows(e3, t3, i3 = false) {
+            this._isPaused ? this._needsFullRefresh = true : (i3 || (this._isNextRenderRedrawOnly = false), this._renderDebouncer.refresh(e3, t3, this._rowCount));
+          }
+          _renderRows(e3, t3) {
+            this._renderer.value && (e3 = Math.min(e3, this._rowCount - 1), t3 = Math.min(t3, this._rowCount - 1), this._renderer.value.renderRows(e3, t3), this._needsSelectionRefresh && (this._renderer.value.handleSelectionChanged(this._selectionState.start, this._selectionState.end, this._selectionState.columnSelectMode), this._needsSelectionRefresh = false), this._isNextRenderRedrawOnly || this._onRenderedViewportChange.fire({ start: e3, end: t3 }), this._onRender.fire({ start: e3, end: t3 }), this._isNextRenderRedrawOnly = true);
+          }
+          resize(e3, t3) {
+            this._rowCount = t3, this._fireOnCanvasResize();
+          }
+          _handleOptionsChanged() {
+            this._renderer.value && (this.refreshRows(0, this._rowCount - 1), this._fireOnCanvasResize());
+          }
+          _fireOnCanvasResize() {
+            this._renderer.value && (this._renderer.value.dimensions.css.canvas.width === this._canvasWidth && this._renderer.value.dimensions.css.canvas.height === this._canvasHeight || this._onDimensionsChange.fire(this._renderer.value.dimensions));
+          }
+          hasRenderer() {
+            return !!this._renderer.value;
+          }
+          setRenderer(e3) {
+            this._renderer.value = e3, this._renderer.value && (this._renderer.value.onRequestRedraw((e4) => this.refreshRows(e4.start, e4.end, true)), this._needsSelectionRefresh = true, this._fullRefresh());
+          }
+          addRefreshCallback(e3) {
+            return this._renderDebouncer.addRefreshCallback(e3);
+          }
+          _fullRefresh() {
+            this._isPaused ? this._needsFullRefresh = true : this.refreshRows(0, this._rowCount - 1);
+          }
+          clearTextureAtlas() {
+            var _a, _b;
+            this._renderer.value && ((_b = (_a = this._renderer.value).clearTextureAtlas) == null ? void 0 : _b.call(_a), this._fullRefresh());
+          }
+          handleDevicePixelRatioChange() {
+            this._charSizeService.measure(), this._renderer.value && (this._renderer.value.handleDevicePixelRatioChange(), this.refreshRows(0, this._rowCount - 1));
+          }
+          handleResize(e3, t3) {
+            this._renderer.value && (this._isPaused ? this._pausedResizeTask.set(() => {
+              var _a;
+              return (_a = this._renderer.value) == null ? void 0 : _a.handleResize(e3, t3);
+            }) : this._renderer.value.handleResize(e3, t3), this._fullRefresh());
+          }
+          handleCharSizeChanged() {
+            var _a;
+            (_a = this._renderer.value) == null ? void 0 : _a.handleCharSizeChanged();
+          }
+          handleBlur() {
+            var _a;
+            (_a = this._renderer.value) == null ? void 0 : _a.handleBlur();
+          }
+          handleFocus() {
+            var _a;
+            (_a = this._renderer.value) == null ? void 0 : _a.handleFocus();
+          }
+          handleSelectionChanged(e3, t3, i3) {
+            var _a;
+            this._selectionState.start = e3, this._selectionState.end = t3, this._selectionState.columnSelectMode = i3, (_a = this._renderer.value) == null ? void 0 : _a.handleSelectionChanged(e3, t3, i3);
+          }
+          handleCursorMove() {
+            var _a;
+            (_a = this._renderer.value) == null ? void 0 : _a.handleCursorMove();
+          }
+          clear() {
+            var _a;
+            (_a = this._renderer.value) == null ? void 0 : _a.clear();
+          }
+        };
+        t2.RenderService = d = s2([r(2, l.IOptionsService), r(3, o.ICharSizeService), r(4, l.IDecorationService), r(5, l.IBufferService), r(6, o.ICoreBrowserService), r(7, o.IThemeService)], d);
+      }, 9312: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.SelectionService = void 0;
+        const n = i2(9806), o = i2(9504), a = i2(456), h = i2(4725), c = i2(8460), l = i2(844), d = i2(6114), _ = i2(4841), u = i2(511), f = i2(2585), v = String.fromCharCode(160), p = new RegExp(v, "g");
+        let g = t2.SelectionService = class extends l.Disposable {
+          constructor(e3, t3, i3, s3, r2, n2, o2, h2, d2) {
+            super(), this._element = e3, this._screenElement = t3, this._linkifier = i3, this._bufferService = s3, this._coreService = r2, this._mouseService = n2, this._optionsService = o2, this._renderService = h2, this._coreBrowserService = d2, this._dragScrollAmount = 0, this._enabled = true, this._workCell = new u.CellData(), this._mouseDownTimeStamp = 0, this._oldHasSelection = false, this._oldSelectionStart = void 0, this._oldSelectionEnd = void 0, this._onLinuxMouseSelection = this.register(new c.EventEmitter()), this.onLinuxMouseSelection = this._onLinuxMouseSelection.event, this._onRedrawRequest = this.register(new c.EventEmitter()), this.onRequestRedraw = this._onRedrawRequest.event, this._onSelectionChange = this.register(new c.EventEmitter()), this.onSelectionChange = this._onSelectionChange.event, this._onRequestScrollLines = this.register(new c.EventEmitter()), this.onRequestScrollLines = this._onRequestScrollLines.event, this._mouseMoveListener = (e4) => this._handleMouseMove(e4), this._mouseUpListener = (e4) => this._handleMouseUp(e4), this._coreService.onUserInput(() => {
+              this.hasSelection && this.clearSelection();
+            }), this._trimListener = this._bufferService.buffer.lines.onTrim((e4) => this._handleTrim(e4)), this.register(this._bufferService.buffers.onBufferActivate((e4) => this._handleBufferActivate(e4))), this.enable(), this._model = new a.SelectionModel(this._bufferService), this._activeSelectionMode = 0, this.register((0, l.toDisposable)(() => {
+              this._removeMouseDownListeners();
+            }));
+          }
+          reset() {
+            this.clearSelection();
+          }
+          disable() {
+            this.clearSelection(), this._enabled = false;
+          }
+          enable() {
+            this._enabled = true;
+          }
+          get selectionStart() {
+            return this._model.finalSelectionStart;
+          }
+          get selectionEnd() {
+            return this._model.finalSelectionEnd;
+          }
+          get hasSelection() {
+            const e3 = this._model.finalSelectionStart, t3 = this._model.finalSelectionEnd;
+            return !(!e3 || !t3 || e3[0] === t3[0] && e3[1] === t3[1]);
+          }
+          get selectionText() {
+            const e3 = this._model.finalSelectionStart, t3 = this._model.finalSelectionEnd;
+            if (!e3 || !t3) return "";
+            const i3 = this._bufferService.buffer, s3 = [];
+            if (3 === this._activeSelectionMode) {
+              if (e3[0] === t3[0]) return "";
+              const r2 = e3[0] < t3[0] ? e3[0] : t3[0], n2 = e3[0] < t3[0] ? t3[0] : e3[0];
+              for (let o2 = e3[1]; o2 <= t3[1]; o2++) {
+                const e4 = i3.translateBufferLineToString(o2, true, r2, n2);
+                s3.push(e4);
+              }
+            } else {
+              const r2 = e3[1] === t3[1] ? t3[0] : void 0;
+              s3.push(i3.translateBufferLineToString(e3[1], true, e3[0], r2));
+              for (let r3 = e3[1] + 1; r3 <= t3[1] - 1; r3++) {
+                const e4 = i3.lines.get(r3), t4 = i3.translateBufferLineToString(r3, true);
+                (e4 == null ? void 0 : e4.isWrapped) ? s3[s3.length - 1] += t4 : s3.push(t4);
+              }
+              if (e3[1] !== t3[1]) {
+                const e4 = i3.lines.get(t3[1]), r3 = i3.translateBufferLineToString(t3[1], true, 0, t3[0]);
+                e4 && e4.isWrapped ? s3[s3.length - 1] += r3 : s3.push(r3);
+              }
+            }
+            return s3.map((e4) => e4.replace(p, " ")).join(d.isWindows ? "\r\n" : "\n");
+          }
+          clearSelection() {
+            this._model.clearSelection(), this._removeMouseDownListeners(), this.refresh(), this._onSelectionChange.fire();
+          }
+          refresh(e3) {
+            this._refreshAnimationFrame || (this._refreshAnimationFrame = this._coreBrowserService.window.requestAnimationFrame(() => this._refresh())), d.isLinux && e3 && this.selectionText.length && this._onLinuxMouseSelection.fire(this.selectionText);
+          }
+          _refresh() {
+            this._refreshAnimationFrame = void 0, this._onRedrawRequest.fire({ start: this._model.finalSelectionStart, end: this._model.finalSelectionEnd, columnSelectMode: 3 === this._activeSelectionMode });
+          }
+          _isClickInSelection(e3) {
+            const t3 = this._getMouseBufferCoords(e3), i3 = this._model.finalSelectionStart, s3 = this._model.finalSelectionEnd;
+            return !!(i3 && s3 && t3) && this._areCoordsInSelection(t3, i3, s3);
+          }
+          isCellInSelection(e3, t3) {
+            const i3 = this._model.finalSelectionStart, s3 = this._model.finalSelectionEnd;
+            return !(!i3 || !s3) && this._areCoordsInSelection([e3, t3], i3, s3);
+          }
+          _areCoordsInSelection(e3, t3, i3) {
+            return e3[1] > t3[1] && e3[1] < i3[1] || t3[1] === i3[1] && e3[1] === t3[1] && e3[0] >= t3[0] && e3[0] < i3[0] || t3[1] < i3[1] && e3[1] === i3[1] && e3[0] < i3[0] || t3[1] < i3[1] && e3[1] === t3[1] && e3[0] >= t3[0];
+          }
+          _selectWordAtCursor(e3, t3) {
+            var _a, _b;
+            const i3 = (_b = (_a = this._linkifier.currentLink) == null ? void 0 : _a.link) == null ? void 0 : _b.range;
+            if (i3) return this._model.selectionStart = [i3.start.x - 1, i3.start.y - 1], this._model.selectionStartLength = (0, _.getRangeLength)(i3, this._bufferService.cols), this._model.selectionEnd = void 0, true;
+            const s3 = this._getMouseBufferCoords(e3);
+            return !!s3 && (this._selectWordAt(s3, t3), this._model.selectionEnd = void 0, true);
+          }
+          selectAll() {
+            this._model.isSelectAllActive = true, this.refresh(), this._onSelectionChange.fire();
+          }
+          selectLines(e3, t3) {
+            this._model.clearSelection(), e3 = Math.max(e3, 0), t3 = Math.min(t3, this._bufferService.buffer.lines.length - 1), this._model.selectionStart = [0, e3], this._model.selectionEnd = [this._bufferService.cols, t3], this.refresh(), this._onSelectionChange.fire();
+          }
+          _handleTrim(e3) {
+            this._model.handleTrim(e3) && this.refresh();
+          }
+          _getMouseBufferCoords(e3) {
+            const t3 = this._mouseService.getCoords(e3, this._screenElement, this._bufferService.cols, this._bufferService.rows, true);
+            if (t3) return t3[0]--, t3[1]--, t3[1] += this._bufferService.buffer.ydisp, t3;
+          }
+          _getMouseEventScrollAmount(e3) {
+            let t3 = (0, n.getCoordsRelativeToElement)(this._coreBrowserService.window, e3, this._screenElement)[1];
+            const i3 = this._renderService.dimensions.css.canvas.height;
+            return t3 >= 0 && t3 <= i3 ? 0 : (t3 > i3 && (t3 -= i3), t3 = Math.min(Math.max(t3, -50), 50), t3 /= 50, t3 / Math.abs(t3) + Math.round(14 * t3));
+          }
+          shouldForceSelection(e3) {
+            return d.isMac ? e3.altKey && this._optionsService.rawOptions.macOptionClickForcesSelection : e3.shiftKey;
+          }
+          handleMouseDown(e3) {
+            if (this._mouseDownTimeStamp = e3.timeStamp, (2 !== e3.button || !this.hasSelection) && 0 === e3.button) {
+              if (!this._enabled) {
+                if (!this.shouldForceSelection(e3)) return;
+                e3.stopPropagation();
+              }
+              e3.preventDefault(), this._dragScrollAmount = 0, this._enabled && e3.shiftKey ? this._handleIncrementalClick(e3) : 1 === e3.detail ? this._handleSingleClick(e3) : 2 === e3.detail ? this._handleDoubleClick(e3) : 3 === e3.detail && this._handleTripleClick(e3), this._addMouseDownListeners(), this.refresh(true);
+            }
+          }
+          _addMouseDownListeners() {
+            this._screenElement.ownerDocument && (this._screenElement.ownerDocument.addEventListener("mousemove", this._mouseMoveListener), this._screenElement.ownerDocument.addEventListener("mouseup", this._mouseUpListener)), this._dragScrollIntervalTimer = this._coreBrowserService.window.setInterval(() => this._dragScroll(), 50);
+          }
+          _removeMouseDownListeners() {
+            this._screenElement.ownerDocument && (this._screenElement.ownerDocument.removeEventListener("mousemove", this._mouseMoveListener), this._screenElement.ownerDocument.removeEventListener("mouseup", this._mouseUpListener)), this._coreBrowserService.window.clearInterval(this._dragScrollIntervalTimer), this._dragScrollIntervalTimer = void 0;
+          }
+          _handleIncrementalClick(e3) {
+            this._model.selectionStart && (this._model.selectionEnd = this._getMouseBufferCoords(e3));
+          }
+          _handleSingleClick(e3) {
+            if (this._model.selectionStartLength = 0, this._model.isSelectAllActive = false, this._activeSelectionMode = this.shouldColumnSelect(e3) ? 3 : 0, this._model.selectionStart = this._getMouseBufferCoords(e3), !this._model.selectionStart) return;
+            this._model.selectionEnd = void 0;
+            const t3 = this._bufferService.buffer.lines.get(this._model.selectionStart[1]);
+            t3 && t3.length !== this._model.selectionStart[0] && 0 === t3.hasWidth(this._model.selectionStart[0]) && this._model.selectionStart[0]++;
+          }
+          _handleDoubleClick(e3) {
+            this._selectWordAtCursor(e3, true) && (this._activeSelectionMode = 1);
+          }
+          _handleTripleClick(e3) {
+            const t3 = this._getMouseBufferCoords(e3);
+            t3 && (this._activeSelectionMode = 2, this._selectLineAt(t3[1]));
+          }
+          shouldColumnSelect(e3) {
+            return e3.altKey && !(d.isMac && this._optionsService.rawOptions.macOptionClickForcesSelection);
+          }
+          _handleMouseMove(e3) {
+            if (e3.stopImmediatePropagation(), !this._model.selectionStart) return;
+            const t3 = this._model.selectionEnd ? [this._model.selectionEnd[0], this._model.selectionEnd[1]] : null;
+            if (this._model.selectionEnd = this._getMouseBufferCoords(e3), !this._model.selectionEnd) return void this.refresh(true);
+            2 === this._activeSelectionMode ? this._model.selectionEnd[1] < this._model.selectionStart[1] ? this._model.selectionEnd[0] = 0 : this._model.selectionEnd[0] = this._bufferService.cols : 1 === this._activeSelectionMode && this._selectToWordAt(this._model.selectionEnd), this._dragScrollAmount = this._getMouseEventScrollAmount(e3), 3 !== this._activeSelectionMode && (this._dragScrollAmount > 0 ? this._model.selectionEnd[0] = this._bufferService.cols : this._dragScrollAmount < 0 && (this._model.selectionEnd[0] = 0));
+            const i3 = this._bufferService.buffer;
+            if (this._model.selectionEnd[1] < i3.lines.length) {
+              const e4 = i3.lines.get(this._model.selectionEnd[1]);
+              e4 && 0 === e4.hasWidth(this._model.selectionEnd[0]) && this._model.selectionEnd[0] < this._bufferService.cols && this._model.selectionEnd[0]++;
+            }
+            t3 && t3[0] === this._model.selectionEnd[0] && t3[1] === this._model.selectionEnd[1] || this.refresh(true);
+          }
+          _dragScroll() {
+            if (this._model.selectionEnd && this._model.selectionStart && this._dragScrollAmount) {
+              this._onRequestScrollLines.fire({ amount: this._dragScrollAmount, suppressScrollEvent: false });
+              const e3 = this._bufferService.buffer;
+              this._dragScrollAmount > 0 ? (3 !== this._activeSelectionMode && (this._model.selectionEnd[0] = this._bufferService.cols), this._model.selectionEnd[1] = Math.min(e3.ydisp + this._bufferService.rows, e3.lines.length - 1)) : (3 !== this._activeSelectionMode && (this._model.selectionEnd[0] = 0), this._model.selectionEnd[1] = e3.ydisp), this.refresh();
+            }
+          }
+          _handleMouseUp(e3) {
+            const t3 = e3.timeStamp - this._mouseDownTimeStamp;
+            if (this._removeMouseDownListeners(), this.selectionText.length <= 1 && t3 < 500 && e3.altKey && this._optionsService.rawOptions.altClickMovesCursor) {
+              if (this._bufferService.buffer.ybase === this._bufferService.buffer.ydisp) {
+                const t4 = this._mouseService.getCoords(e3, this._element, this._bufferService.cols, this._bufferService.rows, false);
+                if (t4 && void 0 !== t4[0] && void 0 !== t4[1]) {
+                  const e4 = (0, o.moveToCellSequence)(t4[0] - 1, t4[1] - 1, this._bufferService, this._coreService.decPrivateModes.applicationCursorKeys);
+                  this._coreService.triggerDataEvent(e4, true);
+                }
+              }
+            } else this._fireEventIfSelectionChanged();
+          }
+          _fireEventIfSelectionChanged() {
+            const e3 = this._model.finalSelectionStart, t3 = this._model.finalSelectionEnd, i3 = !(!e3 || !t3 || e3[0] === t3[0] && e3[1] === t3[1]);
+            i3 ? e3 && t3 && (this._oldSelectionStart && this._oldSelectionEnd && e3[0] === this._oldSelectionStart[0] && e3[1] === this._oldSelectionStart[1] && t3[0] === this._oldSelectionEnd[0] && t3[1] === this._oldSelectionEnd[1] || this._fireOnSelectionChange(e3, t3, i3)) : this._oldHasSelection && this._fireOnSelectionChange(e3, t3, i3);
+          }
+          _fireOnSelectionChange(e3, t3, i3) {
+            this._oldSelectionStart = e3, this._oldSelectionEnd = t3, this._oldHasSelection = i3, this._onSelectionChange.fire();
+          }
+          _handleBufferActivate(e3) {
+            this.clearSelection(), this._trimListener.dispose(), this._trimListener = e3.activeBuffer.lines.onTrim((e4) => this._handleTrim(e4));
+          }
+          _convertViewportColToCharacterIndex(e3, t3) {
+            let i3 = t3;
+            for (let s3 = 0; t3 >= s3; s3++) {
+              const r2 = e3.loadCell(s3, this._workCell).getChars().length;
+              0 === this._workCell.getWidth() ? i3-- : r2 > 1 && t3 !== s3 && (i3 += r2 - 1);
+            }
+            return i3;
+          }
+          setSelection(e3, t3, i3) {
+            this._model.clearSelection(), this._removeMouseDownListeners(), this._model.selectionStart = [e3, t3], this._model.selectionStartLength = i3, this.refresh(), this._fireEventIfSelectionChanged();
+          }
+          rightClickSelect(e3) {
+            this._isClickInSelection(e3) || (this._selectWordAtCursor(e3, false) && this.refresh(true), this._fireEventIfSelectionChanged());
+          }
+          _getWordAt(e3, t3, i3 = true, s3 = true) {
+            if (e3[0] >= this._bufferService.cols) return;
+            const r2 = this._bufferService.buffer, n2 = r2.lines.get(e3[1]);
+            if (!n2) return;
+            const o2 = r2.translateBufferLineToString(e3[1], false);
+            let a2 = this._convertViewportColToCharacterIndex(n2, e3[0]), h2 = a2;
+            const c2 = e3[0] - a2;
+            let l2 = 0, d2 = 0, _2 = 0, u2 = 0;
+            if (" " === o2.charAt(a2)) {
+              for (; a2 > 0 && " " === o2.charAt(a2 - 1); ) a2--;
+              for (; h2 < o2.length && " " === o2.charAt(h2 + 1); ) h2++;
+            } else {
+              let t4 = e3[0], i4 = e3[0];
+              0 === n2.getWidth(t4) && (l2++, t4--), 2 === n2.getWidth(i4) && (d2++, i4++);
+              const s4 = n2.getString(i4).length;
+              for (s4 > 1 && (u2 += s4 - 1, h2 += s4 - 1); t4 > 0 && a2 > 0 && !this._isCharWordSeparator(n2.loadCell(t4 - 1, this._workCell)); ) {
+                n2.loadCell(t4 - 1, this._workCell);
+                const e4 = this._workCell.getChars().length;
+                0 === this._workCell.getWidth() ? (l2++, t4--) : e4 > 1 && (_2 += e4 - 1, a2 -= e4 - 1), a2--, t4--;
+              }
+              for (; i4 < n2.length && h2 + 1 < o2.length && !this._isCharWordSeparator(n2.loadCell(i4 + 1, this._workCell)); ) {
+                n2.loadCell(i4 + 1, this._workCell);
+                const e4 = this._workCell.getChars().length;
+                2 === this._workCell.getWidth() ? (d2++, i4++) : e4 > 1 && (u2 += e4 - 1, h2 += e4 - 1), h2++, i4++;
+              }
+            }
+            h2++;
+            let f2 = a2 + c2 - l2 + _2, v2 = Math.min(this._bufferService.cols, h2 - a2 + l2 + d2 - _2 - u2);
+            if (t3 || "" !== o2.slice(a2, h2).trim()) {
+              if (i3 && 0 === f2 && 32 !== n2.getCodePoint(0)) {
+                const t4 = r2.lines.get(e3[1] - 1);
+                if (t4 && n2.isWrapped && 32 !== t4.getCodePoint(this._bufferService.cols - 1)) {
+                  const t5 = this._getWordAt([this._bufferService.cols - 1, e3[1] - 1], false, true, false);
+                  if (t5) {
+                    const e4 = this._bufferService.cols - t5.start;
+                    f2 -= e4, v2 += e4;
+                  }
+                }
+              }
+              if (s3 && f2 + v2 === this._bufferService.cols && 32 !== n2.getCodePoint(this._bufferService.cols - 1)) {
+                const t4 = r2.lines.get(e3[1] + 1);
+                if ((t4 == null ? void 0 : t4.isWrapped) && 32 !== t4.getCodePoint(0)) {
+                  const t5 = this._getWordAt([0, e3[1] + 1], false, false, true);
+                  t5 && (v2 += t5.length);
+                }
+              }
+              return { start: f2, length: v2 };
+            }
+          }
+          _selectWordAt(e3, t3) {
+            const i3 = this._getWordAt(e3, t3);
+            if (i3) {
+              for (; i3.start < 0; ) i3.start += this._bufferService.cols, e3[1]--;
+              this._model.selectionStart = [i3.start, e3[1]], this._model.selectionStartLength = i3.length;
+            }
+          }
+          _selectToWordAt(e3) {
+            const t3 = this._getWordAt(e3, true);
+            if (t3) {
+              let i3 = e3[1];
+              for (; t3.start < 0; ) t3.start += this._bufferService.cols, i3--;
+              if (!this._model.areSelectionValuesReversed()) for (; t3.start + t3.length > this._bufferService.cols; ) t3.length -= this._bufferService.cols, i3++;
+              this._model.selectionEnd = [this._model.areSelectionValuesReversed() ? t3.start : t3.start + t3.length, i3];
+            }
+          }
+          _isCharWordSeparator(e3) {
+            return 0 !== e3.getWidth() && this._optionsService.rawOptions.wordSeparator.indexOf(e3.getChars()) >= 0;
+          }
+          _selectLineAt(e3) {
+            const t3 = this._bufferService.buffer.getWrappedRangeForLine(e3), i3 = { start: { x: 0, y: t3.first }, end: { x: this._bufferService.cols - 1, y: t3.last } };
+            this._model.selectionStart = [0, t3.first], this._model.selectionEnd = void 0, this._model.selectionStartLength = (0, _.getRangeLength)(i3, this._bufferService.cols);
+          }
+        };
+        t2.SelectionService = g = s2([r(3, f.IBufferService), r(4, f.ICoreService), r(5, h.IMouseService), r(6, f.IOptionsService), r(7, h.IRenderService), r(8, h.ICoreBrowserService)], g);
+      }, 4725: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.ILinkProviderService = t2.IThemeService = t2.ICharacterJoinerService = t2.ISelectionService = t2.IRenderService = t2.IMouseService = t2.ICoreBrowserService = t2.ICharSizeService = void 0;
+        const s2 = i2(8343);
+        t2.ICharSizeService = (0, s2.createDecorator)("CharSizeService"), t2.ICoreBrowserService = (0, s2.createDecorator)("CoreBrowserService"), t2.IMouseService = (0, s2.createDecorator)("MouseService"), t2.IRenderService = (0, s2.createDecorator)("RenderService"), t2.ISelectionService = (0, s2.createDecorator)("SelectionService"), t2.ICharacterJoinerService = (0, s2.createDecorator)("CharacterJoinerService"), t2.IThemeService = (0, s2.createDecorator)("ThemeService"), t2.ILinkProviderService = (0, s2.createDecorator)("LinkProviderService");
+      }, 6731: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.ThemeService = t2.DEFAULT_ANSI_COLORS = void 0;
+        const n = i2(7239), o = i2(8055), a = i2(8460), h = i2(844), c = i2(2585), l = o.css.toColor("#ffffff"), d = o.css.toColor("#000000"), _ = o.css.toColor("#ffffff"), u = o.css.toColor("#000000"), f = { css: "rgba(255, 255, 255, 0.3)", rgba: 4294967117 };
+        t2.DEFAULT_ANSI_COLORS = Object.freeze((() => {
+          const e3 = [o.css.toColor("#2e3436"), o.css.toColor("#cc0000"), o.css.toColor("#4e9a06"), o.css.toColor("#c4a000"), o.css.toColor("#3465a4"), o.css.toColor("#75507b"), o.css.toColor("#06989a"), o.css.toColor("#d3d7cf"), o.css.toColor("#555753"), o.css.toColor("#ef2929"), o.css.toColor("#8ae234"), o.css.toColor("#fce94f"), o.css.toColor("#729fcf"), o.css.toColor("#ad7fa8"), o.css.toColor("#34e2e2"), o.css.toColor("#eeeeec")], t3 = [0, 95, 135, 175, 215, 255];
+          for (let i3 = 0; i3 < 216; i3++) {
+            const s3 = t3[i3 / 36 % 6 | 0], r2 = t3[i3 / 6 % 6 | 0], n2 = t3[i3 % 6];
+            e3.push({ css: o.channels.toCss(s3, r2, n2), rgba: o.channels.toRgba(s3, r2, n2) });
+          }
+          for (let t4 = 0; t4 < 24; t4++) {
+            const i3 = 8 + 10 * t4;
+            e3.push({ css: o.channels.toCss(i3, i3, i3), rgba: o.channels.toRgba(i3, i3, i3) });
+          }
+          return e3;
+        })());
+        let v = t2.ThemeService = class extends h.Disposable {
+          get colors() {
+            return this._colors;
+          }
+          constructor(e3) {
+            super(), this._optionsService = e3, this._contrastCache = new n.ColorContrastCache(), this._halfContrastCache = new n.ColorContrastCache(), this._onChangeColors = this.register(new a.EventEmitter()), this.onChangeColors = this._onChangeColors.event, this._colors = { foreground: l, background: d, cursor: _, cursorAccent: u, selectionForeground: void 0, selectionBackgroundTransparent: f, selectionBackgroundOpaque: o.color.blend(d, f), selectionInactiveBackgroundTransparent: f, selectionInactiveBackgroundOpaque: o.color.blend(d, f), ansi: t2.DEFAULT_ANSI_COLORS.slice(), contrastCache: this._contrastCache, halfContrastCache: this._halfContrastCache }, this._updateRestoreColors(), this._setTheme(this._optionsService.rawOptions.theme), this.register(this._optionsService.onSpecificOptionChange("minimumContrastRatio", () => this._contrastCache.clear())), this.register(this._optionsService.onSpecificOptionChange("theme", () => this._setTheme(this._optionsService.rawOptions.theme)));
+          }
+          _setTheme(e3 = {}) {
+            const i3 = this._colors;
+            if (i3.foreground = p(e3.foreground, l), i3.background = p(e3.background, d), i3.cursor = p(e3.cursor, _), i3.cursorAccent = p(e3.cursorAccent, u), i3.selectionBackgroundTransparent = p(e3.selectionBackground, f), i3.selectionBackgroundOpaque = o.color.blend(i3.background, i3.selectionBackgroundTransparent), i3.selectionInactiveBackgroundTransparent = p(e3.selectionInactiveBackground, i3.selectionBackgroundTransparent), i3.selectionInactiveBackgroundOpaque = o.color.blend(i3.background, i3.selectionInactiveBackgroundTransparent), i3.selectionForeground = e3.selectionForeground ? p(e3.selectionForeground, o.NULL_COLOR) : void 0, i3.selectionForeground === o.NULL_COLOR && (i3.selectionForeground = void 0), o.color.isOpaque(i3.selectionBackgroundTransparent)) {
+              const e4 = 0.3;
+              i3.selectionBackgroundTransparent = o.color.opacity(i3.selectionBackgroundTransparent, e4);
+            }
+            if (o.color.isOpaque(i3.selectionInactiveBackgroundTransparent)) {
+              const e4 = 0.3;
+              i3.selectionInactiveBackgroundTransparent = o.color.opacity(i3.selectionInactiveBackgroundTransparent, e4);
+            }
+            if (i3.ansi = t2.DEFAULT_ANSI_COLORS.slice(), i3.ansi[0] = p(e3.black, t2.DEFAULT_ANSI_COLORS[0]), i3.ansi[1] = p(e3.red, t2.DEFAULT_ANSI_COLORS[1]), i3.ansi[2] = p(e3.green, t2.DEFAULT_ANSI_COLORS[2]), i3.ansi[3] = p(e3.yellow, t2.DEFAULT_ANSI_COLORS[3]), i3.ansi[4] = p(e3.blue, t2.DEFAULT_ANSI_COLORS[4]), i3.ansi[5] = p(e3.magenta, t2.DEFAULT_ANSI_COLORS[5]), i3.ansi[6] = p(e3.cyan, t2.DEFAULT_ANSI_COLORS[6]), i3.ansi[7] = p(e3.white, t2.DEFAULT_ANSI_COLORS[7]), i3.ansi[8] = p(e3.brightBlack, t2.DEFAULT_ANSI_COLORS[8]), i3.ansi[9] = p(e3.brightRed, t2.DEFAULT_ANSI_COLORS[9]), i3.ansi[10] = p(e3.brightGreen, t2.DEFAULT_ANSI_COLORS[10]), i3.ansi[11] = p(e3.brightYellow, t2.DEFAULT_ANSI_COLORS[11]), i3.ansi[12] = p(e3.brightBlue, t2.DEFAULT_ANSI_COLORS[12]), i3.ansi[13] = p(e3.brightMagenta, t2.DEFAULT_ANSI_COLORS[13]), i3.ansi[14] = p(e3.brightCyan, t2.DEFAULT_ANSI_COLORS[14]), i3.ansi[15] = p(e3.brightWhite, t2.DEFAULT_ANSI_COLORS[15]), e3.extendedAnsi) {
+              const s3 = Math.min(i3.ansi.length - 16, e3.extendedAnsi.length);
+              for (let r2 = 0; r2 < s3; r2++) i3.ansi[r2 + 16] = p(e3.extendedAnsi[r2], t2.DEFAULT_ANSI_COLORS[r2 + 16]);
+            }
+            this._contrastCache.clear(), this._halfContrastCache.clear(), this._updateRestoreColors(), this._onChangeColors.fire(this.colors);
+          }
+          restoreColor(e3) {
+            this._restoreColor(e3), this._onChangeColors.fire(this.colors);
+          }
+          _restoreColor(e3) {
+            if (void 0 !== e3) switch (e3) {
+              case 256:
+                this._colors.foreground = this._restoreColors.foreground;
+                break;
+              case 257:
+                this._colors.background = this._restoreColors.background;
+                break;
+              case 258:
+                this._colors.cursor = this._restoreColors.cursor;
+                break;
+              default:
+                this._colors.ansi[e3] = this._restoreColors.ansi[e3];
+            }
+            else for (let e4 = 0; e4 < this._restoreColors.ansi.length; ++e4) this._colors.ansi[e4] = this._restoreColors.ansi[e4];
+          }
+          modifyColors(e3) {
+            e3(this._colors), this._onChangeColors.fire(this.colors);
+          }
+          _updateRestoreColors() {
+            this._restoreColors = { foreground: this._colors.foreground, background: this._colors.background, cursor: this._colors.cursor, ansi: this._colors.ansi.slice() };
+          }
+        };
+        function p(e3, t3) {
+          if (void 0 !== e3) try {
+            return o.css.toColor(e3);
+          } catch (e4) {
+          }
+          return t3;
+        }
+        t2.ThemeService = v = s2([r(0, c.IOptionsService)], v);
+      }, 6349: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CircularList = void 0;
+        const s2 = i2(8460), r = i2(844);
+        class n extends r.Disposable {
+          constructor(e3) {
+            super(), this._maxLength = e3, this.onDeleteEmitter = this.register(new s2.EventEmitter()), this.onDelete = this.onDeleteEmitter.event, this.onInsertEmitter = this.register(new s2.EventEmitter()), this.onInsert = this.onInsertEmitter.event, this.onTrimEmitter = this.register(new s2.EventEmitter()), this.onTrim = this.onTrimEmitter.event, this._array = new Array(this._maxLength), this._startIndex = 0, this._length = 0;
+          }
+          get maxLength() {
+            return this._maxLength;
+          }
+          set maxLength(e3) {
+            if (this._maxLength === e3) return;
+            const t3 = new Array(e3);
+            for (let i3 = 0; i3 < Math.min(e3, this.length); i3++) t3[i3] = this._array[this._getCyclicIndex(i3)];
+            this._array = t3, this._maxLength = e3, this._startIndex = 0;
+          }
+          get length() {
+            return this._length;
+          }
+          set length(e3) {
+            if (e3 > this._length) for (let t3 = this._length; t3 < e3; t3++) this._array[t3] = void 0;
+            this._length = e3;
+          }
+          get(e3) {
+            return this._array[this._getCyclicIndex(e3)];
+          }
+          set(e3, t3) {
+            this._array[this._getCyclicIndex(e3)] = t3;
+          }
+          push(e3) {
+            this._array[this._getCyclicIndex(this._length)] = e3, this._length === this._maxLength ? (this._startIndex = ++this._startIndex % this._maxLength, this.onTrimEmitter.fire(1)) : this._length++;
+          }
+          recycle() {
+            if (this._length !== this._maxLength) throw new Error("Can only recycle when the buffer is full");
+            return this._startIndex = ++this._startIndex % this._maxLength, this.onTrimEmitter.fire(1), this._array[this._getCyclicIndex(this._length - 1)];
+          }
+          get isFull() {
+            return this._length === this._maxLength;
+          }
+          pop() {
+            return this._array[this._getCyclicIndex(this._length-- - 1)];
+          }
+          splice(e3, t3, ...i3) {
+            if (t3) {
+              for (let i4 = e3; i4 < this._length - t3; i4++) this._array[this._getCyclicIndex(i4)] = this._array[this._getCyclicIndex(i4 + t3)];
+              this._length -= t3, this.onDeleteEmitter.fire({ index: e3, amount: t3 });
+            }
+            for (let t4 = this._length - 1; t4 >= e3; t4--) this._array[this._getCyclicIndex(t4 + i3.length)] = this._array[this._getCyclicIndex(t4)];
+            for (let t4 = 0; t4 < i3.length; t4++) this._array[this._getCyclicIndex(e3 + t4)] = i3[t4];
+            if (i3.length && this.onInsertEmitter.fire({ index: e3, amount: i3.length }), this._length + i3.length > this._maxLength) {
+              const e4 = this._length + i3.length - this._maxLength;
+              this._startIndex += e4, this._length = this._maxLength, this.onTrimEmitter.fire(e4);
+            } else this._length += i3.length;
+          }
+          trimStart(e3) {
+            e3 > this._length && (e3 = this._length), this._startIndex += e3, this._length -= e3, this.onTrimEmitter.fire(e3);
+          }
+          shiftElements(e3, t3, i3) {
+            if (!(t3 <= 0)) {
+              if (e3 < 0 || e3 >= this._length) throw new Error("start argument out of range");
+              if (e3 + i3 < 0) throw new Error("Cannot shift elements in list beyond index 0");
+              if (i3 > 0) {
+                for (let s4 = t3 - 1; s4 >= 0; s4--) this.set(e3 + s4 + i3, this.get(e3 + s4));
+                const s3 = e3 + t3 + i3 - this._length;
+                if (s3 > 0) for (this._length += s3; this._length > this._maxLength; ) this._length--, this._startIndex++, this.onTrimEmitter.fire(1);
+              } else for (let s3 = 0; s3 < t3; s3++) this.set(e3 + s3 + i3, this.get(e3 + s3));
+            }
+          }
+          _getCyclicIndex(e3) {
+            return (this._startIndex + e3) % this._maxLength;
+          }
+        }
+        t2.CircularList = n;
+      }, 1439: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.clone = void 0, t2.clone = function e3(t3, i2 = 5) {
+          if ("object" != typeof t3) return t3;
+          const s2 = Array.isArray(t3) ? [] : {};
+          for (const r in t3) s2[r] = i2 <= 1 ? t3[r] : t3[r] && e3(t3[r], i2 - 1);
+          return s2;
+        };
+      }, 8055: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.contrastRatio = t2.toPaddedHex = t2.rgba = t2.rgb = t2.css = t2.color = t2.channels = t2.NULL_COLOR = void 0;
+        let i2 = 0, s2 = 0, r = 0, n = 0;
+        var o, a, h, c, l;
+        function d(e3) {
+          const t3 = e3.toString(16);
+          return t3.length < 2 ? "0" + t3 : t3;
+        }
+        function _(e3, t3) {
+          return e3 < t3 ? (t3 + 0.05) / (e3 + 0.05) : (e3 + 0.05) / (t3 + 0.05);
+        }
+        t2.NULL_COLOR = { css: "#00000000", rgba: 0 }, function(e3) {
+          e3.toCss = function(e4, t3, i3, s3) {
+            return void 0 !== s3 ? `#${d(e4)}${d(t3)}${d(i3)}${d(s3)}` : `#${d(e4)}${d(t3)}${d(i3)}`;
+          }, e3.toRgba = function(e4, t3, i3, s3 = 255) {
+            return (e4 << 24 | t3 << 16 | i3 << 8 | s3) >>> 0;
+          }, e3.toColor = function(t3, i3, s3, r2) {
+            return { css: e3.toCss(t3, i3, s3, r2), rgba: e3.toRgba(t3, i3, s3, r2) };
+          };
+        }(o || (t2.channels = o = {})), function(e3) {
+          function t3(e4, t4) {
+            return n = Math.round(255 * t4), [i2, s2, r] = l.toChannels(e4.rgba), { css: o.toCss(i2, s2, r, n), rgba: o.toRgba(i2, s2, r, n) };
+          }
+          e3.blend = function(e4, t4) {
+            if (n = (255 & t4.rgba) / 255, 1 === n) return { css: t4.css, rgba: t4.rgba };
+            const a2 = t4.rgba >> 24 & 255, h2 = t4.rgba >> 16 & 255, c2 = t4.rgba >> 8 & 255, l2 = e4.rgba >> 24 & 255, d2 = e4.rgba >> 16 & 255, _2 = e4.rgba >> 8 & 255;
+            return i2 = l2 + Math.round((a2 - l2) * n), s2 = d2 + Math.round((h2 - d2) * n), r = _2 + Math.round((c2 - _2) * n), { css: o.toCss(i2, s2, r), rgba: o.toRgba(i2, s2, r) };
+          }, e3.isOpaque = function(e4) {
+            return 255 == (255 & e4.rgba);
+          }, e3.ensureContrastRatio = function(e4, t4, i3) {
+            const s3 = l.ensureContrastRatio(e4.rgba, t4.rgba, i3);
+            if (s3) return o.toColor(s3 >> 24 & 255, s3 >> 16 & 255, s3 >> 8 & 255);
+          }, e3.opaque = function(e4) {
+            const t4 = (255 | e4.rgba) >>> 0;
+            return [i2, s2, r] = l.toChannels(t4), { css: o.toCss(i2, s2, r), rgba: t4 };
+          }, e3.opacity = t3, e3.multiplyOpacity = function(e4, i3) {
+            return n = 255 & e4.rgba, t3(e4, n * i3 / 255);
+          }, e3.toColorRGB = function(e4) {
+            return [e4.rgba >> 24 & 255, e4.rgba >> 16 & 255, e4.rgba >> 8 & 255];
+          };
+        }(a || (t2.color = a = {})), function(e3) {
+          let t3, a2;
+          try {
+            const e4 = document.createElement("canvas");
+            e4.width = 1, e4.height = 1;
+            const i3 = e4.getContext("2d", { willReadFrequently: true });
+            i3 && (t3 = i3, t3.globalCompositeOperation = "copy", a2 = t3.createLinearGradient(0, 0, 1, 1));
+          } catch (e4) {
+          }
+          e3.toColor = function(e4) {
+            if (e4.match(/#[\da-f]{3,8}/i)) switch (e4.length) {
+              case 4:
+                return i2 = parseInt(e4.slice(1, 2).repeat(2), 16), s2 = parseInt(e4.slice(2, 3).repeat(2), 16), r = parseInt(e4.slice(3, 4).repeat(2), 16), o.toColor(i2, s2, r);
+              case 5:
+                return i2 = parseInt(e4.slice(1, 2).repeat(2), 16), s2 = parseInt(e4.slice(2, 3).repeat(2), 16), r = parseInt(e4.slice(3, 4).repeat(2), 16), n = parseInt(e4.slice(4, 5).repeat(2), 16), o.toColor(i2, s2, r, n);
+              case 7:
+                return { css: e4, rgba: (parseInt(e4.slice(1), 16) << 8 | 255) >>> 0 };
+              case 9:
+                return { css: e4, rgba: parseInt(e4.slice(1), 16) >>> 0 };
+            }
+            const h2 = e4.match(/rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(,\s*(0|1|\d?\.(\d+))\s*)?\)/);
+            if (h2) return i2 = parseInt(h2[1]), s2 = parseInt(h2[2]), r = parseInt(h2[3]), n = Math.round(255 * (void 0 === h2[5] ? 1 : parseFloat(h2[5]))), o.toColor(i2, s2, r, n);
+            if (!t3 || !a2) throw new Error("css.toColor: Unsupported css format");
+            if (t3.fillStyle = a2, t3.fillStyle = e4, "string" != typeof t3.fillStyle) throw new Error("css.toColor: Unsupported css format");
+            if (t3.fillRect(0, 0, 1, 1), [i2, s2, r, n] = t3.getImageData(0, 0, 1, 1).data, 255 !== n) throw new Error("css.toColor: Unsupported css format");
+            return { rgba: o.toRgba(i2, s2, r, n), css: e4 };
+          };
+        }(h || (t2.css = h = {})), function(e3) {
+          function t3(e4, t4, i3) {
+            const s3 = e4 / 255, r2 = t4 / 255, n2 = i3 / 255;
+            return 0.2126 * (s3 <= 0.03928 ? s3 / 12.92 : Math.pow((s3 + 0.055) / 1.055, 2.4)) + 0.7152 * (r2 <= 0.03928 ? r2 / 12.92 : Math.pow((r2 + 0.055) / 1.055, 2.4)) + 0.0722 * (n2 <= 0.03928 ? n2 / 12.92 : Math.pow((n2 + 0.055) / 1.055, 2.4));
+          }
+          e3.relativeLuminance = function(e4) {
+            return t3(e4 >> 16 & 255, e4 >> 8 & 255, 255 & e4);
+          }, e3.relativeLuminance2 = t3;
+        }(c || (t2.rgb = c = {})), function(e3) {
+          function t3(e4, t4, i3) {
+            const s3 = e4 >> 24 & 255, r2 = e4 >> 16 & 255, n2 = e4 >> 8 & 255;
+            let o2 = t4 >> 24 & 255, a3 = t4 >> 16 & 255, h2 = t4 >> 8 & 255, l2 = _(c.relativeLuminance2(o2, a3, h2), c.relativeLuminance2(s3, r2, n2));
+            for (; l2 < i3 && (o2 > 0 || a3 > 0 || h2 > 0); ) o2 -= Math.max(0, Math.ceil(0.1 * o2)), a3 -= Math.max(0, Math.ceil(0.1 * a3)), h2 -= Math.max(0, Math.ceil(0.1 * h2)), l2 = _(c.relativeLuminance2(o2, a3, h2), c.relativeLuminance2(s3, r2, n2));
+            return (o2 << 24 | a3 << 16 | h2 << 8 | 255) >>> 0;
+          }
+          function a2(e4, t4, i3) {
+            const s3 = e4 >> 24 & 255, r2 = e4 >> 16 & 255, n2 = e4 >> 8 & 255;
+            let o2 = t4 >> 24 & 255, a3 = t4 >> 16 & 255, h2 = t4 >> 8 & 255, l2 = _(c.relativeLuminance2(o2, a3, h2), c.relativeLuminance2(s3, r2, n2));
+            for (; l2 < i3 && (o2 < 255 || a3 < 255 || h2 < 255); ) o2 = Math.min(255, o2 + Math.ceil(0.1 * (255 - o2))), a3 = Math.min(255, a3 + Math.ceil(0.1 * (255 - a3))), h2 = Math.min(255, h2 + Math.ceil(0.1 * (255 - h2))), l2 = _(c.relativeLuminance2(o2, a3, h2), c.relativeLuminance2(s3, r2, n2));
+            return (o2 << 24 | a3 << 16 | h2 << 8 | 255) >>> 0;
+          }
+          e3.blend = function(e4, t4) {
+            if (n = (255 & t4) / 255, 1 === n) return t4;
+            const a3 = t4 >> 24 & 255, h2 = t4 >> 16 & 255, c2 = t4 >> 8 & 255, l2 = e4 >> 24 & 255, d2 = e4 >> 16 & 255, _2 = e4 >> 8 & 255;
+            return i2 = l2 + Math.round((a3 - l2) * n), s2 = d2 + Math.round((h2 - d2) * n), r = _2 + Math.round((c2 - _2) * n), o.toRgba(i2, s2, r);
+          }, e3.ensureContrastRatio = function(e4, i3, s3) {
+            const r2 = c.relativeLuminance(e4 >> 8), n2 = c.relativeLuminance(i3 >> 8);
+            if (_(r2, n2) < s3) {
+              if (n2 < r2) {
+                const n3 = t3(e4, i3, s3), o3 = _(r2, c.relativeLuminance(n3 >> 8));
+                if (o3 < s3) {
+                  const t4 = a2(e4, i3, s3);
+                  return o3 > _(r2, c.relativeLuminance(t4 >> 8)) ? n3 : t4;
+                }
+                return n3;
+              }
+              const o2 = a2(e4, i3, s3), h2 = _(r2, c.relativeLuminance(o2 >> 8));
+              if (h2 < s3) {
+                const n3 = t3(e4, i3, s3);
+                return h2 > _(r2, c.relativeLuminance(n3 >> 8)) ? o2 : n3;
+              }
+              return o2;
+            }
+          }, e3.reduceLuminance = t3, e3.increaseLuminance = a2, e3.toChannels = function(e4) {
+            return [e4 >> 24 & 255, e4 >> 16 & 255, e4 >> 8 & 255, 255 & e4];
+          };
+        }(l || (t2.rgba = l = {})), t2.toPaddedHex = d, t2.contrastRatio = _;
+      }, 8969: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CoreTerminal = void 0;
+        const s2 = i2(844), r = i2(2585), n = i2(4348), o = i2(7866), a = i2(744), h = i2(7302), c = i2(6975), l = i2(8460), d = i2(1753), _ = i2(1480), u = i2(7994), f = i2(9282), v = i2(5435), p = i2(5981), g = i2(2660);
+        let m = false;
+        class S extends s2.Disposable {
+          get onScroll() {
+            return this._onScrollApi || (this._onScrollApi = this.register(new l.EventEmitter()), this._onScroll.event((e3) => {
+              var _a;
+              (_a = this._onScrollApi) == null ? void 0 : _a.fire(e3.position);
+            })), this._onScrollApi.event;
+          }
+          get cols() {
+            return this._bufferService.cols;
+          }
+          get rows() {
+            return this._bufferService.rows;
+          }
+          get buffers() {
+            return this._bufferService.buffers;
+          }
+          get options() {
+            return this.optionsService.options;
+          }
+          set options(e3) {
+            for (const t3 in e3) this.optionsService.options[t3] = e3[t3];
+          }
+          constructor(e3) {
+            super(), this._windowsWrappingHeuristics = this.register(new s2.MutableDisposable()), this._onBinary = this.register(new l.EventEmitter()), this.onBinary = this._onBinary.event, this._onData = this.register(new l.EventEmitter()), this.onData = this._onData.event, this._onLineFeed = this.register(new l.EventEmitter()), this.onLineFeed = this._onLineFeed.event, this._onResize = this.register(new l.EventEmitter()), this.onResize = this._onResize.event, this._onWriteParsed = this.register(new l.EventEmitter()), this.onWriteParsed = this._onWriteParsed.event, this._onScroll = this.register(new l.EventEmitter()), this._instantiationService = new n.InstantiationService(), this.optionsService = this.register(new h.OptionsService(e3)), this._instantiationService.setService(r.IOptionsService, this.optionsService), this._bufferService = this.register(this._instantiationService.createInstance(a.BufferService)), this._instantiationService.setService(r.IBufferService, this._bufferService), this._logService = this.register(this._instantiationService.createInstance(o.LogService)), this._instantiationService.setService(r.ILogService, this._logService), this.coreService = this.register(this._instantiationService.createInstance(c.CoreService)), this._instantiationService.setService(r.ICoreService, this.coreService), this.coreMouseService = this.register(this._instantiationService.createInstance(d.CoreMouseService)), this._instantiationService.setService(r.ICoreMouseService, this.coreMouseService), this.unicodeService = this.register(this._instantiationService.createInstance(_.UnicodeService)), this._instantiationService.setService(r.IUnicodeService, this.unicodeService), this._charsetService = this._instantiationService.createInstance(u.CharsetService), this._instantiationService.setService(r.ICharsetService, this._charsetService), this._oscLinkService = this._instantiationService.createInstance(g.OscLinkService), this._instantiationService.setService(r.IOscLinkService, this._oscLinkService), this._inputHandler = this.register(new v.InputHandler(this._bufferService, this._charsetService, this.coreService, this._logService, this.optionsService, this._oscLinkService, this.coreMouseService, this.unicodeService)), this.register((0, l.forwardEvent)(this._inputHandler.onLineFeed, this._onLineFeed)), this.register(this._inputHandler), this.register((0, l.forwardEvent)(this._bufferService.onResize, this._onResize)), this.register((0, l.forwardEvent)(this.coreService.onData, this._onData)), this.register((0, l.forwardEvent)(this.coreService.onBinary, this._onBinary)), this.register(this.coreService.onRequestScrollToBottom(() => this.scrollToBottom())), this.register(this.coreService.onUserInput(() => this._writeBuffer.handleUserInput())), this.register(this.optionsService.onMultipleOptionChange(["windowsMode", "windowsPty"], () => this._handleWindowsPtyOptionChange())), this.register(this._bufferService.onScroll((e4) => {
+              this._onScroll.fire({ position: this._bufferService.buffer.ydisp, source: 0 }), this._inputHandler.markRangeDirty(this._bufferService.buffer.scrollTop, this._bufferService.buffer.scrollBottom);
+            })), this.register(this._inputHandler.onScroll((e4) => {
+              this._onScroll.fire({ position: this._bufferService.buffer.ydisp, source: 0 }), this._inputHandler.markRangeDirty(this._bufferService.buffer.scrollTop, this._bufferService.buffer.scrollBottom);
+            })), this._writeBuffer = this.register(new p.WriteBuffer((e4, t3) => this._inputHandler.parse(e4, t3))), this.register((0, l.forwardEvent)(this._writeBuffer.onWriteParsed, this._onWriteParsed));
+          }
+          write(e3, t3) {
+            this._writeBuffer.write(e3, t3);
+          }
+          writeSync(e3, t3) {
+            this._logService.logLevel <= r.LogLevelEnum.WARN && !m && (this._logService.warn("writeSync is unreliable and will be removed soon."), m = true), this._writeBuffer.writeSync(e3, t3);
+          }
+          input(e3, t3 = true) {
+            this.coreService.triggerDataEvent(e3, t3);
+          }
+          resize(e3, t3) {
+            isNaN(e3) || isNaN(t3) || (e3 = Math.max(e3, a.MINIMUM_COLS), t3 = Math.max(t3, a.MINIMUM_ROWS), this._bufferService.resize(e3, t3));
+          }
+          scroll(e3, t3 = false) {
+            this._bufferService.scroll(e3, t3);
+          }
+          scrollLines(e3, t3, i3) {
+            this._bufferService.scrollLines(e3, t3, i3);
+          }
+          scrollPages(e3) {
+            this.scrollLines(e3 * (this.rows - 1));
+          }
+          scrollToTop() {
+            this.scrollLines(-this._bufferService.buffer.ydisp);
+          }
+          scrollToBottom() {
+            this.scrollLines(this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
+          }
+          scrollToLine(e3) {
+            const t3 = e3 - this._bufferService.buffer.ydisp;
+            0 !== t3 && this.scrollLines(t3);
+          }
+          registerEscHandler(e3, t3) {
+            return this._inputHandler.registerEscHandler(e3, t3);
+          }
+          registerDcsHandler(e3, t3) {
+            return this._inputHandler.registerDcsHandler(e3, t3);
+          }
+          registerCsiHandler(e3, t3) {
+            return this._inputHandler.registerCsiHandler(e3, t3);
+          }
+          registerOscHandler(e3, t3) {
+            return this._inputHandler.registerOscHandler(e3, t3);
+          }
+          _setup() {
+            this._handleWindowsPtyOptionChange();
+          }
+          reset() {
+            this._inputHandler.reset(), this._bufferService.reset(), this._charsetService.reset(), this.coreService.reset(), this.coreMouseService.reset();
+          }
+          _handleWindowsPtyOptionChange() {
+            let e3 = false;
+            const t3 = this.optionsService.rawOptions.windowsPty;
+            t3 && void 0 !== t3.buildNumber && void 0 !== t3.buildNumber ? e3 = !!("conpty" === t3.backend && t3.buildNumber < 21376) : this.optionsService.rawOptions.windowsMode && (e3 = true), e3 ? this._enableWindowsWrappingHeuristics() : this._windowsWrappingHeuristics.clear();
+          }
+          _enableWindowsWrappingHeuristics() {
+            if (!this._windowsWrappingHeuristics.value) {
+              const e3 = [];
+              e3.push(this.onLineFeed(f.updateWindowsModeWrappedState.bind(null, this._bufferService))), e3.push(this.registerCsiHandler({ final: "H" }, () => ((0, f.updateWindowsModeWrappedState)(this._bufferService), false))), this._windowsWrappingHeuristics.value = (0, s2.toDisposable)(() => {
+                for (const t3 of e3) t3.dispose();
+              });
+            }
+          }
+        }
+        t2.CoreTerminal = S;
+      }, 8460: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.runAndSubscribe = t2.forwardEvent = t2.EventEmitter = void 0, t2.EventEmitter = class {
+          constructor() {
+            this._listeners = [], this._disposed = false;
+          }
+          get event() {
+            return this._event || (this._event = (e3) => (this._listeners.push(e3), { dispose: () => {
+              if (!this._disposed) {
+                for (let t3 = 0; t3 < this._listeners.length; t3++) if (this._listeners[t3] === e3) return void this._listeners.splice(t3, 1);
+              }
+            } })), this._event;
+          }
+          fire(e3, t3) {
+            const i2 = [];
+            for (let e4 = 0; e4 < this._listeners.length; e4++) i2.push(this._listeners[e4]);
+            for (let s2 = 0; s2 < i2.length; s2++) i2[s2].call(void 0, e3, t3);
+          }
+          dispose() {
+            this.clearListeners(), this._disposed = true;
+          }
+          clearListeners() {
+            this._listeners && (this._listeners.length = 0);
+          }
+        }, t2.forwardEvent = function(e3, t3) {
+          return e3((e4) => t3.fire(e4));
+        }, t2.runAndSubscribe = function(e3, t3) {
+          return t3(void 0), e3((e4) => t3(e4));
+        };
+      }, 5435: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.InputHandler = t2.WindowsOptionsReportType = void 0;
+        const n = i2(2584), o = i2(7116), a = i2(2015), h = i2(844), c = i2(482), l = i2(8437), d = i2(8460), _ = i2(643), u = i2(511), f = i2(3734), v = i2(2585), p = i2(1480), g = i2(6242), m = i2(6351), S = i2(5941), C = { "(": 0, ")": 1, "*": 2, "+": 3, "-": 1, ".": 2 }, b = 131072;
+        function w(e3, t3) {
+          if (e3 > 24) return t3.setWinLines || false;
+          switch (e3) {
+            case 1:
+              return !!t3.restoreWin;
+            case 2:
+              return !!t3.minimizeWin;
+            case 3:
+              return !!t3.setWinPosition;
+            case 4:
+              return !!t3.setWinSizePixels;
+            case 5:
+              return !!t3.raiseWin;
+            case 6:
+              return !!t3.lowerWin;
+            case 7:
+              return !!t3.refreshWin;
+            case 8:
+              return !!t3.setWinSizeChars;
+            case 9:
+              return !!t3.maximizeWin;
+            case 10:
+              return !!t3.fullscreenWin;
+            case 11:
+              return !!t3.getWinState;
+            case 13:
+              return !!t3.getWinPosition;
+            case 14:
+              return !!t3.getWinSizePixels;
+            case 15:
+              return !!t3.getScreenSizePixels;
+            case 16:
+              return !!t3.getCellSizePixels;
+            case 18:
+              return !!t3.getWinSizeChars;
+            case 19:
+              return !!t3.getScreenSizeChars;
+            case 20:
+              return !!t3.getIconTitle;
+            case 21:
+              return !!t3.getWinTitle;
+            case 22:
+              return !!t3.pushTitle;
+            case 23:
+              return !!t3.popTitle;
+            case 24:
+              return !!t3.setWinLines;
+          }
+          return false;
+        }
+        var y;
+        !function(e3) {
+          e3[e3.GET_WIN_SIZE_PIXELS = 0] = "GET_WIN_SIZE_PIXELS", e3[e3.GET_CELL_SIZE_PIXELS = 1] = "GET_CELL_SIZE_PIXELS";
+        }(y || (t2.WindowsOptionsReportType = y = {}));
+        let E = 0;
+        class k extends h.Disposable {
+          getAttrData() {
+            return this._curAttrData;
+          }
+          constructor(e3, t3, i3, s3, r2, h2, _2, f2, v2 = new a.EscapeSequenceParser()) {
+            super(), this._bufferService = e3, this._charsetService = t3, this._coreService = i3, this._logService = s3, this._optionsService = r2, this._oscLinkService = h2, this._coreMouseService = _2, this._unicodeService = f2, this._parser = v2, this._parseBuffer = new Uint32Array(4096), this._stringDecoder = new c.StringToUtf32(), this._utf8Decoder = new c.Utf8ToUtf32(), this._workCell = new u.CellData(), this._windowTitle = "", this._iconName = "", this._windowTitleStack = [], this._iconNameStack = [], this._curAttrData = l.DEFAULT_ATTR_DATA.clone(), this._eraseAttrDataInternal = l.DEFAULT_ATTR_DATA.clone(), this._onRequestBell = this.register(new d.EventEmitter()), this.onRequestBell = this._onRequestBell.event, this._onRequestRefreshRows = this.register(new d.EventEmitter()), this.onRequestRefreshRows = this._onRequestRefreshRows.event, this._onRequestReset = this.register(new d.EventEmitter()), this.onRequestReset = this._onRequestReset.event, this._onRequestSendFocus = this.register(new d.EventEmitter()), this.onRequestSendFocus = this._onRequestSendFocus.event, this._onRequestSyncScrollBar = this.register(new d.EventEmitter()), this.onRequestSyncScrollBar = this._onRequestSyncScrollBar.event, this._onRequestWindowsOptionsReport = this.register(new d.EventEmitter()), this.onRequestWindowsOptionsReport = this._onRequestWindowsOptionsReport.event, this._onA11yChar = this.register(new d.EventEmitter()), this.onA11yChar = this._onA11yChar.event, this._onA11yTab = this.register(new d.EventEmitter()), this.onA11yTab = this._onA11yTab.event, this._onCursorMove = this.register(new d.EventEmitter()), this.onCursorMove = this._onCursorMove.event, this._onLineFeed = this.register(new d.EventEmitter()), this.onLineFeed = this._onLineFeed.event, this._onScroll = this.register(new d.EventEmitter()), this.onScroll = this._onScroll.event, this._onTitleChange = this.register(new d.EventEmitter()), this.onTitleChange = this._onTitleChange.event, this._onColor = this.register(new d.EventEmitter()), this.onColor = this._onColor.event, this._parseStack = { paused: false, cursorStartX: 0, cursorStartY: 0, decodedLength: 0, position: 0 }, this._specialColors = [256, 257, 258], this.register(this._parser), this._dirtyRowTracker = new L(this._bufferService), this._activeBuffer = this._bufferService.buffer, this.register(this._bufferService.buffers.onBufferActivate((e4) => this._activeBuffer = e4.activeBuffer)), this._parser.setCsiHandlerFallback((e4, t4) => {
+              this._logService.debug("Unknown CSI code: ", { identifier: this._parser.identToString(e4), params: t4.toArray() });
+            }), this._parser.setEscHandlerFallback((e4) => {
+              this._logService.debug("Unknown ESC code: ", { identifier: this._parser.identToString(e4) });
+            }), this._parser.setExecuteHandlerFallback((e4) => {
+              this._logService.debug("Unknown EXECUTE code: ", { code: e4 });
+            }), this._parser.setOscHandlerFallback((e4, t4, i4) => {
+              this._logService.debug("Unknown OSC code: ", { identifier: e4, action: t4, data: i4 });
+            }), this._parser.setDcsHandlerFallback((e4, t4, i4) => {
+              "HOOK" === t4 && (i4 = i4.toArray()), this._logService.debug("Unknown DCS code: ", { identifier: this._parser.identToString(e4), action: t4, payload: i4 });
+            }), this._parser.setPrintHandler((e4, t4, i4) => this.print(e4, t4, i4)), this._parser.registerCsiHandler({ final: "@" }, (e4) => this.insertChars(e4)), this._parser.registerCsiHandler({ intermediates: " ", final: "@" }, (e4) => this.scrollLeft(e4)), this._parser.registerCsiHandler({ final: "A" }, (e4) => this.cursorUp(e4)), this._parser.registerCsiHandler({ intermediates: " ", final: "A" }, (e4) => this.scrollRight(e4)), this._parser.registerCsiHandler({ final: "B" }, (e4) => this.cursorDown(e4)), this._parser.registerCsiHandler({ final: "C" }, (e4) => this.cursorForward(e4)), this._parser.registerCsiHandler({ final: "D" }, (e4) => this.cursorBackward(e4)), this._parser.registerCsiHandler({ final: "E" }, (e4) => this.cursorNextLine(e4)), this._parser.registerCsiHandler({ final: "F" }, (e4) => this.cursorPrecedingLine(e4)), this._parser.registerCsiHandler({ final: "G" }, (e4) => this.cursorCharAbsolute(e4)), this._parser.registerCsiHandler({ final: "H" }, (e4) => this.cursorPosition(e4)), this._parser.registerCsiHandler({ final: "I" }, (e4) => this.cursorForwardTab(e4)), this._parser.registerCsiHandler({ final: "J" }, (e4) => this.eraseInDisplay(e4, false)), this._parser.registerCsiHandler({ prefix: "?", final: "J" }, (e4) => this.eraseInDisplay(e4, true)), this._parser.registerCsiHandler({ final: "K" }, (e4) => this.eraseInLine(e4, false)), this._parser.registerCsiHandler({ prefix: "?", final: "K" }, (e4) => this.eraseInLine(e4, true)), this._parser.registerCsiHandler({ final: "L" }, (e4) => this.insertLines(e4)), this._parser.registerCsiHandler({ final: "M" }, (e4) => this.deleteLines(e4)), this._parser.registerCsiHandler({ final: "P" }, (e4) => this.deleteChars(e4)), this._parser.registerCsiHandler({ final: "S" }, (e4) => this.scrollUp(e4)), this._parser.registerCsiHandler({ final: "T" }, (e4) => this.scrollDown(e4)), this._parser.registerCsiHandler({ final: "X" }, (e4) => this.eraseChars(e4)), this._parser.registerCsiHandler({ final: "Z" }, (e4) => this.cursorBackwardTab(e4)), this._parser.registerCsiHandler({ final: "`" }, (e4) => this.charPosAbsolute(e4)), this._parser.registerCsiHandler({ final: "a" }, (e4) => this.hPositionRelative(e4)), this._parser.registerCsiHandler({ final: "b" }, (e4) => this.repeatPrecedingCharacter(e4)), this._parser.registerCsiHandler({ final: "c" }, (e4) => this.sendDeviceAttributesPrimary(e4)), this._parser.registerCsiHandler({ prefix: ">", final: "c" }, (e4) => this.sendDeviceAttributesSecondary(e4)), this._parser.registerCsiHandler({ final: "d" }, (e4) => this.linePosAbsolute(e4)), this._parser.registerCsiHandler({ final: "e" }, (e4) => this.vPositionRelative(e4)), this._parser.registerCsiHandler({ final: "f" }, (e4) => this.hVPosition(e4)), this._parser.registerCsiHandler({ final: "g" }, (e4) => this.tabClear(e4)), this._parser.registerCsiHandler({ final: "h" }, (e4) => this.setMode(e4)), this._parser.registerCsiHandler({ prefix: "?", final: "h" }, (e4) => this.setModePrivate(e4)), this._parser.registerCsiHandler({ final: "l" }, (e4) => this.resetMode(e4)), this._parser.registerCsiHandler({ prefix: "?", final: "l" }, (e4) => this.resetModePrivate(e4)), this._parser.registerCsiHandler({ final: "m" }, (e4) => this.charAttributes(e4)), this._parser.registerCsiHandler({ final: "n" }, (e4) => this.deviceStatus(e4)), this._parser.registerCsiHandler({ prefix: "?", final: "n" }, (e4) => this.deviceStatusPrivate(e4)), this._parser.registerCsiHandler({ intermediates: "!", final: "p" }, (e4) => this.softReset(e4)), this._parser.registerCsiHandler({ intermediates: " ", final: "q" }, (e4) => this.setCursorStyle(e4)), this._parser.registerCsiHandler({ final: "r" }, (e4) => this.setScrollRegion(e4)), this._parser.registerCsiHandler({ final: "s" }, (e4) => this.saveCursor(e4)), this._parser.registerCsiHandler({ final: "t" }, (e4) => this.windowOptions(e4)), this._parser.registerCsiHandler({ final: "u" }, (e4) => this.restoreCursor(e4)), this._parser.registerCsiHandler({ intermediates: "'", final: "}" }, (e4) => this.insertColumns(e4)), this._parser.registerCsiHandler({ intermediates: "'", final: "~" }, (e4) => this.deleteColumns(e4)), this._parser.registerCsiHandler({ intermediates: '"', final: "q" }, (e4) => this.selectProtected(e4)), this._parser.registerCsiHandler({ intermediates: "$", final: "p" }, (e4) => this.requestMode(e4, true)), this._parser.registerCsiHandler({ prefix: "?", intermediates: "$", final: "p" }, (e4) => this.requestMode(e4, false)), this._parser.setExecuteHandler(n.C0.BEL, () => this.bell()), this._parser.setExecuteHandler(n.C0.LF, () => this.lineFeed()), this._parser.setExecuteHandler(n.C0.VT, () => this.lineFeed()), this._parser.setExecuteHandler(n.C0.FF, () => this.lineFeed()), this._parser.setExecuteHandler(n.C0.CR, () => this.carriageReturn()), this._parser.setExecuteHandler(n.C0.BS, () => this.backspace()), this._parser.setExecuteHandler(n.C0.HT, () => this.tab()), this._parser.setExecuteHandler(n.C0.SO, () => this.shiftOut()), this._parser.setExecuteHandler(n.C0.SI, () => this.shiftIn()), this._parser.setExecuteHandler(n.C1.IND, () => this.index()), this._parser.setExecuteHandler(n.C1.NEL, () => this.nextLine()), this._parser.setExecuteHandler(n.C1.HTS, () => this.tabSet()), this._parser.registerOscHandler(0, new g.OscHandler((e4) => (this.setTitle(e4), this.setIconName(e4), true))), this._parser.registerOscHandler(1, new g.OscHandler((e4) => this.setIconName(e4))), this._parser.registerOscHandler(2, new g.OscHandler((e4) => this.setTitle(e4))), this._parser.registerOscHandler(4, new g.OscHandler((e4) => this.setOrReportIndexedColor(e4))), this._parser.registerOscHandler(8, new g.OscHandler((e4) => this.setHyperlink(e4))), this._parser.registerOscHandler(10, new g.OscHandler((e4) => this.setOrReportFgColor(e4))), this._parser.registerOscHandler(11, new g.OscHandler((e4) => this.setOrReportBgColor(e4))), this._parser.registerOscHandler(12, new g.OscHandler((e4) => this.setOrReportCursorColor(e4))), this._parser.registerOscHandler(104, new g.OscHandler((e4) => this.restoreIndexedColor(e4))), this._parser.registerOscHandler(110, new g.OscHandler((e4) => this.restoreFgColor(e4))), this._parser.registerOscHandler(111, new g.OscHandler((e4) => this.restoreBgColor(e4))), this._parser.registerOscHandler(112, new g.OscHandler((e4) => this.restoreCursorColor(e4))), this._parser.registerEscHandler({ final: "7" }, () => this.saveCursor()), this._parser.registerEscHandler({ final: "8" }, () => this.restoreCursor()), this._parser.registerEscHandler({ final: "D" }, () => this.index()), this._parser.registerEscHandler({ final: "E" }, () => this.nextLine()), this._parser.registerEscHandler({ final: "H" }, () => this.tabSet()), this._parser.registerEscHandler({ final: "M" }, () => this.reverseIndex()), this._parser.registerEscHandler({ final: "=" }, () => this.keypadApplicationMode()), this._parser.registerEscHandler({ final: ">" }, () => this.keypadNumericMode()), this._parser.registerEscHandler({ final: "c" }, () => this.fullReset()), this._parser.registerEscHandler({ final: "n" }, () => this.setgLevel(2)), this._parser.registerEscHandler({ final: "o" }, () => this.setgLevel(3)), this._parser.registerEscHandler({ final: "|" }, () => this.setgLevel(3)), this._parser.registerEscHandler({ final: "}" }, () => this.setgLevel(2)), this._parser.registerEscHandler({ final: "~" }, () => this.setgLevel(1)), this._parser.registerEscHandler({ intermediates: "%", final: "@" }, () => this.selectDefaultCharset()), this._parser.registerEscHandler({ intermediates: "%", final: "G" }, () => this.selectDefaultCharset());
+            for (const e4 in o.CHARSETS) this._parser.registerEscHandler({ intermediates: "(", final: e4 }, () => this.selectCharset("(" + e4)), this._parser.registerEscHandler({ intermediates: ")", final: e4 }, () => this.selectCharset(")" + e4)), this._parser.registerEscHandler({ intermediates: "*", final: e4 }, () => this.selectCharset("*" + e4)), this._parser.registerEscHandler({ intermediates: "+", final: e4 }, () => this.selectCharset("+" + e4)), this._parser.registerEscHandler({ intermediates: "-", final: e4 }, () => this.selectCharset("-" + e4)), this._parser.registerEscHandler({ intermediates: ".", final: e4 }, () => this.selectCharset("." + e4)), this._parser.registerEscHandler({ intermediates: "/", final: e4 }, () => this.selectCharset("/" + e4));
+            this._parser.registerEscHandler({ intermediates: "#", final: "8" }, () => this.screenAlignmentPattern()), this._parser.setErrorHandler((e4) => (this._logService.error("Parsing error: ", e4), e4)), this._parser.registerDcsHandler({ intermediates: "$", final: "q" }, new m.DcsHandler((e4, t4) => this.requestStatusString(e4, t4)));
+          }
+          _preserveStack(e3, t3, i3, s3) {
+            this._parseStack.paused = true, this._parseStack.cursorStartX = e3, this._parseStack.cursorStartY = t3, this._parseStack.decodedLength = i3, this._parseStack.position = s3;
+          }
+          _logSlowResolvingAsync(e3) {
+            this._logService.logLevel <= v.LogLevelEnum.WARN && Promise.race([e3, new Promise((e4, t3) => setTimeout(() => t3("#SLOW_TIMEOUT"), 5e3))]).catch((e4) => {
+              if ("#SLOW_TIMEOUT" !== e4) throw e4;
+              console.warn("async parser handler taking longer than 5000 ms");
+            });
+          }
+          _getCurrentLinkId() {
+            return this._curAttrData.extended.urlId;
+          }
+          parse(e3, t3) {
+            let i3, s3 = this._activeBuffer.x, r2 = this._activeBuffer.y, n2 = 0;
+            const o2 = this._parseStack.paused;
+            if (o2) {
+              if (i3 = this._parser.parse(this._parseBuffer, this._parseStack.decodedLength, t3)) return this._logSlowResolvingAsync(i3), i3;
+              s3 = this._parseStack.cursorStartX, r2 = this._parseStack.cursorStartY, this._parseStack.paused = false, e3.length > b && (n2 = this._parseStack.position + b);
+            }
+            if (this._logService.logLevel <= v.LogLevelEnum.DEBUG && this._logService.debug("parsing data" + ("string" == typeof e3 ? ` "${e3}"` : ` "${Array.prototype.map.call(e3, (e4) => String.fromCharCode(e4)).join("")}"`), "string" == typeof e3 ? e3.split("").map((e4) => e4.charCodeAt(0)) : e3), this._parseBuffer.length < e3.length && this._parseBuffer.length < b && (this._parseBuffer = new Uint32Array(Math.min(e3.length, b))), o2 || this._dirtyRowTracker.clearRange(), e3.length > b) for (let t4 = n2; t4 < e3.length; t4 += b) {
+              const n3 = t4 + b < e3.length ? t4 + b : e3.length, o3 = "string" == typeof e3 ? this._stringDecoder.decode(e3.substring(t4, n3), this._parseBuffer) : this._utf8Decoder.decode(e3.subarray(t4, n3), this._parseBuffer);
+              if (i3 = this._parser.parse(this._parseBuffer, o3)) return this._preserveStack(s3, r2, o3, t4), this._logSlowResolvingAsync(i3), i3;
+            }
+            else if (!o2) {
+              const t4 = "string" == typeof e3 ? this._stringDecoder.decode(e3, this._parseBuffer) : this._utf8Decoder.decode(e3, this._parseBuffer);
+              if (i3 = this._parser.parse(this._parseBuffer, t4)) return this._preserveStack(s3, r2, t4, 0), this._logSlowResolvingAsync(i3), i3;
+            }
+            this._activeBuffer.x === s3 && this._activeBuffer.y === r2 || this._onCursorMove.fire();
+            const a2 = this._dirtyRowTracker.end + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp), h2 = this._dirtyRowTracker.start + (this._bufferService.buffer.ybase - this._bufferService.buffer.ydisp);
+            h2 < this._bufferService.rows && this._onRequestRefreshRows.fire(Math.min(h2, this._bufferService.rows - 1), Math.min(a2, this._bufferService.rows - 1));
+          }
+          print(e3, t3, i3) {
+            let s3, r2;
+            const n2 = this._charsetService.charset, o2 = this._optionsService.rawOptions.screenReaderMode, a2 = this._bufferService.cols, h2 = this._coreService.decPrivateModes.wraparound, d2 = this._coreService.modes.insertMode, u2 = this._curAttrData;
+            let f2 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+            this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._activeBuffer.x && i3 - t3 > 0 && 2 === f2.getWidth(this._activeBuffer.x - 1) && f2.setCellFromCodepoint(this._activeBuffer.x - 1, 0, 1, u2);
+            let v2 = this._parser.precedingJoinState;
+            for (let g2 = t3; g2 < i3; ++g2) {
+              if (s3 = e3[g2], s3 < 127 && n2) {
+                const e4 = n2[String.fromCharCode(s3)];
+                e4 && (s3 = e4.charCodeAt(0));
+              }
+              const t4 = this._unicodeService.charProperties(s3, v2);
+              r2 = p.UnicodeService.extractWidth(t4);
+              const i4 = p.UnicodeService.extractShouldJoin(t4), m2 = i4 ? p.UnicodeService.extractWidth(v2) : 0;
+              if (v2 = t4, o2 && this._onA11yChar.fire((0, c.stringFromCodePoint)(s3)), this._getCurrentLinkId() && this._oscLinkService.addLineToLink(this._getCurrentLinkId(), this._activeBuffer.ybase + this._activeBuffer.y), this._activeBuffer.x + r2 - m2 > a2) {
+                if (h2) {
+                  const e4 = f2;
+                  let t5 = this._activeBuffer.x - m2;
+                  for (this._activeBuffer.x = m2, this._activeBuffer.y++, this._activeBuffer.y === this._activeBuffer.scrollBottom + 1 ? (this._activeBuffer.y--, this._bufferService.scroll(this._eraseAttrData(), true)) : (this._activeBuffer.y >= this._bufferService.rows && (this._activeBuffer.y = this._bufferService.rows - 1), this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).isWrapped = true), f2 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y), m2 > 0 && f2 instanceof l.BufferLine && f2.copyCellsFrom(e4, t5, 0, m2, false); t5 < a2; ) e4.setCellFromCodepoint(t5++, 0, 1, u2);
+                } else if (this._activeBuffer.x = a2 - 1, 2 === r2) continue;
+              }
+              if (i4 && this._activeBuffer.x) {
+                const e4 = f2.getWidth(this._activeBuffer.x - 1) ? 1 : 2;
+                f2.addCodepointToCell(this._activeBuffer.x - e4, s3, r2);
+                for (let e5 = r2 - m2; --e5 >= 0; ) f2.setCellFromCodepoint(this._activeBuffer.x++, 0, 0, u2);
+              } else if (d2 && (f2.insertCells(this._activeBuffer.x, r2 - m2, this._activeBuffer.getNullCell(u2)), 2 === f2.getWidth(a2 - 1) && f2.setCellFromCodepoint(a2 - 1, _.NULL_CELL_CODE, _.NULL_CELL_WIDTH, u2)), f2.setCellFromCodepoint(this._activeBuffer.x++, s3, r2, u2), r2 > 0) for (; --r2; ) f2.setCellFromCodepoint(this._activeBuffer.x++, 0, 0, u2);
+            }
+            this._parser.precedingJoinState = v2, this._activeBuffer.x < a2 && i3 - t3 > 0 && 0 === f2.getWidth(this._activeBuffer.x) && !f2.hasContent(this._activeBuffer.x) && f2.setCellFromCodepoint(this._activeBuffer.x, 0, 1, u2), this._dirtyRowTracker.markDirty(this._activeBuffer.y);
+          }
+          registerCsiHandler(e3, t3) {
+            return "t" !== e3.final || e3.prefix || e3.intermediates ? this._parser.registerCsiHandler(e3, t3) : this._parser.registerCsiHandler(e3, (e4) => !w(e4.params[0], this._optionsService.rawOptions.windowOptions) || t3(e4));
+          }
+          registerDcsHandler(e3, t3) {
+            return this._parser.registerDcsHandler(e3, new m.DcsHandler(t3));
+          }
+          registerEscHandler(e3, t3) {
+            return this._parser.registerEscHandler(e3, t3);
+          }
+          registerOscHandler(e3, t3) {
+            return this._parser.registerOscHandler(e3, new g.OscHandler(t3));
+          }
+          bell() {
+            return this._onRequestBell.fire(), true;
+          }
+          lineFeed() {
+            return this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._optionsService.rawOptions.convertEol && (this._activeBuffer.x = 0), this._activeBuffer.y++, this._activeBuffer.y === this._activeBuffer.scrollBottom + 1 ? (this._activeBuffer.y--, this._bufferService.scroll(this._eraseAttrData())) : this._activeBuffer.y >= this._bufferService.rows ? this._activeBuffer.y = this._bufferService.rows - 1 : this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).isWrapped = false, this._activeBuffer.x >= this._bufferService.cols && this._activeBuffer.x--, this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._onLineFeed.fire(), true;
+          }
+          carriageReturn() {
+            return this._activeBuffer.x = 0, true;
+          }
+          backspace() {
+            var _a;
+            if (!this._coreService.decPrivateModes.reverseWraparound) return this._restrictCursor(), this._activeBuffer.x > 0 && this._activeBuffer.x--, true;
+            if (this._restrictCursor(this._bufferService.cols), this._activeBuffer.x > 0) this._activeBuffer.x--;
+            else if (0 === this._activeBuffer.x && this._activeBuffer.y > this._activeBuffer.scrollTop && this._activeBuffer.y <= this._activeBuffer.scrollBottom && ((_a = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y)) == null ? void 0 : _a.isWrapped)) {
+              this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).isWrapped = false, this._activeBuffer.y--, this._activeBuffer.x = this._bufferService.cols - 1;
+              const e3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+              e3.hasWidth(this._activeBuffer.x) && !e3.hasContent(this._activeBuffer.x) && this._activeBuffer.x--;
+            }
+            return this._restrictCursor(), true;
+          }
+          tab() {
+            if (this._activeBuffer.x >= this._bufferService.cols) return true;
+            const e3 = this._activeBuffer.x;
+            return this._activeBuffer.x = this._activeBuffer.nextStop(), this._optionsService.rawOptions.screenReaderMode && this._onA11yTab.fire(this._activeBuffer.x - e3), true;
+          }
+          shiftOut() {
+            return this._charsetService.setgLevel(1), true;
+          }
+          shiftIn() {
+            return this._charsetService.setgLevel(0), true;
+          }
+          _restrictCursor(e3 = this._bufferService.cols - 1) {
+            this._activeBuffer.x = Math.min(e3, Math.max(0, this._activeBuffer.x)), this._activeBuffer.y = this._coreService.decPrivateModes.origin ? Math.min(this._activeBuffer.scrollBottom, Math.max(this._activeBuffer.scrollTop, this._activeBuffer.y)) : Math.min(this._bufferService.rows - 1, Math.max(0, this._activeBuffer.y)), this._dirtyRowTracker.markDirty(this._activeBuffer.y);
+          }
+          _setCursor(e3, t3) {
+            this._dirtyRowTracker.markDirty(this._activeBuffer.y), this._coreService.decPrivateModes.origin ? (this._activeBuffer.x = e3, this._activeBuffer.y = this._activeBuffer.scrollTop + t3) : (this._activeBuffer.x = e3, this._activeBuffer.y = t3), this._restrictCursor(), this._dirtyRowTracker.markDirty(this._activeBuffer.y);
+          }
+          _moveCursor(e3, t3) {
+            this._restrictCursor(), this._setCursor(this._activeBuffer.x + e3, this._activeBuffer.y + t3);
+          }
+          cursorUp(e3) {
+            const t3 = this._activeBuffer.y - this._activeBuffer.scrollTop;
+            return t3 >= 0 ? this._moveCursor(0, -Math.min(t3, e3.params[0] || 1)) : this._moveCursor(0, -(e3.params[0] || 1)), true;
+          }
+          cursorDown(e3) {
+            const t3 = this._activeBuffer.scrollBottom - this._activeBuffer.y;
+            return t3 >= 0 ? this._moveCursor(0, Math.min(t3, e3.params[0] || 1)) : this._moveCursor(0, e3.params[0] || 1), true;
+          }
+          cursorForward(e3) {
+            return this._moveCursor(e3.params[0] || 1, 0), true;
+          }
+          cursorBackward(e3) {
+            return this._moveCursor(-(e3.params[0] || 1), 0), true;
+          }
+          cursorNextLine(e3) {
+            return this.cursorDown(e3), this._activeBuffer.x = 0, true;
+          }
+          cursorPrecedingLine(e3) {
+            return this.cursorUp(e3), this._activeBuffer.x = 0, true;
+          }
+          cursorCharAbsolute(e3) {
+            return this._setCursor((e3.params[0] || 1) - 1, this._activeBuffer.y), true;
+          }
+          cursorPosition(e3) {
+            return this._setCursor(e3.length >= 2 ? (e3.params[1] || 1) - 1 : 0, (e3.params[0] || 1) - 1), true;
+          }
+          charPosAbsolute(e3) {
+            return this._setCursor((e3.params[0] || 1) - 1, this._activeBuffer.y), true;
+          }
+          hPositionRelative(e3) {
+            return this._moveCursor(e3.params[0] || 1, 0), true;
+          }
+          linePosAbsolute(e3) {
+            return this._setCursor(this._activeBuffer.x, (e3.params[0] || 1) - 1), true;
+          }
+          vPositionRelative(e3) {
+            return this._moveCursor(0, e3.params[0] || 1), true;
+          }
+          hVPosition(e3) {
+            return this.cursorPosition(e3), true;
+          }
+          tabClear(e3) {
+            const t3 = e3.params[0];
+            return 0 === t3 ? delete this._activeBuffer.tabs[this._activeBuffer.x] : 3 === t3 && (this._activeBuffer.tabs = {}), true;
+          }
+          cursorForwardTab(e3) {
+            if (this._activeBuffer.x >= this._bufferService.cols) return true;
+            let t3 = e3.params[0] || 1;
+            for (; t3--; ) this._activeBuffer.x = this._activeBuffer.nextStop();
+            return true;
+          }
+          cursorBackwardTab(e3) {
+            if (this._activeBuffer.x >= this._bufferService.cols) return true;
+            let t3 = e3.params[0] || 1;
+            for (; t3--; ) this._activeBuffer.x = this._activeBuffer.prevStop();
+            return true;
+          }
+          selectProtected(e3) {
+            const t3 = e3.params[0];
+            return 1 === t3 && (this._curAttrData.bg |= 536870912), 2 !== t3 && 0 !== t3 || (this._curAttrData.bg &= -536870913), true;
+          }
+          _eraseInBufferLine(e3, t3, i3, s3 = false, r2 = false) {
+            const n2 = this._activeBuffer.lines.get(this._activeBuffer.ybase + e3);
+            n2.replaceCells(t3, i3, this._activeBuffer.getNullCell(this._eraseAttrData()), r2), s3 && (n2.isWrapped = false);
+          }
+          _resetBufferLine(e3, t3 = false) {
+            const i3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + e3);
+            i3 && (i3.fill(this._activeBuffer.getNullCell(this._eraseAttrData()), t3), this._bufferService.buffer.clearMarkers(this._activeBuffer.ybase + e3), i3.isWrapped = false);
+          }
+          eraseInDisplay(e3, t3 = false) {
+            let i3;
+            switch (this._restrictCursor(this._bufferService.cols), e3.params[0]) {
+              case 0:
+                for (i3 = this._activeBuffer.y, this._dirtyRowTracker.markDirty(i3), this._eraseInBufferLine(i3++, this._activeBuffer.x, this._bufferService.cols, 0 === this._activeBuffer.x, t3); i3 < this._bufferService.rows; i3++) this._resetBufferLine(i3, t3);
+                this._dirtyRowTracker.markDirty(i3);
+                break;
+              case 1:
+                for (i3 = this._activeBuffer.y, this._dirtyRowTracker.markDirty(i3), this._eraseInBufferLine(i3, 0, this._activeBuffer.x + 1, true, t3), this._activeBuffer.x + 1 >= this._bufferService.cols && (this._activeBuffer.lines.get(i3 + 1).isWrapped = false); i3--; ) this._resetBufferLine(i3, t3);
+                this._dirtyRowTracker.markDirty(0);
+                break;
+              case 2:
+                for (i3 = this._bufferService.rows, this._dirtyRowTracker.markDirty(i3 - 1); i3--; ) this._resetBufferLine(i3, t3);
+                this._dirtyRowTracker.markDirty(0);
+                break;
+              case 3:
+                const e4 = this._activeBuffer.lines.length - this._bufferService.rows;
+                e4 > 0 && (this._activeBuffer.lines.trimStart(e4), this._activeBuffer.ybase = Math.max(this._activeBuffer.ybase - e4, 0), this._activeBuffer.ydisp = Math.max(this._activeBuffer.ydisp - e4, 0), this._onScroll.fire(0));
+            }
+            return true;
+          }
+          eraseInLine(e3, t3 = false) {
+            switch (this._restrictCursor(this._bufferService.cols), e3.params[0]) {
+              case 0:
+                this._eraseInBufferLine(this._activeBuffer.y, this._activeBuffer.x, this._bufferService.cols, 0 === this._activeBuffer.x, t3);
+                break;
+              case 1:
+                this._eraseInBufferLine(this._activeBuffer.y, 0, this._activeBuffer.x + 1, false, t3);
+                break;
+              case 2:
+                this._eraseInBufferLine(this._activeBuffer.y, 0, this._bufferService.cols, true, t3);
+            }
+            return this._dirtyRowTracker.markDirty(this._activeBuffer.y), true;
+          }
+          insertLines(e3) {
+            this._restrictCursor();
+            let t3 = e3.params[0] || 1;
+            if (this._activeBuffer.y > this._activeBuffer.scrollBottom || this._activeBuffer.y < this._activeBuffer.scrollTop) return true;
+            const i3 = this._activeBuffer.ybase + this._activeBuffer.y, s3 = this._bufferService.rows - 1 - this._activeBuffer.scrollBottom, r2 = this._bufferService.rows - 1 + this._activeBuffer.ybase - s3 + 1;
+            for (; t3--; ) this._activeBuffer.lines.splice(r2 - 1, 1), this._activeBuffer.lines.splice(i3, 0, this._activeBuffer.getBlankLine(this._eraseAttrData()));
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.y, this._activeBuffer.scrollBottom), this._activeBuffer.x = 0, true;
+          }
+          deleteLines(e3) {
+            this._restrictCursor();
+            let t3 = e3.params[0] || 1;
+            if (this._activeBuffer.y > this._activeBuffer.scrollBottom || this._activeBuffer.y < this._activeBuffer.scrollTop) return true;
+            const i3 = this._activeBuffer.ybase + this._activeBuffer.y;
+            let s3;
+            for (s3 = this._bufferService.rows - 1 - this._activeBuffer.scrollBottom, s3 = this._bufferService.rows - 1 + this._activeBuffer.ybase - s3; t3--; ) this._activeBuffer.lines.splice(i3, 1), this._activeBuffer.lines.splice(s3, 0, this._activeBuffer.getBlankLine(this._eraseAttrData()));
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.y, this._activeBuffer.scrollBottom), this._activeBuffer.x = 0, true;
+          }
+          insertChars(e3) {
+            this._restrictCursor();
+            const t3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+            return t3 && (t3.insertCells(this._activeBuffer.x, e3.params[0] || 1, this._activeBuffer.getNullCell(this._eraseAttrData())), this._dirtyRowTracker.markDirty(this._activeBuffer.y)), true;
+          }
+          deleteChars(e3) {
+            this._restrictCursor();
+            const t3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+            return t3 && (t3.deleteCells(this._activeBuffer.x, e3.params[0] || 1, this._activeBuffer.getNullCell(this._eraseAttrData())), this._dirtyRowTracker.markDirty(this._activeBuffer.y)), true;
+          }
+          scrollUp(e3) {
+            let t3 = e3.params[0] || 1;
+            for (; t3--; ) this._activeBuffer.lines.splice(this._activeBuffer.ybase + this._activeBuffer.scrollTop, 1), this._activeBuffer.lines.splice(this._activeBuffer.ybase + this._activeBuffer.scrollBottom, 0, this._activeBuffer.getBlankLine(this._eraseAttrData()));
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom), true;
+          }
+          scrollDown(e3) {
+            let t3 = e3.params[0] || 1;
+            for (; t3--; ) this._activeBuffer.lines.splice(this._activeBuffer.ybase + this._activeBuffer.scrollBottom, 1), this._activeBuffer.lines.splice(this._activeBuffer.ybase + this._activeBuffer.scrollTop, 0, this._activeBuffer.getBlankLine(l.DEFAULT_ATTR_DATA));
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom), true;
+          }
+          scrollLeft(e3) {
+            if (this._activeBuffer.y > this._activeBuffer.scrollBottom || this._activeBuffer.y < this._activeBuffer.scrollTop) return true;
+            const t3 = e3.params[0] || 1;
+            for (let e4 = this._activeBuffer.scrollTop; e4 <= this._activeBuffer.scrollBottom; ++e4) {
+              const i3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + e4);
+              i3.deleteCells(0, t3, this._activeBuffer.getNullCell(this._eraseAttrData())), i3.isWrapped = false;
+            }
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom), true;
+          }
+          scrollRight(e3) {
+            if (this._activeBuffer.y > this._activeBuffer.scrollBottom || this._activeBuffer.y < this._activeBuffer.scrollTop) return true;
+            const t3 = e3.params[0] || 1;
+            for (let e4 = this._activeBuffer.scrollTop; e4 <= this._activeBuffer.scrollBottom; ++e4) {
+              const i3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + e4);
+              i3.insertCells(0, t3, this._activeBuffer.getNullCell(this._eraseAttrData())), i3.isWrapped = false;
+            }
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom), true;
+          }
+          insertColumns(e3) {
+            if (this._activeBuffer.y > this._activeBuffer.scrollBottom || this._activeBuffer.y < this._activeBuffer.scrollTop) return true;
+            const t3 = e3.params[0] || 1;
+            for (let e4 = this._activeBuffer.scrollTop; e4 <= this._activeBuffer.scrollBottom; ++e4) {
+              const i3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + e4);
+              i3.insertCells(this._activeBuffer.x, t3, this._activeBuffer.getNullCell(this._eraseAttrData())), i3.isWrapped = false;
+            }
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom), true;
+          }
+          deleteColumns(e3) {
+            if (this._activeBuffer.y > this._activeBuffer.scrollBottom || this._activeBuffer.y < this._activeBuffer.scrollTop) return true;
+            const t3 = e3.params[0] || 1;
+            for (let e4 = this._activeBuffer.scrollTop; e4 <= this._activeBuffer.scrollBottom; ++e4) {
+              const i3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + e4);
+              i3.deleteCells(this._activeBuffer.x, t3, this._activeBuffer.getNullCell(this._eraseAttrData())), i3.isWrapped = false;
+            }
+            return this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom), true;
+          }
+          eraseChars(e3) {
+            this._restrictCursor();
+            const t3 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y);
+            return t3 && (t3.replaceCells(this._activeBuffer.x, this._activeBuffer.x + (e3.params[0] || 1), this._activeBuffer.getNullCell(this._eraseAttrData())), this._dirtyRowTracker.markDirty(this._activeBuffer.y)), true;
+          }
+          repeatPrecedingCharacter(e3) {
+            const t3 = this._parser.precedingJoinState;
+            if (!t3) return true;
+            const i3 = e3.params[0] || 1, s3 = p.UnicodeService.extractWidth(t3), r2 = this._activeBuffer.x - s3, n2 = this._activeBuffer.lines.get(this._activeBuffer.ybase + this._activeBuffer.y).getString(r2), o2 = new Uint32Array(n2.length * i3);
+            let a2 = 0;
+            for (let e4 = 0; e4 < n2.length; ) {
+              const t4 = n2.codePointAt(e4) || 0;
+              o2[a2++] = t4, e4 += t4 > 65535 ? 2 : 1;
+            }
+            let h2 = a2;
+            for (let e4 = 1; e4 < i3; ++e4) o2.copyWithin(h2, 0, a2), h2 += a2;
+            return this.print(o2, 0, h2), true;
+          }
+          sendDeviceAttributesPrimary(e3) {
+            return e3.params[0] > 0 || (this._is("xterm") || this._is("rxvt-unicode") || this._is("screen") ? this._coreService.triggerDataEvent(n.C0.ESC + "[?1;2c") : this._is("linux") && this._coreService.triggerDataEvent(n.C0.ESC + "[?6c")), true;
+          }
+          sendDeviceAttributesSecondary(e3) {
+            return e3.params[0] > 0 || (this._is("xterm") ? this._coreService.triggerDataEvent(n.C0.ESC + "[>0;276;0c") : this._is("rxvt-unicode") ? this._coreService.triggerDataEvent(n.C0.ESC + "[>85;95;0c") : this._is("linux") ? this._coreService.triggerDataEvent(e3.params[0] + "c") : this._is("screen") && this._coreService.triggerDataEvent(n.C0.ESC + "[>83;40003;0c")), true;
+          }
+          _is(e3) {
+            return 0 === (this._optionsService.rawOptions.termName + "").indexOf(e3);
+          }
+          setMode(e3) {
+            for (let t3 = 0; t3 < e3.length; t3++) switch (e3.params[t3]) {
+              case 4:
+                this._coreService.modes.insertMode = true;
+                break;
+              case 20:
+                this._optionsService.options.convertEol = true;
+            }
+            return true;
+          }
+          setModePrivate(e3) {
+            for (let t3 = 0; t3 < e3.length; t3++) switch (e3.params[t3]) {
+              case 1:
+                this._coreService.decPrivateModes.applicationCursorKeys = true;
+                break;
+              case 2:
+                this._charsetService.setgCharset(0, o.DEFAULT_CHARSET), this._charsetService.setgCharset(1, o.DEFAULT_CHARSET), this._charsetService.setgCharset(2, o.DEFAULT_CHARSET), this._charsetService.setgCharset(3, o.DEFAULT_CHARSET);
+                break;
+              case 3:
+                this._optionsService.rawOptions.windowOptions.setWinLines && (this._bufferService.resize(132, this._bufferService.rows), this._onRequestReset.fire());
+                break;
+              case 6:
+                this._coreService.decPrivateModes.origin = true, this._setCursor(0, 0);
+                break;
+              case 7:
+                this._coreService.decPrivateModes.wraparound = true;
+                break;
+              case 12:
+                this._optionsService.options.cursorBlink = true;
+                break;
+              case 45:
+                this._coreService.decPrivateModes.reverseWraparound = true;
+                break;
+              case 66:
+                this._logService.debug("Serial port requested application keypad."), this._coreService.decPrivateModes.applicationKeypad = true, this._onRequestSyncScrollBar.fire();
+                break;
+              case 9:
+                this._coreMouseService.activeProtocol = "X10";
+                break;
+              case 1e3:
+                this._coreMouseService.activeProtocol = "VT200";
+                break;
+              case 1002:
+                this._coreMouseService.activeProtocol = "DRAG";
+                break;
+              case 1003:
+                this._coreMouseService.activeProtocol = "ANY";
+                break;
+              case 1004:
+                this._coreService.decPrivateModes.sendFocus = true, this._onRequestSendFocus.fire();
+                break;
+              case 1005:
+                this._logService.debug("DECSET 1005 not supported (see #2507)");
+                break;
+              case 1006:
+                this._coreMouseService.activeEncoding = "SGR";
+                break;
+              case 1015:
+                this._logService.debug("DECSET 1015 not supported (see #2507)");
+                break;
+              case 1016:
+                this._coreMouseService.activeEncoding = "SGR_PIXELS";
+                break;
+              case 25:
+                this._coreService.isCursorHidden = false;
+                break;
+              case 1048:
+                this.saveCursor();
+                break;
+              case 1049:
+                this.saveCursor();
+              case 47:
+              case 1047:
+                this._bufferService.buffers.activateAltBuffer(this._eraseAttrData()), this._coreService.isCursorInitialized = true, this._onRequestRefreshRows.fire(0, this._bufferService.rows - 1), this._onRequestSyncScrollBar.fire();
+                break;
+              case 2004:
+                this._coreService.decPrivateModes.bracketedPasteMode = true;
+            }
+            return true;
+          }
+          resetMode(e3) {
+            for (let t3 = 0; t3 < e3.length; t3++) switch (e3.params[t3]) {
+              case 4:
+                this._coreService.modes.insertMode = false;
+                break;
+              case 20:
+                this._optionsService.options.convertEol = false;
+            }
+            return true;
+          }
+          resetModePrivate(e3) {
+            for (let t3 = 0; t3 < e3.length; t3++) switch (e3.params[t3]) {
+              case 1:
+                this._coreService.decPrivateModes.applicationCursorKeys = false;
+                break;
+              case 3:
+                this._optionsService.rawOptions.windowOptions.setWinLines && (this._bufferService.resize(80, this._bufferService.rows), this._onRequestReset.fire());
+                break;
+              case 6:
+                this._coreService.decPrivateModes.origin = false, this._setCursor(0, 0);
+                break;
+              case 7:
+                this._coreService.decPrivateModes.wraparound = false;
+                break;
+              case 12:
+                this._optionsService.options.cursorBlink = false;
+                break;
+              case 45:
+                this._coreService.decPrivateModes.reverseWraparound = false;
+                break;
+              case 66:
+                this._logService.debug("Switching back to normal keypad."), this._coreService.decPrivateModes.applicationKeypad = false, this._onRequestSyncScrollBar.fire();
+                break;
+              case 9:
+              case 1e3:
+              case 1002:
+              case 1003:
+                this._coreMouseService.activeProtocol = "NONE";
+                break;
+              case 1004:
+                this._coreService.decPrivateModes.sendFocus = false;
+                break;
+              case 1005:
+                this._logService.debug("DECRST 1005 not supported (see #2507)");
+                break;
+              case 1006:
+              case 1016:
+                this._coreMouseService.activeEncoding = "DEFAULT";
+                break;
+              case 1015:
+                this._logService.debug("DECRST 1015 not supported (see #2507)");
+                break;
+              case 25:
+                this._coreService.isCursorHidden = true;
+                break;
+              case 1048:
+                this.restoreCursor();
+                break;
+              case 1049:
+              case 47:
+              case 1047:
+                this._bufferService.buffers.activateNormalBuffer(), 1049 === e3.params[t3] && this.restoreCursor(), this._coreService.isCursorInitialized = true, this._onRequestRefreshRows.fire(0, this._bufferService.rows - 1), this._onRequestSyncScrollBar.fire();
+                break;
+              case 2004:
+                this._coreService.decPrivateModes.bracketedPasteMode = false;
+            }
+            return true;
+          }
+          requestMode(e3, t3) {
+            const i3 = this._coreService.decPrivateModes, { activeProtocol: s3, activeEncoding: r2 } = this._coreMouseService, o2 = this._coreService, { buffers: a2, cols: h2 } = this._bufferService, { active: c2, alt: l2 } = a2, d2 = this._optionsService.rawOptions, _2 = (e4) => e4 ? 1 : 2, u2 = e3.params[0];
+            return f2 = u2, v2 = t3 ? 2 === u2 ? 4 : 4 === u2 ? _2(o2.modes.insertMode) : 12 === u2 ? 3 : 20 === u2 ? _2(d2.convertEol) : 0 : 1 === u2 ? _2(i3.applicationCursorKeys) : 3 === u2 ? d2.windowOptions.setWinLines ? 80 === h2 ? 2 : 132 === h2 ? 1 : 0 : 0 : 6 === u2 ? _2(i3.origin) : 7 === u2 ? _2(i3.wraparound) : 8 === u2 ? 3 : 9 === u2 ? _2("X10" === s3) : 12 === u2 ? _2(d2.cursorBlink) : 25 === u2 ? _2(!o2.isCursorHidden) : 45 === u2 ? _2(i3.reverseWraparound) : 66 === u2 ? _2(i3.applicationKeypad) : 67 === u2 ? 4 : 1e3 === u2 ? _2("VT200" === s3) : 1002 === u2 ? _2("DRAG" === s3) : 1003 === u2 ? _2("ANY" === s3) : 1004 === u2 ? _2(i3.sendFocus) : 1005 === u2 ? 4 : 1006 === u2 ? _2("SGR" === r2) : 1015 === u2 ? 4 : 1016 === u2 ? _2("SGR_PIXELS" === r2) : 1048 === u2 ? 1 : 47 === u2 || 1047 === u2 || 1049 === u2 ? _2(c2 === l2) : 2004 === u2 ? _2(i3.bracketedPasteMode) : 0, o2.triggerDataEvent(`${n.C0.ESC}[${t3 ? "" : "?"}${f2};${v2}$y`), true;
+            var f2, v2;
+          }
+          _updateAttrColor(e3, t3, i3, s3, r2) {
+            return 2 === t3 ? (e3 |= 50331648, e3 &= -16777216, e3 |= f.AttributeData.fromColorRGB([i3, s3, r2])) : 5 === t3 && (e3 &= -50331904, e3 |= 33554432 | 255 & i3), e3;
+          }
+          _extractColor(e3, t3, i3) {
+            const s3 = [0, 0, -1, 0, 0, 0];
+            let r2 = 0, n2 = 0;
+            do {
+              if (s3[n2 + r2] = e3.params[t3 + n2], e3.hasSubParams(t3 + n2)) {
+                const i4 = e3.getSubParams(t3 + n2);
+                let o2 = 0;
+                do {
+                  5 === s3[1] && (r2 = 1), s3[n2 + o2 + 1 + r2] = i4[o2];
+                } while (++o2 < i4.length && o2 + n2 + 1 + r2 < s3.length);
+                break;
+              }
+              if (5 === s3[1] && n2 + r2 >= 2 || 2 === s3[1] && n2 + r2 >= 5) break;
+              s3[1] && (r2 = 1);
+            } while (++n2 + t3 < e3.length && n2 + r2 < s3.length);
+            for (let e4 = 2; e4 < s3.length; ++e4) -1 === s3[e4] && (s3[e4] = 0);
+            switch (s3[0]) {
+              case 38:
+                i3.fg = this._updateAttrColor(i3.fg, s3[1], s3[3], s3[4], s3[5]);
+                break;
+              case 48:
+                i3.bg = this._updateAttrColor(i3.bg, s3[1], s3[3], s3[4], s3[5]);
+                break;
+              case 58:
+                i3.extended = i3.extended.clone(), i3.extended.underlineColor = this._updateAttrColor(i3.extended.underlineColor, s3[1], s3[3], s3[4], s3[5]);
+            }
+            return n2;
+          }
+          _processUnderline(e3, t3) {
+            t3.extended = t3.extended.clone(), (!~e3 || e3 > 5) && (e3 = 1), t3.extended.underlineStyle = e3, t3.fg |= 268435456, 0 === e3 && (t3.fg &= -268435457), t3.updateExtended();
+          }
+          _processSGR0(e3) {
+            e3.fg = l.DEFAULT_ATTR_DATA.fg, e3.bg = l.DEFAULT_ATTR_DATA.bg, e3.extended = e3.extended.clone(), e3.extended.underlineStyle = 0, e3.extended.underlineColor &= -67108864, e3.updateExtended();
+          }
+          charAttributes(e3) {
+            if (1 === e3.length && 0 === e3.params[0]) return this._processSGR0(this._curAttrData), true;
+            const t3 = e3.length;
+            let i3;
+            const s3 = this._curAttrData;
+            for (let r2 = 0; r2 < t3; r2++) i3 = e3.params[r2], i3 >= 30 && i3 <= 37 ? (s3.fg &= -50331904, s3.fg |= 16777216 | i3 - 30) : i3 >= 40 && i3 <= 47 ? (s3.bg &= -50331904, s3.bg |= 16777216 | i3 - 40) : i3 >= 90 && i3 <= 97 ? (s3.fg &= -50331904, s3.fg |= 16777224 | i3 - 90) : i3 >= 100 && i3 <= 107 ? (s3.bg &= -50331904, s3.bg |= 16777224 | i3 - 100) : 0 === i3 ? this._processSGR0(s3) : 1 === i3 ? s3.fg |= 134217728 : 3 === i3 ? s3.bg |= 67108864 : 4 === i3 ? (s3.fg |= 268435456, this._processUnderline(e3.hasSubParams(r2) ? e3.getSubParams(r2)[0] : 1, s3)) : 5 === i3 ? s3.fg |= 536870912 : 7 === i3 ? s3.fg |= 67108864 : 8 === i3 ? s3.fg |= 1073741824 : 9 === i3 ? s3.fg |= 2147483648 : 2 === i3 ? s3.bg |= 134217728 : 21 === i3 ? this._processUnderline(2, s3) : 22 === i3 ? (s3.fg &= -134217729, s3.bg &= -134217729) : 23 === i3 ? s3.bg &= -67108865 : 24 === i3 ? (s3.fg &= -268435457, this._processUnderline(0, s3)) : 25 === i3 ? s3.fg &= -536870913 : 27 === i3 ? s3.fg &= -67108865 : 28 === i3 ? s3.fg &= -1073741825 : 29 === i3 ? s3.fg &= 2147483647 : 39 === i3 ? (s3.fg &= -67108864, s3.fg |= 16777215 & l.DEFAULT_ATTR_DATA.fg) : 49 === i3 ? (s3.bg &= -67108864, s3.bg |= 16777215 & l.DEFAULT_ATTR_DATA.bg) : 38 === i3 || 48 === i3 || 58 === i3 ? r2 += this._extractColor(e3, r2, s3) : 53 === i3 ? s3.bg |= 1073741824 : 55 === i3 ? s3.bg &= -1073741825 : 59 === i3 ? (s3.extended = s3.extended.clone(), s3.extended.underlineColor = -1, s3.updateExtended()) : 100 === i3 ? (s3.fg &= -67108864, s3.fg |= 16777215 & l.DEFAULT_ATTR_DATA.fg, s3.bg &= -67108864, s3.bg |= 16777215 & l.DEFAULT_ATTR_DATA.bg) : this._logService.debug("Unknown SGR attribute: %d.", i3);
+            return true;
+          }
+          deviceStatus(e3) {
+            switch (e3.params[0]) {
+              case 5:
+                this._coreService.triggerDataEvent(`${n.C0.ESC}[0n`);
+                break;
+              case 6:
+                const e4 = this._activeBuffer.y + 1, t3 = this._activeBuffer.x + 1;
+                this._coreService.triggerDataEvent(`${n.C0.ESC}[${e4};${t3}R`);
+            }
+            return true;
+          }
+          deviceStatusPrivate(e3) {
+            if (6 === e3.params[0]) {
+              const e4 = this._activeBuffer.y + 1, t3 = this._activeBuffer.x + 1;
+              this._coreService.triggerDataEvent(`${n.C0.ESC}[?${e4};${t3}R`);
+            }
+            return true;
+          }
+          softReset(e3) {
+            return this._coreService.isCursorHidden = false, this._onRequestSyncScrollBar.fire(), this._activeBuffer.scrollTop = 0, this._activeBuffer.scrollBottom = this._bufferService.rows - 1, this._curAttrData = l.DEFAULT_ATTR_DATA.clone(), this._coreService.reset(), this._charsetService.reset(), this._activeBuffer.savedX = 0, this._activeBuffer.savedY = this._activeBuffer.ybase, this._activeBuffer.savedCurAttrData.fg = this._curAttrData.fg, this._activeBuffer.savedCurAttrData.bg = this._curAttrData.bg, this._activeBuffer.savedCharset = this._charsetService.charset, this._coreService.decPrivateModes.origin = false, true;
+          }
+          setCursorStyle(e3) {
+            const t3 = e3.params[0] || 1;
+            switch (t3) {
+              case 1:
+              case 2:
+                this._optionsService.options.cursorStyle = "block";
+                break;
+              case 3:
+              case 4:
+                this._optionsService.options.cursorStyle = "underline";
+                break;
+              case 5:
+              case 6:
+                this._optionsService.options.cursorStyle = "bar";
+            }
+            const i3 = t3 % 2 == 1;
+            return this._optionsService.options.cursorBlink = i3, true;
+          }
+          setScrollRegion(e3) {
+            const t3 = e3.params[0] || 1;
+            let i3;
+            return (e3.length < 2 || (i3 = e3.params[1]) > this._bufferService.rows || 0 === i3) && (i3 = this._bufferService.rows), i3 > t3 && (this._activeBuffer.scrollTop = t3 - 1, this._activeBuffer.scrollBottom = i3 - 1, this._setCursor(0, 0)), true;
+          }
+          windowOptions(e3) {
+            if (!w(e3.params[0], this._optionsService.rawOptions.windowOptions)) return true;
+            const t3 = e3.length > 1 ? e3.params[1] : 0;
+            switch (e3.params[0]) {
+              case 14:
+                2 !== t3 && this._onRequestWindowsOptionsReport.fire(y.GET_WIN_SIZE_PIXELS);
+                break;
+              case 16:
+                this._onRequestWindowsOptionsReport.fire(y.GET_CELL_SIZE_PIXELS);
+                break;
+              case 18:
+                this._bufferService && this._coreService.triggerDataEvent(`${n.C0.ESC}[8;${this._bufferService.rows};${this._bufferService.cols}t`);
+                break;
+              case 22:
+                0 !== t3 && 2 !== t3 || (this._windowTitleStack.push(this._windowTitle), this._windowTitleStack.length > 10 && this._windowTitleStack.shift()), 0 !== t3 && 1 !== t3 || (this._iconNameStack.push(this._iconName), this._iconNameStack.length > 10 && this._iconNameStack.shift());
+                break;
+              case 23:
+                0 !== t3 && 2 !== t3 || this._windowTitleStack.length && this.setTitle(this._windowTitleStack.pop()), 0 !== t3 && 1 !== t3 || this._iconNameStack.length && this.setIconName(this._iconNameStack.pop());
+            }
+            return true;
+          }
+          saveCursor(e3) {
+            return this._activeBuffer.savedX = this._activeBuffer.x, this._activeBuffer.savedY = this._activeBuffer.ybase + this._activeBuffer.y, this._activeBuffer.savedCurAttrData.fg = this._curAttrData.fg, this._activeBuffer.savedCurAttrData.bg = this._curAttrData.bg, this._activeBuffer.savedCharset = this._charsetService.charset, true;
+          }
+          restoreCursor(e3) {
+            return this._activeBuffer.x = this._activeBuffer.savedX || 0, this._activeBuffer.y = Math.max(this._activeBuffer.savedY - this._activeBuffer.ybase, 0), this._curAttrData.fg = this._activeBuffer.savedCurAttrData.fg, this._curAttrData.bg = this._activeBuffer.savedCurAttrData.bg, this._charsetService.charset = this._savedCharset, this._activeBuffer.savedCharset && (this._charsetService.charset = this._activeBuffer.savedCharset), this._restrictCursor(), true;
+          }
+          setTitle(e3) {
+            return this._windowTitle = e3, this._onTitleChange.fire(e3), true;
+          }
+          setIconName(e3) {
+            return this._iconName = e3, true;
+          }
+          setOrReportIndexedColor(e3) {
+            const t3 = [], i3 = e3.split(";");
+            for (; i3.length > 1; ) {
+              const e4 = i3.shift(), s3 = i3.shift();
+              if (/^\d+$/.exec(e4)) {
+                const i4 = parseInt(e4);
+                if (D(i4)) if ("?" === s3) t3.push({ type: 0, index: i4 });
+                else {
+                  const e5 = (0, S.parseColor)(s3);
+                  e5 && t3.push({ type: 1, index: i4, color: e5 });
+                }
+              }
+            }
+            return t3.length && this._onColor.fire(t3), true;
+          }
+          setHyperlink(e3) {
+            const t3 = e3.split(";");
+            return !(t3.length < 2) && (t3[1] ? this._createHyperlink(t3[0], t3[1]) : !t3[0] && this._finishHyperlink());
+          }
+          _createHyperlink(e3, t3) {
+            this._getCurrentLinkId() && this._finishHyperlink();
+            const i3 = e3.split(":");
+            let s3;
+            const r2 = i3.findIndex((e4) => e4.startsWith("id="));
+            return -1 !== r2 && (s3 = i3[r2].slice(3) || void 0), this._curAttrData.extended = this._curAttrData.extended.clone(), this._curAttrData.extended.urlId = this._oscLinkService.registerLink({ id: s3, uri: t3 }), this._curAttrData.updateExtended(), true;
+          }
+          _finishHyperlink() {
+            return this._curAttrData.extended = this._curAttrData.extended.clone(), this._curAttrData.extended.urlId = 0, this._curAttrData.updateExtended(), true;
+          }
+          _setOrReportSpecialColor(e3, t3) {
+            const i3 = e3.split(";");
+            for (let e4 = 0; e4 < i3.length && !(t3 >= this._specialColors.length); ++e4, ++t3) if ("?" === i3[e4]) this._onColor.fire([{ type: 0, index: this._specialColors[t3] }]);
+            else {
+              const s3 = (0, S.parseColor)(i3[e4]);
+              s3 && this._onColor.fire([{ type: 1, index: this._specialColors[t3], color: s3 }]);
+            }
+            return true;
+          }
+          setOrReportFgColor(e3) {
+            return this._setOrReportSpecialColor(e3, 0);
+          }
+          setOrReportBgColor(e3) {
+            return this._setOrReportSpecialColor(e3, 1);
+          }
+          setOrReportCursorColor(e3) {
+            return this._setOrReportSpecialColor(e3, 2);
+          }
+          restoreIndexedColor(e3) {
+            if (!e3) return this._onColor.fire([{ type: 2 }]), true;
+            const t3 = [], i3 = e3.split(";");
+            for (let e4 = 0; e4 < i3.length; ++e4) if (/^\d+$/.exec(i3[e4])) {
+              const s3 = parseInt(i3[e4]);
+              D(s3) && t3.push({ type: 2, index: s3 });
+            }
+            return t3.length && this._onColor.fire(t3), true;
+          }
+          restoreFgColor(e3) {
+            return this._onColor.fire([{ type: 2, index: 256 }]), true;
+          }
+          restoreBgColor(e3) {
+            return this._onColor.fire([{ type: 2, index: 257 }]), true;
+          }
+          restoreCursorColor(e3) {
+            return this._onColor.fire([{ type: 2, index: 258 }]), true;
+          }
+          nextLine() {
+            return this._activeBuffer.x = 0, this.index(), true;
+          }
+          keypadApplicationMode() {
+            return this._logService.debug("Serial port requested application keypad."), this._coreService.decPrivateModes.applicationKeypad = true, this._onRequestSyncScrollBar.fire(), true;
+          }
+          keypadNumericMode() {
+            return this._logService.debug("Switching back to normal keypad."), this._coreService.decPrivateModes.applicationKeypad = false, this._onRequestSyncScrollBar.fire(), true;
+          }
+          selectDefaultCharset() {
+            return this._charsetService.setgLevel(0), this._charsetService.setgCharset(0, o.DEFAULT_CHARSET), true;
+          }
+          selectCharset(e3) {
+            return 2 !== e3.length ? (this.selectDefaultCharset(), true) : ("/" === e3[0] || this._charsetService.setgCharset(C[e3[0]], o.CHARSETS[e3[1]] || o.DEFAULT_CHARSET), true);
+          }
+          index() {
+            return this._restrictCursor(), this._activeBuffer.y++, this._activeBuffer.y === this._activeBuffer.scrollBottom + 1 ? (this._activeBuffer.y--, this._bufferService.scroll(this._eraseAttrData())) : this._activeBuffer.y >= this._bufferService.rows && (this._activeBuffer.y = this._bufferService.rows - 1), this._restrictCursor(), true;
+          }
+          tabSet() {
+            return this._activeBuffer.tabs[this._activeBuffer.x] = true, true;
+          }
+          reverseIndex() {
+            if (this._restrictCursor(), this._activeBuffer.y === this._activeBuffer.scrollTop) {
+              const e3 = this._activeBuffer.scrollBottom - this._activeBuffer.scrollTop;
+              this._activeBuffer.lines.shiftElements(this._activeBuffer.ybase + this._activeBuffer.y, e3, 1), this._activeBuffer.lines.set(this._activeBuffer.ybase + this._activeBuffer.y, this._activeBuffer.getBlankLine(this._eraseAttrData())), this._dirtyRowTracker.markRangeDirty(this._activeBuffer.scrollTop, this._activeBuffer.scrollBottom);
+            } else this._activeBuffer.y--, this._restrictCursor();
+            return true;
+          }
+          fullReset() {
+            return this._parser.reset(), this._onRequestReset.fire(), true;
+          }
+          reset() {
+            this._curAttrData = l.DEFAULT_ATTR_DATA.clone(), this._eraseAttrDataInternal = l.DEFAULT_ATTR_DATA.clone();
+          }
+          _eraseAttrData() {
+            return this._eraseAttrDataInternal.bg &= -67108864, this._eraseAttrDataInternal.bg |= 67108863 & this._curAttrData.bg, this._eraseAttrDataInternal;
+          }
+          setgLevel(e3) {
+            return this._charsetService.setgLevel(e3), true;
+          }
+          screenAlignmentPattern() {
+            const e3 = new u.CellData();
+            e3.content = 1 << 22 | "E".charCodeAt(0), e3.fg = this._curAttrData.fg, e3.bg = this._curAttrData.bg, this._setCursor(0, 0);
+            for (let t3 = 0; t3 < this._bufferService.rows; ++t3) {
+              const i3 = this._activeBuffer.ybase + this._activeBuffer.y + t3, s3 = this._activeBuffer.lines.get(i3);
+              s3 && (s3.fill(e3), s3.isWrapped = false);
+            }
+            return this._dirtyRowTracker.markAllDirty(), this._setCursor(0, 0), true;
+          }
+          requestStatusString(e3, t3) {
+            const i3 = this._bufferService.buffer, s3 = this._optionsService.rawOptions;
+            return ((e4) => (this._coreService.triggerDataEvent(`${n.C0.ESC}${e4}${n.C0.ESC}\\`), true))('"q' === e3 ? `P1$r${this._curAttrData.isProtected() ? 1 : 0}"q` : '"p' === e3 ? 'P1$r61;1"p' : "r" === e3 ? `P1$r${i3.scrollTop + 1};${i3.scrollBottom + 1}r` : "m" === e3 ? "P1$r0m" : " q" === e3 ? `P1$r${{ block: 2, underline: 4, bar: 6 }[s3.cursorStyle] - (s3.cursorBlink ? 1 : 0)} q` : "P0$r");
+          }
+          markRangeDirty(e3, t3) {
+            this._dirtyRowTracker.markRangeDirty(e3, t3);
+          }
+        }
+        t2.InputHandler = k;
+        let L = class {
+          constructor(e3) {
+            this._bufferService = e3, this.clearRange();
+          }
+          clearRange() {
+            this.start = this._bufferService.buffer.y, this.end = this._bufferService.buffer.y;
+          }
+          markDirty(e3) {
+            e3 < this.start ? this.start = e3 : e3 > this.end && (this.end = e3);
+          }
+          markRangeDirty(e3, t3) {
+            e3 > t3 && (E = e3, e3 = t3, t3 = E), e3 < this.start && (this.start = e3), t3 > this.end && (this.end = t3);
+          }
+          markAllDirty() {
+            this.markRangeDirty(0, this._bufferService.rows - 1);
+          }
+        };
+        function D(e3) {
+          return 0 <= e3 && e3 < 256;
+        }
+        L = s2([r(0, v.IBufferService)], L);
+      }, 844: (e2, t2) => {
+        function i2(e3) {
+          for (const t3 of e3) t3.dispose();
+          e3.length = 0;
+        }
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.getDisposeArrayDisposable = t2.disposeArray = t2.toDisposable = t2.MutableDisposable = t2.Disposable = void 0, t2.Disposable = class {
+          constructor() {
+            this._disposables = [], this._isDisposed = false;
+          }
+          dispose() {
+            this._isDisposed = true;
+            for (const e3 of this._disposables) e3.dispose();
+            this._disposables.length = 0;
+          }
+          register(e3) {
+            return this._disposables.push(e3), e3;
+          }
+          unregister(e3) {
+            const t3 = this._disposables.indexOf(e3);
+            -1 !== t3 && this._disposables.splice(t3, 1);
+          }
+        }, t2.MutableDisposable = class {
+          constructor() {
+            this._isDisposed = false;
+          }
+          get value() {
+            return this._isDisposed ? void 0 : this._value;
+          }
+          set value(e3) {
+            var _a;
+            this._isDisposed || e3 === this._value || ((_a = this._value) == null ? void 0 : _a.dispose(), this._value = e3);
+          }
+          clear() {
+            this.value = void 0;
+          }
+          dispose() {
+            var _a;
+            this._isDisposed = true, (_a = this._value) == null ? void 0 : _a.dispose(), this._value = void 0;
+          }
+        }, t2.toDisposable = function(e3) {
+          return { dispose: e3 };
+        }, t2.disposeArray = i2, t2.getDisposeArrayDisposable = function(e3) {
+          return { dispose: () => i2(e3) };
+        };
+      }, 1505: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.FourKeyMap = t2.TwoKeyMap = void 0;
+        class i2 {
+          constructor() {
+            this._data = {};
+          }
+          set(e3, t3, i3) {
+            this._data[e3] || (this._data[e3] = {}), this._data[e3][t3] = i3;
+          }
+          get(e3, t3) {
+            return this._data[e3] ? this._data[e3][t3] : void 0;
+          }
+          clear() {
+            this._data = {};
+          }
+        }
+        t2.TwoKeyMap = i2, t2.FourKeyMap = class {
+          constructor() {
+            this._data = new i2();
+          }
+          set(e3, t3, s2, r, n) {
+            this._data.get(e3, t3) || this._data.set(e3, t3, new i2()), this._data.get(e3, t3).set(s2, r, n);
+          }
+          get(e3, t3, i3, s2) {
+            var _a;
+            return (_a = this._data.get(e3, t3)) == null ? void 0 : _a.get(i3, s2);
+          }
+          clear() {
+            this._data.clear();
+          }
+        };
+      }, 6114: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.isChromeOS = t2.isLinux = t2.isWindows = t2.isIphone = t2.isIpad = t2.isMac = t2.getSafariVersion = t2.isSafari = t2.isLegacyEdge = t2.isFirefox = t2.isNode = void 0, t2.isNode = "undefined" != typeof process && "title" in process;
+        const i2 = t2.isNode ? "node" : navigator.userAgent, s2 = t2.isNode ? "node" : navigator.platform;
+        t2.isFirefox = i2.includes("Firefox"), t2.isLegacyEdge = i2.includes("Edge"), t2.isSafari = /^((?!chrome|android).)*safari/i.test(i2), t2.getSafariVersion = function() {
+          if (!t2.isSafari) return 0;
+          const e3 = i2.match(/Version\/(\d+)/);
+          return null === e3 || e3.length < 2 ? 0 : parseInt(e3[1]);
+        }, t2.isMac = ["Macintosh", "MacIntel", "MacPPC", "Mac68K"].includes(s2), t2.isIpad = "iPad" === s2, t2.isIphone = "iPhone" === s2, t2.isWindows = ["Windows", "Win16", "Win32", "WinCE"].includes(s2), t2.isLinux = s2.indexOf("Linux") >= 0, t2.isChromeOS = /\bCrOS\b/.test(i2);
+      }, 6106: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.SortedList = void 0;
+        let i2 = 0;
+        t2.SortedList = class {
+          constructor(e3) {
+            this._getKey = e3, this._array = [];
+          }
+          clear() {
+            this._array.length = 0;
+          }
+          insert(e3) {
+            0 !== this._array.length ? (i2 = this._search(this._getKey(e3)), this._array.splice(i2, 0, e3)) : this._array.push(e3);
+          }
+          delete(e3) {
+            if (0 === this._array.length) return false;
+            const t3 = this._getKey(e3);
+            if (void 0 === t3) return false;
+            if (i2 = this._search(t3), -1 === i2) return false;
+            if (this._getKey(this._array[i2]) !== t3) return false;
+            do {
+              if (this._array[i2] === e3) return this._array.splice(i2, 1), true;
+            } while (++i2 < this._array.length && this._getKey(this._array[i2]) === t3);
+            return false;
+          }
+          *getKeyIterator(e3) {
+            if (0 !== this._array.length && (i2 = this._search(e3), !(i2 < 0 || i2 >= this._array.length) && this._getKey(this._array[i2]) === e3)) do {
+              yield this._array[i2];
+            } while (++i2 < this._array.length && this._getKey(this._array[i2]) === e3);
+          }
+          forEachByKey(e3, t3) {
+            if (0 !== this._array.length && (i2 = this._search(e3), !(i2 < 0 || i2 >= this._array.length) && this._getKey(this._array[i2]) === e3)) do {
+              t3(this._array[i2]);
+            } while (++i2 < this._array.length && this._getKey(this._array[i2]) === e3);
+          }
+          values() {
+            return [...this._array].values();
+          }
+          _search(e3) {
+            let t3 = 0, i3 = this._array.length - 1;
+            for (; i3 >= t3; ) {
+              let s2 = t3 + i3 >> 1;
+              const r = this._getKey(this._array[s2]);
+              if (r > e3) i3 = s2 - 1;
+              else {
+                if (!(r < e3)) {
+                  for (; s2 > 0 && this._getKey(this._array[s2 - 1]) === e3; ) s2--;
+                  return s2;
+                }
+                t3 = s2 + 1;
+              }
+            }
+            return t3;
+          }
+        };
+      }, 7226: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.DebouncedIdleTask = t2.IdleTaskQueue = t2.PriorityTaskQueue = void 0;
+        const s2 = i2(6114);
+        class r {
+          constructor() {
+            this._tasks = [], this._i = 0;
+          }
+          enqueue(e3) {
+            this._tasks.push(e3), this._start();
+          }
+          flush() {
+            for (; this._i < this._tasks.length; ) this._tasks[this._i]() || this._i++;
+            this.clear();
+          }
+          clear() {
+            this._idleCallback && (this._cancelCallback(this._idleCallback), this._idleCallback = void 0), this._i = 0, this._tasks.length = 0;
+          }
+          _start() {
+            this._idleCallback || (this._idleCallback = this._requestCallback(this._process.bind(this)));
+          }
+          _process(e3) {
+            this._idleCallback = void 0;
+            let t3 = 0, i3 = 0, s3 = e3.timeRemaining(), r2 = 0;
+            for (; this._i < this._tasks.length; ) {
+              if (t3 = Date.now(), this._tasks[this._i]() || this._i++, t3 = Math.max(1, Date.now() - t3), i3 = Math.max(t3, i3), r2 = e3.timeRemaining(), 1.5 * i3 > r2) return s3 - t3 < -20 && console.warn(`task queue exceeded allotted deadline by ${Math.abs(Math.round(s3 - t3))}ms`), void this._start();
+              s3 = r2;
+            }
+            this.clear();
+          }
+        }
+        class n extends r {
+          _requestCallback(e3) {
+            return setTimeout(() => e3(this._createDeadline(16)));
+          }
+          _cancelCallback(e3) {
+            clearTimeout(e3);
+          }
+          _createDeadline(e3) {
+            const t3 = Date.now() + e3;
+            return { timeRemaining: () => Math.max(0, t3 - Date.now()) };
+          }
+        }
+        t2.PriorityTaskQueue = n, t2.IdleTaskQueue = !s2.isNode && "requestIdleCallback" in window ? class extends r {
+          _requestCallback(e3) {
+            return requestIdleCallback(e3);
+          }
+          _cancelCallback(e3) {
+            cancelIdleCallback(e3);
+          }
+        } : n, t2.DebouncedIdleTask = class {
+          constructor() {
+            this._queue = new t2.IdleTaskQueue();
+          }
+          set(e3) {
+            this._queue.clear(), this._queue.enqueue(e3);
+          }
+          flush() {
+            this._queue.flush();
+          }
+        };
+      }, 9282: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.updateWindowsModeWrappedState = void 0;
+        const s2 = i2(643);
+        t2.updateWindowsModeWrappedState = function(e3) {
+          const t3 = e3.buffer.lines.get(e3.buffer.ybase + e3.buffer.y - 1), i3 = t3 == null ? void 0 : t3.get(e3.cols - 1), r = e3.buffer.lines.get(e3.buffer.ybase + e3.buffer.y);
+          r && i3 && (r.isWrapped = i3[s2.CHAR_DATA_CODE_INDEX] !== s2.NULL_CELL_CODE && i3[s2.CHAR_DATA_CODE_INDEX] !== s2.WHITESPACE_CELL_CODE);
+        };
+      }, 3734: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.ExtendedAttrs = t2.AttributeData = void 0;
+        class i2 {
+          constructor() {
+            this.fg = 0, this.bg = 0, this.extended = new s2();
+          }
+          static toColorRGB(e3) {
+            return [e3 >>> 16 & 255, e3 >>> 8 & 255, 255 & e3];
+          }
+          static fromColorRGB(e3) {
+            return (255 & e3[0]) << 16 | (255 & e3[1]) << 8 | 255 & e3[2];
+          }
+          clone() {
+            const e3 = new i2();
+            return e3.fg = this.fg, e3.bg = this.bg, e3.extended = this.extended.clone(), e3;
+          }
+          isInverse() {
+            return 67108864 & this.fg;
+          }
+          isBold() {
+            return 134217728 & this.fg;
+          }
+          isUnderline() {
+            return this.hasExtendedAttrs() && 0 !== this.extended.underlineStyle ? 1 : 268435456 & this.fg;
+          }
+          isBlink() {
+            return 536870912 & this.fg;
+          }
+          isInvisible() {
+            return 1073741824 & this.fg;
+          }
+          isItalic() {
+            return 67108864 & this.bg;
+          }
+          isDim() {
+            return 134217728 & this.bg;
+          }
+          isStrikethrough() {
+            return 2147483648 & this.fg;
+          }
+          isProtected() {
+            return 536870912 & this.bg;
+          }
+          isOverline() {
+            return 1073741824 & this.bg;
+          }
+          getFgColorMode() {
+            return 50331648 & this.fg;
+          }
+          getBgColorMode() {
+            return 50331648 & this.bg;
+          }
+          isFgRGB() {
+            return 50331648 == (50331648 & this.fg);
+          }
+          isBgRGB() {
+            return 50331648 == (50331648 & this.bg);
+          }
+          isFgPalette() {
+            return 16777216 == (50331648 & this.fg) || 33554432 == (50331648 & this.fg);
+          }
+          isBgPalette() {
+            return 16777216 == (50331648 & this.bg) || 33554432 == (50331648 & this.bg);
+          }
+          isFgDefault() {
+            return 0 == (50331648 & this.fg);
+          }
+          isBgDefault() {
+            return 0 == (50331648 & this.bg);
+          }
+          isAttributeDefault() {
+            return 0 === this.fg && 0 === this.bg;
+          }
+          getFgColor() {
+            switch (50331648 & this.fg) {
+              case 16777216:
+              case 33554432:
+                return 255 & this.fg;
+              case 50331648:
+                return 16777215 & this.fg;
+              default:
+                return -1;
+            }
+          }
+          getBgColor() {
+            switch (50331648 & this.bg) {
+              case 16777216:
+              case 33554432:
+                return 255 & this.bg;
+              case 50331648:
+                return 16777215 & this.bg;
+              default:
+                return -1;
+            }
+          }
+          hasExtendedAttrs() {
+            return 268435456 & this.bg;
+          }
+          updateExtended() {
+            this.extended.isEmpty() ? this.bg &= -268435457 : this.bg |= 268435456;
+          }
+          getUnderlineColor() {
+            if (268435456 & this.bg && ~this.extended.underlineColor) switch (50331648 & this.extended.underlineColor) {
+              case 16777216:
+              case 33554432:
+                return 255 & this.extended.underlineColor;
+              case 50331648:
+                return 16777215 & this.extended.underlineColor;
+              default:
+                return this.getFgColor();
+            }
+            return this.getFgColor();
+          }
+          getUnderlineColorMode() {
+            return 268435456 & this.bg && ~this.extended.underlineColor ? 50331648 & this.extended.underlineColor : this.getFgColorMode();
+          }
+          isUnderlineColorRGB() {
+            return 268435456 & this.bg && ~this.extended.underlineColor ? 50331648 == (50331648 & this.extended.underlineColor) : this.isFgRGB();
+          }
+          isUnderlineColorPalette() {
+            return 268435456 & this.bg && ~this.extended.underlineColor ? 16777216 == (50331648 & this.extended.underlineColor) || 33554432 == (50331648 & this.extended.underlineColor) : this.isFgPalette();
+          }
+          isUnderlineColorDefault() {
+            return 268435456 & this.bg && ~this.extended.underlineColor ? 0 == (50331648 & this.extended.underlineColor) : this.isFgDefault();
+          }
+          getUnderlineStyle() {
+            return 268435456 & this.fg ? 268435456 & this.bg ? this.extended.underlineStyle : 1 : 0;
+          }
+          getUnderlineVariantOffset() {
+            return this.extended.underlineVariantOffset;
+          }
+        }
+        t2.AttributeData = i2;
+        class s2 {
+          get ext() {
+            return this._urlId ? -469762049 & this._ext | this.underlineStyle << 26 : this._ext;
+          }
+          set ext(e3) {
+            this._ext = e3;
+          }
+          get underlineStyle() {
+            return this._urlId ? 5 : (469762048 & this._ext) >> 26;
+          }
+          set underlineStyle(e3) {
+            this._ext &= -469762049, this._ext |= e3 << 26 & 469762048;
+          }
+          get underlineColor() {
+            return 67108863 & this._ext;
+          }
+          set underlineColor(e3) {
+            this._ext &= -67108864, this._ext |= 67108863 & e3;
+          }
+          get urlId() {
+            return this._urlId;
+          }
+          set urlId(e3) {
+            this._urlId = e3;
+          }
+          get underlineVariantOffset() {
+            const e3 = (3758096384 & this._ext) >> 29;
+            return e3 < 0 ? 4294967288 ^ e3 : e3;
+          }
+          set underlineVariantOffset(e3) {
+            this._ext &= 536870911, this._ext |= e3 << 29 & 3758096384;
+          }
+          constructor(e3 = 0, t3 = 0) {
+            this._ext = 0, this._urlId = 0, this._ext = e3, this._urlId = t3;
+          }
+          clone() {
+            return new s2(this._ext, this._urlId);
+          }
+          isEmpty() {
+            return 0 === this.underlineStyle && 0 === this._urlId;
+          }
+        }
+        t2.ExtendedAttrs = s2;
+      }, 9092: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Buffer = t2.MAX_BUFFER_SIZE = void 0;
+        const s2 = i2(6349), r = i2(7226), n = i2(3734), o = i2(8437), a = i2(4634), h = i2(511), c = i2(643), l = i2(4863), d = i2(7116);
+        t2.MAX_BUFFER_SIZE = 4294967295, t2.Buffer = class {
+          constructor(e3, t3, i3) {
+            this._hasScrollback = e3, this._optionsService = t3, this._bufferService = i3, this.ydisp = 0, this.ybase = 0, this.y = 0, this.x = 0, this.tabs = {}, this.savedY = 0, this.savedX = 0, this.savedCurAttrData = o.DEFAULT_ATTR_DATA.clone(), this.savedCharset = d.DEFAULT_CHARSET, this.markers = [], this._nullCell = h.CellData.fromCharData([0, c.NULL_CELL_CHAR, c.NULL_CELL_WIDTH, c.NULL_CELL_CODE]), this._whitespaceCell = h.CellData.fromCharData([0, c.WHITESPACE_CELL_CHAR, c.WHITESPACE_CELL_WIDTH, c.WHITESPACE_CELL_CODE]), this._isClearing = false, this._memoryCleanupQueue = new r.IdleTaskQueue(), this._memoryCleanupPosition = 0, this._cols = this._bufferService.cols, this._rows = this._bufferService.rows, this.lines = new s2.CircularList(this._getCorrectBufferLength(this._rows)), this.scrollTop = 0, this.scrollBottom = this._rows - 1, this.setupTabStops();
+          }
+          getNullCell(e3) {
+            return e3 ? (this._nullCell.fg = e3.fg, this._nullCell.bg = e3.bg, this._nullCell.extended = e3.extended) : (this._nullCell.fg = 0, this._nullCell.bg = 0, this._nullCell.extended = new n.ExtendedAttrs()), this._nullCell;
+          }
+          getWhitespaceCell(e3) {
+            return e3 ? (this._whitespaceCell.fg = e3.fg, this._whitespaceCell.bg = e3.bg, this._whitespaceCell.extended = e3.extended) : (this._whitespaceCell.fg = 0, this._whitespaceCell.bg = 0, this._whitespaceCell.extended = new n.ExtendedAttrs()), this._whitespaceCell;
+          }
+          getBlankLine(e3, t3) {
+            return new o.BufferLine(this._bufferService.cols, this.getNullCell(e3), t3);
+          }
+          get hasScrollback() {
+            return this._hasScrollback && this.lines.maxLength > this._rows;
+          }
+          get isCursorInViewport() {
+            const e3 = this.ybase + this.y - this.ydisp;
+            return e3 >= 0 && e3 < this._rows;
+          }
+          _getCorrectBufferLength(e3) {
+            if (!this._hasScrollback) return e3;
+            const i3 = e3 + this._optionsService.rawOptions.scrollback;
+            return i3 > t2.MAX_BUFFER_SIZE ? t2.MAX_BUFFER_SIZE : i3;
+          }
+          fillViewportRows(e3) {
+            if (0 === this.lines.length) {
+              void 0 === e3 && (e3 = o.DEFAULT_ATTR_DATA);
+              let t3 = this._rows;
+              for (; t3--; ) this.lines.push(this.getBlankLine(e3));
+            }
+          }
+          clear() {
+            this.ydisp = 0, this.ybase = 0, this.y = 0, this.x = 0, this.lines = new s2.CircularList(this._getCorrectBufferLength(this._rows)), this.scrollTop = 0, this.scrollBottom = this._rows - 1, this.setupTabStops();
+          }
+          resize(e3, t3) {
+            const i3 = this.getNullCell(o.DEFAULT_ATTR_DATA);
+            let s3 = 0;
+            const r2 = this._getCorrectBufferLength(t3);
+            if (r2 > this.lines.maxLength && (this.lines.maxLength = r2), this.lines.length > 0) {
+              if (this._cols < e3) for (let t4 = 0; t4 < this.lines.length; t4++) s3 += +this.lines.get(t4).resize(e3, i3);
+              let n2 = 0;
+              if (this._rows < t3) for (let s4 = this._rows; s4 < t3; s4++) this.lines.length < t3 + this.ybase && (this._optionsService.rawOptions.windowsMode || void 0 !== this._optionsService.rawOptions.windowsPty.backend || void 0 !== this._optionsService.rawOptions.windowsPty.buildNumber ? this.lines.push(new o.BufferLine(e3, i3)) : this.ybase > 0 && this.lines.length <= this.ybase + this.y + n2 + 1 ? (this.ybase--, n2++, this.ydisp > 0 && this.ydisp--) : this.lines.push(new o.BufferLine(e3, i3)));
+              else for (let e4 = this._rows; e4 > t3; e4--) this.lines.length > t3 + this.ybase && (this.lines.length > this.ybase + this.y + 1 ? this.lines.pop() : (this.ybase++, this.ydisp++));
+              if (r2 < this.lines.maxLength) {
+                const e4 = this.lines.length - r2;
+                e4 > 0 && (this.lines.trimStart(e4), this.ybase = Math.max(this.ybase - e4, 0), this.ydisp = Math.max(this.ydisp - e4, 0), this.savedY = Math.max(this.savedY - e4, 0)), this.lines.maxLength = r2;
+              }
+              this.x = Math.min(this.x, e3 - 1), this.y = Math.min(this.y, t3 - 1), n2 && (this.y += n2), this.savedX = Math.min(this.savedX, e3 - 1), this.scrollTop = 0;
+            }
+            if (this.scrollBottom = t3 - 1, this._isReflowEnabled && (this._reflow(e3, t3), this._cols > e3)) for (let t4 = 0; t4 < this.lines.length; t4++) s3 += +this.lines.get(t4).resize(e3, i3);
+            this._cols = e3, this._rows = t3, this._memoryCleanupQueue.clear(), s3 > 0.1 * this.lines.length && (this._memoryCleanupPosition = 0, this._memoryCleanupQueue.enqueue(() => this._batchedMemoryCleanup()));
+          }
+          _batchedMemoryCleanup() {
+            let e3 = true;
+            this._memoryCleanupPosition >= this.lines.length && (this._memoryCleanupPosition = 0, e3 = false);
+            let t3 = 0;
+            for (; this._memoryCleanupPosition < this.lines.length; ) if (t3 += this.lines.get(this._memoryCleanupPosition++).cleanupMemory(), t3 > 100) return true;
+            return e3;
+          }
+          get _isReflowEnabled() {
+            const e3 = this._optionsService.rawOptions.windowsPty;
+            return e3 && e3.buildNumber ? this._hasScrollback && "conpty" === e3.backend && e3.buildNumber >= 21376 : this._hasScrollback && !this._optionsService.rawOptions.windowsMode;
+          }
+          _reflow(e3, t3) {
+            this._cols !== e3 && (e3 > this._cols ? this._reflowLarger(e3, t3) : this._reflowSmaller(e3, t3));
+          }
+          _reflowLarger(e3, t3) {
+            const i3 = (0, a.reflowLargerGetLinesToRemove)(this.lines, this._cols, e3, this.ybase + this.y, this.getNullCell(o.DEFAULT_ATTR_DATA));
+            if (i3.length > 0) {
+              const s3 = (0, a.reflowLargerCreateNewLayout)(this.lines, i3);
+              (0, a.reflowLargerApplyNewLayout)(this.lines, s3.layout), this._reflowLargerAdjustViewport(e3, t3, s3.countRemoved);
+            }
+          }
+          _reflowLargerAdjustViewport(e3, t3, i3) {
+            const s3 = this.getNullCell(o.DEFAULT_ATTR_DATA);
+            let r2 = i3;
+            for (; r2-- > 0; ) 0 === this.ybase ? (this.y > 0 && this.y--, this.lines.length < t3 && this.lines.push(new o.BufferLine(e3, s3))) : (this.ydisp === this.ybase && this.ydisp--, this.ybase--);
+            this.savedY = Math.max(this.savedY - i3, 0);
+          }
+          _reflowSmaller(e3, t3) {
+            const i3 = this.getNullCell(o.DEFAULT_ATTR_DATA), s3 = [];
+            let r2 = 0;
+            for (let n2 = this.lines.length - 1; n2 >= 0; n2--) {
+              let h2 = this.lines.get(n2);
+              if (!h2 || !h2.isWrapped && h2.getTrimmedLength() <= e3) continue;
+              const c2 = [h2];
+              for (; h2.isWrapped && n2 > 0; ) h2 = this.lines.get(--n2), c2.unshift(h2);
+              const l2 = this.ybase + this.y;
+              if (l2 >= n2 && l2 < n2 + c2.length) continue;
+              const d2 = c2[c2.length - 1].getTrimmedLength(), _ = (0, a.reflowSmallerGetNewLineLengths)(c2, this._cols, e3), u = _.length - c2.length;
+              let f;
+              f = 0 === this.ybase && this.y !== this.lines.length - 1 ? Math.max(0, this.y - this.lines.maxLength + u) : Math.max(0, this.lines.length - this.lines.maxLength + u);
+              const v = [];
+              for (let e4 = 0; e4 < u; e4++) {
+                const e5 = this.getBlankLine(o.DEFAULT_ATTR_DATA, true);
+                v.push(e5);
+              }
+              v.length > 0 && (s3.push({ start: n2 + c2.length + r2, newLines: v }), r2 += v.length), c2.push(...v);
+              let p = _.length - 1, g = _[p];
+              0 === g && (p--, g = _[p]);
+              let m = c2.length - u - 1, S = d2;
+              for (; m >= 0; ) {
+                const e4 = Math.min(S, g);
+                if (void 0 === c2[p]) break;
+                if (c2[p].copyCellsFrom(c2[m], S - e4, g - e4, e4, true), g -= e4, 0 === g && (p--, g = _[p]), S -= e4, 0 === S) {
+                  m--;
+                  const e5 = Math.max(m, 0);
+                  S = (0, a.getWrappedLineTrimmedLength)(c2, e5, this._cols);
+                }
+              }
+              for (let t4 = 0; t4 < c2.length; t4++) _[t4] < e3 && c2[t4].setCell(_[t4], i3);
+              let C = u - f;
+              for (; C-- > 0; ) 0 === this.ybase ? this.y < t3 - 1 ? (this.y++, this.lines.pop()) : (this.ybase++, this.ydisp++) : this.ybase < Math.min(this.lines.maxLength, this.lines.length + r2) - t3 && (this.ybase === this.ydisp && this.ydisp++, this.ybase++);
+              this.savedY = Math.min(this.savedY + u, this.ybase + t3 - 1);
+            }
+            if (s3.length > 0) {
+              const e4 = [], t4 = [];
+              for (let e5 = 0; e5 < this.lines.length; e5++) t4.push(this.lines.get(e5));
+              const i4 = this.lines.length;
+              let n2 = i4 - 1, o2 = 0, a2 = s3[o2];
+              this.lines.length = Math.min(this.lines.maxLength, this.lines.length + r2);
+              let h2 = 0;
+              for (let c3 = Math.min(this.lines.maxLength - 1, i4 + r2 - 1); c3 >= 0; c3--) if (a2 && a2.start > n2 + h2) {
+                for (let e5 = a2.newLines.length - 1; e5 >= 0; e5--) this.lines.set(c3--, a2.newLines[e5]);
+                c3++, e4.push({ index: n2 + 1, amount: a2.newLines.length }), h2 += a2.newLines.length, a2 = s3[++o2];
+              } else this.lines.set(c3, t4[n2--]);
+              let c2 = 0;
+              for (let t5 = e4.length - 1; t5 >= 0; t5--) e4[t5].index += c2, this.lines.onInsertEmitter.fire(e4[t5]), c2 += e4[t5].amount;
+              const l2 = Math.max(0, i4 + r2 - this.lines.maxLength);
+              l2 > 0 && this.lines.onTrimEmitter.fire(l2);
+            }
+          }
+          translateBufferLineToString(e3, t3, i3 = 0, s3) {
+            const r2 = this.lines.get(e3);
+            return r2 ? r2.translateToString(t3, i3, s3) : "";
+          }
+          getWrappedRangeForLine(e3) {
+            let t3 = e3, i3 = e3;
+            for (; t3 > 0 && this.lines.get(t3).isWrapped; ) t3--;
+            for (; i3 + 1 < this.lines.length && this.lines.get(i3 + 1).isWrapped; ) i3++;
+            return { first: t3, last: i3 };
+          }
+          setupTabStops(e3) {
+            for (null != e3 ? this.tabs[e3] || (e3 = this.prevStop(e3)) : (this.tabs = {}, e3 = 0); e3 < this._cols; e3 += this._optionsService.rawOptions.tabStopWidth) this.tabs[e3] = true;
+          }
+          prevStop(e3) {
+            for (null == e3 && (e3 = this.x); !this.tabs[--e3] && e3 > 0; ) ;
+            return e3 >= this._cols ? this._cols - 1 : e3 < 0 ? 0 : e3;
+          }
+          nextStop(e3) {
+            for (null == e3 && (e3 = this.x); !this.tabs[++e3] && e3 < this._cols; ) ;
+            return e3 >= this._cols ? this._cols - 1 : e3 < 0 ? 0 : e3;
+          }
+          clearMarkers(e3) {
+            this._isClearing = true;
+            for (let t3 = 0; t3 < this.markers.length; t3++) this.markers[t3].line === e3 && (this.markers[t3].dispose(), this.markers.splice(t3--, 1));
+            this._isClearing = false;
+          }
+          clearAllMarkers() {
+            this._isClearing = true;
+            for (let e3 = 0; e3 < this.markers.length; e3++) this.markers[e3].dispose(), this.markers.splice(e3--, 1);
+            this._isClearing = false;
+          }
+          addMarker(e3) {
+            const t3 = new l.Marker(e3);
+            return this.markers.push(t3), t3.register(this.lines.onTrim((e4) => {
+              t3.line -= e4, t3.line < 0 && t3.dispose();
+            })), t3.register(this.lines.onInsert((e4) => {
+              t3.line >= e4.index && (t3.line += e4.amount);
+            })), t3.register(this.lines.onDelete((e4) => {
+              t3.line >= e4.index && t3.line < e4.index + e4.amount && t3.dispose(), t3.line > e4.index && (t3.line -= e4.amount);
+            })), t3.register(t3.onDispose(() => this._removeMarker(t3))), t3;
+          }
+          _removeMarker(e3) {
+            this._isClearing || this.markers.splice(this.markers.indexOf(e3), 1);
+          }
+        };
+      }, 8437: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferLine = t2.DEFAULT_ATTR_DATA = void 0;
+        const s2 = i2(3734), r = i2(511), n = i2(643), o = i2(482);
+        t2.DEFAULT_ATTR_DATA = Object.freeze(new s2.AttributeData());
+        let a = 0;
+        class h {
+          constructor(e3, t3, i3 = false) {
+            this.isWrapped = i3, this._combined = {}, this._extendedAttrs = {}, this._data = new Uint32Array(3 * e3);
+            const s3 = t3 || r.CellData.fromCharData([0, n.NULL_CELL_CHAR, n.NULL_CELL_WIDTH, n.NULL_CELL_CODE]);
+            for (let t4 = 0; t4 < e3; ++t4) this.setCell(t4, s3);
+            this.length = e3;
+          }
+          get(e3) {
+            const t3 = this._data[3 * e3 + 0], i3 = 2097151 & t3;
+            return [this._data[3 * e3 + 1], 2097152 & t3 ? this._combined[e3] : i3 ? (0, o.stringFromCodePoint)(i3) : "", t3 >> 22, 2097152 & t3 ? this._combined[e3].charCodeAt(this._combined[e3].length - 1) : i3];
+          }
+          set(e3, t3) {
+            this._data[3 * e3 + 1] = t3[n.CHAR_DATA_ATTR_INDEX], t3[n.CHAR_DATA_CHAR_INDEX].length > 1 ? (this._combined[e3] = t3[1], this._data[3 * e3 + 0] = 2097152 | e3 | t3[n.CHAR_DATA_WIDTH_INDEX] << 22) : this._data[3 * e3 + 0] = t3[n.CHAR_DATA_CHAR_INDEX].charCodeAt(0) | t3[n.CHAR_DATA_WIDTH_INDEX] << 22;
+          }
+          getWidth(e3) {
+            return this._data[3 * e3 + 0] >> 22;
+          }
+          hasWidth(e3) {
+            return 12582912 & this._data[3 * e3 + 0];
+          }
+          getFg(e3) {
+            return this._data[3 * e3 + 1];
+          }
+          getBg(e3) {
+            return this._data[3 * e3 + 2];
+          }
+          hasContent(e3) {
+            return 4194303 & this._data[3 * e3 + 0];
+          }
+          getCodePoint(e3) {
+            const t3 = this._data[3 * e3 + 0];
+            return 2097152 & t3 ? this._combined[e3].charCodeAt(this._combined[e3].length - 1) : 2097151 & t3;
+          }
+          isCombined(e3) {
+            return 2097152 & this._data[3 * e3 + 0];
+          }
+          getString(e3) {
+            const t3 = this._data[3 * e3 + 0];
+            return 2097152 & t3 ? this._combined[e3] : 2097151 & t3 ? (0, o.stringFromCodePoint)(2097151 & t3) : "";
+          }
+          isProtected(e3) {
+            return 536870912 & this._data[3 * e3 + 2];
+          }
+          loadCell(e3, t3) {
+            return a = 3 * e3, t3.content = this._data[a + 0], t3.fg = this._data[a + 1], t3.bg = this._data[a + 2], 2097152 & t3.content && (t3.combinedData = this._combined[e3]), 268435456 & t3.bg && (t3.extended = this._extendedAttrs[e3]), t3;
+          }
+          setCell(e3, t3) {
+            2097152 & t3.content && (this._combined[e3] = t3.combinedData), 268435456 & t3.bg && (this._extendedAttrs[e3] = t3.extended), this._data[3 * e3 + 0] = t3.content, this._data[3 * e3 + 1] = t3.fg, this._data[3 * e3 + 2] = t3.bg;
+          }
+          setCellFromCodepoint(e3, t3, i3, s3) {
+            268435456 & s3.bg && (this._extendedAttrs[e3] = s3.extended), this._data[3 * e3 + 0] = t3 | i3 << 22, this._data[3 * e3 + 1] = s3.fg, this._data[3 * e3 + 2] = s3.bg;
+          }
+          addCodepointToCell(e3, t3, i3) {
+            let s3 = this._data[3 * e3 + 0];
+            2097152 & s3 ? this._combined[e3] += (0, o.stringFromCodePoint)(t3) : 2097151 & s3 ? (this._combined[e3] = (0, o.stringFromCodePoint)(2097151 & s3) + (0, o.stringFromCodePoint)(t3), s3 &= -2097152, s3 |= 2097152) : s3 = t3 | 1 << 22, i3 && (s3 &= -12582913, s3 |= i3 << 22), this._data[3 * e3 + 0] = s3;
+          }
+          insertCells(e3, t3, i3) {
+            if ((e3 %= this.length) && 2 === this.getWidth(e3 - 1) && this.setCellFromCodepoint(e3 - 1, 0, 1, i3), t3 < this.length - e3) {
+              const s3 = new r.CellData();
+              for (let i4 = this.length - e3 - t3 - 1; i4 >= 0; --i4) this.setCell(e3 + t3 + i4, this.loadCell(e3 + i4, s3));
+              for (let s4 = 0; s4 < t3; ++s4) this.setCell(e3 + s4, i3);
+            } else for (let t4 = e3; t4 < this.length; ++t4) this.setCell(t4, i3);
+            2 === this.getWidth(this.length - 1) && this.setCellFromCodepoint(this.length - 1, 0, 1, i3);
+          }
+          deleteCells(e3, t3, i3) {
+            if (e3 %= this.length, t3 < this.length - e3) {
+              const s3 = new r.CellData();
+              for (let i4 = 0; i4 < this.length - e3 - t3; ++i4) this.setCell(e3 + i4, this.loadCell(e3 + t3 + i4, s3));
+              for (let e4 = this.length - t3; e4 < this.length; ++e4) this.setCell(e4, i3);
+            } else for (let t4 = e3; t4 < this.length; ++t4) this.setCell(t4, i3);
+            e3 && 2 === this.getWidth(e3 - 1) && this.setCellFromCodepoint(e3 - 1, 0, 1, i3), 0 !== this.getWidth(e3) || this.hasContent(e3) || this.setCellFromCodepoint(e3, 0, 1, i3);
+          }
+          replaceCells(e3, t3, i3, s3 = false) {
+            if (s3) for (e3 && 2 === this.getWidth(e3 - 1) && !this.isProtected(e3 - 1) && this.setCellFromCodepoint(e3 - 1, 0, 1, i3), t3 < this.length && 2 === this.getWidth(t3 - 1) && !this.isProtected(t3) && this.setCellFromCodepoint(t3, 0, 1, i3); e3 < t3 && e3 < this.length; ) this.isProtected(e3) || this.setCell(e3, i3), e3++;
+            else for (e3 && 2 === this.getWidth(e3 - 1) && this.setCellFromCodepoint(e3 - 1, 0, 1, i3), t3 < this.length && 2 === this.getWidth(t3 - 1) && this.setCellFromCodepoint(t3, 0, 1, i3); e3 < t3 && e3 < this.length; ) this.setCell(e3++, i3);
+          }
+          resize(e3, t3) {
+            if (e3 === this.length) return 4 * this._data.length * 2 < this._data.buffer.byteLength;
+            const i3 = 3 * e3;
+            if (e3 > this.length) {
+              if (this._data.buffer.byteLength >= 4 * i3) this._data = new Uint32Array(this._data.buffer, 0, i3);
+              else {
+                const e4 = new Uint32Array(i3);
+                e4.set(this._data), this._data = e4;
+              }
+              for (let i4 = this.length; i4 < e3; ++i4) this.setCell(i4, t3);
+            } else {
+              this._data = this._data.subarray(0, i3);
+              const t4 = Object.keys(this._combined);
+              for (let i4 = 0; i4 < t4.length; i4++) {
+                const s4 = parseInt(t4[i4], 10);
+                s4 >= e3 && delete this._combined[s4];
+              }
+              const s3 = Object.keys(this._extendedAttrs);
+              for (let t5 = 0; t5 < s3.length; t5++) {
+                const i4 = parseInt(s3[t5], 10);
+                i4 >= e3 && delete this._extendedAttrs[i4];
+              }
+            }
+            return this.length = e3, 4 * i3 * 2 < this._data.buffer.byteLength;
+          }
+          cleanupMemory() {
+            if (4 * this._data.length * 2 < this._data.buffer.byteLength) {
+              const e3 = new Uint32Array(this._data.length);
+              return e3.set(this._data), this._data = e3, 1;
+            }
+            return 0;
+          }
+          fill(e3, t3 = false) {
+            if (t3) for (let t4 = 0; t4 < this.length; ++t4) this.isProtected(t4) || this.setCell(t4, e3);
+            else {
+              this._combined = {}, this._extendedAttrs = {};
+              for (let t4 = 0; t4 < this.length; ++t4) this.setCell(t4, e3);
+            }
+          }
+          copyFrom(e3) {
+            this.length !== e3.length ? this._data = new Uint32Array(e3._data) : this._data.set(e3._data), this.length = e3.length, this._combined = {};
+            for (const t3 in e3._combined) this._combined[t3] = e3._combined[t3];
+            this._extendedAttrs = {};
+            for (const t3 in e3._extendedAttrs) this._extendedAttrs[t3] = e3._extendedAttrs[t3];
+            this.isWrapped = e3.isWrapped;
+          }
+          clone() {
+            const e3 = new h(0);
+            e3._data = new Uint32Array(this._data), e3.length = this.length;
+            for (const t3 in this._combined) e3._combined[t3] = this._combined[t3];
+            for (const t3 in this._extendedAttrs) e3._extendedAttrs[t3] = this._extendedAttrs[t3];
+            return e3.isWrapped = this.isWrapped, e3;
+          }
+          getTrimmedLength() {
+            for (let e3 = this.length - 1; e3 >= 0; --e3) if (4194303 & this._data[3 * e3 + 0]) return e3 + (this._data[3 * e3 + 0] >> 22);
+            return 0;
+          }
+          getNoBgTrimmedLength() {
+            for (let e3 = this.length - 1; e3 >= 0; --e3) if (4194303 & this._data[3 * e3 + 0] || 50331648 & this._data[3 * e3 + 2]) return e3 + (this._data[3 * e3 + 0] >> 22);
+            return 0;
+          }
+          copyCellsFrom(e3, t3, i3, s3, r2) {
+            const n2 = e3._data;
+            if (r2) for (let r3 = s3 - 1; r3 >= 0; r3--) {
+              for (let e4 = 0; e4 < 3; e4++) this._data[3 * (i3 + r3) + e4] = n2[3 * (t3 + r3) + e4];
+              268435456 & n2[3 * (t3 + r3) + 2] && (this._extendedAttrs[i3 + r3] = e3._extendedAttrs[t3 + r3]);
+            }
+            else for (let r3 = 0; r3 < s3; r3++) {
+              for (let e4 = 0; e4 < 3; e4++) this._data[3 * (i3 + r3) + e4] = n2[3 * (t3 + r3) + e4];
+              268435456 & n2[3 * (t3 + r3) + 2] && (this._extendedAttrs[i3 + r3] = e3._extendedAttrs[t3 + r3]);
+            }
+            const o2 = Object.keys(e3._combined);
+            for (let s4 = 0; s4 < o2.length; s4++) {
+              const r3 = parseInt(o2[s4], 10);
+              r3 >= t3 && (this._combined[r3 - t3 + i3] = e3._combined[r3]);
+            }
+          }
+          translateToString(e3, t3, i3, s3) {
+            t3 = t3 != null ? t3 : 0, i3 = i3 != null ? i3 : this.length, e3 && (i3 = Math.min(i3, this.getTrimmedLength())), s3 && (s3.length = 0);
+            let r2 = "";
+            for (; t3 < i3; ) {
+              const e4 = this._data[3 * t3 + 0], i4 = 2097151 & e4, a2 = 2097152 & e4 ? this._combined[t3] : i4 ? (0, o.stringFromCodePoint)(i4) : n.WHITESPACE_CELL_CHAR;
+              if (r2 += a2, s3) for (let e5 = 0; e5 < a2.length; ++e5) s3.push(t3);
+              t3 += e4 >> 22 || 1;
+            }
+            return s3 && s3.push(t3), r2;
+          }
+        }
+        t2.BufferLine = h;
+      }, 4841: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.getRangeLength = void 0, t2.getRangeLength = function(e3, t3) {
+          if (e3.start.y > e3.end.y) throw new Error(`Buffer range end (${e3.end.x}, ${e3.end.y}) cannot be before start (${e3.start.x}, ${e3.start.y})`);
+          return t3 * (e3.end.y - e3.start.y) + (e3.end.x - e3.start.x + 1);
+        };
+      }, 4634: (e2, t2) => {
+        function i2(e3, t3, i3) {
+          if (t3 === e3.length - 1) return e3[t3].getTrimmedLength();
+          const s2 = !e3[t3].hasContent(i3 - 1) && 1 === e3[t3].getWidth(i3 - 1), r = 2 === e3[t3 + 1].getWidth(0);
+          return s2 && r ? i3 - 1 : i3;
+        }
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.getWrappedLineTrimmedLength = t2.reflowSmallerGetNewLineLengths = t2.reflowLargerApplyNewLayout = t2.reflowLargerCreateNewLayout = t2.reflowLargerGetLinesToRemove = void 0, t2.reflowLargerGetLinesToRemove = function(e3, t3, s2, r, n) {
+          const o = [];
+          for (let a = 0; a < e3.length - 1; a++) {
+            let h = a, c = e3.get(++h);
+            if (!c.isWrapped) continue;
+            const l = [e3.get(a)];
+            for (; h < e3.length && c.isWrapped; ) l.push(c), c = e3.get(++h);
+            if (r >= a && r < h) {
+              a += l.length - 1;
+              continue;
+            }
+            let d = 0, _ = i2(l, d, t3), u = 1, f = 0;
+            for (; u < l.length; ) {
+              const e4 = i2(l, u, t3), r2 = e4 - f, o2 = s2 - _, a2 = Math.min(r2, o2);
+              l[d].copyCellsFrom(l[u], f, _, a2, false), _ += a2, _ === s2 && (d++, _ = 0), f += a2, f === e4 && (u++, f = 0), 0 === _ && 0 !== d && 2 === l[d - 1].getWidth(s2 - 1) && (l[d].copyCellsFrom(l[d - 1], s2 - 1, _++, 1, false), l[d - 1].setCell(s2 - 1, n));
+            }
+            l[d].replaceCells(_, s2, n);
+            let v = 0;
+            for (let e4 = l.length - 1; e4 > 0 && (e4 > d || 0 === l[e4].getTrimmedLength()); e4--) v++;
+            v > 0 && (o.push(a + l.length - v), o.push(v)), a += l.length - 1;
+          }
+          return o;
+        }, t2.reflowLargerCreateNewLayout = function(e3, t3) {
+          const i3 = [];
+          let s2 = 0, r = t3[s2], n = 0;
+          for (let o = 0; o < e3.length; o++) if (r === o) {
+            const i4 = t3[++s2];
+            e3.onDeleteEmitter.fire({ index: o - n, amount: i4 }), o += i4 - 1, n += i4, r = t3[++s2];
+          } else i3.push(o);
+          return { layout: i3, countRemoved: n };
+        }, t2.reflowLargerApplyNewLayout = function(e3, t3) {
+          const i3 = [];
+          for (let s2 = 0; s2 < t3.length; s2++) i3.push(e3.get(t3[s2]));
+          for (let t4 = 0; t4 < i3.length; t4++) e3.set(t4, i3[t4]);
+          e3.length = t3.length;
+        }, t2.reflowSmallerGetNewLineLengths = function(e3, t3, s2) {
+          const r = [], n = e3.map((s3, r2) => i2(e3, r2, t3)).reduce((e4, t4) => e4 + t4);
+          let o = 0, a = 0, h = 0;
+          for (; h < n; ) {
+            if (n - h < s2) {
+              r.push(n - h);
+              break;
+            }
+            o += s2;
+            const c = i2(e3, a, t3);
+            o > c && (o -= c, a++);
+            const l = 2 === e3[a].getWidth(o - 1);
+            l && o--;
+            const d = l ? s2 - 1 : s2;
+            r.push(d), h += d;
+          }
+          return r;
+        }, t2.getWrappedLineTrimmedLength = i2;
+      }, 5295: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferSet = void 0;
+        const s2 = i2(8460), r = i2(844), n = i2(9092);
+        class o extends r.Disposable {
+          constructor(e3, t3) {
+            super(), this._optionsService = e3, this._bufferService = t3, this._onBufferActivate = this.register(new s2.EventEmitter()), this.onBufferActivate = this._onBufferActivate.event, this.reset(), this.register(this._optionsService.onSpecificOptionChange("scrollback", () => this.resize(this._bufferService.cols, this._bufferService.rows))), this.register(this._optionsService.onSpecificOptionChange("tabStopWidth", () => this.setupTabStops()));
+          }
+          reset() {
+            this._normal = new n.Buffer(true, this._optionsService, this._bufferService), this._normal.fillViewportRows(), this._alt = new n.Buffer(false, this._optionsService, this._bufferService), this._activeBuffer = this._normal, this._onBufferActivate.fire({ activeBuffer: this._normal, inactiveBuffer: this._alt }), this.setupTabStops();
+          }
+          get alt() {
+            return this._alt;
+          }
+          get active() {
+            return this._activeBuffer;
+          }
+          get normal() {
+            return this._normal;
+          }
+          activateNormalBuffer() {
+            this._activeBuffer !== this._normal && (this._normal.x = this._alt.x, this._normal.y = this._alt.y, this._alt.clearAllMarkers(), this._alt.clear(), this._activeBuffer = this._normal, this._onBufferActivate.fire({ activeBuffer: this._normal, inactiveBuffer: this._alt }));
+          }
+          activateAltBuffer(e3) {
+            this._activeBuffer !== this._alt && (this._alt.fillViewportRows(e3), this._alt.x = this._normal.x, this._alt.y = this._normal.y, this._activeBuffer = this._alt, this._onBufferActivate.fire({ activeBuffer: this._alt, inactiveBuffer: this._normal }));
+          }
+          resize(e3, t3) {
+            this._normal.resize(e3, t3), this._alt.resize(e3, t3), this.setupTabStops(e3);
+          }
+          setupTabStops(e3) {
+            this._normal.setupTabStops(e3), this._alt.setupTabStops(e3);
+          }
+        }
+        t2.BufferSet = o;
+      }, 511: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CellData = void 0;
+        const s2 = i2(482), r = i2(643), n = i2(3734);
+        class o extends n.AttributeData {
+          constructor() {
+            super(...arguments), this.content = 0, this.fg = 0, this.bg = 0, this.extended = new n.ExtendedAttrs(), this.combinedData = "";
+          }
+          static fromCharData(e3) {
+            const t3 = new o();
+            return t3.setFromCharData(e3), t3;
+          }
+          isCombined() {
+            return 2097152 & this.content;
+          }
+          getWidth() {
+            return this.content >> 22;
+          }
+          getChars() {
+            return 2097152 & this.content ? this.combinedData : 2097151 & this.content ? (0, s2.stringFromCodePoint)(2097151 & this.content) : "";
+          }
+          getCode() {
+            return this.isCombined() ? this.combinedData.charCodeAt(this.combinedData.length - 1) : 2097151 & this.content;
+          }
+          setFromCharData(e3) {
+            this.fg = e3[r.CHAR_DATA_ATTR_INDEX], this.bg = 0;
+            let t3 = false;
+            if (e3[r.CHAR_DATA_CHAR_INDEX].length > 2) t3 = true;
+            else if (2 === e3[r.CHAR_DATA_CHAR_INDEX].length) {
+              const i3 = e3[r.CHAR_DATA_CHAR_INDEX].charCodeAt(0);
+              if (55296 <= i3 && i3 <= 56319) {
+                const s3 = e3[r.CHAR_DATA_CHAR_INDEX].charCodeAt(1);
+                56320 <= s3 && s3 <= 57343 ? this.content = 1024 * (i3 - 55296) + s3 - 56320 + 65536 | e3[r.CHAR_DATA_WIDTH_INDEX] << 22 : t3 = true;
+              } else t3 = true;
+            } else this.content = e3[r.CHAR_DATA_CHAR_INDEX].charCodeAt(0) | e3[r.CHAR_DATA_WIDTH_INDEX] << 22;
+            t3 && (this.combinedData = e3[r.CHAR_DATA_CHAR_INDEX], this.content = 2097152 | e3[r.CHAR_DATA_WIDTH_INDEX] << 22);
+          }
+          getAsCharData() {
+            return [this.fg, this.getChars(), this.getWidth(), this.getCode()];
+          }
+        }
+        t2.CellData = o;
+      }, 643: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.WHITESPACE_CELL_CODE = t2.WHITESPACE_CELL_WIDTH = t2.WHITESPACE_CELL_CHAR = t2.NULL_CELL_CODE = t2.NULL_CELL_WIDTH = t2.NULL_CELL_CHAR = t2.CHAR_DATA_CODE_INDEX = t2.CHAR_DATA_WIDTH_INDEX = t2.CHAR_DATA_CHAR_INDEX = t2.CHAR_DATA_ATTR_INDEX = t2.DEFAULT_EXT = t2.DEFAULT_ATTR = t2.DEFAULT_COLOR = void 0, t2.DEFAULT_COLOR = 0, t2.DEFAULT_ATTR = 256 | t2.DEFAULT_COLOR << 9, t2.DEFAULT_EXT = 0, t2.CHAR_DATA_ATTR_INDEX = 0, t2.CHAR_DATA_CHAR_INDEX = 1, t2.CHAR_DATA_WIDTH_INDEX = 2, t2.CHAR_DATA_CODE_INDEX = 3, t2.NULL_CELL_CHAR = "", t2.NULL_CELL_WIDTH = 1, t2.NULL_CELL_CODE = 0, t2.WHITESPACE_CELL_CHAR = " ", t2.WHITESPACE_CELL_WIDTH = 1, t2.WHITESPACE_CELL_CODE = 32;
+      }, 4863: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Marker = void 0;
+        const s2 = i2(8460), r = i2(844);
+        class n {
+          get id() {
+            return this._id;
+          }
+          constructor(e3) {
+            this.line = e3, this.isDisposed = false, this._disposables = [], this._id = n._nextId++, this._onDispose = this.register(new s2.EventEmitter()), this.onDispose = this._onDispose.event;
+          }
+          dispose() {
+            this.isDisposed || (this.isDisposed = true, this.line = -1, this._onDispose.fire(), (0, r.disposeArray)(this._disposables), this._disposables.length = 0);
+          }
+          register(e3) {
+            return this._disposables.push(e3), e3;
+          }
+        }
+        t2.Marker = n, n._nextId = 1;
+      }, 7116: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.DEFAULT_CHARSET = t2.CHARSETS = void 0, t2.CHARSETS = {}, t2.DEFAULT_CHARSET = t2.CHARSETS.B, t2.CHARSETS[0] = { "`": "\u25C6", a: "\u2592", b: "\u2409", c: "\u240C", d: "\u240D", e: "\u240A", f: "\xB0", g: "\xB1", h: "\u2424", i: "\u240B", j: "\u2518", k: "\u2510", l: "\u250C", m: "\u2514", n: "\u253C", o: "\u23BA", p: "\u23BB", q: "\u2500", r: "\u23BC", s: "\u23BD", t: "\u251C", u: "\u2524", v: "\u2534", w: "\u252C", x: "\u2502", y: "\u2264", z: "\u2265", "{": "\u03C0", "|": "\u2260", "}": "\xA3", "~": "\xB7" }, t2.CHARSETS.A = { "#": "\xA3" }, t2.CHARSETS.B = void 0, t2.CHARSETS[4] = { "#": "\xA3", "@": "\xBE", "[": "ij", "\\": "\xBD", "]": "|", "{": "\xA8", "|": "f", "}": "\xBC", "~": "\xB4" }, t2.CHARSETS.C = t2.CHARSETS[5] = { "[": "\xC4", "\\": "\xD6", "]": "\xC5", "^": "\xDC", "`": "\xE9", "{": "\xE4", "|": "\xF6", "}": "\xE5", "~": "\xFC" }, t2.CHARSETS.R = { "#": "\xA3", "@": "\xE0", "[": "\xB0", "\\": "\xE7", "]": "\xA7", "{": "\xE9", "|": "\xF9", "}": "\xE8", "~": "\xA8" }, t2.CHARSETS.Q = { "@": "\xE0", "[": "\xE2", "\\": "\xE7", "]": "\xEA", "^": "\xEE", "`": "\xF4", "{": "\xE9", "|": "\xF9", "}": "\xE8", "~": "\xFB" }, t2.CHARSETS.K = { "@": "\xA7", "[": "\xC4", "\\": "\xD6", "]": "\xDC", "{": "\xE4", "|": "\xF6", "}": "\xFC", "~": "\xDF" }, t2.CHARSETS.Y = { "#": "\xA3", "@": "\xA7", "[": "\xB0", "\\": "\xE7", "]": "\xE9", "`": "\xF9", "{": "\xE0", "|": "\xF2", "}": "\xE8", "~": "\xEC" }, t2.CHARSETS.E = t2.CHARSETS[6] = { "@": "\xC4", "[": "\xC6", "\\": "\xD8", "]": "\xC5", "^": "\xDC", "`": "\xE4", "{": "\xE6", "|": "\xF8", "}": "\xE5", "~": "\xFC" }, t2.CHARSETS.Z = { "#": "\xA3", "@": "\xA7", "[": "\xA1", "\\": "\xD1", "]": "\xBF", "{": "\xB0", "|": "\xF1", "}": "\xE7" }, t2.CHARSETS.H = t2.CHARSETS[7] = { "@": "\xC9", "[": "\xC4", "\\": "\xD6", "]": "\xC5", "^": "\xDC", "`": "\xE9", "{": "\xE4", "|": "\xF6", "}": "\xE5", "~": "\xFC" }, t2.CHARSETS["="] = { "#": "\xF9", "@": "\xE0", "[": "\xE9", "\\": "\xE7", "]": "\xEA", "^": "\xEE", _: "\xE8", "`": "\xF4", "{": "\xE4", "|": "\xF6", "}": "\xFC", "~": "\xFB" };
+      }, 2584: (e2, t2) => {
+        var i2, s2, r;
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.C1_ESCAPED = t2.C1 = t2.C0 = void 0, function(e3) {
+          e3.NUL = "\0", e3.SOH = "", e3.STX = "", e3.ETX = "", e3.EOT = "", e3.ENQ = "", e3.ACK = "", e3.BEL = "\x07", e3.BS = "\b", e3.HT = "	", e3.LF = "\n", e3.VT = "\v", e3.FF = "\f", e3.CR = "\r", e3.SO = "", e3.SI = "", e3.DLE = "", e3.DC1 = "", e3.DC2 = "", e3.DC3 = "", e3.DC4 = "", e3.NAK = "", e3.SYN = "", e3.ETB = "", e3.CAN = "", e3.EM = "", e3.SUB = "", e3.ESC = "\x1B", e3.FS = "", e3.GS = "", e3.RS = "", e3.US = "", e3.SP = " ", e3.DEL = "\x7F";
+        }(i2 || (t2.C0 = i2 = {})), function(e3) {
+          e3.PAD = "\x80", e3.HOP = "\x81", e3.BPH = "\x82", e3.NBH = "\x83", e3.IND = "\x84", e3.NEL = "\x85", e3.SSA = "\x86", e3.ESA = "\x87", e3.HTS = "\x88", e3.HTJ = "\x89", e3.VTS = "\x8A", e3.PLD = "\x8B", e3.PLU = "\x8C", e3.RI = "\x8D", e3.SS2 = "\x8E", e3.SS3 = "\x8F", e3.DCS = "\x90", e3.PU1 = "\x91", e3.PU2 = "\x92", e3.STS = "\x93", e3.CCH = "\x94", e3.MW = "\x95", e3.SPA = "\x96", e3.EPA = "\x97", e3.SOS = "\x98", e3.SGCI = "\x99", e3.SCI = "\x9A", e3.CSI = "\x9B", e3.ST = "\x9C", e3.OSC = "\x9D", e3.PM = "\x9E", e3.APC = "\x9F";
+        }(s2 || (t2.C1 = s2 = {})), function(e3) {
+          e3.ST = `${i2.ESC}\\`;
+        }(r || (t2.C1_ESCAPED = r = {}));
+      }, 7399: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.evaluateKeyboardEvent = void 0;
+        const s2 = i2(2584), r = { 48: ["0", ")"], 49: ["1", "!"], 50: ["2", "@"], 51: ["3", "#"], 52: ["4", "$"], 53: ["5", "%"], 54: ["6", "^"], 55: ["7", "&"], 56: ["8", "*"], 57: ["9", "("], 186: [";", ":"], 187: ["=", "+"], 188: [",", "<"], 189: ["-", "_"], 190: [".", ">"], 191: ["/", "?"], 192: ["`", "~"], 219: ["[", "{"], 220: ["\\", "|"], 221: ["]", "}"], 222: ["'", '"'] };
+        t2.evaluateKeyboardEvent = function(e3, t3, i3, n) {
+          const o = { type: 0, cancel: false, key: void 0 }, a = (e3.shiftKey ? 1 : 0) | (e3.altKey ? 2 : 0) | (e3.ctrlKey ? 4 : 0) | (e3.metaKey ? 8 : 0);
+          switch (e3.keyCode) {
+            case 0:
+              "UIKeyInputUpArrow" === e3.key ? o.key = t3 ? s2.C0.ESC + "OA" : s2.C0.ESC + "[A" : "UIKeyInputLeftArrow" === e3.key ? o.key = t3 ? s2.C0.ESC + "OD" : s2.C0.ESC + "[D" : "UIKeyInputRightArrow" === e3.key ? o.key = t3 ? s2.C0.ESC + "OC" : s2.C0.ESC + "[C" : "UIKeyInputDownArrow" === e3.key && (o.key = t3 ? s2.C0.ESC + "OB" : s2.C0.ESC + "[B");
+              break;
+            case 8:
+              o.key = e3.ctrlKey ? "\b" : s2.C0.DEL, e3.altKey && (o.key = s2.C0.ESC + o.key);
+              break;
+            case 9:
+              if (e3.shiftKey) {
+                o.key = s2.C0.ESC + "[Z";
+                break;
+              }
+              o.key = s2.C0.HT, o.cancel = true;
+              break;
+            case 13:
+              o.key = e3.altKey ? s2.C0.ESC + s2.C0.CR : s2.C0.CR, o.cancel = true;
+              break;
+            case 27:
+              o.key = s2.C0.ESC, e3.altKey && (o.key = s2.C0.ESC + s2.C0.ESC), o.cancel = true;
+              break;
+            case 37:
+              if (e3.metaKey) break;
+              a ? (o.key = s2.C0.ESC + "[1;" + (a + 1) + "D", o.key === s2.C0.ESC + "[1;3D" && (o.key = s2.C0.ESC + (i3 ? "b" : "[1;5D"))) : o.key = t3 ? s2.C0.ESC + "OD" : s2.C0.ESC + "[D";
+              break;
+            case 39:
+              if (e3.metaKey) break;
+              a ? (o.key = s2.C0.ESC + "[1;" + (a + 1) + "C", o.key === s2.C0.ESC + "[1;3C" && (o.key = s2.C0.ESC + (i3 ? "f" : "[1;5C"))) : o.key = t3 ? s2.C0.ESC + "OC" : s2.C0.ESC + "[C";
+              break;
+            case 38:
+              if (e3.metaKey) break;
+              a ? (o.key = s2.C0.ESC + "[1;" + (a + 1) + "A", i3 || o.key !== s2.C0.ESC + "[1;3A" || (o.key = s2.C0.ESC + "[1;5A")) : o.key = t3 ? s2.C0.ESC + "OA" : s2.C0.ESC + "[A";
+              break;
+            case 40:
+              if (e3.metaKey) break;
+              a ? (o.key = s2.C0.ESC + "[1;" + (a + 1) + "B", i3 || o.key !== s2.C0.ESC + "[1;3B" || (o.key = s2.C0.ESC + "[1;5B")) : o.key = t3 ? s2.C0.ESC + "OB" : s2.C0.ESC + "[B";
+              break;
+            case 45:
+              e3.shiftKey || e3.ctrlKey || (o.key = s2.C0.ESC + "[2~");
+              break;
+            case 46:
+              o.key = a ? s2.C0.ESC + "[3;" + (a + 1) + "~" : s2.C0.ESC + "[3~";
+              break;
+            case 36:
+              o.key = a ? s2.C0.ESC + "[1;" + (a + 1) + "H" : t3 ? s2.C0.ESC + "OH" : s2.C0.ESC + "[H";
+              break;
+            case 35:
+              o.key = a ? s2.C0.ESC + "[1;" + (a + 1) + "F" : t3 ? s2.C0.ESC + "OF" : s2.C0.ESC + "[F";
+              break;
+            case 33:
+              e3.shiftKey ? o.type = 2 : e3.ctrlKey ? o.key = s2.C0.ESC + "[5;" + (a + 1) + "~" : o.key = s2.C0.ESC + "[5~";
+              break;
+            case 34:
+              e3.shiftKey ? o.type = 3 : e3.ctrlKey ? o.key = s2.C0.ESC + "[6;" + (a + 1) + "~" : o.key = s2.C0.ESC + "[6~";
+              break;
+            case 112:
+              o.key = a ? s2.C0.ESC + "[1;" + (a + 1) + "P" : s2.C0.ESC + "OP";
+              break;
+            case 113:
+              o.key = a ? s2.C0.ESC + "[1;" + (a + 1) + "Q" : s2.C0.ESC + "OQ";
+              break;
+            case 114:
+              o.key = a ? s2.C0.ESC + "[1;" + (a + 1) + "R" : s2.C0.ESC + "OR";
+              break;
+            case 115:
+              o.key = a ? s2.C0.ESC + "[1;" + (a + 1) + "S" : s2.C0.ESC + "OS";
+              break;
+            case 116:
+              o.key = a ? s2.C0.ESC + "[15;" + (a + 1) + "~" : s2.C0.ESC + "[15~";
+              break;
+            case 117:
+              o.key = a ? s2.C0.ESC + "[17;" + (a + 1) + "~" : s2.C0.ESC + "[17~";
+              break;
+            case 118:
+              o.key = a ? s2.C0.ESC + "[18;" + (a + 1) + "~" : s2.C0.ESC + "[18~";
+              break;
+            case 119:
+              o.key = a ? s2.C0.ESC + "[19;" + (a + 1) + "~" : s2.C0.ESC + "[19~";
+              break;
+            case 120:
+              o.key = a ? s2.C0.ESC + "[20;" + (a + 1) + "~" : s2.C0.ESC + "[20~";
+              break;
+            case 121:
+              o.key = a ? s2.C0.ESC + "[21;" + (a + 1) + "~" : s2.C0.ESC + "[21~";
+              break;
+            case 122:
+              o.key = a ? s2.C0.ESC + "[23;" + (a + 1) + "~" : s2.C0.ESC + "[23~";
+              break;
+            case 123:
+              o.key = a ? s2.C0.ESC + "[24;" + (a + 1) + "~" : s2.C0.ESC + "[24~";
+              break;
+            default:
+              if (!e3.ctrlKey || e3.shiftKey || e3.altKey || e3.metaKey) if (i3 && !n || !e3.altKey || e3.metaKey) !i3 || e3.altKey || e3.ctrlKey || e3.shiftKey || !e3.metaKey ? e3.key && !e3.ctrlKey && !e3.altKey && !e3.metaKey && e3.keyCode >= 48 && 1 === e3.key.length ? o.key = e3.key : e3.key && e3.ctrlKey && ("_" === e3.key && (o.key = s2.C0.US), "@" === e3.key && (o.key = s2.C0.NUL)) : 65 === e3.keyCode && (o.type = 1);
+              else {
+                const t4 = r[e3.keyCode], i4 = t4 == null ? void 0 : t4[e3.shiftKey ? 1 : 0];
+                if (i4) o.key = s2.C0.ESC + i4;
+                else if (e3.keyCode >= 65 && e3.keyCode <= 90) {
+                  const t5 = e3.ctrlKey ? e3.keyCode - 64 : e3.keyCode + 32;
+                  let i5 = String.fromCharCode(t5);
+                  e3.shiftKey && (i5 = i5.toUpperCase()), o.key = s2.C0.ESC + i5;
+                } else if (32 === e3.keyCode) o.key = s2.C0.ESC + (e3.ctrlKey ? s2.C0.NUL : " ");
+                else if ("Dead" === e3.key && e3.code.startsWith("Key")) {
+                  let t5 = e3.code.slice(3, 4);
+                  e3.shiftKey || (t5 = t5.toLowerCase()), o.key = s2.C0.ESC + t5, o.cancel = true;
+                }
+              }
+              else e3.keyCode >= 65 && e3.keyCode <= 90 ? o.key = String.fromCharCode(e3.keyCode - 64) : 32 === e3.keyCode ? o.key = s2.C0.NUL : e3.keyCode >= 51 && e3.keyCode <= 55 ? o.key = String.fromCharCode(e3.keyCode - 51 + 27) : 56 === e3.keyCode ? o.key = s2.C0.DEL : 219 === e3.keyCode ? o.key = s2.C0.ESC : 220 === e3.keyCode ? o.key = s2.C0.FS : 221 === e3.keyCode && (o.key = s2.C0.GS);
+          }
+          return o;
+        };
+      }, 482: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Utf8ToUtf32 = t2.StringToUtf32 = t2.utf32ToString = t2.stringFromCodePoint = void 0, t2.stringFromCodePoint = function(e3) {
+          return e3 > 65535 ? (e3 -= 65536, String.fromCharCode(55296 + (e3 >> 10)) + String.fromCharCode(e3 % 1024 + 56320)) : String.fromCharCode(e3);
+        }, t2.utf32ToString = function(e3, t3 = 0, i2 = e3.length) {
+          let s2 = "";
+          for (let r = t3; r < i2; ++r) {
+            let t4 = e3[r];
+            t4 > 65535 ? (t4 -= 65536, s2 += String.fromCharCode(55296 + (t4 >> 10)) + String.fromCharCode(t4 % 1024 + 56320)) : s2 += String.fromCharCode(t4);
+          }
+          return s2;
+        }, t2.StringToUtf32 = class {
+          constructor() {
+            this._interim = 0;
+          }
+          clear() {
+            this._interim = 0;
+          }
+          decode(e3, t3) {
+            const i2 = e3.length;
+            if (!i2) return 0;
+            let s2 = 0, r = 0;
+            if (this._interim) {
+              const i3 = e3.charCodeAt(r++);
+              56320 <= i3 && i3 <= 57343 ? t3[s2++] = 1024 * (this._interim - 55296) + i3 - 56320 + 65536 : (t3[s2++] = this._interim, t3[s2++] = i3), this._interim = 0;
+            }
+            for (let n = r; n < i2; ++n) {
+              const r2 = e3.charCodeAt(n);
+              if (55296 <= r2 && r2 <= 56319) {
+                if (++n >= i2) return this._interim = r2, s2;
+                const o = e3.charCodeAt(n);
+                56320 <= o && o <= 57343 ? t3[s2++] = 1024 * (r2 - 55296) + o - 56320 + 65536 : (t3[s2++] = r2, t3[s2++] = o);
+              } else 65279 !== r2 && (t3[s2++] = r2);
+            }
+            return s2;
+          }
+        }, t2.Utf8ToUtf32 = class {
+          constructor() {
+            this.interim = new Uint8Array(3);
+          }
+          clear() {
+            this.interim.fill(0);
+          }
+          decode(e3, t3) {
+            const i2 = e3.length;
+            if (!i2) return 0;
+            let s2, r, n, o, a = 0, h = 0, c = 0;
+            if (this.interim[0]) {
+              let s3 = false, r2 = this.interim[0];
+              r2 &= 192 == (224 & r2) ? 31 : 224 == (240 & r2) ? 15 : 7;
+              let n2, o2 = 0;
+              for (; (n2 = 63 & this.interim[++o2]) && o2 < 4; ) r2 <<= 6, r2 |= n2;
+              const h2 = 192 == (224 & this.interim[0]) ? 2 : 224 == (240 & this.interim[0]) ? 3 : 4, l2 = h2 - o2;
+              for (; c < l2; ) {
+                if (c >= i2) return 0;
+                if (n2 = e3[c++], 128 != (192 & n2)) {
+                  c--, s3 = true;
+                  break;
+                }
+                this.interim[o2++] = n2, r2 <<= 6, r2 |= 63 & n2;
+              }
+              s3 || (2 === h2 ? r2 < 128 ? c-- : t3[a++] = r2 : 3 === h2 ? r2 < 2048 || r2 >= 55296 && r2 <= 57343 || 65279 === r2 || (t3[a++] = r2) : r2 < 65536 || r2 > 1114111 || (t3[a++] = r2)), this.interim.fill(0);
+            }
+            const l = i2 - 4;
+            let d = c;
+            for (; d < i2; ) {
+              for (; !(!(d < l) || 128 & (s2 = e3[d]) || 128 & (r = e3[d + 1]) || 128 & (n = e3[d + 2]) || 128 & (o = e3[d + 3])); ) t3[a++] = s2, t3[a++] = r, t3[a++] = n, t3[a++] = o, d += 4;
+              if (s2 = e3[d++], s2 < 128) t3[a++] = s2;
+              else if (192 == (224 & s2)) {
+                if (d >= i2) return this.interim[0] = s2, a;
+                if (r = e3[d++], 128 != (192 & r)) {
+                  d--;
+                  continue;
+                }
+                if (h = (31 & s2) << 6 | 63 & r, h < 128) {
+                  d--;
+                  continue;
+                }
+                t3[a++] = h;
+              } else if (224 == (240 & s2)) {
+                if (d >= i2) return this.interim[0] = s2, a;
+                if (r = e3[d++], 128 != (192 & r)) {
+                  d--;
+                  continue;
+                }
+                if (d >= i2) return this.interim[0] = s2, this.interim[1] = r, a;
+                if (n = e3[d++], 128 != (192 & n)) {
+                  d--;
+                  continue;
+                }
+                if (h = (15 & s2) << 12 | (63 & r) << 6 | 63 & n, h < 2048 || h >= 55296 && h <= 57343 || 65279 === h) continue;
+                t3[a++] = h;
+              } else if (240 == (248 & s2)) {
+                if (d >= i2) return this.interim[0] = s2, a;
+                if (r = e3[d++], 128 != (192 & r)) {
+                  d--;
+                  continue;
+                }
+                if (d >= i2) return this.interim[0] = s2, this.interim[1] = r, a;
+                if (n = e3[d++], 128 != (192 & n)) {
+                  d--;
+                  continue;
+                }
+                if (d >= i2) return this.interim[0] = s2, this.interim[1] = r, this.interim[2] = n, a;
+                if (o = e3[d++], 128 != (192 & o)) {
+                  d--;
+                  continue;
+                }
+                if (h = (7 & s2) << 18 | (63 & r) << 12 | (63 & n) << 6 | 63 & o, h < 65536 || h > 1114111) continue;
+                t3[a++] = h;
+              }
+            }
+            return a;
+          }
+        };
+      }, 225: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.UnicodeV6 = void 0;
+        const s2 = i2(1480), r = [[768, 879], [1155, 1158], [1160, 1161], [1425, 1469], [1471, 1471], [1473, 1474], [1476, 1477], [1479, 1479], [1536, 1539], [1552, 1557], [1611, 1630], [1648, 1648], [1750, 1764], [1767, 1768], [1770, 1773], [1807, 1807], [1809, 1809], [1840, 1866], [1958, 1968], [2027, 2035], [2305, 2306], [2364, 2364], [2369, 2376], [2381, 2381], [2385, 2388], [2402, 2403], [2433, 2433], [2492, 2492], [2497, 2500], [2509, 2509], [2530, 2531], [2561, 2562], [2620, 2620], [2625, 2626], [2631, 2632], [2635, 2637], [2672, 2673], [2689, 2690], [2748, 2748], [2753, 2757], [2759, 2760], [2765, 2765], [2786, 2787], [2817, 2817], [2876, 2876], [2879, 2879], [2881, 2883], [2893, 2893], [2902, 2902], [2946, 2946], [3008, 3008], [3021, 3021], [3134, 3136], [3142, 3144], [3146, 3149], [3157, 3158], [3260, 3260], [3263, 3263], [3270, 3270], [3276, 3277], [3298, 3299], [3393, 3395], [3405, 3405], [3530, 3530], [3538, 3540], [3542, 3542], [3633, 3633], [3636, 3642], [3655, 3662], [3761, 3761], [3764, 3769], [3771, 3772], [3784, 3789], [3864, 3865], [3893, 3893], [3895, 3895], [3897, 3897], [3953, 3966], [3968, 3972], [3974, 3975], [3984, 3991], [3993, 4028], [4038, 4038], [4141, 4144], [4146, 4146], [4150, 4151], [4153, 4153], [4184, 4185], [4448, 4607], [4959, 4959], [5906, 5908], [5938, 5940], [5970, 5971], [6002, 6003], [6068, 6069], [6071, 6077], [6086, 6086], [6089, 6099], [6109, 6109], [6155, 6157], [6313, 6313], [6432, 6434], [6439, 6440], [6450, 6450], [6457, 6459], [6679, 6680], [6912, 6915], [6964, 6964], [6966, 6970], [6972, 6972], [6978, 6978], [7019, 7027], [7616, 7626], [7678, 7679], [8203, 8207], [8234, 8238], [8288, 8291], [8298, 8303], [8400, 8431], [12330, 12335], [12441, 12442], [43014, 43014], [43019, 43019], [43045, 43046], [64286, 64286], [65024, 65039], [65056, 65059], [65279, 65279], [65529, 65531]], n = [[68097, 68099], [68101, 68102], [68108, 68111], [68152, 68154], [68159, 68159], [119143, 119145], [119155, 119170], [119173, 119179], [119210, 119213], [119362, 119364], [917505, 917505], [917536, 917631], [917760, 917999]];
+        let o;
+        t2.UnicodeV6 = class {
+          constructor() {
+            if (this.version = "6", !o) {
+              o = new Uint8Array(65536), o.fill(1), o[0] = 0, o.fill(0, 1, 32), o.fill(0, 127, 160), o.fill(2, 4352, 4448), o[9001] = 2, o[9002] = 2, o.fill(2, 11904, 42192), o[12351] = 1, o.fill(2, 44032, 55204), o.fill(2, 63744, 64256), o.fill(2, 65040, 65050), o.fill(2, 65072, 65136), o.fill(2, 65280, 65377), o.fill(2, 65504, 65511);
+              for (let e3 = 0; e3 < r.length; ++e3) o.fill(0, r[e3][0], r[e3][1] + 1);
+            }
+          }
+          wcwidth(e3) {
+            return e3 < 32 ? 0 : e3 < 127 ? 1 : e3 < 65536 ? o[e3] : function(e4, t3) {
+              let i3, s3 = 0, r2 = t3.length - 1;
+              if (e4 < t3[0][0] || e4 > t3[r2][1]) return false;
+              for (; r2 >= s3; ) if (i3 = s3 + r2 >> 1, e4 > t3[i3][1]) s3 = i3 + 1;
+              else {
+                if (!(e4 < t3[i3][0])) return true;
+                r2 = i3 - 1;
+              }
+              return false;
+            }(e3, n) ? 0 : e3 >= 131072 && e3 <= 196605 || e3 >= 196608 && e3 <= 262141 ? 2 : 1;
+          }
+          charProperties(e3, t3) {
+            let i3 = this.wcwidth(e3), r2 = 0 === i3 && 0 !== t3;
+            if (r2) {
+              const e4 = s2.UnicodeService.extractWidth(t3);
+              0 === e4 ? r2 = false : e4 > i3 && (i3 = e4);
+            }
+            return s2.UnicodeService.createPropertyValue(0, i3, r2);
+          }
+        };
+      }, 5981: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.WriteBuffer = void 0;
+        const s2 = i2(8460), r = i2(844);
+        class n extends r.Disposable {
+          constructor(e3) {
+            super(), this._action = e3, this._writeBuffer = [], this._callbacks = [], this._pendingData = 0, this._bufferOffset = 0, this._isSyncWriting = false, this._syncCalls = 0, this._didUserInput = false, this._onWriteParsed = this.register(new s2.EventEmitter()), this.onWriteParsed = this._onWriteParsed.event;
+          }
+          handleUserInput() {
+            this._didUserInput = true;
+          }
+          writeSync(e3, t3) {
+            if (void 0 !== t3 && this._syncCalls > t3) return void (this._syncCalls = 0);
+            if (this._pendingData += e3.length, this._writeBuffer.push(e3), this._callbacks.push(void 0), this._syncCalls++, this._isSyncWriting) return;
+            let i3;
+            for (this._isSyncWriting = true; i3 = this._writeBuffer.shift(); ) {
+              this._action(i3);
+              const e4 = this._callbacks.shift();
+              e4 && e4();
+            }
+            this._pendingData = 0, this._bufferOffset = 2147483647, this._isSyncWriting = false, this._syncCalls = 0;
+          }
+          write(e3, t3) {
+            if (this._pendingData > 5e7) throw new Error("write data discarded, use flow control to avoid losing data");
+            if (!this._writeBuffer.length) {
+              if (this._bufferOffset = 0, this._didUserInput) return this._didUserInput = false, this._pendingData += e3.length, this._writeBuffer.push(e3), this._callbacks.push(t3), void this._innerWrite();
+              setTimeout(() => this._innerWrite());
+            }
+            this._pendingData += e3.length, this._writeBuffer.push(e3), this._callbacks.push(t3);
+          }
+          _innerWrite(e3 = 0, t3 = true) {
+            const i3 = e3 || Date.now();
+            for (; this._writeBuffer.length > this._bufferOffset; ) {
+              const e4 = this._writeBuffer[this._bufferOffset], s3 = this._action(e4, t3);
+              if (s3) {
+                const e5 = (e6) => Date.now() - i3 >= 12 ? setTimeout(() => this._innerWrite(0, e6)) : this._innerWrite(i3, e6);
+                return void s3.catch((e6) => (queueMicrotask(() => {
+                  throw e6;
+                }), Promise.resolve(false))).then(e5);
+              }
+              const r2 = this._callbacks[this._bufferOffset];
+              if (r2 && r2(), this._bufferOffset++, this._pendingData -= e4.length, Date.now() - i3 >= 12) break;
+            }
+            this._writeBuffer.length > this._bufferOffset ? (this._bufferOffset > 50 && (this._writeBuffer = this._writeBuffer.slice(this._bufferOffset), this._callbacks = this._callbacks.slice(this._bufferOffset), this._bufferOffset = 0), setTimeout(() => this._innerWrite())) : (this._writeBuffer.length = 0, this._callbacks.length = 0, this._pendingData = 0, this._bufferOffset = 0), this._onWriteParsed.fire();
+          }
+        }
+        t2.WriteBuffer = n;
+      }, 5941: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.toRgbString = t2.parseColor = void 0;
+        const i2 = /^([\da-f])\/([\da-f])\/([\da-f])$|^([\da-f]{2})\/([\da-f]{2})\/([\da-f]{2})$|^([\da-f]{3})\/([\da-f]{3})\/([\da-f]{3})$|^([\da-f]{4})\/([\da-f]{4})\/([\da-f]{4})$/, s2 = /^[\da-f]+$/;
+        function r(e3, t3) {
+          const i3 = e3.toString(16), s3 = i3.length < 2 ? "0" + i3 : i3;
+          switch (t3) {
+            case 4:
+              return i3[0];
+            case 8:
+              return s3;
+            case 12:
+              return (s3 + s3).slice(0, 3);
+            default:
+              return s3 + s3;
+          }
+        }
+        t2.parseColor = function(e3) {
+          if (!e3) return;
+          let t3 = e3.toLowerCase();
+          if (0 === t3.indexOf("rgb:")) {
+            t3 = t3.slice(4);
+            const e4 = i2.exec(t3);
+            if (e4) {
+              const t4 = e4[1] ? 15 : e4[4] ? 255 : e4[7] ? 4095 : 65535;
+              return [Math.round(parseInt(e4[1] || e4[4] || e4[7] || e4[10], 16) / t4 * 255), Math.round(parseInt(e4[2] || e4[5] || e4[8] || e4[11], 16) / t4 * 255), Math.round(parseInt(e4[3] || e4[6] || e4[9] || e4[12], 16) / t4 * 255)];
+            }
+          } else if (0 === t3.indexOf("#") && (t3 = t3.slice(1), s2.exec(t3) && [3, 6, 9, 12].includes(t3.length))) {
+            const e4 = t3.length / 3, i3 = [0, 0, 0];
+            for (let s3 = 0; s3 < 3; ++s3) {
+              const r2 = parseInt(t3.slice(e4 * s3, e4 * s3 + e4), 16);
+              i3[s3] = 1 === e4 ? r2 << 4 : 2 === e4 ? r2 : 3 === e4 ? r2 >> 4 : r2 >> 8;
+            }
+            return i3;
+          }
+        }, t2.toRgbString = function(e3, t3 = 16) {
+          const [i3, s3, n] = e3;
+          return `rgb:${r(i3, t3)}/${r(s3, t3)}/${r(n, t3)}`;
+        };
+      }, 5770: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.PAYLOAD_LIMIT = void 0, t2.PAYLOAD_LIMIT = 1e7;
+      }, 6351: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.DcsHandler = t2.DcsParser = void 0;
+        const s2 = i2(482), r = i2(8742), n = i2(5770), o = [];
+        t2.DcsParser = class {
+          constructor() {
+            this._handlers = /* @__PURE__ */ Object.create(null), this._active = o, this._ident = 0, this._handlerFb = () => {
+            }, this._stack = { paused: false, loopPosition: 0, fallThrough: false };
+          }
+          dispose() {
+            this._handlers = /* @__PURE__ */ Object.create(null), this._handlerFb = () => {
+            }, this._active = o;
+          }
+          registerHandler(e3, t3) {
+            void 0 === this._handlers[e3] && (this._handlers[e3] = []);
+            const i3 = this._handlers[e3];
+            return i3.push(t3), { dispose: () => {
+              const e4 = i3.indexOf(t3);
+              -1 !== e4 && i3.splice(e4, 1);
+            } };
+          }
+          clearHandler(e3) {
+            this._handlers[e3] && delete this._handlers[e3];
+          }
+          setHandlerFallback(e3) {
+            this._handlerFb = e3;
+          }
+          reset() {
+            if (this._active.length) for (let e3 = this._stack.paused ? this._stack.loopPosition - 1 : this._active.length - 1; e3 >= 0; --e3) this._active[e3].unhook(false);
+            this._stack.paused = false, this._active = o, this._ident = 0;
+          }
+          hook(e3, t3) {
+            if (this.reset(), this._ident = e3, this._active = this._handlers[e3] || o, this._active.length) for (let e4 = this._active.length - 1; e4 >= 0; e4--) this._active[e4].hook(t3);
+            else this._handlerFb(this._ident, "HOOK", t3);
+          }
+          put(e3, t3, i3) {
+            if (this._active.length) for (let s3 = this._active.length - 1; s3 >= 0; s3--) this._active[s3].put(e3, t3, i3);
+            else this._handlerFb(this._ident, "PUT", (0, s2.utf32ToString)(e3, t3, i3));
+          }
+          unhook(e3, t3 = true) {
+            if (this._active.length) {
+              let i3 = false, s3 = this._active.length - 1, r2 = false;
+              if (this._stack.paused && (s3 = this._stack.loopPosition - 1, i3 = t3, r2 = this._stack.fallThrough, this._stack.paused = false), !r2 && false === i3) {
+                for (; s3 >= 0 && (i3 = this._active[s3].unhook(e3), true !== i3); s3--) if (i3 instanceof Promise) return this._stack.paused = true, this._stack.loopPosition = s3, this._stack.fallThrough = false, i3;
+                s3--;
+              }
+              for (; s3 >= 0; s3--) if (i3 = this._active[s3].unhook(false), i3 instanceof Promise) return this._stack.paused = true, this._stack.loopPosition = s3, this._stack.fallThrough = true, i3;
+            } else this._handlerFb(this._ident, "UNHOOK", e3);
+            this._active = o, this._ident = 0;
+          }
+        };
+        const a = new r.Params();
+        a.addParam(0), t2.DcsHandler = class {
+          constructor(e3) {
+            this._handler = e3, this._data = "", this._params = a, this._hitLimit = false;
+          }
+          hook(e3) {
+            this._params = e3.length > 1 || e3.params[0] ? e3.clone() : a, this._data = "", this._hitLimit = false;
+          }
+          put(e3, t3, i3) {
+            this._hitLimit || (this._data += (0, s2.utf32ToString)(e3, t3, i3), this._data.length > n.PAYLOAD_LIMIT && (this._data = "", this._hitLimit = true));
+          }
+          unhook(e3) {
+            let t3 = false;
+            if (this._hitLimit) t3 = false;
+            else if (e3 && (t3 = this._handler(this._data, this._params), t3 instanceof Promise)) return t3.then((e4) => (this._params = a, this._data = "", this._hitLimit = false, e4));
+            return this._params = a, this._data = "", this._hitLimit = false, t3;
+          }
+        };
+      }, 2015: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.EscapeSequenceParser = t2.VT500_TRANSITION_TABLE = t2.TransitionTable = void 0;
+        const s2 = i2(844), r = i2(8742), n = i2(6242), o = i2(6351);
+        class a {
+          constructor(e3) {
+            this.table = new Uint8Array(e3);
+          }
+          setDefault(e3, t3) {
+            this.table.fill(e3 << 4 | t3);
+          }
+          add(e3, t3, i3, s3) {
+            this.table[t3 << 8 | e3] = i3 << 4 | s3;
+          }
+          addMany(e3, t3, i3, s3) {
+            for (let r2 = 0; r2 < e3.length; r2++) this.table[t3 << 8 | e3[r2]] = i3 << 4 | s3;
+          }
+        }
+        t2.TransitionTable = a;
+        const h = 160;
+        t2.VT500_TRANSITION_TABLE = function() {
+          const e3 = new a(4095), t3 = Array.apply(null, Array(256)).map((e4, t4) => t4), i3 = (e4, i4) => t3.slice(e4, i4), s3 = i3(32, 127), r2 = i3(0, 24);
+          r2.push(25), r2.push.apply(r2, i3(28, 32));
+          const n2 = i3(0, 14);
+          let o2;
+          for (o2 in e3.setDefault(1, 0), e3.addMany(s3, 0, 2, 0), n2) e3.addMany([24, 26, 153, 154], o2, 3, 0), e3.addMany(i3(128, 144), o2, 3, 0), e3.addMany(i3(144, 152), o2, 3, 0), e3.add(156, o2, 0, 0), e3.add(27, o2, 11, 1), e3.add(157, o2, 4, 8), e3.addMany([152, 158, 159], o2, 0, 7), e3.add(155, o2, 11, 3), e3.add(144, o2, 11, 9);
+          return e3.addMany(r2, 0, 3, 0), e3.addMany(r2, 1, 3, 1), e3.add(127, 1, 0, 1), e3.addMany(r2, 8, 0, 8), e3.addMany(r2, 3, 3, 3), e3.add(127, 3, 0, 3), e3.addMany(r2, 4, 3, 4), e3.add(127, 4, 0, 4), e3.addMany(r2, 6, 3, 6), e3.addMany(r2, 5, 3, 5), e3.add(127, 5, 0, 5), e3.addMany(r2, 2, 3, 2), e3.add(127, 2, 0, 2), e3.add(93, 1, 4, 8), e3.addMany(s3, 8, 5, 8), e3.add(127, 8, 5, 8), e3.addMany([156, 27, 24, 26, 7], 8, 6, 0), e3.addMany(i3(28, 32), 8, 0, 8), e3.addMany([88, 94, 95], 1, 0, 7), e3.addMany(s3, 7, 0, 7), e3.addMany(r2, 7, 0, 7), e3.add(156, 7, 0, 0), e3.add(127, 7, 0, 7), e3.add(91, 1, 11, 3), e3.addMany(i3(64, 127), 3, 7, 0), e3.addMany(i3(48, 60), 3, 8, 4), e3.addMany([60, 61, 62, 63], 3, 9, 4), e3.addMany(i3(48, 60), 4, 8, 4), e3.addMany(i3(64, 127), 4, 7, 0), e3.addMany([60, 61, 62, 63], 4, 0, 6), e3.addMany(i3(32, 64), 6, 0, 6), e3.add(127, 6, 0, 6), e3.addMany(i3(64, 127), 6, 0, 0), e3.addMany(i3(32, 48), 3, 9, 5), e3.addMany(i3(32, 48), 5, 9, 5), e3.addMany(i3(48, 64), 5, 0, 6), e3.addMany(i3(64, 127), 5, 7, 0), e3.addMany(i3(32, 48), 4, 9, 5), e3.addMany(i3(32, 48), 1, 9, 2), e3.addMany(i3(32, 48), 2, 9, 2), e3.addMany(i3(48, 127), 2, 10, 0), e3.addMany(i3(48, 80), 1, 10, 0), e3.addMany(i3(81, 88), 1, 10, 0), e3.addMany([89, 90, 92], 1, 10, 0), e3.addMany(i3(96, 127), 1, 10, 0), e3.add(80, 1, 11, 9), e3.addMany(r2, 9, 0, 9), e3.add(127, 9, 0, 9), e3.addMany(i3(28, 32), 9, 0, 9), e3.addMany(i3(32, 48), 9, 9, 12), e3.addMany(i3(48, 60), 9, 8, 10), e3.addMany([60, 61, 62, 63], 9, 9, 10), e3.addMany(r2, 11, 0, 11), e3.addMany(i3(32, 128), 11, 0, 11), e3.addMany(i3(28, 32), 11, 0, 11), e3.addMany(r2, 10, 0, 10), e3.add(127, 10, 0, 10), e3.addMany(i3(28, 32), 10, 0, 10), e3.addMany(i3(48, 60), 10, 8, 10), e3.addMany([60, 61, 62, 63], 10, 0, 11), e3.addMany(i3(32, 48), 10, 9, 12), e3.addMany(r2, 12, 0, 12), e3.add(127, 12, 0, 12), e3.addMany(i3(28, 32), 12, 0, 12), e3.addMany(i3(32, 48), 12, 9, 12), e3.addMany(i3(48, 64), 12, 0, 11), e3.addMany(i3(64, 127), 12, 12, 13), e3.addMany(i3(64, 127), 10, 12, 13), e3.addMany(i3(64, 127), 9, 12, 13), e3.addMany(r2, 13, 13, 13), e3.addMany(s3, 13, 13, 13), e3.add(127, 13, 0, 13), e3.addMany([27, 156, 24, 26], 13, 14, 0), e3.add(h, 0, 2, 0), e3.add(h, 8, 5, 8), e3.add(h, 6, 0, 6), e3.add(h, 11, 0, 11), e3.add(h, 13, 13, 13), e3;
+        }();
+        class c extends s2.Disposable {
+          constructor(e3 = t2.VT500_TRANSITION_TABLE) {
+            super(), this._transitions = e3, this._parseStack = { state: 0, handlers: [], handlerPos: 0, transition: 0, chunkPos: 0 }, this.initialState = 0, this.currentState = this.initialState, this._params = new r.Params(), this._params.addParam(0), this._collect = 0, this.precedingJoinState = 0, this._printHandlerFb = (e4, t3, i3) => {
+            }, this._executeHandlerFb = (e4) => {
+            }, this._csiHandlerFb = (e4, t3) => {
+            }, this._escHandlerFb = (e4) => {
+            }, this._errorHandlerFb = (e4) => e4, this._printHandler = this._printHandlerFb, this._executeHandlers = /* @__PURE__ */ Object.create(null), this._csiHandlers = /* @__PURE__ */ Object.create(null), this._escHandlers = /* @__PURE__ */ Object.create(null), this.register((0, s2.toDisposable)(() => {
+              this._csiHandlers = /* @__PURE__ */ Object.create(null), this._executeHandlers = /* @__PURE__ */ Object.create(null), this._escHandlers = /* @__PURE__ */ Object.create(null);
+            })), this._oscParser = this.register(new n.OscParser()), this._dcsParser = this.register(new o.DcsParser()), this._errorHandler = this._errorHandlerFb, this.registerEscHandler({ final: "\\" }, () => true);
+          }
+          _identifier(e3, t3 = [64, 126]) {
+            let i3 = 0;
+            if (e3.prefix) {
+              if (e3.prefix.length > 1) throw new Error("only one byte as prefix supported");
+              if (i3 = e3.prefix.charCodeAt(0), i3 && 60 > i3 || i3 > 63) throw new Error("prefix must be in range 0x3c .. 0x3f");
+            }
+            if (e3.intermediates) {
+              if (e3.intermediates.length > 2) throw new Error("only two bytes as intermediates are supported");
+              for (let t4 = 0; t4 < e3.intermediates.length; ++t4) {
+                const s4 = e3.intermediates.charCodeAt(t4);
+                if (32 > s4 || s4 > 47) throw new Error("intermediate must be in range 0x20 .. 0x2f");
+                i3 <<= 8, i3 |= s4;
+              }
+            }
+            if (1 !== e3.final.length) throw new Error("final must be a single byte");
+            const s3 = e3.final.charCodeAt(0);
+            if (t3[0] > s3 || s3 > t3[1]) throw new Error(`final must be in range ${t3[0]} .. ${t3[1]}`);
+            return i3 <<= 8, i3 |= s3, i3;
+          }
+          identToString(e3) {
+            const t3 = [];
+            for (; e3; ) t3.push(String.fromCharCode(255 & e3)), e3 >>= 8;
+            return t3.reverse().join("");
+          }
+          setPrintHandler(e3) {
+            this._printHandler = e3;
+          }
+          clearPrintHandler() {
+            this._printHandler = this._printHandlerFb;
+          }
+          registerEscHandler(e3, t3) {
+            const i3 = this._identifier(e3, [48, 126]);
+            void 0 === this._escHandlers[i3] && (this._escHandlers[i3] = []);
+            const s3 = this._escHandlers[i3];
+            return s3.push(t3), { dispose: () => {
+              const e4 = s3.indexOf(t3);
+              -1 !== e4 && s3.splice(e4, 1);
+            } };
+          }
+          clearEscHandler(e3) {
+            this._escHandlers[this._identifier(e3, [48, 126])] && delete this._escHandlers[this._identifier(e3, [48, 126])];
+          }
+          setEscHandlerFallback(e3) {
+            this._escHandlerFb = e3;
+          }
+          setExecuteHandler(e3, t3) {
+            this._executeHandlers[e3.charCodeAt(0)] = t3;
+          }
+          clearExecuteHandler(e3) {
+            this._executeHandlers[e3.charCodeAt(0)] && delete this._executeHandlers[e3.charCodeAt(0)];
+          }
+          setExecuteHandlerFallback(e3) {
+            this._executeHandlerFb = e3;
+          }
+          registerCsiHandler(e3, t3) {
+            const i3 = this._identifier(e3);
+            void 0 === this._csiHandlers[i3] && (this._csiHandlers[i3] = []);
+            const s3 = this._csiHandlers[i3];
+            return s3.push(t3), { dispose: () => {
+              const e4 = s3.indexOf(t3);
+              -1 !== e4 && s3.splice(e4, 1);
+            } };
+          }
+          clearCsiHandler(e3) {
+            this._csiHandlers[this._identifier(e3)] && delete this._csiHandlers[this._identifier(e3)];
+          }
+          setCsiHandlerFallback(e3) {
+            this._csiHandlerFb = e3;
+          }
+          registerDcsHandler(e3, t3) {
+            return this._dcsParser.registerHandler(this._identifier(e3), t3);
+          }
+          clearDcsHandler(e3) {
+            this._dcsParser.clearHandler(this._identifier(e3));
+          }
+          setDcsHandlerFallback(e3) {
+            this._dcsParser.setHandlerFallback(e3);
+          }
+          registerOscHandler(e3, t3) {
+            return this._oscParser.registerHandler(e3, t3);
+          }
+          clearOscHandler(e3) {
+            this._oscParser.clearHandler(e3);
+          }
+          setOscHandlerFallback(e3) {
+            this._oscParser.setHandlerFallback(e3);
+          }
+          setErrorHandler(e3) {
+            this._errorHandler = e3;
+          }
+          clearErrorHandler() {
+            this._errorHandler = this._errorHandlerFb;
+          }
+          reset() {
+            this.currentState = this.initialState, this._oscParser.reset(), this._dcsParser.reset(), this._params.reset(), this._params.addParam(0), this._collect = 0, this.precedingJoinState = 0, 0 !== this._parseStack.state && (this._parseStack.state = 2, this._parseStack.handlers = []);
+          }
+          _preserveStack(e3, t3, i3, s3, r2) {
+            this._parseStack.state = e3, this._parseStack.handlers = t3, this._parseStack.handlerPos = i3, this._parseStack.transition = s3, this._parseStack.chunkPos = r2;
+          }
+          parse(e3, t3, i3) {
+            let s3, r2 = 0, n2 = 0, o2 = 0;
+            if (this._parseStack.state) if (2 === this._parseStack.state) this._parseStack.state = 0, o2 = this._parseStack.chunkPos + 1;
+            else {
+              if (void 0 === i3 || 1 === this._parseStack.state) throw this._parseStack.state = 1, new Error("improper continuation due to previous async handler, giving up parsing");
+              const t4 = this._parseStack.handlers;
+              let n3 = this._parseStack.handlerPos - 1;
+              switch (this._parseStack.state) {
+                case 3:
+                  if (false === i3 && n3 > -1) {
+                    for (; n3 >= 0 && (s3 = t4[n3](this._params), true !== s3); n3--) if (s3 instanceof Promise) return this._parseStack.handlerPos = n3, s3;
+                  }
+                  this._parseStack.handlers = [];
+                  break;
+                case 4:
+                  if (false === i3 && n3 > -1) {
+                    for (; n3 >= 0 && (s3 = t4[n3](), true !== s3); n3--) if (s3 instanceof Promise) return this._parseStack.handlerPos = n3, s3;
+                  }
+                  this._parseStack.handlers = [];
+                  break;
+                case 6:
+                  if (r2 = e3[this._parseStack.chunkPos], s3 = this._dcsParser.unhook(24 !== r2 && 26 !== r2, i3), s3) return s3;
+                  27 === r2 && (this._parseStack.transition |= 1), this._params.reset(), this._params.addParam(0), this._collect = 0;
+                  break;
+                case 5:
+                  if (r2 = e3[this._parseStack.chunkPos], s3 = this._oscParser.end(24 !== r2 && 26 !== r2, i3), s3) return s3;
+                  27 === r2 && (this._parseStack.transition |= 1), this._params.reset(), this._params.addParam(0), this._collect = 0;
+              }
+              this._parseStack.state = 0, o2 = this._parseStack.chunkPos + 1, this.precedingJoinState = 0, this.currentState = 15 & this._parseStack.transition;
+            }
+            for (let i4 = o2; i4 < t3; ++i4) {
+              switch (r2 = e3[i4], n2 = this._transitions.table[this.currentState << 8 | (r2 < 160 ? r2 : h)], n2 >> 4) {
+                case 2:
+                  for (let s4 = i4 + 1; ; ++s4) {
+                    if (s4 >= t3 || (r2 = e3[s4]) < 32 || r2 > 126 && r2 < h) {
+                      this._printHandler(e3, i4, s4), i4 = s4 - 1;
+                      break;
+                    }
+                    if (++s4 >= t3 || (r2 = e3[s4]) < 32 || r2 > 126 && r2 < h) {
+                      this._printHandler(e3, i4, s4), i4 = s4 - 1;
+                      break;
+                    }
+                    if (++s4 >= t3 || (r2 = e3[s4]) < 32 || r2 > 126 && r2 < h) {
+                      this._printHandler(e3, i4, s4), i4 = s4 - 1;
+                      break;
+                    }
+                    if (++s4 >= t3 || (r2 = e3[s4]) < 32 || r2 > 126 && r2 < h) {
+                      this._printHandler(e3, i4, s4), i4 = s4 - 1;
+                      break;
+                    }
+                  }
+                  break;
+                case 3:
+                  this._executeHandlers[r2] ? this._executeHandlers[r2]() : this._executeHandlerFb(r2), this.precedingJoinState = 0;
+                  break;
+                case 0:
+                  break;
+                case 1:
+                  if (this._errorHandler({ position: i4, code: r2, currentState: this.currentState, collect: this._collect, params: this._params, abort: false }).abort) return;
+                  break;
+                case 7:
+                  const o3 = this._csiHandlers[this._collect << 8 | r2];
+                  let a2 = o3 ? o3.length - 1 : -1;
+                  for (; a2 >= 0 && (s3 = o3[a2](this._params), true !== s3); a2--) if (s3 instanceof Promise) return this._preserveStack(3, o3, a2, n2, i4), s3;
+                  a2 < 0 && this._csiHandlerFb(this._collect << 8 | r2, this._params), this.precedingJoinState = 0;
+                  break;
+                case 8:
+                  do {
+                    switch (r2) {
+                      case 59:
+                        this._params.addParam(0);
+                        break;
+                      case 58:
+                        this._params.addSubParam(-1);
+                        break;
+                      default:
+                        this._params.addDigit(r2 - 48);
+                    }
+                  } while (++i4 < t3 && (r2 = e3[i4]) > 47 && r2 < 60);
+                  i4--;
+                  break;
+                case 9:
+                  this._collect <<= 8, this._collect |= r2;
+                  break;
+                case 10:
+                  const c2 = this._escHandlers[this._collect << 8 | r2];
+                  let l = c2 ? c2.length - 1 : -1;
+                  for (; l >= 0 && (s3 = c2[l](), true !== s3); l--) if (s3 instanceof Promise) return this._preserveStack(4, c2, l, n2, i4), s3;
+                  l < 0 && this._escHandlerFb(this._collect << 8 | r2), this.precedingJoinState = 0;
+                  break;
+                case 11:
+                  this._params.reset(), this._params.addParam(0), this._collect = 0;
+                  break;
+                case 12:
+                  this._dcsParser.hook(this._collect << 8 | r2, this._params);
+                  break;
+                case 13:
+                  for (let s4 = i4 + 1; ; ++s4) if (s4 >= t3 || 24 === (r2 = e3[s4]) || 26 === r2 || 27 === r2 || r2 > 127 && r2 < h) {
+                    this._dcsParser.put(e3, i4, s4), i4 = s4 - 1;
+                    break;
+                  }
+                  break;
+                case 14:
+                  if (s3 = this._dcsParser.unhook(24 !== r2 && 26 !== r2), s3) return this._preserveStack(6, [], 0, n2, i4), s3;
+                  27 === r2 && (n2 |= 1), this._params.reset(), this._params.addParam(0), this._collect = 0, this.precedingJoinState = 0;
+                  break;
+                case 4:
+                  this._oscParser.start();
+                  break;
+                case 5:
+                  for (let s4 = i4 + 1; ; s4++) if (s4 >= t3 || (r2 = e3[s4]) < 32 || r2 > 127 && r2 < h) {
+                    this._oscParser.put(e3, i4, s4), i4 = s4 - 1;
+                    break;
+                  }
+                  break;
+                case 6:
+                  if (s3 = this._oscParser.end(24 !== r2 && 26 !== r2), s3) return this._preserveStack(5, [], 0, n2, i4), s3;
+                  27 === r2 && (n2 |= 1), this._params.reset(), this._params.addParam(0), this._collect = 0, this.precedingJoinState = 0;
+              }
+              this.currentState = 15 & n2;
+            }
+          }
+        }
+        t2.EscapeSequenceParser = c;
+      }, 6242: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.OscHandler = t2.OscParser = void 0;
+        const s2 = i2(5770), r = i2(482), n = [];
+        t2.OscParser = class {
+          constructor() {
+            this._state = 0, this._active = n, this._id = -1, this._handlers = /* @__PURE__ */ Object.create(null), this._handlerFb = () => {
+            }, this._stack = { paused: false, loopPosition: 0, fallThrough: false };
+          }
+          registerHandler(e3, t3) {
+            void 0 === this._handlers[e3] && (this._handlers[e3] = []);
+            const i3 = this._handlers[e3];
+            return i3.push(t3), { dispose: () => {
+              const e4 = i3.indexOf(t3);
+              -1 !== e4 && i3.splice(e4, 1);
+            } };
+          }
+          clearHandler(e3) {
+            this._handlers[e3] && delete this._handlers[e3];
+          }
+          setHandlerFallback(e3) {
+            this._handlerFb = e3;
+          }
+          dispose() {
+            this._handlers = /* @__PURE__ */ Object.create(null), this._handlerFb = () => {
+            }, this._active = n;
+          }
+          reset() {
+            if (2 === this._state) for (let e3 = this._stack.paused ? this._stack.loopPosition - 1 : this._active.length - 1; e3 >= 0; --e3) this._active[e3].end(false);
+            this._stack.paused = false, this._active = n, this._id = -1, this._state = 0;
+          }
+          _start() {
+            if (this._active = this._handlers[this._id] || n, this._active.length) for (let e3 = this._active.length - 1; e3 >= 0; e3--) this._active[e3].start();
+            else this._handlerFb(this._id, "START");
+          }
+          _put(e3, t3, i3) {
+            if (this._active.length) for (let s3 = this._active.length - 1; s3 >= 0; s3--) this._active[s3].put(e3, t3, i3);
+            else this._handlerFb(this._id, "PUT", (0, r.utf32ToString)(e3, t3, i3));
+          }
+          start() {
+            this.reset(), this._state = 1;
+          }
+          put(e3, t3, i3) {
+            if (3 !== this._state) {
+              if (1 === this._state) for (; t3 < i3; ) {
+                const i4 = e3[t3++];
+                if (59 === i4) {
+                  this._state = 2, this._start();
+                  break;
+                }
+                if (i4 < 48 || 57 < i4) return void (this._state = 3);
+                -1 === this._id && (this._id = 0), this._id = 10 * this._id + i4 - 48;
+              }
+              2 === this._state && i3 - t3 > 0 && this._put(e3, t3, i3);
+            }
+          }
+          end(e3, t3 = true) {
+            if (0 !== this._state) {
+              if (3 !== this._state) if (1 === this._state && this._start(), this._active.length) {
+                let i3 = false, s3 = this._active.length - 1, r2 = false;
+                if (this._stack.paused && (s3 = this._stack.loopPosition - 1, i3 = t3, r2 = this._stack.fallThrough, this._stack.paused = false), !r2 && false === i3) {
+                  for (; s3 >= 0 && (i3 = this._active[s3].end(e3), true !== i3); s3--) if (i3 instanceof Promise) return this._stack.paused = true, this._stack.loopPosition = s3, this._stack.fallThrough = false, i3;
+                  s3--;
+                }
+                for (; s3 >= 0; s3--) if (i3 = this._active[s3].end(false), i3 instanceof Promise) return this._stack.paused = true, this._stack.loopPosition = s3, this._stack.fallThrough = true, i3;
+              } else this._handlerFb(this._id, "END", e3);
+              this._active = n, this._id = -1, this._state = 0;
+            }
+          }
+        }, t2.OscHandler = class {
+          constructor(e3) {
+            this._handler = e3, this._data = "", this._hitLimit = false;
+          }
+          start() {
+            this._data = "", this._hitLimit = false;
+          }
+          put(e3, t3, i3) {
+            this._hitLimit || (this._data += (0, r.utf32ToString)(e3, t3, i3), this._data.length > s2.PAYLOAD_LIMIT && (this._data = "", this._hitLimit = true));
+          }
+          end(e3) {
+            let t3 = false;
+            if (this._hitLimit) t3 = false;
+            else if (e3 && (t3 = this._handler(this._data), t3 instanceof Promise)) return t3.then((e4) => (this._data = "", this._hitLimit = false, e4));
+            return this._data = "", this._hitLimit = false, t3;
+          }
+        };
+      }, 8742: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.Params = void 0;
+        const i2 = 2147483647;
+        class s2 {
+          static fromArray(e3) {
+            const t3 = new s2();
+            if (!e3.length) return t3;
+            for (let i3 = Array.isArray(e3[0]) ? 1 : 0; i3 < e3.length; ++i3) {
+              const s3 = e3[i3];
+              if (Array.isArray(s3)) for (let e4 = 0; e4 < s3.length; ++e4) t3.addSubParam(s3[e4]);
+              else t3.addParam(s3);
+            }
+            return t3;
+          }
+          constructor(e3 = 32, t3 = 32) {
+            if (this.maxLength = e3, this.maxSubParamsLength = t3, t3 > 256) throw new Error("maxSubParamsLength must not be greater than 256");
+            this.params = new Int32Array(e3), this.length = 0, this._subParams = new Int32Array(t3), this._subParamsLength = 0, this._subParamsIdx = new Uint16Array(e3), this._rejectDigits = false, this._rejectSubDigits = false, this._digitIsSub = false;
+          }
+          clone() {
+            const e3 = new s2(this.maxLength, this.maxSubParamsLength);
+            return e3.params.set(this.params), e3.length = this.length, e3._subParams.set(this._subParams), e3._subParamsLength = this._subParamsLength, e3._subParamsIdx.set(this._subParamsIdx), e3._rejectDigits = this._rejectDigits, e3._rejectSubDigits = this._rejectSubDigits, e3._digitIsSub = this._digitIsSub, e3;
+          }
+          toArray() {
+            const e3 = [];
+            for (let t3 = 0; t3 < this.length; ++t3) {
+              e3.push(this.params[t3]);
+              const i3 = this._subParamsIdx[t3] >> 8, s3 = 255 & this._subParamsIdx[t3];
+              s3 - i3 > 0 && e3.push(Array.prototype.slice.call(this._subParams, i3, s3));
+            }
+            return e3;
+          }
+          reset() {
+            this.length = 0, this._subParamsLength = 0, this._rejectDigits = false, this._rejectSubDigits = false, this._digitIsSub = false;
+          }
+          addParam(e3) {
+            if (this._digitIsSub = false, this.length >= this.maxLength) this._rejectDigits = true;
+            else {
+              if (e3 < -1) throw new Error("values lesser than -1 are not allowed");
+              this._subParamsIdx[this.length] = this._subParamsLength << 8 | this._subParamsLength, this.params[this.length++] = e3 > i2 ? i2 : e3;
+            }
+          }
+          addSubParam(e3) {
+            if (this._digitIsSub = true, this.length) if (this._rejectDigits || this._subParamsLength >= this.maxSubParamsLength) this._rejectSubDigits = true;
+            else {
+              if (e3 < -1) throw new Error("values lesser than -1 are not allowed");
+              this._subParams[this._subParamsLength++] = e3 > i2 ? i2 : e3, this._subParamsIdx[this.length - 1]++;
+            }
+          }
+          hasSubParams(e3) {
+            return (255 & this._subParamsIdx[e3]) - (this._subParamsIdx[e3] >> 8) > 0;
+          }
+          getSubParams(e3) {
+            const t3 = this._subParamsIdx[e3] >> 8, i3 = 255 & this._subParamsIdx[e3];
+            return i3 - t3 > 0 ? this._subParams.subarray(t3, i3) : null;
+          }
+          getSubParamsAll() {
+            const e3 = {};
+            for (let t3 = 0; t3 < this.length; ++t3) {
+              const i3 = this._subParamsIdx[t3] >> 8, s3 = 255 & this._subParamsIdx[t3];
+              s3 - i3 > 0 && (e3[t3] = this._subParams.slice(i3, s3));
+            }
+            return e3;
+          }
+          addDigit(e3) {
+            let t3;
+            if (this._rejectDigits || !(t3 = this._digitIsSub ? this._subParamsLength : this.length) || this._digitIsSub && this._rejectSubDigits) return;
+            const s3 = this._digitIsSub ? this._subParams : this.params, r = s3[t3 - 1];
+            s3[t3 - 1] = ~r ? Math.min(10 * r + e3, i2) : e3;
+          }
+        }
+        t2.Params = s2;
+      }, 5741: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.AddonManager = void 0, t2.AddonManager = class {
+          constructor() {
+            this._addons = [];
+          }
+          dispose() {
+            for (let e3 = this._addons.length - 1; e3 >= 0; e3--) this._addons[e3].instance.dispose();
+          }
+          loadAddon(e3, t3) {
+            const i2 = { instance: t3, dispose: t3.dispose, isDisposed: false };
+            this._addons.push(i2), t3.dispose = () => this._wrappedAddonDispose(i2), t3.activate(e3);
+          }
+          _wrappedAddonDispose(e3) {
+            if (e3.isDisposed) return;
+            let t3 = -1;
+            for (let i2 = 0; i2 < this._addons.length; i2++) if (this._addons[i2] === e3) {
+              t3 = i2;
+              break;
+            }
+            if (-1 === t3) throw new Error("Could not dispose an addon that has not been loaded");
+            e3.isDisposed = true, e3.dispose.apply(e3.instance), this._addons.splice(t3, 1);
+          }
+        };
+      }, 8771: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferApiView = void 0;
+        const s2 = i2(3785), r = i2(511);
+        t2.BufferApiView = class {
+          constructor(e3, t3) {
+            this._buffer = e3, this.type = t3;
+          }
+          init(e3) {
+            return this._buffer = e3, this;
+          }
+          get cursorY() {
+            return this._buffer.y;
+          }
+          get cursorX() {
+            return this._buffer.x;
+          }
+          get viewportY() {
+            return this._buffer.ydisp;
+          }
+          get baseY() {
+            return this._buffer.ybase;
+          }
+          get length() {
+            return this._buffer.lines.length;
+          }
+          getLine(e3) {
+            const t3 = this._buffer.lines.get(e3);
+            if (t3) return new s2.BufferLineApiView(t3);
+          }
+          getNullCell() {
+            return new r.CellData();
+          }
+        };
+      }, 3785: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferLineApiView = void 0;
+        const s2 = i2(511);
+        t2.BufferLineApiView = class {
+          constructor(e3) {
+            this._line = e3;
+          }
+          get isWrapped() {
+            return this._line.isWrapped;
+          }
+          get length() {
+            return this._line.length;
+          }
+          getCell(e3, t3) {
+            if (!(e3 < 0 || e3 >= this._line.length)) return t3 ? (this._line.loadCell(e3, t3), t3) : this._line.loadCell(e3, new s2.CellData());
+          }
+          translateToString(e3, t3, i3) {
+            return this._line.translateToString(e3, t3, i3);
+          }
+        };
+      }, 8285: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferNamespaceApi = void 0;
+        const s2 = i2(8771), r = i2(8460), n = i2(844);
+        class o extends n.Disposable {
+          constructor(e3) {
+            super(), this._core = e3, this._onBufferChange = this.register(new r.EventEmitter()), this.onBufferChange = this._onBufferChange.event, this._normal = new s2.BufferApiView(this._core.buffers.normal, "normal"), this._alternate = new s2.BufferApiView(this._core.buffers.alt, "alternate"), this._core.buffers.onBufferActivate(() => this._onBufferChange.fire(this.active));
+          }
+          get active() {
+            if (this._core.buffers.active === this._core.buffers.normal) return this.normal;
+            if (this._core.buffers.active === this._core.buffers.alt) return this.alternate;
+            throw new Error("Active buffer is neither normal nor alternate");
+          }
+          get normal() {
+            return this._normal.init(this._core.buffers.normal);
+          }
+          get alternate() {
+            return this._alternate.init(this._core.buffers.alt);
+          }
+        }
+        t2.BufferNamespaceApi = o;
+      }, 7975: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.ParserApi = void 0, t2.ParserApi = class {
+          constructor(e3) {
+            this._core = e3;
+          }
+          registerCsiHandler(e3, t3) {
+            return this._core.registerCsiHandler(e3, (e4) => t3(e4.toArray()));
+          }
+          addCsiHandler(e3, t3) {
+            return this.registerCsiHandler(e3, t3);
+          }
+          registerDcsHandler(e3, t3) {
+            return this._core.registerDcsHandler(e3, (e4, i2) => t3(e4, i2.toArray()));
+          }
+          addDcsHandler(e3, t3) {
+            return this.registerDcsHandler(e3, t3);
+          }
+          registerEscHandler(e3, t3) {
+            return this._core.registerEscHandler(e3, t3);
+          }
+          addEscHandler(e3, t3) {
+            return this.registerEscHandler(e3, t3);
+          }
+          registerOscHandler(e3, t3) {
+            return this._core.registerOscHandler(e3, t3);
+          }
+          addOscHandler(e3, t3) {
+            return this.registerOscHandler(e3, t3);
+          }
+        };
+      }, 7090: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.UnicodeApi = void 0, t2.UnicodeApi = class {
+          constructor(e3) {
+            this._core = e3;
+          }
+          register(e3) {
+            this._core.unicodeService.register(e3);
+          }
+          get versions() {
+            return this._core.unicodeService.versions;
+          }
+          get activeVersion() {
+            return this._core.unicodeService.activeVersion;
+          }
+          set activeVersion(e3) {
+            this._core.unicodeService.activeVersion = e3;
+          }
+        };
+      }, 744: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.BufferService = t2.MINIMUM_ROWS = t2.MINIMUM_COLS = void 0;
+        const n = i2(8460), o = i2(844), a = i2(5295), h = i2(2585);
+        t2.MINIMUM_COLS = 2, t2.MINIMUM_ROWS = 1;
+        let c = t2.BufferService = class extends o.Disposable {
+          get buffer() {
+            return this.buffers.active;
+          }
+          constructor(e3) {
+            super(), this.isUserScrolling = false, this._onResize = this.register(new n.EventEmitter()), this.onResize = this._onResize.event, this._onScroll = this.register(new n.EventEmitter()), this.onScroll = this._onScroll.event, this.cols = Math.max(e3.rawOptions.cols || 0, t2.MINIMUM_COLS), this.rows = Math.max(e3.rawOptions.rows || 0, t2.MINIMUM_ROWS), this.buffers = this.register(new a.BufferSet(e3, this));
+          }
+          resize(e3, t3) {
+            this.cols = e3, this.rows = t3, this.buffers.resize(e3, t3), this._onResize.fire({ cols: e3, rows: t3 });
+          }
+          reset() {
+            this.buffers.reset(), this.isUserScrolling = false;
+          }
+          scroll(e3, t3 = false) {
+            const i3 = this.buffer;
+            let s3;
+            s3 = this._cachedBlankLine, s3 && s3.length === this.cols && s3.getFg(0) === e3.fg && s3.getBg(0) === e3.bg || (s3 = i3.getBlankLine(e3, t3), this._cachedBlankLine = s3), s3.isWrapped = t3;
+            const r2 = i3.ybase + i3.scrollTop, n2 = i3.ybase + i3.scrollBottom;
+            if (0 === i3.scrollTop) {
+              const e4 = i3.lines.isFull;
+              n2 === i3.lines.length - 1 ? e4 ? i3.lines.recycle().copyFrom(s3) : i3.lines.push(s3.clone()) : i3.lines.splice(n2 + 1, 0, s3.clone()), e4 ? this.isUserScrolling && (i3.ydisp = Math.max(i3.ydisp - 1, 0)) : (i3.ybase++, this.isUserScrolling || i3.ydisp++);
+            } else {
+              const e4 = n2 - r2 + 1;
+              i3.lines.shiftElements(r2 + 1, e4 - 1, -1), i3.lines.set(n2, s3.clone());
+            }
+            this.isUserScrolling || (i3.ydisp = i3.ybase), this._onScroll.fire(i3.ydisp);
+          }
+          scrollLines(e3, t3, i3) {
+            const s3 = this.buffer;
+            if (e3 < 0) {
+              if (0 === s3.ydisp) return;
+              this.isUserScrolling = true;
+            } else e3 + s3.ydisp >= s3.ybase && (this.isUserScrolling = false);
+            const r2 = s3.ydisp;
+            s3.ydisp = Math.max(Math.min(s3.ydisp + e3, s3.ybase), 0), r2 !== s3.ydisp && (t3 || this._onScroll.fire(s3.ydisp));
+          }
+        };
+        t2.BufferService = c = s2([r(0, h.IOptionsService)], c);
+      }, 7994: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CharsetService = void 0, t2.CharsetService = class {
+          constructor() {
+            this.glevel = 0, this._charsets = [];
+          }
+          reset() {
+            this.charset = void 0, this._charsets = [], this.glevel = 0;
+          }
+          setgLevel(e3) {
+            this.glevel = e3, this.charset = this._charsets[e3];
+          }
+          setgCharset(e3, t3) {
+            this._charsets[e3] = t3, this.glevel === e3 && (this.charset = t3);
+          }
+        };
+      }, 1753: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CoreMouseService = void 0;
+        const n = i2(2585), o = i2(8460), a = i2(844), h = { NONE: { events: 0, restrict: () => false }, X10: { events: 1, restrict: (e3) => 4 !== e3.button && 1 === e3.action && (e3.ctrl = false, e3.alt = false, e3.shift = false, true) }, VT200: { events: 19, restrict: (e3) => 32 !== e3.action }, DRAG: { events: 23, restrict: (e3) => 32 !== e3.action || 3 !== e3.button }, ANY: { events: 31, restrict: (e3) => true } };
+        function c(e3, t3) {
+          let i3 = (e3.ctrl ? 16 : 0) | (e3.shift ? 4 : 0) | (e3.alt ? 8 : 0);
+          return 4 === e3.button ? (i3 |= 64, i3 |= e3.action) : (i3 |= 3 & e3.button, 4 & e3.button && (i3 |= 64), 8 & e3.button && (i3 |= 128), 32 === e3.action ? i3 |= 32 : 0 !== e3.action || t3 || (i3 |= 3)), i3;
+        }
+        const l = String.fromCharCode, d = { DEFAULT: (e3) => {
+          const t3 = [c(e3, false) + 32, e3.col + 32, e3.row + 32];
+          return t3[0] > 255 || t3[1] > 255 || t3[2] > 255 ? "" : `\x1B[M${l(t3[0])}${l(t3[1])}${l(t3[2])}`;
+        }, SGR: (e3) => {
+          const t3 = 0 === e3.action && 4 !== e3.button ? "m" : "M";
+          return `\x1B[<${c(e3, true)};${e3.col};${e3.row}${t3}`;
+        }, SGR_PIXELS: (e3) => {
+          const t3 = 0 === e3.action && 4 !== e3.button ? "m" : "M";
+          return `\x1B[<${c(e3, true)};${e3.x};${e3.y}${t3}`;
+        } };
+        let _ = t2.CoreMouseService = class extends a.Disposable {
+          constructor(e3, t3) {
+            super(), this._bufferService = e3, this._coreService = t3, this._protocols = {}, this._encodings = {}, this._activeProtocol = "", this._activeEncoding = "", this._lastEvent = null, this._onProtocolChange = this.register(new o.EventEmitter()), this.onProtocolChange = this._onProtocolChange.event;
+            for (const e4 of Object.keys(h)) this.addProtocol(e4, h[e4]);
+            for (const e4 of Object.keys(d)) this.addEncoding(e4, d[e4]);
+            this.reset();
+          }
+          addProtocol(e3, t3) {
+            this._protocols[e3] = t3;
+          }
+          addEncoding(e3, t3) {
+            this._encodings[e3] = t3;
+          }
+          get activeProtocol() {
+            return this._activeProtocol;
+          }
+          get areMouseEventsActive() {
+            return 0 !== this._protocols[this._activeProtocol].events;
+          }
+          set activeProtocol(e3) {
+            if (!this._protocols[e3]) throw new Error(`unknown protocol "${e3}"`);
+            this._activeProtocol = e3, this._onProtocolChange.fire(this._protocols[e3].events);
+          }
+          get activeEncoding() {
+            return this._activeEncoding;
+          }
+          set activeEncoding(e3) {
+            if (!this._encodings[e3]) throw new Error(`unknown encoding "${e3}"`);
+            this._activeEncoding = e3;
+          }
+          reset() {
+            this.activeProtocol = "NONE", this.activeEncoding = "DEFAULT", this._lastEvent = null;
+          }
+          triggerMouseEvent(e3) {
+            if (e3.col < 0 || e3.col >= this._bufferService.cols || e3.row < 0 || e3.row >= this._bufferService.rows) return false;
+            if (4 === e3.button && 32 === e3.action) return false;
+            if (3 === e3.button && 32 !== e3.action) return false;
+            if (4 !== e3.button && (2 === e3.action || 3 === e3.action)) return false;
+            if (e3.col++, e3.row++, 32 === e3.action && this._lastEvent && this._equalEvents(this._lastEvent, e3, "SGR_PIXELS" === this._activeEncoding)) return false;
+            if (!this._protocols[this._activeProtocol].restrict(e3)) return false;
+            const t3 = this._encodings[this._activeEncoding](e3);
+            return t3 && ("DEFAULT" === this._activeEncoding ? this._coreService.triggerBinaryEvent(t3) : this._coreService.triggerDataEvent(t3, true)), this._lastEvent = e3, true;
+          }
+          explainEvents(e3) {
+            return { down: !!(1 & e3), up: !!(2 & e3), drag: !!(4 & e3), move: !!(8 & e3), wheel: !!(16 & e3) };
+          }
+          _equalEvents(e3, t3, i3) {
+            if (i3) {
+              if (e3.x !== t3.x) return false;
+              if (e3.y !== t3.y) return false;
+            } else {
+              if (e3.col !== t3.col) return false;
+              if (e3.row !== t3.row) return false;
+            }
+            return e3.button === t3.button && e3.action === t3.action && e3.ctrl === t3.ctrl && e3.alt === t3.alt && e3.shift === t3.shift;
+          }
+        };
+        t2.CoreMouseService = _ = s2([r(0, n.IBufferService), r(1, n.ICoreService)], _);
+      }, 6975: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.CoreService = void 0;
+        const n = i2(1439), o = i2(8460), a = i2(844), h = i2(2585), c = Object.freeze({ insertMode: false }), l = Object.freeze({ applicationCursorKeys: false, applicationKeypad: false, bracketedPasteMode: false, origin: false, reverseWraparound: false, sendFocus: false, wraparound: true });
+        let d = t2.CoreService = class extends a.Disposable {
+          constructor(e3, t3, i3) {
+            super(), this._bufferService = e3, this._logService = t3, this._optionsService = i3, this.isCursorInitialized = false, this.isCursorHidden = false, this._onData = this.register(new o.EventEmitter()), this.onData = this._onData.event, this._onUserInput = this.register(new o.EventEmitter()), this.onUserInput = this._onUserInput.event, this._onBinary = this.register(new o.EventEmitter()), this.onBinary = this._onBinary.event, this._onRequestScrollToBottom = this.register(new o.EventEmitter()), this.onRequestScrollToBottom = this._onRequestScrollToBottom.event, this.modes = (0, n.clone)(c), this.decPrivateModes = (0, n.clone)(l);
+          }
+          reset() {
+            this.modes = (0, n.clone)(c), this.decPrivateModes = (0, n.clone)(l);
+          }
+          triggerDataEvent(e3, t3 = false) {
+            if (this._optionsService.rawOptions.disableStdin) return;
+            const i3 = this._bufferService.buffer;
+            t3 && this._optionsService.rawOptions.scrollOnUserInput && i3.ybase !== i3.ydisp && this._onRequestScrollToBottom.fire(), t3 && this._onUserInput.fire(), this._logService.debug(`sending data "${e3}"`, () => e3.split("").map((e4) => e4.charCodeAt(0))), this._onData.fire(e3);
+          }
+          triggerBinaryEvent(e3) {
+            this._optionsService.rawOptions.disableStdin || (this._logService.debug(`sending binary "${e3}"`, () => e3.split("").map((e4) => e4.charCodeAt(0))), this._onBinary.fire(e3));
+          }
+        };
+        t2.CoreService = d = s2([r(0, h.IBufferService), r(1, h.ILogService), r(2, h.IOptionsService)], d);
+      }, 9074: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.DecorationService = void 0;
+        const s2 = i2(8055), r = i2(8460), n = i2(844), o = i2(6106);
+        let a = 0, h = 0;
+        class c extends n.Disposable {
+          get decorations() {
+            return this._decorations.values();
+          }
+          constructor() {
+            super(), this._decorations = new o.SortedList((e3) => e3 == null ? void 0 : e3.marker.line), this._onDecorationRegistered = this.register(new r.EventEmitter()), this.onDecorationRegistered = this._onDecorationRegistered.event, this._onDecorationRemoved = this.register(new r.EventEmitter()), this.onDecorationRemoved = this._onDecorationRemoved.event, this.register((0, n.toDisposable)(() => this.reset()));
+          }
+          registerDecoration(e3) {
+            if (e3.marker.isDisposed) return;
+            const t3 = new l(e3);
+            if (t3) {
+              const e4 = t3.marker.onDispose(() => t3.dispose());
+              t3.onDispose(() => {
+                t3 && (this._decorations.delete(t3) && this._onDecorationRemoved.fire(t3), e4.dispose());
+              }), this._decorations.insert(t3), this._onDecorationRegistered.fire(t3);
+            }
+            return t3;
+          }
+          reset() {
+            for (const e3 of this._decorations.values()) e3.dispose();
+            this._decorations.clear();
+          }
+          *getDecorationsAtCell(e3, t3, i3) {
+            var _a, _b, _c2;
+            let s3 = 0, r2 = 0;
+            for (const n2 of this._decorations.getKeyIterator(t3)) s3 = (_a = n2.options.x) != null ? _a : 0, r2 = s3 + ((_b = n2.options.width) != null ? _b : 1), e3 >= s3 && e3 < r2 && (!i3 || ((_c2 = n2.options.layer) != null ? _c2 : "bottom") === i3) && (yield n2);
+          }
+          forEachDecorationAtCell(e3, t3, i3, s3) {
+            this._decorations.forEachByKey(t3, (t4) => {
+              var _a, _b, _c2;
+              a = (_a = t4.options.x) != null ? _a : 0, h = a + ((_b = t4.options.width) != null ? _b : 1), e3 >= a && e3 < h && (!i3 || ((_c2 = t4.options.layer) != null ? _c2 : "bottom") === i3) && s3(t4);
+            });
+          }
+        }
+        t2.DecorationService = c;
+        class l extends n.Disposable {
+          get isDisposed() {
+            return this._isDisposed;
+          }
+          get backgroundColorRGB() {
+            return null === this._cachedBg && (this.options.backgroundColor ? this._cachedBg = s2.css.toColor(this.options.backgroundColor) : this._cachedBg = void 0), this._cachedBg;
+          }
+          get foregroundColorRGB() {
+            return null === this._cachedFg && (this.options.foregroundColor ? this._cachedFg = s2.css.toColor(this.options.foregroundColor) : this._cachedFg = void 0), this._cachedFg;
+          }
+          constructor(e3) {
+            super(), this.options = e3, this.onRenderEmitter = this.register(new r.EventEmitter()), this.onRender = this.onRenderEmitter.event, this._onDispose = this.register(new r.EventEmitter()), this.onDispose = this._onDispose.event, this._cachedBg = null, this._cachedFg = null, this.marker = e3.marker, this.options.overviewRulerOptions && !this.options.overviewRulerOptions.position && (this.options.overviewRulerOptions.position = "full");
+          }
+          dispose() {
+            this._onDispose.fire(), super.dispose();
+          }
+        }
+      }, 4348: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.InstantiationService = t2.ServiceCollection = void 0;
+        const s2 = i2(2585), r = i2(8343);
+        class n {
+          constructor(...e3) {
+            this._entries = /* @__PURE__ */ new Map();
+            for (const [t3, i3] of e3) this.set(t3, i3);
+          }
+          set(e3, t3) {
+            const i3 = this._entries.get(e3);
+            return this._entries.set(e3, t3), i3;
+          }
+          forEach(e3) {
+            for (const [t3, i3] of this._entries.entries()) e3(t3, i3);
+          }
+          has(e3) {
+            return this._entries.has(e3);
+          }
+          get(e3) {
+            return this._entries.get(e3);
+          }
+        }
+        t2.ServiceCollection = n, t2.InstantiationService = class {
+          constructor() {
+            this._services = new n(), this._services.set(s2.IInstantiationService, this);
+          }
+          setService(e3, t3) {
+            this._services.set(e3, t3);
+          }
+          getService(e3) {
+            return this._services.get(e3);
+          }
+          createInstance(e3, ...t3) {
+            const i3 = (0, r.getServiceDependencies)(e3).sort((e4, t4) => e4.index - t4.index), s3 = [];
+            for (const t4 of i3) {
+              const i4 = this._services.get(t4.id);
+              if (!i4) throw new Error(`[createInstance] ${e3.name} depends on UNKNOWN service ${t4.id}.`);
+              s3.push(i4);
+            }
+            const n2 = i3.length > 0 ? i3[0].index : t3.length;
+            if (t3.length !== n2) throw new Error(`[createInstance] First service dependency of ${e3.name} at position ${n2 + 1} conflicts with ${t3.length} static arguments`);
+            return new e3(...[...t3, ...s3]);
+          }
+        };
+      }, 7866: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a2 = e3.length - 1; a2 >= 0; a2--) (r2 = e3[a2]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.traceCall = t2.setTraceLogger = t2.LogService = void 0;
+        const n = i2(844), o = i2(2585), a = { trace: o.LogLevelEnum.TRACE, debug: o.LogLevelEnum.DEBUG, info: o.LogLevelEnum.INFO, warn: o.LogLevelEnum.WARN, error: o.LogLevelEnum.ERROR, off: o.LogLevelEnum.OFF };
+        let h, c = t2.LogService = class extends n.Disposable {
+          get logLevel() {
+            return this._logLevel;
+          }
+          constructor(e3) {
+            super(), this._optionsService = e3, this._logLevel = o.LogLevelEnum.OFF, this._updateLogLevel(), this.register(this._optionsService.onSpecificOptionChange("logLevel", () => this._updateLogLevel())), h = this;
+          }
+          _updateLogLevel() {
+            this._logLevel = a[this._optionsService.rawOptions.logLevel];
+          }
+          _evalLazyOptionalParams(e3) {
+            for (let t3 = 0; t3 < e3.length; t3++) "function" == typeof e3[t3] && (e3[t3] = e3[t3]());
+          }
+          _log(e3, t3, i3) {
+            this._evalLazyOptionalParams(i3), e3.call(console, (this._optionsService.options.logger ? "" : "xterm.js: ") + t3, ...i3);
+          }
+          trace(e3, ...t3) {
+            var _a, _b;
+            this._logLevel <= o.LogLevelEnum.TRACE && this._log((_b = (_a = this._optionsService.options.logger) == null ? void 0 : _a.trace.bind(this._optionsService.options.logger)) != null ? _b : console.log, e3, t3);
+          }
+          debug(e3, ...t3) {
+            var _a, _b;
+            this._logLevel <= o.LogLevelEnum.DEBUG && this._log((_b = (_a = this._optionsService.options.logger) == null ? void 0 : _a.debug.bind(this._optionsService.options.logger)) != null ? _b : console.log, e3, t3);
+          }
+          info(e3, ...t3) {
+            var _a, _b;
+            this._logLevel <= o.LogLevelEnum.INFO && this._log((_b = (_a = this._optionsService.options.logger) == null ? void 0 : _a.info.bind(this._optionsService.options.logger)) != null ? _b : console.info, e3, t3);
+          }
+          warn(e3, ...t3) {
+            var _a, _b;
+            this._logLevel <= o.LogLevelEnum.WARN && this._log((_b = (_a = this._optionsService.options.logger) == null ? void 0 : _a.warn.bind(this._optionsService.options.logger)) != null ? _b : console.warn, e3, t3);
+          }
+          error(e3, ...t3) {
+            var _a, _b;
+            this._logLevel <= o.LogLevelEnum.ERROR && this._log((_b = (_a = this._optionsService.options.logger) == null ? void 0 : _a.error.bind(this._optionsService.options.logger)) != null ? _b : console.error, e3, t3);
+          }
+        };
+        t2.LogService = c = s2([r(0, o.IOptionsService)], c), t2.setTraceLogger = function(e3) {
+          h = e3;
+        }, t2.traceCall = function(e3, t3, i3) {
+          if ("function" != typeof i3.value) throw new Error("not supported");
+          const s3 = i3.value;
+          i3.value = function(...e4) {
+            if (h.logLevel !== o.LogLevelEnum.TRACE) return s3.apply(this, e4);
+            h.trace(`GlyphRenderer#${s3.name}(${e4.map((e5) => JSON.stringify(e5)).join(", ")})`);
+            const t4 = s3.apply(this, e4);
+            return h.trace(`GlyphRenderer#${s3.name} return`, t4), t4;
+          };
+        };
+      }, 7302: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.OptionsService = t2.DEFAULT_OPTIONS = void 0;
+        const s2 = i2(8460), r = i2(844), n = i2(6114);
+        t2.DEFAULT_OPTIONS = { cols: 80, rows: 24, cursorBlink: false, cursorStyle: "block", cursorWidth: 1, cursorInactiveStyle: "outline", customGlyphs: true, drawBoldTextInBrightColors: true, documentOverride: null, fastScrollModifier: "alt", fastScrollSensitivity: 5, fontFamily: "courier-new, courier, monospace", fontSize: 15, fontWeight: "normal", fontWeightBold: "bold", ignoreBracketedPasteMode: false, lineHeight: 1, letterSpacing: 0, linkHandler: null, logLevel: "info", logger: null, scrollback: 1e3, scrollOnUserInput: true, scrollSensitivity: 1, screenReaderMode: false, smoothScrollDuration: 0, macOptionIsMeta: false, macOptionClickForcesSelection: false, minimumContrastRatio: 1, disableStdin: false, allowProposedApi: false, allowTransparency: false, tabStopWidth: 8, theme: {}, rescaleOverlappingGlyphs: false, rightClickSelectsWord: n.isMac, windowOptions: {}, windowsMode: false, windowsPty: {}, wordSeparator: " ()[]{}',\"`", altClickMovesCursor: true, convertEol: false, termName: "xterm", cancelEvents: false, overviewRulerWidth: 0 };
+        const o = ["normal", "bold", "100", "200", "300", "400", "500", "600", "700", "800", "900"];
+        class a extends r.Disposable {
+          constructor(e3) {
+            super(), this._onOptionChange = this.register(new s2.EventEmitter()), this.onOptionChange = this._onOptionChange.event;
+            const i3 = { ...t2.DEFAULT_OPTIONS };
+            for (const t3 in e3) if (t3 in i3) try {
+              const s3 = e3[t3];
+              i3[t3] = this._sanitizeAndValidateOption(t3, s3);
+            } catch (e4) {
+              console.error(e4);
+            }
+            this.rawOptions = i3, this.options = { ...i3 }, this._setupOptions(), this.register((0, r.toDisposable)(() => {
+              this.rawOptions.linkHandler = null, this.rawOptions.documentOverride = null;
+            }));
+          }
+          onSpecificOptionChange(e3, t3) {
+            return this.onOptionChange((i3) => {
+              i3 === e3 && t3(this.rawOptions[e3]);
+            });
+          }
+          onMultipleOptionChange(e3, t3) {
+            return this.onOptionChange((i3) => {
+              -1 !== e3.indexOf(i3) && t3();
+            });
+          }
+          _setupOptions() {
+            const e3 = (e4) => {
+              if (!(e4 in t2.DEFAULT_OPTIONS)) throw new Error(`No option with key "${e4}"`);
+              return this.rawOptions[e4];
+            }, i3 = (e4, i4) => {
+              if (!(e4 in t2.DEFAULT_OPTIONS)) throw new Error(`No option with key "${e4}"`);
+              i4 = this._sanitizeAndValidateOption(e4, i4), this.rawOptions[e4] !== i4 && (this.rawOptions[e4] = i4, this._onOptionChange.fire(e4));
+            };
+            for (const t3 in this.rawOptions) {
+              const s3 = { get: e3.bind(this, t3), set: i3.bind(this, t3) };
+              Object.defineProperty(this.options, t3, s3);
+            }
+          }
+          _sanitizeAndValidateOption(e3, i3) {
+            switch (e3) {
+              case "cursorStyle":
+                if (i3 || (i3 = t2.DEFAULT_OPTIONS[e3]), !/* @__PURE__ */ function(e4) {
+                  return "block" === e4 || "underline" === e4 || "bar" === e4;
+                }(i3)) throw new Error(`"${i3}" is not a valid value for ${e3}`);
+                break;
+              case "wordSeparator":
+                i3 || (i3 = t2.DEFAULT_OPTIONS[e3]);
+                break;
+              case "fontWeight":
+              case "fontWeightBold":
+                if ("number" == typeof i3 && 1 <= i3 && i3 <= 1e3) break;
+                i3 = o.includes(i3) ? i3 : t2.DEFAULT_OPTIONS[e3];
+                break;
+              case "cursorWidth":
+                i3 = Math.floor(i3);
+              case "lineHeight":
+              case "tabStopWidth":
+                if (i3 < 1) throw new Error(`${e3} cannot be less than 1, value: ${i3}`);
+                break;
+              case "minimumContrastRatio":
+                i3 = Math.max(1, Math.min(21, Math.round(10 * i3) / 10));
+                break;
+              case "scrollback":
+                if ((i3 = Math.min(i3, 4294967295)) < 0) throw new Error(`${e3} cannot be less than 0, value: ${i3}`);
+                break;
+              case "fastScrollSensitivity":
+              case "scrollSensitivity":
+                if (i3 <= 0) throw new Error(`${e3} cannot be less than or equal to 0, value: ${i3}`);
+                break;
+              case "rows":
+              case "cols":
+                if (!i3 && 0 !== i3) throw new Error(`${e3} must be numeric, value: ${i3}`);
+                break;
+              case "windowsPty":
+                i3 = i3 != null ? i3 : {};
+            }
+            return i3;
+          }
+        }
+        t2.OptionsService = a;
+      }, 2660: function(e2, t2, i2) {
+        var s2 = this && this.__decorate || function(e3, t3, i3, s3) {
+          var r2, n2 = arguments.length, o2 = n2 < 3 ? t3 : null === s3 ? s3 = Object.getOwnPropertyDescriptor(t3, i3) : s3;
+          if ("object" == typeof Reflect && "function" == typeof Reflect.decorate) o2 = Reflect.decorate(e3, t3, i3, s3);
+          else for (var a = e3.length - 1; a >= 0; a--) (r2 = e3[a]) && (o2 = (n2 < 3 ? r2(o2) : n2 > 3 ? r2(t3, i3, o2) : r2(t3, i3)) || o2);
+          return n2 > 3 && o2 && Object.defineProperty(t3, i3, o2), o2;
+        }, r = this && this.__param || function(e3, t3) {
+          return function(i3, s3) {
+            t3(i3, s3, e3);
+          };
+        };
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.OscLinkService = void 0;
+        const n = i2(2585);
+        let o = t2.OscLinkService = class {
+          constructor(e3) {
+            this._bufferService = e3, this._nextId = 1, this._entriesWithId = /* @__PURE__ */ new Map(), this._dataByLinkId = /* @__PURE__ */ new Map();
+          }
+          registerLink(e3) {
+            const t3 = this._bufferService.buffer;
+            if (void 0 === e3.id) {
+              const i4 = t3.addMarker(t3.ybase + t3.y), s4 = { data: e3, id: this._nextId++, lines: [i4] };
+              return i4.onDispose(() => this._removeMarkerFromLink(s4, i4)), this._dataByLinkId.set(s4.id, s4), s4.id;
+            }
+            const i3 = e3, s3 = this._getEntryIdKey(i3), r2 = this._entriesWithId.get(s3);
+            if (r2) return this.addLineToLink(r2.id, t3.ybase + t3.y), r2.id;
+            const n2 = t3.addMarker(t3.ybase + t3.y), o2 = { id: this._nextId++, key: this._getEntryIdKey(i3), data: i3, lines: [n2] };
+            return n2.onDispose(() => this._removeMarkerFromLink(o2, n2)), this._entriesWithId.set(o2.key, o2), this._dataByLinkId.set(o2.id, o2), o2.id;
+          }
+          addLineToLink(e3, t3) {
+            const i3 = this._dataByLinkId.get(e3);
+            if (i3 && i3.lines.every((e4) => e4.line !== t3)) {
+              const e4 = this._bufferService.buffer.addMarker(t3);
+              i3.lines.push(e4), e4.onDispose(() => this._removeMarkerFromLink(i3, e4));
+            }
+          }
+          getLinkData(e3) {
+            var _a;
+            return (_a = this._dataByLinkId.get(e3)) == null ? void 0 : _a.data;
+          }
+          _getEntryIdKey(e3) {
+            return `${e3.id};;${e3.uri}`;
+          }
+          _removeMarkerFromLink(e3, t3) {
+            const i3 = e3.lines.indexOf(t3);
+            -1 !== i3 && (e3.lines.splice(i3, 1), 0 === e3.lines.length && (void 0 !== e3.data.id && this._entriesWithId.delete(e3.key), this._dataByLinkId.delete(e3.id)));
+          }
+        };
+        t2.OscLinkService = o = s2([r(0, n.IBufferService)], o);
+      }, 8343: (e2, t2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.createDecorator = t2.getServiceDependencies = t2.serviceRegistry = void 0;
+        const i2 = "di$target", s2 = "di$dependencies";
+        t2.serviceRegistry = /* @__PURE__ */ new Map(), t2.getServiceDependencies = function(e3) {
+          return e3[s2] || [];
+        }, t2.createDecorator = function(e3) {
+          if (t2.serviceRegistry.has(e3)) return t2.serviceRegistry.get(e3);
+          const r = function(e4, t3, n) {
+            if (3 !== arguments.length) throw new Error("@IServiceName-decorator can only be used to decorate a parameter");
+            !function(e5, t4, r2) {
+              t4[i2] === t4 ? t4[s2].push({ id: e5, index: r2 }) : (t4[s2] = [{ id: e5, index: r2 }], t4[i2] = t4);
+            }(r, e4, n);
+          };
+          return r.toString = () => e3, t2.serviceRegistry.set(e3, r), r;
+        };
+      }, 2585: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.IDecorationService = t2.IUnicodeService = t2.IOscLinkService = t2.IOptionsService = t2.ILogService = t2.LogLevelEnum = t2.IInstantiationService = t2.ICharsetService = t2.ICoreService = t2.ICoreMouseService = t2.IBufferService = void 0;
+        const s2 = i2(8343);
+        var r;
+        t2.IBufferService = (0, s2.createDecorator)("BufferService"), t2.ICoreMouseService = (0, s2.createDecorator)("CoreMouseService"), t2.ICoreService = (0, s2.createDecorator)("CoreService"), t2.ICharsetService = (0, s2.createDecorator)("CharsetService"), t2.IInstantiationService = (0, s2.createDecorator)("InstantiationService"), function(e3) {
+          e3[e3.TRACE = 0] = "TRACE", e3[e3.DEBUG = 1] = "DEBUG", e3[e3.INFO = 2] = "INFO", e3[e3.WARN = 3] = "WARN", e3[e3.ERROR = 4] = "ERROR", e3[e3.OFF = 5] = "OFF";
+        }(r || (t2.LogLevelEnum = r = {})), t2.ILogService = (0, s2.createDecorator)("LogService"), t2.IOptionsService = (0, s2.createDecorator)("OptionsService"), t2.IOscLinkService = (0, s2.createDecorator)("OscLinkService"), t2.IUnicodeService = (0, s2.createDecorator)("UnicodeService"), t2.IDecorationService = (0, s2.createDecorator)("DecorationService");
+      }, 1480: (e2, t2, i2) => {
+        Object.defineProperty(t2, "__esModule", { value: true }), t2.UnicodeService = void 0;
+        const s2 = i2(8460), r = i2(225);
+        class n {
+          static extractShouldJoin(e3) {
+            return 0 != (1 & e3);
+          }
+          static extractWidth(e3) {
+            return e3 >> 1 & 3;
+          }
+          static extractCharKind(e3) {
+            return e3 >> 3;
+          }
+          static createPropertyValue(e3, t3, i3 = false) {
+            return (16777215 & e3) << 3 | (3 & t3) << 1 | (i3 ? 1 : 0);
+          }
+          constructor() {
+            this._providers = /* @__PURE__ */ Object.create(null), this._active = "", this._onChange = new s2.EventEmitter(), this.onChange = this._onChange.event;
+            const e3 = new r.UnicodeV6();
+            this.register(e3), this._active = e3.version, this._activeProvider = e3;
+          }
+          dispose() {
+            this._onChange.dispose();
+          }
+          get versions() {
+            return Object.keys(this._providers);
+          }
+          get activeVersion() {
+            return this._active;
+          }
+          set activeVersion(e3) {
+            if (!this._providers[e3]) throw new Error(`unknown Unicode version "${e3}"`);
+            this._active = e3, this._activeProvider = this._providers[e3], this._onChange.fire(e3);
+          }
+          register(e3) {
+            this._providers[e3.version] = e3;
+          }
+          wcwidth(e3) {
+            return this._activeProvider.wcwidth(e3);
+          }
+          getStringCellWidth(e3) {
+            let t3 = 0, i3 = 0;
+            const s3 = e3.length;
+            for (let r2 = 0; r2 < s3; ++r2) {
+              let o = e3.charCodeAt(r2);
+              if (55296 <= o && o <= 56319) {
+                if (++r2 >= s3) return t3 + this.wcwidth(o);
+                const i4 = e3.charCodeAt(r2);
+                56320 <= i4 && i4 <= 57343 ? o = 1024 * (o - 55296) + i4 - 56320 + 65536 : t3 += this.wcwidth(i4);
+              }
+              const a = this.charProperties(o, i3);
+              let h = n.extractWidth(a);
+              n.extractShouldJoin(a) && (h -= n.extractWidth(i3)), t3 += h, i3 = a;
+            }
+            return t3;
+          }
+          charProperties(e3, t3) {
+            return this._activeProvider.charProperties(e3, t3);
+          }
+        }
+        t2.UnicodeService = n;
+      } }, t = {};
+      function i(s2) {
+        var r = t[s2];
+        if (void 0 !== r) return r.exports;
+        var n = t[s2] = { exports: {} };
+        return e[s2].call(n.exports, n, n.exports, i), n.exports;
+      }
+      var s = {};
+      return (() => {
+        var e2 = s;
+        Object.defineProperty(e2, "__esModule", { value: true }), e2.Terminal = void 0;
+        const t2 = i(9042), r = i(3236), n = i(844), o = i(5741), a = i(8285), h = i(7975), c = i(7090), l = ["cols", "rows"];
+        class d extends n.Disposable {
+          constructor(e3) {
+            super(), this._core = this.register(new r.Terminal(e3)), this._addonManager = this.register(new o.AddonManager()), this._publicOptions = { ...this._core.options };
+            const t3 = (e4) => this._core.options[e4], i2 = (e4, t4) => {
+              this._checkReadonlyOptions(e4), this._core.options[e4] = t4;
+            };
+            for (const e4 in this._core.options) {
+              const s2 = { get: t3.bind(this, e4), set: i2.bind(this, e4) };
+              Object.defineProperty(this._publicOptions, e4, s2);
+            }
+          }
+          _checkReadonlyOptions(e3) {
+            if (l.includes(e3)) throw new Error(`Option "${e3}" can only be set in the constructor`);
+          }
+          _checkProposedApi() {
+            if (!this._core.optionsService.rawOptions.allowProposedApi) throw new Error("You must set the allowProposedApi option to true to use proposed API");
+          }
+          get onBell() {
+            return this._core.onBell;
+          }
+          get onBinary() {
+            return this._core.onBinary;
+          }
+          get onCursorMove() {
+            return this._core.onCursorMove;
+          }
+          get onData() {
+            return this._core.onData;
+          }
+          get onKey() {
+            return this._core.onKey;
+          }
+          get onLineFeed() {
+            return this._core.onLineFeed;
+          }
+          get onRender() {
+            return this._core.onRender;
+          }
+          get onResize() {
+            return this._core.onResize;
+          }
+          get onScroll() {
+            return this._core.onScroll;
+          }
+          get onSelectionChange() {
+            return this._core.onSelectionChange;
+          }
+          get onTitleChange() {
+            return this._core.onTitleChange;
+          }
+          get onWriteParsed() {
+            return this._core.onWriteParsed;
+          }
+          get element() {
+            return this._core.element;
+          }
+          get parser() {
+            return this._parser || (this._parser = new h.ParserApi(this._core)), this._parser;
+          }
+          get unicode() {
+            return this._checkProposedApi(), new c.UnicodeApi(this._core);
+          }
+          get textarea() {
+            return this._core.textarea;
+          }
+          get rows() {
+            return this._core.rows;
+          }
+          get cols() {
+            return this._core.cols;
+          }
+          get buffer() {
+            return this._buffer || (this._buffer = this.register(new a.BufferNamespaceApi(this._core))), this._buffer;
+          }
+          get markers() {
+            return this._checkProposedApi(), this._core.markers;
+          }
+          get modes() {
+            const e3 = this._core.coreService.decPrivateModes;
+            let t3 = "none";
+            switch (this._core.coreMouseService.activeProtocol) {
+              case "X10":
+                t3 = "x10";
+                break;
+              case "VT200":
+                t3 = "vt200";
+                break;
+              case "DRAG":
+                t3 = "drag";
+                break;
+              case "ANY":
+                t3 = "any";
+            }
+            return { applicationCursorKeysMode: e3.applicationCursorKeys, applicationKeypadMode: e3.applicationKeypad, bracketedPasteMode: e3.bracketedPasteMode, insertMode: this._core.coreService.modes.insertMode, mouseTrackingMode: t3, originMode: e3.origin, reverseWraparoundMode: e3.reverseWraparound, sendFocusMode: e3.sendFocus, wraparoundMode: e3.wraparound };
+          }
+          get options() {
+            return this._publicOptions;
+          }
+          set options(e3) {
+            for (const t3 in e3) this._publicOptions[t3] = e3[t3];
+          }
+          blur() {
+            this._core.blur();
+          }
+          focus() {
+            this._core.focus();
+          }
+          input(e3, t3 = true) {
+            this._core.input(e3, t3);
+          }
+          resize(e3, t3) {
+            this._verifyIntegers(e3, t3), this._core.resize(e3, t3);
+          }
+          open(e3) {
+            this._core.open(e3);
+          }
+          attachCustomKeyEventHandler(e3) {
+            this._core.attachCustomKeyEventHandler(e3);
+          }
+          attachCustomWheelEventHandler(e3) {
+            this._core.attachCustomWheelEventHandler(e3);
+          }
+          registerLinkProvider(e3) {
+            return this._core.registerLinkProvider(e3);
+          }
+          registerCharacterJoiner(e3) {
+            return this._checkProposedApi(), this._core.registerCharacterJoiner(e3);
+          }
+          deregisterCharacterJoiner(e3) {
+            this._checkProposedApi(), this._core.deregisterCharacterJoiner(e3);
+          }
+          registerMarker(e3 = 0) {
+            return this._verifyIntegers(e3), this._core.registerMarker(e3);
+          }
+          registerDecoration(e3) {
+            var _a, _b, _c;
+            return this._checkProposedApi(), this._verifyPositiveIntegers((_a = e3.x) != null ? _a : 0, (_b = e3.width) != null ? _b : 0, (_c = e3.height) != null ? _c : 0), this._core.registerDecoration(e3);
+          }
+          hasSelection() {
+            return this._core.hasSelection();
+          }
+          select(e3, t3, i2) {
+            this._verifyIntegers(e3, t3, i2), this._core.select(e3, t3, i2);
+          }
+          getSelection() {
+            return this._core.getSelection();
+          }
+          getSelectionPosition() {
+            return this._core.getSelectionPosition();
+          }
+          clearSelection() {
+            this._core.clearSelection();
+          }
+          selectAll() {
+            this._core.selectAll();
+          }
+          selectLines(e3, t3) {
+            this._verifyIntegers(e3, t3), this._core.selectLines(e3, t3);
+          }
+          dispose() {
+            super.dispose();
+          }
+          scrollLines(e3) {
+            this._verifyIntegers(e3), this._core.scrollLines(e3);
+          }
+          scrollPages(e3) {
+            this._verifyIntegers(e3), this._core.scrollPages(e3);
+          }
+          scrollToTop() {
+            this._core.scrollToTop();
+          }
+          scrollToBottom() {
+            this._core.scrollToBottom();
+          }
+          scrollToLine(e3) {
+            this._verifyIntegers(e3), this._core.scrollToLine(e3);
+          }
+          clear() {
+            this._core.clear();
+          }
+          write(e3, t3) {
+            this._core.write(e3, t3);
+          }
+          writeln(e3, t3) {
+            this._core.write(e3), this._core.write("\r\n", t3);
+          }
+          paste(e3) {
+            this._core.paste(e3);
+          }
+          refresh(e3, t3) {
+            this._verifyIntegers(e3, t3), this._core.refresh(e3, t3);
+          }
+          reset() {
+            this._core.reset();
+          }
+          clearTextureAtlas() {
+            this._core.clearTextureAtlas();
+          }
+          loadAddon(e3) {
+            this._addonManager.loadAddon(this, e3);
+          }
+          static get strings() {
+            return t2;
+          }
+          _verifyIntegers(...e3) {
+            for (const t3 of e3) if (t3 === 1 / 0 || isNaN(t3) || t3 % 1 != 0) throw new Error("This API only accepts integers");
+          }
+          _verifyPositiveIntegers(...e3) {
+            for (const t3 of e3) if (t3 && (t3 === 1 / 0 || isNaN(t3) || t3 % 1 != 0 || t3 < 0)) throw new Error("This API only accepts positive integers");
+          }
+        }
+        e2.Terminal = d;
+      })(), s;
+    })());
+  }
+});
+
+// node_modules/@xterm/addon-fit/lib/addon-fit.js
+var require_addon_fit = __commonJS({
+  "node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module2) {
+    !function(e, t) {
+      "object" == typeof exports && "object" == typeof module2 ? module2.exports = t() : "function" == typeof define && define.amd ? define([], t) : "object" == typeof exports ? exports.FitAddon = t() : e.FitAddon = t();
+    }(self, () => (() => {
+      "use strict";
+      var e = {};
+      return (() => {
+        var t = e;
+        Object.defineProperty(t, "__esModule", { value: true }), t.FitAddon = void 0, t.FitAddon = class {
+          activate(e2) {
+            this._terminal = e2;
+          }
+          dispose() {
+          }
+          fit() {
+            const e2 = this.proposeDimensions();
+            if (!e2 || !this._terminal || isNaN(e2.cols) || isNaN(e2.rows)) return;
+            const t2 = this._terminal._core;
+            this._terminal.rows === e2.rows && this._terminal.cols === e2.cols || (t2._renderService.clear(), this._terminal.resize(e2.cols, e2.rows));
+          }
+          proposeDimensions() {
+            if (!this._terminal) return;
+            if (!this._terminal.element || !this._terminal.element.parentElement) return;
+            const e2 = this._terminal._core, t2 = e2._renderService.dimensions;
+            if (0 === t2.css.cell.width || 0 === t2.css.cell.height) return;
+            const r = 0 === this._terminal.options.scrollback ? 0 : e2.viewport.scrollBarWidth, i = window.getComputedStyle(this._terminal.element.parentElement), o = parseInt(i.getPropertyValue("height")), s = Math.max(0, parseInt(i.getPropertyValue("width"))), n = window.getComputedStyle(this._terminal.element), l = o - (parseInt(n.getPropertyValue("padding-top")) + parseInt(n.getPropertyValue("padding-bottom"))), a = s - (parseInt(n.getPropertyValue("padding-right")) + parseInt(n.getPropertyValue("padding-left"))) - r;
+            return { cols: Math.max(2, Math.floor(a / t2.css.cell.width)), rows: Math.max(1, Math.floor(l / t2.css.cell.height)) };
+          }
+        };
+      })(), e;
+    })());
+  }
+});
+
+// node_modules/@xterm/xterm/css/xterm.css
+var require_xterm2 = __commonJS({
+  "node_modules/@xterm/xterm/css/xterm.css"(exports, module2) {
+    module2.exports = `/**
+ * Copyright (c) 2014 The xterm.js authors. All rights reserved.
+ * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+ * https://github.com/chjj/term.js
+ * @license MIT
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ *
+ * Originally forked from (with the author's permission):
+ *   Fabrice Bellard's javascript vt100 for jslinux:
+ *   http://bellard.org/jslinux/
+ *   Copyright (c) 2011 Fabrice Bellard
+ *   The original design remains. The terminal itself
+ *   has been extended to include xterm CSI codes, among
+ *   other features.
+ */
+
+/**
+ *  Default styles for xterm.js
+ */
+
+.xterm {
+    cursor: text;
+    position: relative;
+    user-select: none;
+    -ms-user-select: none;
+    -webkit-user-select: none;
+}
+
+.xterm.focus,
+.xterm:focus {
+    outline: none;
+}
+
+.xterm .xterm-helpers {
+    position: absolute;
+    top: 0;
+    /**
+     * The z-index of the helpers must be higher than the canvases in order for
+     * IMEs to appear on top.
+     */
+    z-index: 5;
+}
+
+.xterm .xterm-helper-textarea {
+    padding: 0;
+    border: 0;
+    margin: 0;
+    /* Move textarea out of the screen to the far left, so that the cursor is not visible */
+    position: absolute;
+    opacity: 0;
+    left: -9999em;
+    top: 0;
+    width: 0;
+    height: 0;
+    z-index: -5;
+    /** Prevent wrapping so the IME appears against the textarea at the correct position */
+    white-space: nowrap;
+    overflow: hidden;
+    resize: none;
+}
+
+.xterm .composition-view {
+    /* TODO: Composition position got messed up somewhere */
+    background: #000;
+    color: #FFF;
+    display: none;
+    position: absolute;
+    white-space: nowrap;
+    z-index: 1;
+}
+
+.xterm .composition-view.active {
+    display: block;
+}
+
+.xterm .xterm-viewport {
+    /* On OS X this is required in order for the scroll bar to appear fully opaque */
+    background-color: #000;
+    overflow-y: scroll;
+    cursor: default;
+    position: absolute;
+    right: 0;
+    left: 0;
+    top: 0;
+    bottom: 0;
+}
+
+.xterm .xterm-screen {
+    position: relative;
+}
+
+.xterm .xterm-screen canvas {
+    position: absolute;
+    left: 0;
+    top: 0;
+}
+
+.xterm .xterm-scroll-area {
+    visibility: hidden;
+}
+
+.xterm-char-measure-element {
+    display: inline-block;
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    left: -9999em;
+    line-height: normal;
+}
+
+.xterm.enable-mouse-events {
+    /* When mouse events are enabled (eg. tmux), revert to the standard pointer cursor */
+    cursor: default;
+}
+
+.xterm.xterm-cursor-pointer,
+.xterm .xterm-cursor-pointer {
+    cursor: pointer;
+}
+
+.xterm.column-select.focus {
+    /* Column selection mode */
+    cursor: crosshair;
+}
+
+.xterm .xterm-accessibility:not(.debug),
+.xterm .xterm-message {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    z-index: 10;
+    color: transparent;
+    pointer-events: none;
+}
+
+.xterm .xterm-accessibility-tree:not(.debug) *::selection {
+  color: transparent;
+}
+
+.xterm .xterm-accessibility-tree {
+  user-select: text;
+  white-space: pre;
+}
+
+.xterm .live-region {
+    position: absolute;
+    left: -9999px;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+}
+
+.xterm-dim {
+    /* Dim should not apply to background, so the opacity of the foreground color is applied
+     * explicitly in the generated class and reset to 1 here */
+    opacity: 1 !important;
+}
+
+.xterm-underline-1 { text-decoration: underline; }
+.xterm-underline-2 { text-decoration: double underline; }
+.xterm-underline-3 { text-decoration: wavy underline; }
+.xterm-underline-4 { text-decoration: dotted underline; }
+.xterm-underline-5 { text-decoration: dashed underline; }
+
+.xterm-overline {
+    text-decoration: overline;
+}
+
+.xterm-overline.xterm-underline-1 { text-decoration: overline underline; }
+.xterm-overline.xterm-underline-2 { text-decoration: overline double underline; }
+.xterm-overline.xterm-underline-3 { text-decoration: overline wavy underline; }
+.xterm-overline.xterm-underline-4 { text-decoration: overline dotted underline; }
+.xterm-overline.xterm-underline-5 { text-decoration: overline dashed underline; }
+
+.xterm-strikethrough {
+    text-decoration: line-through;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration {
+	z-index: 6;
+	position: absolute;
+}
+
+.xterm-screen .xterm-decoration-container .xterm-decoration.xterm-decoration-top-layer {
+	z-index: 7;
+}
+
+.xterm-decoration-overview-ruler {
+    z-index: 8;
+    position: absolute;
+    top: 0;
+    right: 0;
+    pointer-events: none;
+}
+
+.xterm-decoration-top {
+    z-index: 2;
+    position: relative;
+}
+`;
+  }
+});
+
 // manifest.json
 var require_manifest = __commonJS({
   "manifest.json"(exports, module2) {
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.20",
+      version: "1.7.21",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -884,13 +7321,13 @@ function workflowExecutionPlan(definition) {
     used.add(id);
     return id;
   };
-  const expand = (workflow, path32, returnId, enterId, inheritedBranch = false) => {
+  const expand = (workflow, path35, returnId, enterId, inheritedBranch = false) => {
     var _a;
-    const ids = new Map(workflow.steps.map((step) => [step.id, path32.length ? internal([...path32, step.id]) : step.id]));
-    const entries = new Map(workflow.steps.map((step) => [step.id, step.stepKind === "workflow" ? internal([...path32, step.id, "enter"]) : ids.get(step.id)]));
+    const ids = new Map(workflow.steps.map((step) => [step.id, path35.length ? internal([...path35, step.id]) : step.id]));
+    const entries = new Map(workflow.steps.map((step) => [step.id, step.stepKind === "workflow" ? internal([...path35, step.id, "enter"]) : ids.get(step.id)]));
     for (const [index, source] of workflow.steps.entries()) {
       const id = ids.get(source.id);
-      const scope = { workflow, path: path32, localId: source.id, rootStepId: path32[0] || source.id, returnId, enterId, handoffBranch: inheritedBranch || !!workflow.handoffBranch };
+      const scope = { workflow, path: path35, localId: source.id, rootStepId: path35[0] || source.id, returnId, enterId, handoffBranch: inheritedBranch || !!workflow.handoffBranch };
       const transitions = workflowStepTransitions(workflow.steps, index).map((edge) => {
         if (!entries.has(edge.toStepId)) throw new Error("Workflow transition references a missing step");
         return { ...edge, toStepId: entries.get(edge.toStepId) };
@@ -902,7 +7339,7 @@ function workflowExecutionPlan(definition) {
         scopes.set(entryId, { ...scope, boundary: "enter" });
         const entryStep = { id: entryId, stepKind: "workflow", transitions: [] };
         steps.push(entryStep);
-        const childEntry = expand(child, [...path32, source.id], id, entryId, scope.handoffBranch);
+        const childEntry = expand(child, [...path35, source.id], id, entryId, scope.handoffBranch);
         entryStep.transitions = [{ toStepId: childEntry, mode: "default" }];
         scopes.set(id, { ...scope, boundary: "return" });
       } else scopes.set(id, scope);
@@ -987,8 +7424,8 @@ function samePhysicalPath(left, right) {
   return path.relative(physicalPath(left), physicalPath(right)) === "";
 }
 function isWithinPhysicalPath(root, location) {
-  const relative6 = path.relative(physicalPath(root), physicalPath(location));
-  return relative6 !== ".." && !relative6.startsWith(".." + path.sep) && !path.isAbsolute(relative6);
+  const relative8 = path.relative(physicalPath(root), physicalPath(location));
+  return relative8 !== ".." && !relative8.startsWith(".." + path.sep) && !path.isAbsolute(relative8);
 }
 
 // execution-journal.ts
@@ -1016,7 +7453,7 @@ async function run(work) {
     const next = work.next();
     if (next.done) return next.value;
     if (import_perf_hooks.performance.now() >= deadline) {
-      await new Promise((resolve10) => (0, import_timers.setImmediate)(resolve10));
+      await new Promise((resolve11) => (0, import_timers.setImmediate)(resolve11));
       deadline = import_perf_hooks.performance.now() + 4;
     }
   }
@@ -1250,11 +7687,11 @@ async function settingsProcessStart(pid) {
     const executable2 = process.platform === "win32" ? path2.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/ps";
     const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`] : ["-p", String(pid), "-o", "lstart="];
     if (process.platform !== "win32" && process.platform !== "darwin") return null;
-    const value = await new Promise((resolve10, reject) => (0, import_child_process.execFile)(
+    const value = await new Promise((resolve11, reject) => (0, import_child_process.execFile)(
       executable2,
       args,
       { windowsHide: true, timeout: 5e3, maxBuffer: 4096 },
-      (error, stdout) => error ? reject(error) : resolve10(stdout.trim())
+      (error, stdout) => error ? reject(error) : resolve11(stdout.trim())
     ));
     if (process.platform === "win32") return /^\d{15,20}$/.test(value) ? `windows:${value}` : null;
     return /^[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value) ? `darwin:${value}` : null;
@@ -1342,7 +7779,7 @@ async function beginSettingsWriteIntent(file, token, originalHash) {
         return;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve10) => setTimeout(resolve10, 50 * (attempt + 1)));
+        await new Promise((resolve11) => setTimeout(resolve11, 50 * (attempt + 1)));
       }
     }
   };
@@ -1520,7 +7957,7 @@ var SettingsWriter = class _SettingsWriter {
       try {
         lockStat = fs2.fstatSync(descriptor);
         fs2.writeFileSync(descriptor, lockText);
-        await new Promise((resolve10, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve10()));
+        await new Promise((resolve11, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve11()));
       } finally {
         fs2.closeSync(descriptor);
       }
@@ -1581,9 +8018,9 @@ function ioBudget() {
   let started = import_perf_hooks2.performance.now();
   return () => {
     if (import_perf_hooks2.performance.now() - started < 4) return;
-    return new Promise((resolve10) => (0, import_timers2.setImmediate)(() => {
+    return new Promise((resolve11) => (0, import_timers2.setImmediate)(() => {
       started = import_perf_hooks2.performance.now();
-      resolve10();
+      resolve11();
     }));
   };
 }
@@ -1657,7 +8094,7 @@ async function readSettingsTextAsync(file) {
           ascii = false;
           break;
         }
-        await new Promise((resolve10) => (0, import_timers2.setImmediate)(resolve10));
+        await new Promise((resolve11) => (0, import_timers2.setImmediate)(resolve11));
       }
       if (ascii) {
         const final2 = await handle.stat();
@@ -1668,7 +8105,7 @@ async function readSettingsTextAsync(file) {
       const decoder = new import_string_decoder.StringDecoder("utf8"), parts = [];
       for (let offset = 0; offset < bytes.length; offset += 256 * 1024) {
         parts.push(decoder.write(bytes.subarray(offset, offset + 256 * 1024)));
-        await new Promise((resolve10) => (0, import_timers2.setImmediate)(resolve10));
+        await new Promise((resolve11) => (0, import_timers2.setImmediate)(resolve11));
       }
       parts.push(decoder.end());
       bytes = void 0;
@@ -1756,7 +8193,7 @@ async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeRepl
         break;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve10) => setTimeout(resolve10, 50 * (attempt + 1)));
+        await new Promise((resolve11) => setTimeout(resolve11, 50 * (attempt + 1)));
         if (beforeReplace) continue;
         const current = await io.readFile(file).catch((readError) => {
           if (readError.code === "ENOENT") return null;
@@ -2198,9 +8635,11 @@ function definitionPayload(workflow, tasks, settings) {
     if (!id || matches.length !== 1) throw new Error("Missing or ambiguous referenced task");
     return withoutRuntime(matches[0]);
   });
-  const usesOpenCode2 = selected.some((task) => task.taskKind === "opencode2") || settings.defaultAiEngine === "opencode2";
+  const usesOpenCode2 = selected.some((task) => task.taskKind === "opencode2" || task.taskKind === "cli" && task.cliProvider === "opencode2") || settings.defaultAiEngine === "opencode2";
+  const effectiveSettings = effectiveExecutionSettings(settings, usesOpenCode2);
+  if (selected.some((task) => task.taskKind === "cli" && task.cliProvider === "claude")) effectiveSettings.claudePath = settings.claudePath || "claude";
   const clean = (w) => ({ ...withoutRuntime(w), steps: w.steps.map((s) => withoutRuntime(s)) });
-  return canonical({ workflow: clean(workflow), ...children.length ? { workflows: children.map(clean) } : {}, tasks: selected, settings: effectiveExecutionSettings(settings, usesOpenCode2) });
+  return canonical({ workflow: clean(workflow), ...children.length ? { workflows: children.map(clean) } : {}, tasks: selected, settings: effectiveSettings });
 }
 function withAvailability(payload, workflow, tasks, catalog = []) {
   return {
@@ -2232,12 +8671,12 @@ async function prepareWorkflowDefinitionAsync(workflow, tasks, settings) {
   const availablePayload = freeze(withAvailability(payload, workflow, tasks, settings.workflows));
   const admissionSettings = Object.freeze(concurrencySettings(settings));
   const captured = captureJsonStructure(payload, 0), digest3 = (0, import_crypto4.createHash)("sha256");
-  await new Promise((resolve10) => (0, import_timers3.setImmediate)(resolve10));
+  await new Promise((resolve11) => (0, import_timers3.setImmediate)(resolve11));
   let deadline = import_perf_hooks3.performance.now() + 4;
   for (const part of encodeCapturedJson(captured)) {
     digest3.update(part, "utf8");
     if (import_perf_hooks3.performance.now() >= deadline) {
-      await new Promise((resolve10) => (0, import_timers3.setImmediate)(resolve10));
+      await new Promise((resolve11) => (0, import_timers3.setImmediate)(resolve11));
       deadline = import_perf_hooks3.performance.now() + 4;
     }
   }
@@ -3154,6 +9593,16 @@ var import_child_process5 = require("child_process");
 var fs5 = __toESM(require("fs"));
 var path5 = __toESM(require("path"));
 var os = __toESM(require("os"));
+
+// interactive-task-terminal.ts
+var InteractiveTerminalLaunchUncertainError = class extends Error {
+  constructor() {
+    super(...arguments);
+    this.code = "AUTOOC_TERMINAL_UNCERTAIN";
+  }
+};
+
+// cli-launchers.ts
 var crypto = __toESM(require("crypto"));
 var import_child_process2 = require("child_process");
 
@@ -3268,11 +9717,11 @@ function resolveOpencodeBin(configured) {
       "/usr/local/bin/opencode"
     );
   }
-  const { accessSync: accessSync2, statSync: statSync6, constants: constants2 } = require("fs");
+  const { accessSync: accessSync2, statSync: statSync7, constants: constants2 } = require("fs");
   for (const candidate of candidates) {
     try {
       accessSync2(candidate, constants2.X_OK);
-      if (!statSync6(candidate).isFile()) continue;
+      if (!statSync7(candidate).isFile()) continue;
       return candidate;
     } catch (e) {
     }
@@ -3436,8 +9885,8 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
       checkDirectory,
       `Set-Location -LiteralPath ${psSingleQuoted(path5.resolve(cwd))}`,
       "try {",
-      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
-      `  $cliArgs = @(${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
+      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application,ExternalScript -ErrorAction Stop | Select-Object -First 1`,
+      `  $cliArgs = @(${options.promptArgs ? options.promptArgs(instruction).map(psSingleQuoted).join(", ") : `${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)}`})`,
       "  & $target.Source @cliArgs",
       "  exit $LASTEXITCODE",
       "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
@@ -3495,16 +9944,16 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
         return;
       }
       if (state.attempt !== attempt) return;
-      if (state.status === "error") finish(new Error("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
+      if (state.status === "error") finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
       else if (state.confirmed === true && (state.status === "started" || state.status === "ended")) finish();
-      else if (state.status === "ended") finish(new Error("Interactive CLI exited without confirmed startup"));
+      else if (state.status === "ended") finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI exited without confirmed startup"));
       if (state.ended === true && (state.status === "ended" || state.status === "error")) {
         stopPolling();
         cleanup();
       }
     };
     poll = setInterval(readState, 100);
-    timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
+    timeout = setTimeout(() => finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
     const launcher = (0, import_child_process2.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
       // A detached hidden PowerShell can exit without executing its command on
       // Windows. The observer does not need a new process group; unref below
@@ -3522,7 +9971,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     (_c = launcher.on) == null ? void 0 : _c.call(launcher, "exit", () => {
       readState();
       stopPolling();
-      finish(new Error("Interactive CLI observer exited without startup confirmation; prompt retained"));
+      finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI observer exited without startup confirmation; prompt retained"));
     });
     launcher.unref();
   } catch (error) {
@@ -3533,26 +9982,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
 }
 function launchHiddenPS(psScriptFile, pidFile) {
   var _a;
-  const fs34 = require("fs");
+  const fs37 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs34.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs37.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn6 } = require("child_process");
   const child = spawn6("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs34.unlinkSync(launcherFile);
+      fs37.unlinkSync(launcherFile);
     } catch (e) {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs34.unlinkSync(psScriptFile);
+      fs37.unlinkSync(psScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3560,12 +10009,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs34.unlinkSync(launcherFile);
+      fs37.unlinkSync(launcherFile);
     } catch (e) {
     }
     if (removeScript) {
       try {
-        fs34.unlinkSync(psScriptFile);
+        fs37.unlinkSync(psScriptFile);
       } catch (e) {
       }
     }
@@ -3587,7 +10036,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs34.existsSync(effectivePidFile) ? String(fs34.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs37.existsSync(effectivePidFile) ? String(fs37.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn6("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -3596,7 +10045,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs34.unlinkSync(effectivePidFile);
+      fs37.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -3618,18 +10067,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
 }
 function launchHiddenSh(shScriptFile, pidFile) {
   var _a;
-  const fs34 = require("fs");
+  const fs37 = require("fs");
   const { spawn: spawn6 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs34.chmodSync(shScriptFile, 448);
+    fs37.chmodSync(shScriptFile, 448);
   } catch (e) {
   }
   const child = spawn6("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs34.unlinkSync(shScriptFile);
+      fs37.unlinkSync(shScriptFile);
     } catch (e) {
     }
   }, 6e5);
@@ -3637,7 +10086,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs34.unlinkSync(shScriptFile);
+        fs37.unlinkSync(shScriptFile);
       } catch (e) {
       }
     }
@@ -3658,7 +10107,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs34.existsSync(effectivePidFile) ? String(fs34.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs37.existsSync(effectivePidFile) ? String(fs37.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -3673,7 +10122,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs34.unlinkSync(effectivePidFile);
+      fs37.unlinkSync(effectivePidFile);
     } catch (e) {
     }
   };
@@ -3761,12 +10210,12 @@ var JsonLineRpcPeer = class {
   }
   request(method, params = {}, timeoutMs = 3e4) {
     const id = this.nextId++;
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex RPC request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve10, reject, timer });
+      this.pending.set(id, { resolve: resolve11, reject, timer });
       this.writeLine(JSON.stringify({ id, method, params }) + "\n");
     });
   }
@@ -3864,7 +10313,7 @@ function openCodexUrl(url) {
     ],
     env: { ...process.env, AUTOOC_CODEX_URL: url }
   } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const child = (0, import_child_process3.spawn)(launcher.bin, launcher.args, {
       detached: false,
       stdio: "ignore",
@@ -3878,7 +10327,7 @@ function openCodexUrl(url) {
     });
     child.once("close", (code) => {
       if (settled) return;
-      if (code === 0) resolve10();
+      if (code === 0) resolve11();
       else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code != null ? code : "unknown"}`));
     });
   });
@@ -4006,8 +10455,8 @@ var CodexAppServerClient = class {
     this.threadId = ((_a = threadResponse == null ? void 0 : threadResponse.thread) == null ? void 0 : _a.id) || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
     await ((_c = (_b = this.callbacks).onThreadCreated) == null ? void 0 : _c.call(_b, { threadId: this.threadId }));
-    const completion = new Promise((resolve10, reject) => {
-      this.completionResolve = resolve10;
+    const completion = new Promise((resolve11, reject) => {
+      this.completionResolve = resolve11;
       this.completionReject = reject;
     });
     void completion.catch(() => {
@@ -4228,11 +10677,11 @@ function readOpenCodeOutput(bin, args, cwd, timeout, maxBuffer) {
     const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ${invocation}; exit $LASTEXITCODE`;
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
   }
-  return new Promise((resolve10, reject) => (0, import_child_process4.execFile)(
+  return new Promise((resolve11, reject) => (0, import_child_process4.execFile)(
     command,
     args,
     { cwd, windowsHide: true, timeout, maxBuffer, encoding: "utf8" },
-    (error, stdout) => error ? reject(error) : resolve10(stdout)
+    (error, stdout) => error ? reject(error) : resolve11(stdout)
   ));
 }
 async function detectOpenCodeVersion(bin) {
@@ -4318,29 +10767,33 @@ function windowsInteractiveCliScripts(bin, cwd, label) {
   ].join("\n");
   return { runner, helper };
 }
-async function launchInteractiveCli(provider, cwd, settings) {
+function prepareInteractiveCli(provider, cwd, settings) {
   var _a;
   const cli = INTERACTIVE_CLIS.find((item) => item.id === provider);
-  if (!cli || ((_a = settings.cliLauncherEnabled) == null ? void 0 : _a[provider]) === false) return Promise.reject(new Error("This CLI is disabled. Enable it in AutoOC Settings."));
+  if (!cli || ((_a = settings.cliLauncherEnabled) == null ? void 0 : _a[provider]) === false) throw new Error("This CLI is disabled. Enable it in AutoOC Settings.");
   const bin = resolveInteractiveCli(provider, settings[cli.pathKey]);
-  if (!bin) return Promise.reject(new Error(`${cli.label} was not found. Check its executable path in AutoOC Settings.`));
-  if (!path8.isAbsolute(cwd)) return Promise.reject(new Error("Choose an absolute project folder."));
+  if (!bin) throw new Error(`${cli.label} was not found. Check its executable path in AutoOC Settings.`);
+  if (!path8.isAbsolute(cwd)) throw new Error("Choose an absolute project folder.");
   try {
     if (!fs7.statSync(cwd).isDirectory()) throw new Error();
   } catch (e) {
-    return Promise.reject(new Error(`Folder does not exist: ${cwd}`));
+    throw new Error(`Folder does not exist: ${cwd}`);
   }
-  if (!["win32", "darwin", "linux"].includes(process.platform)) return Promise.reject(new Error("Interactive CLIs require Windows, macOS or Linux."));
+  if (!["win32", "darwin", "linux"].includes(process.platform)) throw new Error("Interactive CLIs require Windows, macOS or Linux.");
+  return { cli, bin, cwd };
+}
+async function launchInteractiveCli(provider, cwd, settings) {
+  const { cli, bin } = prepareInteractiveCli(provider, cwd, settings);
   if (provider === "opencode2") await assertOpenCode2(bin);
-  if (process.platform !== "win32") return new Promise((resolve10, reject) => {
+  if (process.platform !== "win32") return new Promise((resolve11, reject) => {
     try {
-      openOpencodeCli(bin, cwd, {}, [], { linuxTerminal: settings.linuxTerminal, onLaunched: resolve10, onError: reject });
+      openOpencodeCli(bin, cwd, {}, [], { linuxTerminal: settings.linuxTerminal, onLaunched: resolve11, onError: reject });
     } catch (error) {
       reject(error);
     }
   });
-  return new Promise((resolve10, reject) => {
-    var _a2, _b, _c;
+  return new Promise((resolve11, reject) => {
+    var _a, _b, _c;
     const { helper } = windowsInteractiveCliScripts(bin, cwd, cli.label);
     const windowsRoot = process.env.SystemRoot || process.env.WINDIR || "C:\\Windows";
     const powershell = path8.join(path8.isAbsolute(windowsRoot) ? windowsRoot : "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -4350,7 +10803,7 @@ async function launchInteractiveCli(provider, cwd, settings) {
       { cwd, detached: false, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
     );
     let receipt = "", diagnostic = "";
-    (_a2 = child.stdout) == null ? void 0 : _a2.on("data", (chunk) => {
+    (_a = child.stdout) == null ? void 0 : _a.on("data", (chunk) => {
       receipt = (receipt + chunk.toString()).slice(-1024);
     });
     (_b = child.stderr) == null ? void 0 : _b.on("data", (chunk) => {
@@ -4362,7 +10815,7 @@ async function launchInteractiveCli(provider, cwd, settings) {
       settled = true;
       clearTimeout(timer);
       if (error) reject(error);
-      else resolve10();
+      else resolve11();
     };
     const timer = setTimeout(() => {
       try {
@@ -4396,6 +10849,56 @@ function openCliLauncher(app, host, selected) {
 function addInteractiveCliSettings(root, host) {
   root.createEl("h3", { text: "Interactive CLI launchers" });
   root.createEl("p", { text: "Choose which CLIs appear under \u{1F4BB} CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
+  new import_obsidian4.Setting(root).setName("CLI terminal destination").setDesc("Where manual CLIs and interactive CLI tasks for all harnesses open, including workflow steps. Background tasks, the Codex app and existing terminals are unchanged. Integrated tasks require Obsidian to be open.").addDropdown((dropdown) => {
+    let saving = false;
+    dropdown.addOption("external", "External window").addOption("integrated", "Integrated in Obsidian").setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external").onChange(async (value) => {
+      if (saving || host.isLifecycleStopped() || value !== "integrated" && value !== "external") {
+        dropdown.setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external");
+        return;
+      }
+      const previous = host.settings.cliTerminalDestination;
+      saving = true;
+      dropdown.setDisabled(true);
+      host.settings.cliTerminalDestination = value;
+      try {
+        await host.saveSettings(false);
+      } catch (e) {
+        if (host.settings.cliTerminalDestination === value) host.settings.cliTerminalDestination = previous;
+        new import_obsidian4.Notice("Terminal destination could not be saved. Try again.");
+      } finally {
+        saving = false;
+        dropdown.setDisabled(false);
+        dropdown.setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external");
+      }
+    });
+  });
+  if (host.installCliTerminalSupport) {
+    const support = new import_obsidian4.Setting(root).setName("Integrated terminal support").setDesc("Windows x64 only. Runs with your user permissions; closing AutoOC stops its integrated sessions. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
+    let installing = false;
+    support.addButton((button) => button.setButtonText("Download and install terminal support").onClick(async () => {
+      if (installing || host.isLifecycleStopped()) return;
+      installing = true;
+      button.setDisabled(true);
+      support.setDesc("Installing verified terminal support...");
+      try {
+        await host.installCliTerminalSupport();
+        support.setDesc("Terminal support is ready. New CLI sessions use the destination selected above.");
+      } catch (error) {
+        support.setDesc(`Terminal support could not be installed. ${String(error)}`);
+      } finally {
+        installing = false;
+        button.setDisabled(false);
+      }
+    }));
+    if (host.showCliTerminals) support.addButton((button) => button.setButtonText("Show existing terminals").onClick(async () => {
+      if (host.isLifecycleStopped()) return;
+      try {
+        await host.showCliTerminals();
+      } catch (error) {
+        new import_obsidian4.Notice(String(error));
+      }
+    }));
+  }
   for (const cli of INTERACTIVE_CLIS) {
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
     new import_obsidian4.Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.").addToggle((toggle) => {
@@ -4497,6 +11000,8 @@ var CliLauncherModal = class extends import_obsidian4.Modal {
       });
     });
     else root.createEl("p", { text: "No configured CLI is available. Open Settings to enable one and set its executable path." });
+    const integrated = this.host.settings.cliTerminalDestination === "integrated";
+    root.createEl("p", { text: `Terminal: ${integrated ? "Integrated in Obsidian" : "External window"}. Change the destination in AutoOC Settings.`, cls: "setting-item-description" });
     const missing = configured.filter((cli) => !cli.executable);
     if (missing.length) root.createEl("p", { text: `Not found: ${missing.map((cli) => cli.label).join(", ")}. Configure their paths in Settings.`, cls: "setting-item-description" });
     const feedback = root.createDiv();
@@ -4521,7 +11026,10 @@ var CliLauncherModal = class extends import_obsidian4.Modal {
       open.disabled = choose.disabled = true;
       feedback.setText("Opening terminal\u2026");
       try {
-        await launchInteractiveCli(this.selected, cwd, this.host.settings);
+        if (integrated) {
+          if (!this.host.openIntegratedCli) throw new Error("Integrated terminals are unavailable. Check AutoOC Settings; no external session was started.");
+          await this.host.openIntegratedCli(this.selected, cwd);
+        } else await launchInteractiveCli(this.selected, cwd, this.host.settings);
         if (!this.closed) this.close();
       } catch (error) {
         if (!this.closed) feedback.setText(error instanceof Error ? error.message : String(error));
@@ -4553,6 +11061,968 @@ var CliLauncherModal = class extends import_obsidian4.Modal {
   }
   onClose() {
     this.closed = true;
+    this.contentEl.empty();
+  }
+};
+
+// interactive-cli-task.ts
+var fs8 = __toESM(require("fs"));
+var path9 = __toESM(require("path"));
+
+// interactive-cli-profile.ts
+function isInteractiveCliProvider(value) {
+  return INTERACTIVE_CLIS.some((cli) => cli.id === value);
+}
+function interactiveCliTaskArgs(provider, model, agent, instruction, reasoningEffort) {
+  if (!isInteractiveCliProvider(provider)) throw new Error("Unsupported interactive CLI provider.");
+  if (provider === "opencode" || provider === "opencode2") {
+    const args2 = openCodeInteractiveArgs(provider === "opencode2" ? 2 : 1, model, agent, instruction);
+    if (!model) args2.splice(args2.indexOf("-m"), 2);
+    return args2;
+  }
+  if (agent) throw new Error(`Interactive CLI agent selection is only supported for OpenCode, not ${provider}.`);
+  const args = model ? ["--model", model] : [];
+  if (provider === "copilot") return [...args, "--interactive", instruction];
+  if (provider === "codex" && reasoningEffort) {
+    args.push("--config", `model_reasoning_effort=${JSON.stringify(reasoningEffort)}`);
+  }
+  return [...args, "--", instruction];
+}
+
+// interactive-cli-task.ts
+function getCliTaskValidationError(task) {
+  if (task.taskKind !== "cli") return task.cliProvider !== void 0 ? "cliProvider is only valid for taskKind cli." : null;
+  if (!isInteractiveCliProvider(task.cliProvider)) return "CLI tasks require a known cliProvider: opencode, opencode2, codex, copilot, or claude.";
+  if (task.interactiveTerminal !== true) return "CLI tasks require interactiveTerminal: true.";
+  if (typeof task.prompt !== "string" || !task.prompt.trim()) return "CLI tasks require a non-empty prompt.";
+  for (const field of ["codeAllowVault", "codeAllowFiles", "codeAllowTerminal", "copilotAllowAllTools", "useRalphLoop", "createBranch"]) {
+    if (task[field] !== void 0 && task[field] !== false) return `${field} is not supported for interactive CLI tasks.`;
+  }
+  if (task.branch !== void 0 && task.branch !== "") return "branch is not supported for interactive CLI tasks.";
+  if (task.model !== void 0 && typeof task.model !== "string") return "CLI model must be a string when provided.";
+  if (task.agent !== void 0 && (typeof task.agent !== "string" || task.agent !== "" && !isOpenCodeTask(task.cliProvider))) return "agent is only supported for OpenCode CLI providers.";
+  if (task.forceModel !== void 0 && typeof task.forceModel !== "boolean") return "forceModel must be a boolean when provided.";
+  if (task.reasoningEffort !== void 0 && (task.cliProvider !== "codex" || typeof task.reasoningEffort !== "string" || !task.reasoningEffort.trim())) return "reasoningEffort is only valid as a non-empty string for the Codex CLI provider.";
+  return null;
+}
+function prepareCliTask(task, settings, cwd, prompt, signal) {
+  const error = getCliTaskValidationError(task);
+  if (error) throw new Error(error);
+  if (task.taskKind !== "cli") throw new Error("Expected an interactive CLI task.");
+  if (signal == null ? void 0 : signal.aborted) throw new Error("CLI task cancelled before launch.");
+  if (!path9.isAbsolute(cwd) || !fs8.statSync(cwd).isDirectory()) throw new Error("CLI task requires an existing absolute project directory.");
+  if (!prompt.trim()) throw new Error("CLI task prompt must be nonempty.");
+  const cli = INTERACTIVE_CLIS.find((cli2) => cli2.id === task.cliProvider);
+  const bin = resolveInteractiveCli(cli.id, settings[cli.pathKey]);
+  if (!bin) throw new Error(`${cli.label} executable was not found. Check AutoOC Settings.`);
+  return {
+    provider: cli.id,
+    bin,
+    cwd,
+    label: task.name || cli.label,
+    major: cli.id === "opencode2" ? 2 : 1,
+    model: task.model || "",
+    agent: task.forceModel ? "" : task.agent || "",
+    prompt,
+    reasoningEffort: task.reasoningEffort,
+    signal
+  };
+}
+async function launchExternalCliTask(request, linuxTerminal) {
+  var _a, _b, _c;
+  if (!request.provider || !isInteractiveCliProvider(request.provider)) throw new Error("A CLI task provider is required.");
+  if ((_a = request.signal) == null ? void 0 : _a.aborted) throw new Error("CLI task cancelled before launch.");
+  if (request.provider === "opencode2") await assertOpenCode2(request.bin);
+  if ((_b = request.signal) == null ? void 0 : _b.aborted) throw new Error("CLI task cancelled before launch.");
+  const argsForPrompt = (instruction) => interactiveCliTaskArgs(request.provider, request.model, request.agent, instruction, request.reasoningEffort);
+  if (process.platform === "win32") {
+    await new Promise((resolve11, reject) => openOpencodeCliLongPromptWindows(
+      request.bin,
+      request.cwd,
+      {},
+      request.model,
+      request.agent,
+      request.prompt,
+      { onLaunched: resolve11, onError: reject, promptArgs: argsForPrompt }
+    ));
+    return;
+  }
+  if (!["linux", "darwin"].includes(process.platform)) throw new Error("Interactive CLI tasks require Windows, macOS or Linux.");
+  if (process.platform === "linux" && !resolveLinuxTerminal(linuxTerminal)) throw new Error("No supported Linux terminal is available. Nothing was launched.");
+  const directory = createAuxiliaryDirectory(request.cwd, "interactive");
+  const promptFile = path9.join(directory, "prompt.txt"), scriptFile = path9.join(directory, "launch.sh");
+  let scriptWritten = false;
+  const cleanupBeforeLaunch = () => {
+    for (const parent of [path9.dirname(path9.dirname(directory)), path9.dirname(directory), directory]) {
+      const stat = fs8.lstatSync(parent);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("CLI auxiliary directory changed; input preserved.");
+    }
+    if (scriptWritten) fs8.unlinkSync(scriptFile);
+    completeAuxiliaryDirectory(directory, "interactive");
+  };
+  try {
+    fs8.writeFileSync(promptFile, request.prompt, { encoding: "utf8", flag: "wx", mode: 384 });
+    const instruction = `Read ${path9.relative(request.cwd, promptFile).split(path9.sep).join("/")} as UTF-8 and follow its instructions.`;
+    const q = shSingleQuoted;
+    const command = [request.bin, ...argsForPrompt(instruction)].map(q).join(" ");
+    const script = [
+      "#!/bin/sh",
+      "cleanup() {",
+      "  status=$?",
+      `  if [ -d ${q(directory)} ] && [ ! -L ${q(directory)} ] && [ ! -L ${q(path9.dirname(directory))} ] && [ ! -L ${q(path9.dirname(path9.dirname(directory)))} ]; then`,
+      `    rm -f -- ${q(promptFile)} ${q(scriptFile)}`,
+      `    printf '%s' ${q(auxiliaryCompletionRecord(directory, "interactive"))} > ${q(path9.join(directory, AUXILIARY_COMPLETION))}`,
+      "  fi",
+      '  exit "$status"',
+      "}",
+      "trap cleanup EXIT",
+      command
+    ].join("\n") + "\n";
+    fs8.writeFileSync(scriptFile, script, { encoding: "utf8", flag: "wx", mode: 448 });
+    scriptWritten = true;
+    if ((_c = request.signal) == null ? void 0 : _c.aborted) {
+      throw new Error("CLI task cancelled before launch.");
+    }
+  } catch (error) {
+    cleanupBeforeLaunch();
+    throw error;
+  }
+  await new Promise((resolve11, reject) => {
+    let acknowledged = false;
+    const failed = (error) => {
+      if (acknowledged) return;
+      try {
+        cleanupBeforeLaunch();
+        reject(error);
+      } catch (cleanup) {
+        reject(cleanup);
+      }
+    };
+    try {
+      openOpencodeCli("/bin/sh", request.cwd, {}, [scriptFile], { linuxTerminal, onLaunched: () => {
+        acknowledged = true;
+        resolve11();
+      }, onError: failed });
+    } catch (error) {
+      failed(error);
+    }
+  });
+}
+
+// integrated-terminal.ts
+var import_obsidian5 = require("obsidian");
+var fs10 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
+
+// terminal-pty.ts
+var import_node_crypto = require("node:crypto");
+var import_node_fs = require("node:fs");
+var import_node_https = require("node:https");
+var import_node_module = require("node:module");
+var import_node_os = require("node:os");
+var path10 = __toESM(require("node:path"));
+var import_node_zlib = require("node:zlib");
+var TERMINAL_SUPPORT = Object.freeze({
+  package: "node-pty",
+  version: "1.1.0",
+  license: "MIT",
+  url: "https://registry.npmjs.org/node-pty/-/node-pty-1.1.0.tgz",
+  integrity: "sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg=="
+});
+var DIRECTORY = "node-pty-1.1.0-win32-x64";
+var ARCHIVE = "source.tgz";
+var MAX_DOWNLOAD = 48 * 1024 * 1024;
+var MAX_UNPACKED = 96 * 1024 * 1024;
+function supportedHost() {
+  if (process.platform !== "win32" || process.arch !== "x64") {
+    throw new Error(`Terminal PTY: solo Windows x64 esta soportado; host ${process.platform}/${process.arch}. No se descargara ni compilara otro binario.`);
+  }
+  const version = (0, import_node_os.release)().split(".").map(Number);
+  if (version[0] < 10 || !Number.isFinite(version[2]) || version[2] < 18309) {
+    throw new Error(`Terminal PTY: se requiere Windows build 18309 o posterior (recomendado Windows 10 1903+/11); actual ${(0, import_node_os.release)()}.`);
+  }
+  if (Number(process.versions.napi || 0) < 8) {
+    throw new Error("Terminal PTY: se requiere Node-API >= 8. Actualiza el instalador de Obsidian/Electron, no solo la aplicacion.");
+  }
+}
+async function directoryWithoutLink(directory) {
+  const stat = await import_node_fs.promises.lstat(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`Terminal PTY: se esperaba un directorio real sin enlaces: ${directory}`);
+  }
+}
+async function supportRoot(pluginDirectory, create) {
+  supportedHost();
+  if (!path10.isAbsolute(pluginDirectory)) throw new Error("Terminal PTY: pluginDirectory debe ser una ruta absoluta.");
+  const plugin = await import_node_fs.promises.realpath(pluginDirectory);
+  await directoryWithoutLink(plugin);
+  const root = path10.join(plugin, "terminal-support");
+  if (create) await import_node_fs.promises.mkdir(root).catch((error) => {
+    if (error.code !== "EEXIST") throw error;
+  });
+  try {
+    await directoryWithoutLink(root);
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      throw new Error("Terminal PTY: soporte no instalado. Usa el boton opt-in que llama installTerminalSupport(pluginDirectory).");
+    }
+    throw error;
+  }
+  return root;
+}
+function download() {
+  return new Promise((resolve11, reject) => {
+    const request = (0, import_node_https.get)(TERMINAL_SUPPORT.url, { headers: { "User-Agent": "AutoOC-terminal-support" } }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        request.destroy(new Error(`Terminal PTY: npm respondio HTTP ${response.statusCode}; no se permiten redirecciones.`));
+        return;
+      }
+      const chunks = [];
+      let size = 0;
+      response.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > MAX_DOWNLOAD) request.destroy(new Error("Terminal PTY: descarga demasiado grande."));
+        else chunks.push(chunk);
+      });
+      response.on("error", reject);
+      response.on("aborted", () => reject(new Error("Terminal PTY: descarga interrumpida.")));
+      response.on("end", () => resolve11(Buffer.concat(chunks)));
+    });
+    const timer = setTimeout(() => request.destroy(new Error("Terminal PTY: timeout de descarga (120 s). Comprueba acceso HTTPS a registry.npmjs.org.")), 12e4);
+    request.on("error", reject);
+    request.on("close", () => clearTimeout(timer));
+  });
+}
+async function contents(archive) {
+  if (archive.length > MAX_DOWNLOAD || `sha512-${(0, import_node_crypto.createHash)("sha512").update(archive).digest("base64")}` !== TERMINAL_SUPPORT.integrity) {
+    throw new Error("Terminal PTY: integridad SHA-512 del paquete incorrecta; no se ejecutara su contenido.");
+  }
+  const tar = await new Promise((resolve11, reject) => {
+    (0, import_node_zlib.gunzip)(archive, { maxOutputLength: MAX_UNPACKED }, (error, data) => error ? reject(error) : resolve11(data));
+  });
+  const result = /* @__PURE__ */ new Map();
+  const field = (header, start, end) => header.subarray(start, end).toString("utf8").split("\0")[0];
+  for (let offset = 0; offset + 512 <= tar.length; ) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((byte) => byte === 0)) break;
+    const name = field(header, 0, 100);
+    const sizeText = field(header, 124, 136).trim();
+    const checksumText = field(header, 148, 156).trim();
+    let checksum = 0;
+    for (let i = 0; i < 512; i++) checksum += i >= 148 && i < 156 ? 32 : header[i];
+    const size = parseInt(sizeText, 8);
+    if (!/^[0-7]+$/.test(sizeText) || !/^[0-7]+$/.test(checksumText) || checksum !== parseInt(checksumText, 8) || header[156] !== 48 || field(header, 345, 500) || !name.startsWith("package/") || !/^package\/[a-zA-Z0-9_./-]+$/.test(name) || name.split("/").some((part) => !part || part === "." || part === "..") || offset + 512 + size > tar.length) {
+      throw new Error("Terminal PTY: formato tar no admitido; no se extraeran enlaces ni rutas arbitrarias.");
+    }
+    const relative8 = name.slice("package/".length);
+    const selected = relative8 === "package.json" || relative8 === "LICENSE" || relative8.startsWith("lib/") && relative8.endsWith(".js") && !relative8.endsWith(".test.js") || relative8 === "deps/winpty/LICENSE" || relative8 === "prebuilds/win32-x64/conpty.node" || relative8 === "prebuilds/win32-x64/conpty_console_list.node" || relative8.startsWith("prebuilds/win32-x64/conpty/");
+    if (selected) {
+      if (result.has(relative8)) throw new Error("Terminal PTY: entrada duplicada en tar.");
+      result.set(relative8, tar.subarray(offset + 512, offset + 512 + size));
+    }
+    offset += 512 + Math.ceil(size / 512) * 512;
+  }
+  for (const required2 of [
+    "package.json",
+    "LICENSE",
+    "lib/index.js",
+    "lib/worker/conoutSocketWorker.js",
+    "prebuilds/win32-x64/conpty.node",
+    "prebuilds/win32-x64/conpty/conpty.dll",
+    "prebuilds/win32-x64/conpty/OpenConsole.exe"
+  ]) {
+    if (!result.has(required2)) throw new Error(`Terminal PTY: paquete incompleto, falta ${required2}.`);
+  }
+  const metadata = JSON.parse(result.get("package.json").toString("utf8"));
+  if (metadata.name !== TERMINAL_SUPPORT.package || metadata.version !== TERMINAL_SUPPORT.version || metadata.license !== "MIT") {
+    throw new Error("Terminal PTY: identidad/licencia del paquete inesperada.");
+  }
+  return result;
+}
+async function readRegular(file, maxSize) {
+  const stat = await import_node_fs.promises.lstat(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maxSize) {
+    throw new Error(`Terminal PTY: fichero no admitido: ${file}`);
+  }
+  return import_node_fs.promises.readFile(file);
+}
+async function verify(directory) {
+  await directoryWithoutLink(directory);
+  const files2 = await contents(await readRegular(path10.join(directory, ARCHIVE), MAX_DOWNLOAD));
+  const directories = /* @__PURE__ */ new Set();
+  for (const name of files2.keys()) {
+    let parent = path10.posix.dirname(name);
+    while (parent !== ".") {
+      directories.add(parent);
+      parent = path10.posix.dirname(parent);
+    }
+  }
+  async function walk(relative8) {
+    for (const entry of await import_node_fs.promises.readdir(path10.join(directory, relative8), { withFileTypes: true })) {
+      const name = relative8 ? `${relative8}/${entry.name}` : entry.name;
+      if (entry.isSymbolicLink()) throw new Error(`Terminal PTY: enlace no admitido: ${name}`);
+      if (entry.isDirectory() && directories.has(name)) await walk(name);
+      else if (entry.isFile() && (files2.has(name) || name === ARCHIVE)) continue;
+      else throw new Error(`Terminal PTY: contenido inesperado: ${name}. No se reparara ni borrara automaticamente.`);
+    }
+  }
+  await walk("");
+  for (const [name, expected] of files2) {
+    const actual = await readRegular(path10.join(directory, name), expected.length);
+    if (!actual.equals(expected)) throw new Error(`Terminal PTY: fichero alterado: ${name}. Restaura el soporte original y reinicia Obsidian.`);
+  }
+}
+async function installTerminalSupport(pluginDirectory) {
+  const root = await supportRoot(pluginDirectory, true);
+  const target = path10.join(root, DIRECTORY);
+  try {
+    await import_node_fs.promises.lstat(target);
+    await verify(target);
+    return;
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    try {
+      await import_node_fs.promises.lstat(target);
+      throw new Error("Terminal PTY: instalacion incompleta. Conservala para diagnostico; no se sobrescribira.");
+    } catch (check) {
+      if (check.code !== "ENOENT") throw check;
+    }
+  }
+  const archive = await download();
+  const files2 = await contents(archive);
+  const staging = await import_node_fs.promises.mkdtemp(path10.join(root, ".install-"));
+  try {
+    for (const [name, data] of files2) {
+      const destination = path10.join(staging, name);
+      await import_node_fs.promises.mkdir(path10.dirname(destination), { recursive: true });
+      await import_node_fs.promises.writeFile(destination, data, { flag: "wx" });
+    }
+    await import_node_fs.promises.writeFile(path10.join(staging, ARCHIVE), archive, { flag: "wx" });
+    await verify(staging);
+    try {
+      await import_node_fs.promises.rename(staging, target);
+    } catch (error) {
+      if (!["EEXIST", "ENOTEMPTY", "EPERM"].includes(error.code || "")) throw error;
+      await verify(target);
+    }
+  } finally {
+    await import_node_fs.promises.rm(staging, { recursive: true, force: true });
+  }
+}
+async function loadTerminalPty(pluginDirectory) {
+  var _a;
+  const root = await supportRoot(pluginDirectory, false);
+  const directory = path10.join(root, DIRECTORY);
+  try {
+    await verify(directory);
+  } catch (error) {
+    throw new Error(`Terminal PTY: soporte ausente, incompleto o alterado. Usa la instalacion opt-in si no existe; no se reparara automaticamente. ${String(error)}`);
+  }
+  let nativeRequire = (0, import_node_module.createRequire)(path10.join(directory, "package.json"));
+  if (process.type === "renderer") {
+    try {
+      const obsidianRequire = window.require;
+      const remote = (_a = obsidianRequire == null ? void 0 : obsidianRequire("electron")) == null ? void 0 : _a.remote;
+      if (typeof (remote == null ? void 0 : remote.require) !== "function") throw new Error("electron.remote.require no disponible");
+      nativeRequire = remote.require("node:module").createRequire(path10.join(directory, "package.json"));
+    } catch (error) {
+      throw new Error(`Terminal PTY: el renderer requiere el puente electron.remote de Obsidian para ejecutar node-pty/workers en main. No se creara ningun PTY ni se habilitaran permisos nuevos. ${String(error)}`);
+    }
+  }
+  let conpty;
+  let backend;
+  try {
+    conpty = nativeRequire(path10.join(directory, "prebuilds/win32-x64/conpty.node"));
+    backend = nativeRequire(path10.join(directory, "lib/index.js"));
+    if (typeof backend.spawn !== "function") throw new Error("Falta spawn en node-pty.");
+  } catch (error) {
+    throw new Error(`Terminal PTY: no se pudo cargar el prebuild Node-API Windows x64 (Electron ${process.versions.electron || "no disponible"}, Node ${process.versions.node}, N-API ${process.versions.napi}). Comprueba el instalador de Obsidian y el runtime Microsoft Visual C++ 2015-2022 x64; no se intentara node-gyp. ${String(error)}`);
+  }
+  return {
+    spawn(file, args, options) {
+      if (!file || file.includes("\0") || !Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+        throw new Error("Terminal PTY: ejecutable/argumentos invalidos; usa un ejecutable real, no un archivo .cmd como shell.");
+      }
+      const dimensions = (cols, rows) => {
+        if (![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 32767)) {
+          throw new Error("Terminal PTY: cols/rows deben ser enteros entre 1 y 32767.");
+        }
+      };
+      dimensions(options.cols, options.rows);
+      if (!path10.isAbsolute(options.cwd) || options.cwd.includes("\0") || !options.name || options.name.includes("\0")) {
+        throw new Error("Terminal PTY: cwd absoluto y name no vacio son obligatorios.");
+      }
+      const env = { ...options.env };
+      if (Object.entries(env).some(([key, value]) => !key || key.includes("=") || key.includes("\0") || typeof value !== "string" || value.includes("\0")) || !Object.keys(env).some((key) => key.toLowerCase() === "systemroot" && env[key])) {
+        throw new Error("Terminal PTY: env debe contener solo strings validos e incluir SystemRoot (necesario para PowerShell). No se hereda process.env implicitamente.");
+      }
+      let terminal;
+      try {
+        terminal = backend.spawn(file, [...args], { ...options, env, useConpty: true, useConptyDll: true });
+      } catch (error) {
+        throw new Error(`Terminal PTY: no se pudo iniciar el proceso. Comprueba ejecutable, cwd y permisos. ${String(error)}`);
+      }
+      const agent = terminal._agent;
+      const listeners = /* @__PURE__ */ new Set();
+      let stopping = false;
+      let exited = false;
+      let nativeExitCode;
+      let shutdownRequested = false;
+      let inputClosed = false;
+      let outputClosed = false;
+      let stop;
+      let cleanup;
+      let resolveStop;
+      let rejectStop;
+      let deadline;
+      let drain;
+      const finish = (exitCode) => {
+        if (cleanup || exited) return;
+        nativeExitCode = exitCode;
+        clearInterval(observe);
+        if (drain) clearTimeout(drain);
+        cleanup = (async () => {
+          var _a2;
+          terminal._deferreds = [];
+          if (!inputClosed) {
+            agent.inSocket.destroy();
+            inputClosed = true;
+          }
+          if (!outputClosed) {
+            agent.outSocket.destroy();
+            outputClosed = true;
+          }
+          const connection = agent._conoutSocketWorker;
+          (_a2 = connection._drainTimeout) == null ? void 0 : _a2.close();
+          await connection._worker.terminate();
+          exited = true;
+        })();
+        void cleanup.then(() => {
+          if (deadline) clearTimeout(deadline);
+          resolveStop == null ? void 0 : resolveStop();
+          const current = [...listeners];
+          listeners.clear();
+          for (const listener of current) {
+            try {
+              listener({ exitCode });
+            } catch (error) {
+              console.error("Terminal PTY: error en onExit.", error);
+            }
+          }
+        }, (error) => {
+          cleanup = void 0;
+          if (deadline) clearTimeout(deadline);
+          const failure = new Error(`Terminal PTY: salida nativa confirmada, pero fallo el cleanup de sockets/worker: ${String(error)}`);
+          rejectStop == null ? void 0 : rejectStop(failure);
+          console.error(failure);
+        });
+      };
+      const observeExit = () => {
+        const code = agent.exitCode;
+        if (typeof code !== "number" || !Number.isFinite(code) || nativeExitCode !== void 0) return;
+        nativeExitCode = code;
+        clearInterval(observe);
+        if (stopping) finish(code);
+        else if (!drain) drain = setTimeout(() => finish(code), 1e3);
+      };
+      const observe = setInterval(observeExit, 25);
+      return {
+        get pid() {
+          return terminal.pid;
+        },
+        write(data) {
+          if (!stopping && nativeExitCode === void 0) terminal.write(data);
+        },
+        resize(cols, rows) {
+          dimensions(cols, rows);
+          if (!stopping && nativeExitCode === void 0) terminal.resize(cols, rows);
+        },
+        kill() {
+          var _a2, _b;
+          if (exited) return Promise.resolve();
+          if (stop) return stop;
+          stop = new Promise((resolve11, reject) => {
+            resolveStop = resolve11;
+            rejectStop = reject;
+          });
+          const attempt = stop;
+          void attempt.catch(() => {
+            if (stop === attempt) stop = void 0;
+          });
+          deadline = setTimeout(() => rejectStop(new Error("Terminal PTY: parada no confirmada en 5 s. Se conserva la observacion del proceso propio; no asumir que termino ni matar por PID.")), 5e3);
+          if (nativeExitCode !== void 0) {
+            finish(nativeExitCode);
+            return attempt;
+          }
+          if (!agent || agent._useConpty !== true || agent._useConptyDll !== true || agent._ptyNative !== conpty || !Number.isInteger(agent._pty) || agent._pty <= 0 || agent.innerPid !== terminal.pid || terminal.pid <= 0 || terminal.pid === process.pid || typeof agent.kill !== "function" || !Array.isArray(terminal._deferreds) || typeof ((_b = (_a2 = agent._conoutSocketWorker) == null ? void 0 : _a2._worker) == null ? void 0 : _b.terminate) !== "function") {
+            clearTimeout(deadline);
+            rejectStop(new Error("Terminal PTY: contrato privado node-pty 1.1.0 incompatible; no se puede confirmar una parada segura. No se ha matado ningun PID."));
+            return attempt;
+          }
+          stopping = true;
+          terminal._deferreds = [];
+          try {
+            if (!shutdownRequested && agent.exitCode === void 0) {
+              shutdownRequested = true;
+              agent.kill();
+            }
+            observeExit();
+          } catch (error) {
+            clearTimeout(deadline);
+            rejectStop(new Error(`Terminal PTY: fallo el cierre ConPTY de la instancia propia; parada no confirmada. ${String(error)}`));
+          }
+          return attempt;
+        },
+        onData: (listener) => terminal.onData(listener),
+        onExit(listener) {
+          if (!exited) listeners.add(listener);
+          return { dispose() {
+            listeners.delete(listener);
+          } };
+        }
+      };
+    }
+  };
+}
+
+// integrated-terminal.ts
+var TERMINAL_VIEW_TYPE = "auto-oc-terminals";
+function integratedCliCommand(bin, args = []) {
+  if (/\.exe$/i.test(bin)) return { file: bin, args: [...args] };
+  const file = path11.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const command = `& ${[bin, ...args].map(psSingleQuoted).join(" ")}; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } elseif (!$?) { exit 1 }`;
+  return { file, args: ["-NoLogo", "-NoProfile", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")] };
+}
+var CloseTerminalModal = class extends import_obsidian5.Modal {
+  constructor(app, label, confirm2) {
+    super(app);
+    this.label = label;
+    this.confirm = confirm2;
+  }
+  onOpen() {
+    this.contentEl.createEl("h3", { text: "Stop terminal session?" });
+    this.contentEl.createEl("p", { text: `${this.label} is still running. Closing it stops the terminal and may interrupt work. Changes already made by the CLI are not undone.` });
+    const actions = this.contentEl.createDiv("auto-oc-cli-modal-buttons");
+    const cancel = actions.createEl("button", { text: "Keep running" });
+    cancel.onclick = () => this.close();
+    actions.createEl("button", { text: "Stop and close", cls: "mod-warning" }).onclick = async () => {
+      await this.confirm();
+      this.close();
+    };
+    cancel.focus();
+  }
+  onClose() {
+    this.contentEl.empty();
+  }
+};
+var IntegratedTerminals = class {
+  constructor(host, newSession) {
+    this.host = host;
+    this.newSession = newSession;
+    this.sessions = [];
+    this.sequence = 0;
+    this.generation = 0;
+    this.disposed = false;
+    this.opening = false;
+    this.openingQueue = Promise.resolve();
+    this.queuedTasks = 0;
+    this.stoppingAll = false;
+    this.pendingCleanup = /* @__PURE__ */ new Set();
+    this.pendingCleanupCallbacks = /* @__PURE__ */ new Map();
+    this.listeners = /* @__PURE__ */ new Set();
+    host.registerView(TERMINAL_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
+    host.addCommand({ id: "show-cli-terminals", name: "Show integrated CLI terminals", callback: () => {
+      void this.show().catch((error) => new import_obsidian5.Notice(String(error)));
+    } });
+    host.addCommand({ id: "retry-cli-terminal-cleanup", name: "Retry failed terminal cleanup", callback: () => {
+      void this.retryPendingCleanup().catch((error) => new import_obsidian5.Notice(String(error), 15e3));
+    } });
+  }
+  pluginDirectory() {
+    const base2 = this.host.app.vault.adapter.basePath;
+    if (!base2 || !this.host.manifest.dir) throw new Error("AutoOC terminal installation directory is unavailable.");
+    return path11.resolve(base2, this.host.manifest.dir);
+  }
+  async installSupport() {
+    this.assertOpen();
+    await installTerminalSupport(this.pluginDirectory());
+  }
+  assertOpen() {
+    if (this.disposed || this.host.isLifecycleStopped()) throw new Error("AutoOC has closed. Reopen it before using integrated terminals.");
+    if (this.stoppingAll) throw new Error("Terminal sessions are stopping. Wait before launching another session.");
+  }
+  async open(provider, cwd) {
+    this.assertOpen();
+    if (this.opening || this.queuedTasks > 0) throw new Error("A terminal is already opening. Wait before launching another session.");
+    const operation = this.openSession(provider, cwd);
+    this.openingQueue = operation.catch(() => {
+    });
+    return operation;
+  }
+  async openTask(request) {
+    this.assertOpen();
+    const snapshot = { ...request };
+    const generation = this.generation;
+    this.queuedTasks++;
+    const pending = this.openingQueue.then(() => {
+      var _a;
+      this.assertOpen();
+      if (generation !== this.generation) throw new Error("Terminal opening was cancelled while sessions were stopping.");
+      if ((_a = snapshot.signal) == null ? void 0 : _a.aborted) throw new Error("Terminal opening was cancelled.");
+      return this.openSession(snapshot.provider || (snapshot.major === 2 ? "opencode2" : "opencode"), snapshot.cwd, snapshot);
+    }).finally(() => {
+      this.queuedTasks--;
+    });
+    this.openingQueue = pending.catch(() => {
+    });
+    return pending;
+  }
+  async openSession(provider, cwd, request) {
+    var _a;
+    this.assertOpen();
+    if (this.opening) throw new Error("A terminal is already opening. Wait before launching another session.");
+    if (this.sessions.length >= 12) throw new Error("Close a terminal before opening another (12 sessions maximum).");
+    this.opening = true;
+    const generation = this.generation;
+    let session;
+    let terminal;
+    let pty;
+    let auxiliaryDirectory;
+    let spawnAttempted = false;
+    const cleanup = () => {
+      if (auxiliaryDirectory) {
+        completeAuxiliaryDirectory(auxiliaryDirectory, "interactive");
+        auxiliaryDirectory = void 0;
+      }
+    };
+    const assertOpening = () => {
+      var _a2;
+      this.assertOpen();
+      if (generation !== this.generation) throw new Error("Terminal opening was cancelled while sessions were stopping.");
+      if ((_a2 = request == null ? void 0 : request.signal) == null ? void 0 : _a2.aborted) throw new Error("Terminal opening was cancelled.");
+    };
+    const previousActive = this.activeId;
+    try {
+      assertOpening();
+      if (request && !request.bin.trim()) throw new Error("A task terminal requires an explicit executable.");
+      const selectedCli = INTERACTIVE_CLIS.find((cli2) => cli2.id === provider);
+      if (!selectedCli) throw new Error("Unknown interactive CLI provider.");
+      const settings = request ? {
+        ...this.host.settings,
+        cliLauncherEnabled: void 0,
+        [selectedCli.pathKey]: request.bin
+      } : this.host.settings;
+      const { cli, bin } = prepareInteractiveCli(provider, cwd, settings);
+      if (provider === "opencode2") await assertOpenCode2(bin);
+      assertOpening();
+      const backend = await loadTerminalPty(this.pluginDirectory());
+      assertOpening();
+      await this.show();
+      assertOpening();
+      const element = document.createElement("div");
+      element.className = "auto-oc-terminal-screen";
+      const { Terminal } = require_xterm();
+      const { FitAddon } = require_addon_fit();
+      terminal = new Terminal({
+        cursorBlink: true,
+        scrollback: 5e3,
+        fontSize: 14,
+        allowProposedApi: false,
+        screenReaderMode: true,
+        fontFamily: "var(--font-monospace)"
+      });
+      const fit = new FitAddon();
+      terminal.loadAddon(fit);
+      const env = Object.fromEntries(Object.entries(process.env).filter((entry) => typeof entry[1] === "string"));
+      env.TERM = "xterm-256color";
+      env.COLORTERM = "truecolor";
+      let args = [];
+      if (request) {
+        auxiliaryDirectory = createAuxiliaryDirectory(cwd, "interactive");
+        const promptFile = path11.join(auxiliaryDirectory, "prompt.txt");
+        fs10.writeFileSync(promptFile, request.prompt, { encoding: "utf8", flag: "wx", mode: 384 });
+        const relativePrompt = path11.relative(cwd, promptFile).split(path11.sep).join("/");
+        const instruction = `Read ${relativePrompt} as UTF-8 and follow its instructions.`;
+        args = interactiveCliTaskArgs(provider, request.model, request.agent, instruction, request.reasoningEffort);
+      }
+      const command = integratedCliCommand(bin, args);
+      assertOpening();
+      spawnAttempted = true;
+      pty = backend.spawn(command.file, command.args, { cwd, env, cols: 100, rows: 30, name: "xterm-256color" });
+      this.pendingCleanup.add(pty);
+      if (request) this.pendingCleanupCallbacks.set(pty, cleanup);
+      assertOpening();
+      session = { id: ++this.sequence, label: (_a = request == null ? void 0 : request.label) != null ? _a : cli.label, cwd, terminal, fit, element, pty, subscriptions: [], opened: false, exited: false, cleanup: request ? cleanup : void 0 };
+      const current = session;
+      current.subscriptions.push(pty.onData((data) => current.terminal.write(data)));
+      current.subscriptions.push(pty.onExit(({ exitCode }) => {
+        var _a2;
+        current.exited = true;
+        current.exitCode = exitCode;
+        (_a2 = current.cleanup) == null ? void 0 : _a2.call(current);
+        current.terminal.write(`\r
+\x1B[90m[Process exited: ${exitCode}]\x1B[0m\r
+`);
+        this.changed();
+      }));
+      current.subscriptions.push(terminal.onData((data) => {
+        if (!current.exited) current.pty.write(data);
+      }));
+      current.subscriptions.push(terminal.onResize(({ cols, rows }) => {
+        if (!current.exited) {
+          try {
+            current.pty.resize(cols, rows);
+          } catch (error) {
+            new import_obsidian5.Notice(`Terminal resize failed: ${String(error)}`);
+          }
+        }
+      }));
+      element.addEventListener("keydown", (event) => event.stopPropagation());
+      assertOpening();
+      this.sessions.push(current);
+      this.activeId = current.id;
+      this.changed(true);
+      assertOpening();
+      this.pendingCleanup.delete(pty);
+      this.pendingCleanupCallbacks.delete(pty);
+    } catch (error) {
+      if (session) {
+        const index = this.sessions.indexOf(session);
+        if (index >= 0) this.sessions.splice(index, 1);
+        this.activeId = previousActive;
+      }
+      if (session) for (const subscription of session.subscriptions) subscription.dispose();
+      let cleanupError;
+      try {
+        if (pty) {
+          await pty.kill();
+          cleanup();
+          this.pendingCleanup.delete(pty);
+          this.pendingCleanupCallbacks.delete(pty);
+        } else if (!spawnAttempted) cleanup();
+      } catch (failure) {
+        cleanupError = failure;
+      } finally {
+        terminal == null ? void 0 : terminal.dispose();
+        session == null ? void 0 : session.element.remove();
+      }
+      this.changed();
+      if (cleanupError) throw new InteractiveTerminalLaunchUncertainError(`${String(error)} Terminal cleanup is unconfirmed (PID ${pty == null ? void 0 : pty.pid}); AutoOC still tracks it. Use Retry failed terminal cleanup. ${String(cleanupError)}`);
+      if (spawnAttempted && !pty && auxiliaryDirectory) throw new InteractiveTerminalLaunchUncertainError(`${String(error)} Terminal launch is unconfirmed; prompt evidence was retained at ${auxiliaryDirectory}. Check for a running terminal before retrying.`);
+      throw error;
+    } finally {
+      this.opening = false;
+    }
+  }
+  async show() {
+    this.assertOpen();
+    const workspace = this.host.app.workspace;
+    let leaf = workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)[0];
+    if (!leaf) {
+      leaf = workspace.getLeaf("tab");
+      await leaf.setViewState({ type: TERMINAL_VIEW_TYPE, active: true });
+    }
+    await workspace.revealLeaf(leaf);
+  }
+  add() {
+    this.assertOpen();
+    this.newSession();
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  changed(focus = false) {
+    for (const listener of this.listeners) listener(focus);
+  }
+  select(id) {
+    this.activeId = id;
+    this.changed(true);
+  }
+  async requestClose(id) {
+    const session = this.sessions.find((item) => item.id === id);
+    if (!session) return;
+    if (session.exited) await this.close(id);
+    else new CloseTerminalModal(this.host.app, session.label, async () => {
+      await this.close(id);
+    }).open();
+  }
+  close(id) {
+    const index = this.sessions.findIndex((session2) => session2.id === id);
+    if (index < 0) return Promise.resolve(true);
+    const session = this.sessions[index];
+    if (session.closing) return session.closing;
+    session.closing = (async () => {
+      var _a, _b;
+      try {
+        await session.pty.kill();
+      } catch (error) {
+        new import_obsidian5.Notice(`Terminal could not be stopped (PID ${session.pty.pid}); session kept for inspection. ${String(error)}`, 15e3);
+        return false;
+      }
+      (_a = session.cleanup) == null ? void 0 : _a.call(session);
+      for (const subscription of session.subscriptions) subscription.dispose();
+      session.terminal.dispose();
+      session.element.remove();
+      const currentIndex = this.sessions.indexOf(session);
+      if (currentIndex < 0) return true;
+      this.sessions.splice(currentIndex, 1);
+      if (this.activeId === id) this.activeId = (_b = this.sessions[Math.min(currentIndex, this.sessions.length - 1)]) == null ? void 0 : _b.id;
+      this.changed();
+      return true;
+    })().finally(() => {
+      session.closing = void 0;
+    });
+    return session.closing;
+  }
+  get hasPendingCleanup() {
+    return this.pendingCleanup.size > 0;
+  }
+  get hasRunningSessions() {
+    return this.opening || this.queuedTasks > 0 || this.hasPendingCleanup || this.sessions.some((session) => !session.exited);
+  }
+  async retryPendingCleanup() {
+    const results = await Promise.all([...this.pendingCleanup].map(async (pty) => {
+      var _a;
+      try {
+        await pty.kill();
+        (_a = this.pendingCleanupCallbacks.get(pty)) == null ? void 0 : _a();
+        this.pendingCleanupCallbacks.delete(pty);
+        this.pendingCleanup.delete(pty);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }));
+    this.changed();
+    if (results.some((value) => !value)) throw new Error("AutoOC still tracks terminal processes whose cleanup is unconfirmed. The window must remain open; no process was killed by PID.");
+  }
+  async stopAll() {
+    this.generation++;
+    this.stoppingAll = true;
+    try {
+      const [closed] = await Promise.all([Promise.all([...this.sessions].map((session) => this.close(session.id))), this.retryPendingCleanup()]);
+      if (closed.some((value) => !value)) throw new Error("Some AutoOC terminal processes could not be stopped. Their sessions and observers have been retained; do not assume their work ended.");
+    } finally {
+      this.stoppingAll = false;
+    }
+  }
+  async dispose() {
+    this.disposed = true;
+    await this.stopAll();
+    this.listeners.clear();
+    for (const leaf of this.host.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)) {
+      if (leaf.view instanceof TerminalView && leaf.view.manager === this) leaf.detach();
+    }
+  }
+};
+var TerminalView = class extends import_obsidian5.ItemView {
+  constructor(leaf, manager) {
+    super(leaf);
+    this.manager = manager;
+  }
+  getViewType() {
+    return TERMINAL_VIEW_TYPE;
+  }
+  getDisplayText() {
+    return "AutoOC Terminals";
+  }
+  getIcon() {
+    return "terminal";
+  }
+  async onOpen() {
+    const root = this.contentEl;
+    root.empty();
+    root.addClass("auto-oc-terminals");
+    const terminalCss = require_xterm2();
+    root.createEl("style", { text: terminalCss });
+    const toolbar = root.createDiv("auto-oc-terminal-toolbar");
+    this.tabs = toolbar.createDiv("auto-oc-terminal-tabs");
+    this.tabs.setAttr("role", "tablist");
+    this.tabs.setAttr("aria-label", "CLI sessions");
+    const add = toolbar.createEl("button", { text: "+", attr: { "aria-label": "New CLI session", title: "New CLI session" } });
+    add.onclick = () => this.manager.add();
+    this.status = root.createDiv("auto-oc-terminal-status");
+    this.screen = root.createDiv("auto-oc-terminal-host");
+    this.unsubscribe = this.manager.subscribe((focus) => this.render(focus));
+    this.observer = new ResizeObserver(() => this.fit());
+    this.observer.observe(this.screen);
+    this.registerEvent(this.app.workspace.on("css-change", () => this.fit()));
+    this.render();
+  }
+  render(focus = false) {
+    this.tabs.empty();
+    const active = this.manager.sessions.find((session) => session.id === this.manager.activeId);
+    for (const session of this.manager.sessions) {
+      const group = this.tabs.createDiv("auto-oc-terminal-tab");
+      group.toggleClass("is-active", session === active);
+      const label = `${session.label} ${session.id}${session.exited ? ` (exited ${session.exitCode})` : ""}`;
+      const tab = group.createEl("button", { text: label, attr: { role: "tab", "aria-selected": String(session === active), title: session.cwd, "aria-controls": `auto-oc-terminal-${session.id}` } });
+      tab.id = `auto-oc-terminal-tab-${session.id}`;
+      tab.tabIndex = session === active ? 0 : -1;
+      tab.onclick = () => this.manager.select(session.id);
+      tab.onkeydown = (event) => {
+        var _a;
+        const sessions = this.manager.sessions, index = sessions.indexOf(session);
+        const next = event.key === "ArrowRight" ? (index + 1) % sessions.length : event.key === "ArrowLeft" ? (index + sessions.length - 1) % sessions.length : event.key === "Home" ? 0 : event.key === "End" ? sessions.length - 1 : -1;
+        if (next < 0) return;
+        event.preventDefault();
+        this.manager.select(sessions[next].id);
+        (_a = this.tabs.querySelector(`#auto-oc-terminal-tab-${sessions[next].id}`)) == null ? void 0 : _a.focus();
+      };
+      group.createEl("button", { text: "x", attr: { "aria-label": `Close ${label}`, title: "Close session" } }).onclick = () => this.manager.requestClose(session.id);
+    }
+    if (!active) {
+      this.screen.replaceChildren();
+      this.status.setText(this.manager.hasPendingCleanup ? "Terminal cleanup is unconfirmed. Retry cleanup before closing Obsidian." : "Independent CLI sessions. No scheduled tasks are started here.");
+      const empty = this.screen.createDiv("auto-oc-terminal-empty");
+      empty.createEl("h3", { text: "Your CLI, inside Obsidian" });
+      empty.createEl("p", { text: "Launch a configured harness in a project folder. Each session gets its own terminal tab." });
+      empty.createEl("button", { text: "New CLI session", cls: "mod-cta" }).onclick = () => this.manager.add();
+      if (this.manager.hasPendingCleanup) empty.createEl("button", { text: "Retry failed terminal cleanup" }).onclick = () => {
+        void this.manager.retryPendingCleanup().catch((error) => new import_obsidian5.Notice(String(error), 15e3));
+      };
+      return;
+    }
+    this.status.setText(`${active.exited ? `Exited (${active.exitCode})` : "Running"} | ${active.cwd}`);
+    this.status.title = active.cwd;
+    active.element.id = `auto-oc-terminal-${active.id}`;
+    active.element.setAttr("role", "tabpanel");
+    active.element.setAttr("aria-labelledby", `auto-oc-terminal-tab-${active.id}`);
+    if (active.element.parentElement !== this.screen) {
+      this.screen.replaceChildren();
+      this.screen.append(active.element);
+    }
+    if (!active.opened) {
+      active.terminal.open(active.element);
+      active.opened = true;
+    }
+    this.fit();
+    if (focus) active.terminal.focus();
+  }
+  fit() {
+    if (this.frame !== void 0) window.cancelAnimationFrame(this.frame);
+    this.frame = window.requestAnimationFrame(() => {
+      this.frame = void 0;
+      const active = this.manager.sessions.find((session) => session.id === this.manager.activeId);
+      if (!(active == null ? void 0 : active.opened) || !this.screen.isConnected || this.screen.clientWidth < 20 || this.screen.clientHeight < 20) return;
+      const styles = this.screen.ownerDocument.defaultView.getComputedStyle(this.contentEl);
+      active.terminal.options.fontFamily = styles.getPropertyValue("--font-monospace").trim() || "monospace";
+      active.terminal.options.theme = { background: styles.getPropertyValue("--background-primary").trim(), foreground: styles.getPropertyValue("--text-normal").trim(), cursor: styles.getPropertyValue("--text-accent").trim(), selectionBackground: styles.getPropertyValue("--text-selection").trim() };
+      try {
+        active.fit.fit();
+      } catch (error) {
+        console.warn("AutoOC terminal fit failed", error);
+      }
+    });
+  }
+  async onClose() {
+    var _a, _b;
+    (_a = this.unsubscribe) == null ? void 0 : _a.call(this);
+    (_b = this.observer) == null ? void 0 : _b.disconnect();
+    if (this.frame !== void 0) window.cancelAnimationFrame(this.frame);
+    for (const session of this.manager.sessions) session.element.remove();
     this.contentEl.empty();
   }
 };
@@ -4680,8 +12150,8 @@ async function applyBulkCatalogAction(catalog, selection, action, state, save) {
 }
 
 // catalog-bulk-modal.ts
-var import_obsidian5 = require("obsidian");
-var BulkCatalogModal = class extends import_obsidian5.Modal {
+var import_obsidian6 = require("obsidian");
+var BulkCatalogModal = class extends import_obsidian6.Modal {
   // Modal.open() owns `selection` for restoring the editor's DOM selection.
   constructor(app, host, selectedItems, action, onSaved) {
     super(app);
@@ -4705,7 +12175,7 @@ var BulkCatalogModal = class extends import_obsidian5.Modal {
     let area = this.action.type === "area" ? this.action.area : "";
     if (this.action.type === "area") {
       let input;
-      new import_obsidian5.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
+      new import_obsidian6.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
         input = text.inputEl;
         text.setValue(area).setPlaceholder("No area").onChange((value) => {
           area = value;
@@ -4725,7 +12195,7 @@ var BulkCatalogModal = class extends import_obsidian5.Modal {
     const feedback = root.createDiv("auto-oc-bulk-feedback");
     feedback.setAttr("role", "alert");
     for (const issue of issues) feedback.createEl("p", { text: issue });
-    new import_obsidian5.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
+    new import_obsidian6.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
       if (!this.saving) this.close();
     })).addButton((button) => {
       button.setButtonText(availability ? `${disabling ? "Disable" : "Enable"} ${this.selectedItems.length} items` : deleting ? `Delete ${this.selectedItems.length} items` : "Apply area").setDisabled(issues.length > 0);
@@ -4746,7 +12216,7 @@ var BulkCatalogModal = class extends import_obsidian5.Modal {
         }
         this.saving = false;
         this.close();
-        new import_obsidian5.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
+        new import_obsidian6.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
         this.onSaved();
       });
     });
@@ -4757,7 +12227,7 @@ var BulkCatalogModal = class extends import_obsidian5.Modal {
 };
 
 // ai-draft-modal.ts
-var import_obsidian6 = require("obsidian");
+var import_obsidian7 = require("obsidian");
 
 // ai-draft.ts
 var import_crypto6 = require("crypto");
@@ -4778,7 +12248,7 @@ function buildDraftPrompt(guide, kind, goal, engine, version) {
 IN-APP DRAFT REQUEST
 Produce a definition only. Do not perform the requested task, inspect files, call tools or execute code.
 Return one JSON object, without Markdown or commentary. Use schemaVersion "1.6.0", pluginVersion ${JSON.stringify(version)} and exportedAt ${JSON.stringify((/* @__PURE__ */ new Date()).toISOString())}.
-` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops, conditional transitions or workflow steps. This creator does not receive existing workflow identities; the user can add existing workflows as steps in the editor.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
+` + (kind === "task" ? "Return exactly one task and no workflows.\n" : "Return exactly one workflow with 2 to 30 steps and only the tasks it references. Use a sequential chain in array order. Each non-final step must have exactly one transition to the following step; the last must have transitions: []. Only default, force and eval modes can be edited here. Do not generate branches, loops, conditional transitions or workflow steps. This creator does not receive existing workflow identities; the user can add existing workflows as steps in the editor.\n") + `Use ${engine} for AI tasks unless the objective specifically requests another supported engine. Use manual schedules and interactiveTerminal false. Leave codeAllowVault, codeAllowFiles, codeAllowTerminal and copilotAllowAllTools false; the user will review permissions in the editor. Omit concurrency: new drafts inherit the vault's setting, and the user can change it in the editor. Do not include vault-level defaultConcurrency or maxConcurrentExecutions settings. Do not include cliTerminalDestination: terminal placement is a vault setting, not a task or workflow field. Keep interactiveTerminal false in drafts. Do not generate taskKind cli or cliProvider in these creators: interactive CLI tasks for any harness are created manually in the task editor or imported directly. They use the vault's terminal destination and require a loaded Obsidian plugin for the integrated option. Do not include runtime status, results, identities, credentials or requiresAutoOCSecrets. Keep prompts and names in the language of the objective.
 AutoOC applies the model selected in the creator to tasks using that engine. Do not include model IDs in the JSON.
 OpenCode 2 drafts use the configured default agent. Omit the agent field in these drafts. The user can select a project agent in the task editor.
 CREATOR EXAMPLE (replace its content with the requested objective):
@@ -4934,7 +12404,7 @@ async function saveGeneratedDefinition(catalog, drafts, workflow, save) {
 }
 
 // ai-draft-modal.ts
-var AiDraftModal = class extends import_obsidian6.Modal {
+var AiDraftModal = class extends import_obsidian7.Modal {
   constructor(app, options) {
     super(app);
     this.options = options;
@@ -4955,7 +12425,7 @@ var AiDraftModal = class extends import_obsidian6.Modal {
     this.contentEl.createEl("h2", { text: this.options.kind === "task" ? "Create a task with AI" : "Create a workflow with AI" });
     this.contentEl.createEl("p", { text: "Describe the outcome you want. AI prepares a draft using the WF Builder Prompt, then you finish in the editor. Nothing is saved or scheduled yet." });
     let objectiveInput;
-    new import_obsidian6.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
+    new import_obsidian7.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
       objectiveInput = text.inputEl;
       text.inputEl.rows = 7;
       text.inputEl.maxLength = 2e4;
@@ -4980,7 +12450,7 @@ var AiDraftModal = class extends import_obsidian6.Modal {
       customModel.settingEl.style.display = "none";
       modelInput.value = this.model;
     };
-    new import_obsidian6.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
       engineInput = dropdown.selectEl;
       dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex").addOption("copilot", "GitHub Copilot");
       dropdown.setValue(this.engine).onChange((value) => {
@@ -4992,7 +12462,7 @@ var AiDraftModal = class extends import_obsidian6.Modal {
         invalidate();
       });
     });
-    new import_obsidian6.Setting(this.contentEl).setName("Model").setDesc("Used to generate the draft and prefill tasks using this engine. Lists models loaded in AutoOC or used by your tasks. You can change each task's model in the editor.").addDropdown((dropdown) => {
+    new import_obsidian7.Setting(this.contentEl).setName("Model").setDesc("Used to generate the draft and prefill tasks using this engine. Lists models loaded in AutoOC or used by your tasks. You can change each task's model in the editor.").addDropdown((dropdown) => {
       modelDropdown = dropdown;
       dropdown.onChange((value) => {
         customModel.settingEl.hidden = value !== customValue;
@@ -5004,7 +12474,7 @@ var AiDraftModal = class extends import_obsidian6.Modal {
         invalidate();
       });
     });
-    const customModel = new import_obsidian6.Setting(this.contentEl).setName("Other model").setDesc("Enter a model ID available to this engine and your account. Empty uses the CLI default.").addText((text) => {
+    const customModel = new import_obsidian7.Setting(this.contentEl).setName("Other model").setDesc("Enter a model ID available to this engine and your account. Empty uses the CLI default.").addText((text) => {
       modelInput = text.inputEl;
       text.setValue(this.model).onChange((value) => {
         this.model = value.trim();
@@ -5016,7 +12486,7 @@ var AiDraftModal = class extends import_obsidian6.Modal {
     const preview = this.contentEl.createDiv("auto-oc-ai-draft-preview");
     let generateButton, cancelButton;
     let result;
-    const actions = new import_obsidian6.Setting(this.contentEl);
+    const actions = new import_obsidian7.Setting(this.contentEl);
     actions.addButton((button) => {
       generateButton = button.buttonEl;
       button.setButtonText("Generate draft").setCta().onClick(async () => {
@@ -5106,40 +12576,40 @@ Check the selected engine's installation, sign-in and model, or adjust the objec
 
 // ai-draft-runner.ts
 var import_child_process7 = require("child_process");
-var fs9 = __toESM(require("fs"));
+var fs12 = __toESM(require("fs"));
 var os6 = __toESM(require("os"));
-var path10 = __toESM(require("path"));
+var path13 = __toESM(require("path"));
 
 // copilot-client.ts
 var import_child_process6 = require("child_process");
-var fs8 = __toESM(require("fs"));
+var fs11 = __toESM(require("fs"));
 var os5 = __toESM(require("os"));
-var path9 = __toESM(require("path"));
+var path12 = __toESM(require("path"));
 function resolveCopilotBin(configured = "copilot") {
   const value = configured.trim() || "copilot";
   const nativeFromShim = (shim) => {
-    const npmRoot = path9.join(path9.dirname(shim), "node_modules", "@github");
+    const npmRoot = path12.join(path12.dirname(shim), "node_modules", "@github");
     const packageName = `copilot-${process.platform}-${process.arch}`;
     const executable2 = process.platform === "win32" ? "copilot.exe" : "copilot";
     return [
-      path9.join(npmRoot, "copilot", "node_modules", "@github", packageName, executable2),
-      path9.join(npmRoot, packageName, executable2)
-    ].find((candidate) => fs8.existsSync(candidate));
+      path12.join(npmRoot, "copilot", "node_modules", "@github", packageName, executable2),
+      path12.join(npmRoot, packageName, executable2)
+    ].find((candidate) => fs11.existsSync(candidate));
   };
   if (value !== "copilot") {
     return /\.(cmd|bat|ps1)$/i.test(value) ? nativeFromShim(value) || value : value;
   }
   const home = os5.homedir();
   const dirs = [
-    ...(process.env.PATH || "").split(path9.delimiter),
-    path9.join(home, ".local", "bin"),
-    path9.join(home, ".npm-global", "bin"),
-    ...process.platform === "win32" ? [path9.join(process.env.APPDATA || path9.join(home, "AppData", "Roaming"), "npm")] : ["/opt/homebrew/bin", "/usr/local/bin"]
+    ...(process.env.PATH || "").split(path12.delimiter),
+    path12.join(home, ".local", "bin"),
+    path12.join(home, ".npm-global", "bin"),
+    ...process.platform === "win32" ? [path12.join(process.env.APPDATA || path12.join(home, "AppData", "Roaming"), "npm")] : ["/opt/homebrew/bin", "/usr/local/bin"]
   ];
   for (const dir of dirs.filter(Boolean)) {
     for (const extension of process.platform === "win32" ? [".exe", ".cmd", ".ps1"] : [""]) {
-      const candidate = path9.join(dir.replace(/^"|"$/g, ""), `copilot${extension}`);
-      if (fs8.existsSync(candidate)) return nativeFromShim(candidate) || candidate;
+      const candidate = path12.join(dir.replace(/^"|"$/g, ""), `copilot${extension}`);
+      if (fs11.existsSync(candidate)) return nativeFromShim(candidate) || candidate;
     }
   }
   return value;
@@ -5169,7 +12639,7 @@ var CopilotCliClient = class {
     if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
       return Promise.reject(new Error("Select the native copilot.exe executable, or reinstall @github/copilot with optional dependencies enabled."));
     }
-    return new Promise((resolve10) => {
+    return new Promise((resolve11) => {
       let output = "";
       let error = "";
       let settled = false;
@@ -5182,20 +12652,20 @@ var CopilotCliClient = class {
         if (timer) clearTimeout(timer);
         if (promptDir) {
           try {
-            fs8.unlinkSync(path9.join(promptDir, "task.txt"));
-            fs8.rmdirSync(promptDir);
+            fs11.unlinkSync(path12.join(promptDir, "task.txt"));
+            fs11.rmdirSync(promptDir);
           } catch (e) {
           }
         }
-        resolve10(result);
+        resolve11(result);
       };
       this.finish = finish;
       try {
         let args;
         if (prompt.length > 12e3) {
-          promptDir = fs8.mkdtempSync(path9.join(os5.tmpdir(), "autooc-copilot-"));
-          const promptFile = path9.join(promptDir, "task.txt");
-          fs8.writeFileSync(promptFile, prompt, { encoding: "utf8", mode: 384 });
+          promptDir = fs11.mkdtempSync(path12.join(os5.tmpdir(), "autooc-copilot-"));
+          const promptFile = path12.join(promptDir, "task.txt");
+          fs11.writeFileSync(promptFile, prompt, { encoding: "utf8", mode: 384 });
           args = buildCopilotArgs(`Read the UTF-8 file ${JSON.stringify(promptFile)} and carry out the complete task instructions it contains.`, options);
           args.push("--add-dir", promptDir);
         } else {
@@ -5266,7 +12736,7 @@ var CopilotCliClient = class {
   }
 };
 function checkCopilotInstallation(bin, cwd) {
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     const child = (0, import_child_process6.spawn)(bin, ["--version"], { cwd, windowsHide: true, shell: false, stdio: "pipe" });
     let output = "";
     const timer = setTimeout(() => {
@@ -5287,7 +12757,7 @@ function checkCopilotInstallation(bin, cwd) {
     });
     child.once("close", (code) => {
       clearTimeout(timer);
-      if (code === 0) resolve10(output.trim());
+      if (code === 0) resolve11(output.trim());
       else reject(new Error(output.trim() || `Copilot exited with code ${code}.`));
     });
     child.stdin.end();
@@ -5318,7 +12788,7 @@ function kill(child) {
 }
 async function generateDraftText(request, signal, timeoutMs = 18e4) {
   if (signal.aborted) throw new Error("Generation cancelled.");
-  const folder = fs9.mkdtempSync(path10.join(os6.tmpdir(), "autooc-draft-"));
+  const folder = fs12.mkdtempSync(path13.join(os6.tmpdir(), "autooc-draft-"));
   let dispose = () => {
   };
   let rejectStopped = () => {
@@ -5361,16 +12831,16 @@ async function generateDraftText(request, signal, timeoutMs = 18e4) {
     const v2 = request.engine === "opencode2";
     let bin = resolveOpencodeBin((v2 ? request.opencode2Path : request.opencodePath) || "opencode");
     if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(bin)) {
-      const npmRoot = path10.join(path10.dirname(bin), "node_modules");
+      const npmRoot = path13.join(path13.dirname(bin), "node_modules");
       const candidates = v2 ? [
-        path10.join(npmRoot, "@opencode", "cli", "bin", "opencode.exe"),
-        path10.join(npmRoot, "@opencode", "cli", "node_modules", "@opencode", `cli-windows-${process.arch}`, "bin", "opencode.exe"),
-        path10.join(npmRoot, "@opencode", `cli-windows-${process.arch}`, "bin", "opencode.exe")
+        path13.join(npmRoot, "@opencode", "cli", "bin", "opencode.exe"),
+        path13.join(npmRoot, "@opencode", "cli", "node_modules", "@opencode", `cli-windows-${process.arch}`, "bin", "opencode.exe"),
+        path13.join(npmRoot, "@opencode", `cli-windows-${process.arch}`, "bin", "opencode.exe")
       ] : ["-baseline", ""].flatMap((suffix) => [
-        path10.join(npmRoot, "opencode-ai", "node_modules", `opencode-windows-${process.arch}${suffix}`, "bin", "opencode.exe"),
-        path10.join(npmRoot, `opencode-windows-${process.arch}${suffix}`, "bin", "opencode.exe")
+        path13.join(npmRoot, "opencode-ai", "node_modules", `opencode-windows-${process.arch}${suffix}`, "bin", "opencode.exe"),
+        path13.join(npmRoot, `opencode-windows-${process.arch}${suffix}`, "bin", "opencode.exe")
       ]);
-      const native = candidates.find((candidate) => fs9.existsSync(candidate));
+      const native = candidates.find((candidate) => fs12.existsSync(candidate));
       if (!native) throw new Error("Select the native OpenCode .exe in AutoOC settings, or reinstall its CLI.");
       bin = native;
     }
@@ -5426,7 +12896,7 @@ async function generateDraftText(request, signal, timeoutMs = 18e4) {
         stop(`${failure}. ${hint}`);
       }
     });
-    return new Promise((resolve10, reject) => {
+    return new Promise((resolve11, reject) => {
       child.on("error", reject);
       child.stdin.on("error", reject);
       child.on("close", (code) => {
@@ -5439,7 +12909,7 @@ async function generateDraftText(request, signal, timeoutMs = 18e4) {
           const events = stdout.split(/\r?\n/).filter((line) => line.trim()).map((line) => JSON.parse(line));
           const failure = events.find((event) => event.type === "error");
           if (failure) throw new Error(((_b = (_a = failure.error) == null ? void 0 : _a.data) == null ? void 0 : _b.message) || ((_c = failure.error) == null ? void 0 : _c.message) || "OpenCode returned an error.");
-          resolve10(events.filter((event) => event.type === "text").map((event) => {
+          resolve11(events.filter((event) => event.type === "text").map((event) => {
             var _a2;
             return ((_a2 = event.part) == null ? void 0 : _a2.text) || "";
           }).join(""));
@@ -5457,18 +12927,18 @@ async function generateDraftText(request, signal, timeoutMs = 18e4) {
     signal.removeEventListener("abort", abort);
     dispose();
     try {
-      await fs9.promises.rm(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await fs12.promises.rm(folder, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     } catch (e) {
     }
   }
 }
 
 // catalog-transaction.ts
-var path11 = __toESM(require("path"));
+var path14 = __toESM(require("path"));
 var tails = /* @__PURE__ */ new Map();
 var owners = /* @__PURE__ */ new WeakMap();
 function catalogTransaction(file, operation, transaction) {
-  const key = path11.join(physicalPath(path11.dirname(file)), path11.basename(file));
+  const key = path14.join(physicalPath(path14.dirname(file)), path14.basename(file));
   if (transaction) {
     const current = owners.get(transaction);
     if (!(current == null ? void 0 : current.active) || current.key !== key) return Promise.reject(new Error("Invalid or expired catalog transaction"));
@@ -5495,61 +12965,61 @@ function catalogTransaction(file, operation, transaction) {
 }
 
 // blocked-execution-recovery.ts
-var fs15 = __toESM(require("fs"));
-var path16 = __toESM(require("path"));
+var fs18 = __toESM(require("fs"));
+var path19 = __toESM(require("path"));
 var import_crypto8 = require("crypto");
 
 // installed-workflow-location.ts
-var fs10 = __toESM(require("fs"));
-var path12 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
 function regularDirectory(directory) {
-  const stat = fs10.lstatSync(directory);
+  const stat = fs13.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Installation must use regular directories");
 }
 function optionalStat(file) {
   try {
-    return fs10.lstatSync(file);
+    return fs13.lstatSync(file);
   } catch (error) {
     if (error.code === "ENOENT") return void 0;
     throw error;
   }
 }
 function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
-  if (!path12.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
+  if (!path15.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
   const vault = physicalPath(vaultPath);
   regularDirectory(vault);
-  let relative6 = path12.join(".obsidian", "plugins", "auto-oc");
+  let relative8 = path15.join(".obsidian", "plugins", "auto-oc");
   if (installationDirectory !== void 0) {
     if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
       throw new Error("Invalid installation location");
     }
-    if (process.platform === "win32" && path12.isAbsolute(installationDirectory)) {
-      let inspected = path12.parse(installationDirectory).root;
+    if (process.platform === "win32" && path15.isAbsolute(installationDirectory)) {
+      let inspected = path15.parse(installationDirectory).root;
       for (const part of installationDirectory.slice(inspected.length).split(/[\\/]/)) {
         if (!part || part.includes(":")) throw new Error("Invalid installation component");
-        inspected = path12.join(inspected, part);
+        inspected = path15.join(inspected, part);
         regularDirectory(inspected);
       }
-      relative6 = path12.relative(vault, physicalPath(inspected));
+      relative8 = path15.relative(vault, physicalPath(inspected));
     } else {
-      relative6 = path12.isAbsolute(installationDirectory) ? path12.relative(path12.resolve(vaultPath), installationDirectory) : installationDirectory;
+      relative8 = path15.isAbsolute(installationDirectory) ? path15.relative(path15.resolve(vaultPath), installationDirectory) : installationDirectory;
     }
-    if (!relative6 || path12.isAbsolute(relative6) || relative6.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
+    if (!relative8 || path15.isAbsolute(relative8) || relative8.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
       throw new Error("Installation must remain inside the vault");
     }
   }
   let directory = vault;
-  for (const part of relative6.split(/[\\/]/)) {
+  for (const part of relative8.split(/[\\/]/)) {
     if (!part) throw new Error("Invalid installation component");
-    directory = path12.join(directory, part);
+    directory = path15.join(directory, part);
     regularDirectory(directory);
   }
   directory = physicalPath(directory);
   if (!isWithinPhysicalPath(vault, directory)) throw new Error("Installation must remain inside the vault");
-  const configurationFile = path12.join(directory, "data.json");
+  const configurationFile = path15.join(directory, "data.json");
   const configStat = optionalStat(configurationFile);
   if (configStat && (configStat.isSymbolicLink() || !configStat.isFile())) throw new Error("Configuration must be a regular file");
-  const runtimeDirectory = path12.join(directory, "runtime");
+  const runtimeDirectory = path15.join(directory, "runtime");
   const runtimeStat = optionalStat(runtimeDirectory);
   if (runtimeStat && (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory())) throw new Error("Invalid runtime directory");
   return { vault, installationDirectory: directory, configurationFile, runtimeDirectory };
@@ -5558,7 +13028,7 @@ function ensureInstalledWorkflowRuntime(location) {
   const current = resolveInstalledWorkflowLocation(location.vault, location.installationDirectory);
   if (current.runtimeDirectory !== location.runtimeDirectory) throw new Error("Installation location changed");
   try {
-    fs10.mkdirSync(current.runtimeDirectory);
+    fs13.mkdirSync(current.runtimeDirectory);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
   }
@@ -5566,29 +13036,29 @@ function ensureInstalledWorkflowRuntime(location) {
 }
 
 // execution-lease.ts
-var fs11 = __toESM(require("fs"));
-var path13 = __toESM(require("path"));
+var fs14 = __toESM(require("fs"));
+var path16 = __toESM(require("path"));
 var import_crypto7 = require("crypto");
 function acquireExecutionLease(runtimeDirectory) {
-  const root = fs11.realpathSync(runtimeDirectory);
-  if (fs11.existsSync(path13.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
-  const recovery = path13.join(root, "lease-recovery.lock");
-  if (fs11.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
-  const lock = path13.join(root, "execution.lock");
-  const ownerPath = path13.join(lock, "owner.json");
+  const root = fs14.realpathSync(runtimeDirectory);
+  if (fs14.existsSync(path16.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  const recovery = path16.join(root, "lease-recovery.lock");
+  if (fs14.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
+  const lock = path16.join(root, "execution.lock");
+  const ownerPath = path16.join(lock, "owner.json");
   const token = (0, import_crypto7.randomUUID)();
-  fs11.mkdirSync(lock);
-  if (fs11.existsSync(recovery)) {
-    fs11.rmdirSync(lock);
+  fs14.mkdirSync(lock);
+  if (fs14.existsSync(recovery)) {
+    fs14.rmdirSync(lock);
     throw new Error("Execution lease recovery is in progress");
   }
   try {
-    const fd = fs11.openSync(ownerPath, "wx", 384);
+    const fd = fs14.openSync(ownerPath, "wx", 384);
     try {
-      fs11.writeFileSync(fd, JSON.stringify({ schemaVersion: 1, token, pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
-      fs11.fsyncSync(fd);
+      fs14.writeFileSync(fd, JSON.stringify({ schemaVersion: 1, token, pid: process.pid, createdAt: (/* @__PURE__ */ new Date()).toISOString() }));
+      fs14.fsyncSync(fd);
     } finally {
-      fs11.closeSync(fd);
+      fs14.closeSync(fd);
     }
   } catch (error) {
     throw error;
@@ -5596,9 +13066,9 @@ function acquireExecutionLease(runtimeDirectory) {
   let released = false;
   const assertOwned = () => {
     if (released) throw new Error("Execution lease already released");
-    if (fs11.lstatSync(lock).isSymbolicLink() || fs11.realpathSync(lock) !== lock) throw new Error("Execution lease directory changed");
-    if (fs11.lstatSync(ownerPath).isSymbolicLink()) throw new Error("Execution lease owner changed");
-    const owner = JSON.parse(fs11.readFileSync(ownerPath, "utf8"));
+    if (fs14.lstatSync(lock).isSymbolicLink() || fs14.realpathSync(lock) !== lock) throw new Error("Execution lease directory changed");
+    if (fs14.lstatSync(ownerPath).isSymbolicLink()) throw new Error("Execution lease owner changed");
+    const owner = JSON.parse(fs14.readFileSync(ownerPath, "utf8"));
     if (owner.token !== token || owner.pid !== process.pid || owner.schemaVersion !== 1) throw new Error("Execution lease ownership changed");
   };
   return {
@@ -5607,18 +13077,18 @@ function acquireExecutionLease(runtimeDirectory) {
     assertOwned,
     release() {
       assertOwned();
-      fs11.unlinkSync(ownerPath);
-      fs11.rmdirSync(lock);
+      fs14.unlinkSync(ownerPath);
+      fs14.rmdirSync(lock);
       released = true;
     }
   };
 }
 function readExecutionLeaseOwner(runtimeDirectory) {
-  const root = fs11.realpathSync(runtimeDirectory), lock = path13.join(root, "execution.lock"), file = path13.join(lock, "owner.json");
-  if (fs11.lstatSync(lock).isSymbolicLink() || fs11.realpathSync(lock) !== lock || fs11.lstatSync(file).isSymbolicLink()) throw new Error("Invalid execution lease paths");
+  const root = fs14.realpathSync(runtimeDirectory), lock = path16.join(root, "execution.lock"), file = path16.join(lock, "owner.json");
+  if (fs14.lstatSync(lock).isSymbolicLink() || fs14.realpathSync(lock) !== lock || fs14.lstatSync(file).isSymbolicLink()) throw new Error("Invalid execution lease paths");
   let owner;
   try {
-    owner = JSON.parse(fs11.readFileSync(file, "utf8"));
+    owner = JSON.parse(fs14.readFileSync(file, "utf8"));
   } catch (e) {
     throw new Error("Incomplete execution lease owner; manual reconciliation required");
   }
@@ -5626,8 +13096,8 @@ function readExecutionLeaseOwner(runtimeDirectory) {
   return { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
 }
 function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
-  const root = fs11.realpathSync(runtimeDirectory), guard = path13.join(root, "lease-recovery.lock");
-  fs11.mkdirSync(guard);
+  const root = fs14.realpathSync(runtimeDirectory), guard = path16.join(root, "lease-recovery.lock");
+  fs14.mkdirSync(guard);
   try {
     const owner = readExecutionLeaseOwner(root);
     if (owner.token !== expectedToken) throw new Error("Execution lease recovery identity changed");
@@ -5641,16 +13111,16 @@ function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
     assertSafe == null ? void 0 : assertSafe();
     if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
     const archived = `abandoned-lease-${owner.token}`;
-    if (fs11.existsSync(path13.join(root, archived))) throw new Error("Recovery archive already exists");
-    fs11.renameSync(path13.join(root, "execution.lock"), path13.join(root, archived));
+    if (fs14.existsSync(path16.join(root, archived))) throw new Error("Recovery archive already exists");
+    fs14.renameSync(path16.join(root, "execution.lock"), path16.join(root, archived));
     return { recovered: true, archived, executionsResumed: false };
   } finally {
-    fs11.rmdirSync(guard);
+    fs14.rmdirSync(guard);
   }
 }
 async function recoverExecutionLeaseAsync(runtimeDirectory, expectedToken, assertSafe) {
-  const root = fs11.realpathSync(runtimeDirectory), guard = path13.join(root, "lease-recovery.lock");
-  fs11.mkdirSync(guard);
+  const root = fs14.realpathSync(runtimeDirectory), guard = path16.join(root, "lease-recovery.lock");
+  fs14.mkdirSync(guard);
   try {
     const owner = readExecutionLeaseOwner(root);
     if (owner.token !== expectedToken) throw new Error("Execution lease recovery identity changed");
@@ -5668,20 +13138,20 @@ async function recoverExecutionLeaseAsync(runtimeDirectory, expectedToken, asser
     assertAbsent();
     if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
     const archived = "abandoned-lease-" + owner.token;
-    if (fs11.existsSync(path13.join(root, archived))) throw new Error("Recovery archive already exists");
-    fs11.renameSync(path13.join(root, "execution.lock"), path13.join(root, archived));
+    if (fs14.existsSync(path16.join(root, archived))) throw new Error("Recovery archive already exists");
+    fs14.renameSync(path16.join(root, "execution.lock"), path16.join(root, archived));
     return { recovered: true, archived, executionsResumed: false };
   } finally {
-    fs11.rmdirSync(guard);
+    fs14.rmdirSync(guard);
   }
 }
 
 // checkpoint-observation.ts
-var path14 = __toESM(require("path"));
-var fs12 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
+var fs15 = __toESM(require("fs"));
 async function observeCheckpoint(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path14.join(directory, runId + ".json"), stat = fs12.lstatSync(file), text = await readSettingsTextAsync(file);
+  const file = path17.join(directory, runId + ".json"), stat = fs15.lstatSync(file), text = await readSettingsTextAsync(file);
   if (text === null) throw new Error("Execution checkpoint is absent");
   let checkpoint;
   try {
@@ -5693,7 +13163,7 @@ async function observeCheckpoint(directory, runId) {
   if (checkpoint.runId !== runId) throw new Error("Execution identity changed");
   const hash = await hashTextCooperatively(text);
   const assertCurrent = () => {
-    const current = fs12.lstatSync(file);
+    const current = fs15.lstatSync(file);
     if (!current.isFile() || current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino || current.size !== stat.size || current.mtimeMs !== stat.mtimeMs || current.ctimeMs !== stat.ctimeMs) throw new Error("Execution checkpoint changed during observation");
   };
   assertCurrent();
@@ -5704,18 +13174,18 @@ async function observeCheckpoint(directory, runId) {
 }
 
 // package-maintenance.ts
-var fs13 = __toESM(require("fs"));
-var path15 = __toESM(require("path"));
+var fs16 = __toESM(require("fs"));
+var path18 = __toESM(require("path"));
 function assertPackageMaintenanceSafe(directory) {
-  const runtime = path15.join(directory, "runtime");
-  if (fs13.existsSync(path15.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery");
-  if (fs13.readdirSync(directory).some((name) => name === "data.json.write-lock" || name === "data.json.write-intent" || name.startsWith("data.json.") && name.endsWith(".tmp")) || fs13.readdirSync(runtime).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) {
+  const runtime = path18.join(directory, "runtime");
+  if (fs16.existsSync(path18.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery");
+  if (fs16.readdirSync(directory).some((name) => name === "data.json.write-lock" || name === "data.json.write-intent" || name.startsWith("data.json.") && name.endsWith(".tmp")) || fs16.readdirSync(runtime).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) {
     throw new Error("Unfinished write requires reconciliation before package maintenance");
   }
 }
 
 // execution-abandonment.ts
-var fs14 = __toESM(require("fs"));
+var fs17 = __toESM(require("fs"));
 function inspectTerminalExecution(options) {
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
   const identity = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
@@ -5745,10 +13215,10 @@ async function disposeTerminalExecution(options) {
       lease.assertOwned();
       const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault, options.installationDirectory));
       if (Object.entries(current).some(([key, value]) => options[key] !== value)) throw new Error("Disposition installation identity changed");
-      if (fs14.existsSync(location.configurationFile + ".write-lock") || fs14.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs14.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
-      const config = JSON.parse(fs14.readFileSync(location.configurationFile, "utf8"));
+      if (fs17.existsSync(location.configurationFile + ".write-lock") || fs17.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs17.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
+      const config = JSON.parse(fs17.readFileSync(location.configurationFile, "utf8"));
       if (["tasks", "workflows"].some((kind) => !Array.isArray(config[kind]) || config[kind].some((entry) => entry.status === "running" || entry.pendingCodexApproval))) throw new Error("Active execution requires reconciliation");
-      for (const name of fs14.readdirSync(location.runtimeDirectory)) {
+      for (const name of fs17.readdirSync(location.runtimeDirectory)) {
         if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
         const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
         if (["ready", "in_flight"].includes(state.phase)) throw new Error("Active or unfinished execution requires reconciliation");
@@ -5783,7 +13253,7 @@ async function abandonInstalledExecution(options) {
 // blocked-execution-recovery.ts
 var digest = (text) => (0, import_crypto8.createHash)("sha256").update(text).digest("hex");
 function ownerAt(location) {
-  return fs15.existsSync(path16.join(location.runtimeDirectory, "execution.lock")) ? readExecutionLeaseOwner(location.runtimeDirectory) : null;
+  return fs18.existsSync(path19.join(location.runtimeDirectory, "execution.lock")) ? readExecutionLeaseOwner(location.runtimeDirectory) : null;
 }
 async function inspectBlockedExecutions(location) {
   assertPackageMaintenanceSafe(location.installationDirectory);
@@ -5793,7 +13263,7 @@ async function inspectBlockedExecutions(location) {
   const catalog = await parseCooperatively(text);
   if (!Array.isArray(catalog == null ? void 0 : catalog.tasks) || !Array.isArray(catalog == null ? void 0 : catalog.workflows)) throw new Error("Saved catalog is invalid");
   const attempts = [];
-  for (const file of fs15.readdirSync(location.runtimeDirectory).sort()) {
+  for (const file of fs18.readdirSync(location.runtimeDirectory).sort()) {
     if (!/^[a-zA-Z0-9-]+\.json$/.test(file)) continue;
     const observation = await observeCheckpoint(location.runtimeDirectory, file.slice(0, -5));
     const state = observation.checkpoint;
@@ -5817,12 +13287,12 @@ function assertBlockedInspection(observed, checkOwner, attempt) {
   const location = resolveInstalledWorkflowLocation(observed.location.vault, observed.location.installationDirectory);
   if (JSON.stringify(dispositionLocation(location)) !== JSON.stringify(observed.location)) throw new Error("Installation changed; refresh the recovery review");
   assertPackageMaintenanceSafe(location.installationDirectory);
-  if (digest(fs15.readFileSync(location.configurationFile, "utf8")) !== observed.catalogHash) throw new Error("Saved catalog changed; refresh the recovery review");
+  if (digest(fs18.readFileSync(location.configurationFile, "utf8")) !== observed.catalogHash) throw new Error("Saved catalog changed; refresh the recovery review");
   if (checkOwner && JSON.stringify(ownerAt(location)) !== JSON.stringify(observed.owner)) throw new Error("Execution owner changed; refresh the recovery review");
   for (const selected of attempt ? [attempt] : observed.attempts) {
     if (!observed.attempts.includes(selected)) throw new Error("Select an observed attempt");
     const state = readExecutionCheckpoint(location.runtimeDirectory, selected.runId);
-    if (state.workflowId !== selected.workflowId || state.revision !== selected.revision || digest(fs15.readFileSync(path16.join(location.runtimeDirectory, selected.runId + ".json"), "utf8")) !== selected.checkpointHash) {
+    if (state.workflowId !== selected.workflowId || state.revision !== selected.revision || digest(fs18.readFileSync(path19.join(location.runtimeDirectory, selected.runId + ".json"), "utf8")) !== selected.checkpointHash) {
       throw new Error("Attempt changed; refresh the recovery review");
     }
   }
@@ -5830,11 +13300,11 @@ function assertBlockedInspection(observed, checkOwner, attempt) {
 }
 async function resetBlockedAttempt(observed, attempt, lease, reason, acknowledgedUnknownEffects, assertHostIdle) {
   if (acknowledgedUnknownEffects !== true || !reason.trim() || reason.length > 1e3) throw new Error("Confirm the unknown outcome and enter a reason of 1\u20131000 characters");
-  return catalogTransaction(path16.join(observed.location.installationDirectory, "data.json"), async () => {
+  return catalogTransaction(path19.join(observed.location.installationDirectory, "data.json"), async () => {
     assertHostIdle();
     lease.assertOwned();
     const location = assertBlockedInspection(observed, false, attempt);
-    if (fs15.realpathSync(lease.directory) !== location.runtimeDirectory) throw new Error("Recovery lease belongs to another installation");
+    if (fs18.realpathSync(lease.directory) !== location.runtimeDirectory) throw new Error("Recovery lease belongs to another installation");
     const options = {
       vault: location.vault,
       installationDirectory: location.installationDirectory,
@@ -5851,8 +13321,8 @@ async function resetBlockedAttempt(observed, attempt, lease, reason, acknowledge
 }
 
 // blocked-execution-modal.ts
-var import_obsidian7 = require("obsidian");
-var BlockedExecutionModal = class extends import_obsidian7.Modal {
+var import_obsidian8 = require("obsidian");
+var BlockedExecutionModal = class extends import_obsidian8.Modal {
   constructor(app, inspect, reset, reconnect, describeError, selectedRunId) {
     super(app);
     this.inspect = inspect;
@@ -5922,8 +13392,8 @@ var BlockedExecutionModal = class extends import_obsidian7.Modal {
 };
 
 // execution-coordinator.ts
-var fs16 = __toESM(require("fs"));
-var path17 = __toESM(require("path"));
+var fs19 = __toESM(require("fs"));
+var path20 = __toESM(require("path"));
 var import_child_process8 = require("child_process");
 var admissionDiagnostics = /* @__PURE__ */ new Set([
   "A shared workflow is already executing",
@@ -5959,17 +13429,17 @@ function resources(definition, vault) {
     result.directories.push(directory);
     let parent = directory, gitRoot;
     for (; ; ) {
-      if (fs16.existsSync(path17.join(parent, ".git"))) {
+      if (fs19.existsSync(path20.join(parent, ".git"))) {
         gitRoot = parent;
         break;
       }
-      const next = path17.dirname(parent);
+      const next = path20.dirname(parent);
       if (next === parent) break;
       parent = next;
     }
     if (gitRoot) {
       const common = (0, import_child_process8.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
-      result.repositories.add(physicalPath(path17.resolve(gitRoot, common)));
+      result.repositories.add(physicalPath(path20.resolve(gitRoot, common)));
     }
   }
   if (!result.sharedWorkspace && workflows.some((w) => w.steps.some((s) => {
@@ -6104,8 +13574,8 @@ function assertWorkflowDependencies(workflow, tasks, workflows = []) {
 }
 
 // legacy-output-redaction.ts
-var fs17 = __toESM(require("fs"));
-var path18 = __toESM(require("path"));
+var fs20 = __toESM(require("fs"));
+var path21 = __toESM(require("path"));
 var import_crypto9 = require("crypto");
 var digest2 = (value) => (0, import_crypto9.createHash)("sha256").update(value).digest("hex");
 var LegacyOutputRedaction = class {
@@ -6132,7 +13602,7 @@ var LegacyOutputRedaction = class {
     const issue = this.issue;
     if (!issue || issue.id !== id || !issue.contentHash) throw new Error("The legacy credential notice changed. Try reading again before dismissing it.");
     try {
-      if (digest2(fs17.readFileSync(this.file)) !== issue.contentHash) throw new Error("changed");
+      if (digest2(fs20.readFileSync(this.file)) !== issue.contentHash) throw new Error("changed");
     } catch (e) {
       throw new Error("The historical file changed or cannot be read. Try reading again before dismissing this reminder.");
     }
@@ -6153,7 +13623,7 @@ var LegacyOutputRedaction = class {
     if (notify && first && !((_a = this.getIssue()) == null ? void 0 : _a.acknowledged)) this.diagnostic();
   }
   load(file, storage, notify = true) {
-    const identity = path18.resolve(file);
+    const identity = path21.resolve(file);
     if (identity !== this.file) {
       this.values = [];
       this.issue = void 0;
@@ -6162,7 +13632,7 @@ var LegacyOutputRedaction = class {
     }
     let raw;
     try {
-      raw = fs17.readFileSync(this.file);
+      raw = fs20.readFileSync(this.file);
     } catch (error) {
       if (error.code === "ENOENT") {
         this.values = [];
@@ -6213,14 +13683,14 @@ var LegacyOutputRedaction = class {
 };
 
 // legacy-credential-notice.ts
-var import_obsidian8 = require("obsidian");
+var import_obsidian9 = require("obsidian");
 var explanations = {
   "storage-unavailable": "This device cannot currently access the secure storage used to read the old credentials.",
   "decryption-failed": "Some old credentials could not be decrypted with the secure storage available on this device.",
   "invalid-store": "The historical credential file is incomplete or has an unsupported structure.",
   "unreadable-store": "The historical credential file could not be read. Check that this operating-system account can access it, then retry."
 };
-var LegacyCredentialNoticeModal = class extends import_obsidian8.Modal {
+var LegacyCredentialNoticeModal = class extends import_obsidian9.Modal {
   constructor(app, host) {
     super(app);
     this.host = host;
@@ -6248,7 +13718,7 @@ var LegacyCredentialNoticeModal = class extends import_obsidian8.Modal {
       if (!issue.dismissible) root.createEl("p", { text: "The reminder cannot be saved until the file can be read and identified." });
     }
     if (this.message) root.createEl("p", { text: this.message });
-    const controls = new import_obsidian8.Setting(root);
+    const controls = new import_obsidian9.Setting(root);
     controls.settingEl.style.display = "block";
     controls.controlEl.style.flexWrap = "wrap";
     controls.addButton((button) => button.setButtonText("Try reading again").onClick(() => {
@@ -6277,19 +13747,19 @@ var LegacyCredentialNoticeModal = class extends import_obsidian8.Modal {
 };
 
 // settings-write-recovery.ts
-var fs19 = __toESM(require("fs"));
-var path20 = __toESM(require("path"));
+var fs22 = __toESM(require("fs"));
+var path23 = __toESM(require("path"));
 var import_crypto10 = require("crypto");
 
 // execution-idle.ts
-var fs18 = __toESM(require("fs"));
-var path19 = __toESM(require("path"));
+var fs21 = __toESM(require("fs"));
+var path22 = __toESM(require("path"));
 var import_promises = require("timers/promises");
 var import_perf_hooks4 = require("perf_hooks");
 function assertIdleJournals(runtime) {
-  if (fs18.existsSync(path19.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  if (fs21.existsSync(path22.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
   const checkpoints = /* @__PURE__ */ new Map();
-  for (const name of fs18.readdirSync(runtime)) {
+  for (const name of fs21.readdirSync(runtime)) {
     if (name.endsWith(".tmp") || name.endsWith(".write-lock")) throw new Error("Unfinished execution write requires reconciliation");
     if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
     const state = readExecutionCheckpoint(runtime, name.slice(0, -5));
@@ -6346,26 +13816,26 @@ function assertIdleCatalog(settings, checkpoints) {
   }
 }
 function assertInstalledExecutionIdle(directory, memorySettings) {
-  const checkpoints = assertIdleJournals(path19.join(directory, "runtime"));
-  const file = path19.join(directory, "data.json");
-  if (fs18.existsSync(file + ".write-lock") || fs18.existsSync(file + ".write-intent") || fs18.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+  const checkpoints = assertIdleJournals(path22.join(directory, "runtime"));
+  const file = path22.join(directory, "data.json");
+  if (fs21.existsSync(file + ".write-lock") || fs21.existsSync(file + ".write-intent") || fs21.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
     throw new Error("Unfinished configuration write requires reconciliation");
   }
   let stat;
   try {
-    stat = fs18.lstatSync(file);
+    stat = fs21.lstatSync(file);
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
   if (stat) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe execution configuration");
-    assertIdleCatalog(JSON.parse(fs18.readFileSync(file, "utf8")), checkpoints);
+    assertIdleCatalog(JSON.parse(fs21.readFileSync(file, "utf8")), checkpoints);
   }
   if (memorySettings !== void 0) assertIdleCatalog(memorySettings, checkpoints);
 }
 async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns = false, cooperative = false) {
   var _a;
-  const file = path19.join(directory, "data.json");
+  const file = path22.join(directory, "data.json");
   const checkCatalog = (settings, checkpoints) => {
     var _a2, _b;
     if (!allowPendingRuns) return assertIdleCatalog(settings, checkpoints);
@@ -6376,14 +13846,14 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const lock = file + ".write-lock";
   const identity = (stat) => `${stat.dev}:${stat.ino}:${stat.birthtimeMs}`;
-  const directoryIdentity2 = identity(fs18.lstatSync(directory));
+  const directoryIdentity2 = identity(fs21.lstatSync(directory));
   let fileIdentity;
   let initial = true, writer, writerFinished = false;
   const temporaryIdentities = /* @__PURE__ */ new Map();
   const regularStat = (target) => {
     let stat;
     try {
-      stat = fs18.lstatSync(target);
+      stat = fs21.lstatSync(target);
     } catch (error) {
       if (error.code === "ENOENT") return;
       throw error;
@@ -6393,20 +13863,20 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const asyncCatalog = cooperative && (((_a = regularStat(file)) == null ? void 0 : _a.size) || 0) > 256 * 1024;
   const checkContext = () => {
-    if (identity(fs18.lstatSync(directory)) !== directoryIdentity2) throw new Error("Installation identity changed during startup");
+    if (identity(fs21.lstatSync(directory)) !== directoryIdentity2) throw new Error("Installation identity changed during startup");
     assertOwner();
   };
   const pendingWriter = () => {
     checkContext();
     const stat = regularStat(lock);
-    const temporaries = fs18.readdirSync(directory).filter((name) => name.startsWith("data.json.") && name.endsWith(".tmp"));
+    const temporaries = fs21.readdirSync(directory).filter((name) => name.startsWith("data.json.") && name.endsWith(".tmp"));
     if (stat) {
       if (stat.size > 16384) throw new Error("Unsafe configuration write lock size");
-      const token = parseSettingsWriteLock(fs18.readFileSync(lock, "utf8")).token;
+      const token = parseSettingsWriteLock(fs21.readFileSync(lock, "utf8")).token;
       if (!/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(token)) throw new Error("Unsafe configuration write lock token");
       const intentStat = regularStat(file + ".write-intent");
       if (intentStat) {
-        if (intentStat.size > 16384 || JSON.parse(fs18.readFileSync(file + ".write-intent", "utf8")).token !== token) throw new Error("Configuration write intent identity changed");
+        if (intentStat.size > 16384 || JSON.parse(fs21.readFileSync(file + ".write-intent", "utf8")).token !== token) throw new Error("Configuration write intent identity changed");
       }
       if (!writer) {
         if (!initial) throw new Error("Configuration write started after startup snapshot");
@@ -6415,7 +13885,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
       } else if (writerFinished || writer.identity !== identity(stat) || writer.token !== token) {
         const catalog = regularStat(file);
         const catalogIdentity = catalog ? identity(catalog) : null;
-        const committed = [...temporaryIdentities].some(([name, id]) => id === catalogIdentity && !regularStat(path19.join(directory, name)));
+        const committed = [...temporaryIdentities].some(([name, id]) => id === catalogIdentity && !regularStat(path22.join(directory, name)));
         if (writer.identity === identity(stat) || writer.token === token || catalogIdentity === writer.catalog || !committed) {
           throw new Error("Configuration write lock ownership changed without an observed atomic commit");
         }
@@ -6428,11 +13898,11 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
       if (!after || identity(after) !== writer.identity) throw new Error("Configuration write lock ownership changed");
       for (const name of temporaries) {
         if (intentStat && name === "data.json.write-intent." + token + ".tmp") {
-          regularStat(path19.join(directory, name));
+          regularStat(path22.join(directory, name));
           continue;
         }
         if (!new RegExp(`^data\\.json\\.${process.pid}\\.[0-9]+\\.[0-9a-f]+\\.tmp$`).test(name)) throw new Error("Unsafe configuration temporary writer");
-        const temporary = regularStat(path19.join(directory, name));
+        const temporary = regularStat(path22.join(directory, name));
         if (!temporary) continue;
         const before = temporaryIdentities.get(name);
         if (before && before !== identity(temporary)) throw new Error("Configuration temporary identity changed");
@@ -6449,7 +13919,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   };
   const read2 = () => {
     checkContext();
-    if (regularStat(lock) || fs18.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+    if (regularStat(lock) || fs21.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
       throw new Error("Unfinished configuration write requires reconciliation");
     }
     const stat = regularStat(file);
@@ -6457,19 +13927,19 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     if (fileIdentity === void 0) fileIdentity = currentIdentity;
     if (fileIdentity !== currentIdentity) throw new Error("Configuration identity changed during startup");
     if (!stat) return null;
-    const fd = fs18.openSync(file, "r");
+    const fd = fs21.openSync(file, "r");
     try {
-      if (identity(fs18.fstatSync(fd)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
-      const value = fs18.readFileSync(fd, "utf8");
-      if (identity(fs18.lstatSync(file)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+      if (identity(fs21.fstatSync(fd)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
+      const value = fs21.readFileSync(fd, "utf8");
+      if (identity(fs21.lstatSync(file)) !== fileIdentity) throw new Error("Configuration identity changed during startup");
       return value;
     } finally {
-      fs18.closeSync(fd);
+      fs21.closeSync(fd);
     }
   };
   const retryRead = new Error("Observed historical writer advanced during asynchronous read");
   const checkReadMarkers = () => {
-    if (regularStat(lock) || fs18.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
+    if (regularStat(lock) || fs21.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) {
       if (writer && pendingWriter()) throw retryRead;
       throw new Error("Unfinished configuration write requires reconciliation");
     }
@@ -6503,7 +13973,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     if (await readAsyncFingerprint() !== expectedHash) throw new Error("Configuration changed after startup validation; retry safely");
     if (!allowPendingRuns) {
       const current = await readAsync();
-      checkCatalog(current === null ? {} : await parseCooperatively(current), assertIdleJournals(path19.join(directory, "runtime")));
+      checkCatalog(current === null ? {} : await parseCooperatively(current), assertIdleJournals(path22.join(directory, "runtime")));
       if (current !== null && await hashTextCooperatively(current) !== expectedHash) throw new Error("Configuration changed after startup validation; retry safely");
       checkContext();
     }
@@ -6515,7 +13985,7 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
   let previous, stableSince = import_perf_hooks4.performance.now();
   let validated;
   let wake, changed = false;
-  const watcher = fs18.watch(directory, () => {
+  const watcher = fs21.watch(directory, () => {
     changed = true;
     wake == null ? void 0 : wake();
   });
@@ -6532,8 +14002,8 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     const controller = new AbortController();
     try {
       await Promise.race([
-        new Promise((resolve10) => {
-          wake = resolve10;
+        new Promise((resolve11) => {
+          wake = resolve11;
         }),
         (0, import_promises.setTimeout)(25, void 0, { signal: controller.signal }).catch((error) => {
           if (error.name !== "AbortError") throw error;
@@ -6549,12 +14019,12 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
     while (true) {
       if (watchError) throw watchError;
       checkContext();
-      const checkpoints = allowPendingRuns ? /* @__PURE__ */ new Map() : assertIdleJournals(path19.join(directory, "runtime"));
+      const checkpoints = allowPendingRuns ? /* @__PURE__ */ new Map() : assertIdleJournals(path22.join(directory, "runtime"));
       if (pendingWriter()) {
         const current = regularStat(file);
         if (current) {
-          const settings2 = asyncCatalog ? await parseCooperatively(await readSettingsTextAsync(file)) : JSON.parse(fs18.readFileSync(file, "utf8"));
-          assertIdleCatalog(settings2, assertIdleJournals(path19.join(directory, "runtime")));
+          const settings2 = asyncCatalog ? await parseCooperatively(await readSettingsTextAsync(file)) : JSON.parse(fs21.readFileSync(file, "utf8"));
+          assertIdleCatalog(settings2, assertIdleJournals(path22.join(directory, "runtime")));
         }
         if (import_perf_hooks4.performance.now() >= writerDeadline) throw new Error("Unfinished configuration write requires reconciliation; startup wait expired");
         stableSince = import_perf_hooks4.performance.now();
@@ -6618,21 +14088,21 @@ async function waitForInstalledCatalog(directory, assertOwner, allowPendingRuns 
 
 // settings-write-recovery.ts
 function statFile(file) {
-  const s = fs19.lstatSync(file);
+  const s = fs22.lstatSync(file);
   if (!s.isFile() || s.isSymbolicLink() || s.nlink !== 1) throw new Error("Unsafe interrupted settings artifact");
   return s;
 }
 function small(file) {
   const s = statFile(file);
   if (s.size > 16384) throw new Error("Oversized settings recovery marker");
-  return fs19.readFileSync(file, "utf8");
+  return fs22.readFileSync(file, "utf8");
 }
 function sameFile(a, b) {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
 }
 var exists = (p) => {
   try {
-    fs19.lstatSync(p);
+    fs22.lstatSync(p);
     return true;
   } catch (e) {
     if (e.code === "ENOENT") return false;
@@ -6641,22 +14111,22 @@ var exists = (p) => {
 };
 async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
 }) {
-  const file = path20.join(directory, "data.json"), intentFile = file + ".write-intent", runtime = path20.join(directory, "runtime");
+  const file = path23.join(directory, "data.json"), intentFile = file + ".write-intent", runtime = path23.join(directory, "runtime");
   if (!exists(intentFile)) return;
   const intentText = small(intentFile), intent = JSON.parse(intentText);
   if (intent.schemaVersion !== 1 || !/^[a-f0-9-]{36}$/.test(intent.token || "") || !intent.owner || !Number.isSafeInteger(intent.owner.pid) || intent.owner.pid <= 0 || !/^[a-f0-9]{64}$/.test(intent.originalHash || "") || intent.preparedHash !== void 0 && !/^[a-f0-9]{64}$/.test(intent.preparedHash) || intent.temporary !== void 0 && !new RegExp(`^data\\.json\\.${intent.owner.pid}\\.[0-9]+\\.[0-9a-f]+\\.tmp$`).test(intent.temporary) || intent.preparedHash && !intent.temporary) throw new Error("Invalid interrupted settings proof");
   const owner = readExecutionLeaseOwner(runtime);
   if (JSON.stringify(owner) !== JSON.stringify(intent.owner)) throw new Error("Interrupted settings owner identity changed");
-  const archive = path20.join(runtime, "settings-write-recovery-" + intent.token);
+  const archive = path23.join(runtime, "settings-write-recovery-" + intent.token);
   let primaryHash;
   await recoverExecutionLeaseAsync(runtime, owner.token, async (currentOwner) => {
     const assertContext = () => {
       assertOpen();
-      const anchor = JSON.parse(small(path20.join(runtime, "execution.lock", "owner.json"))).settingsWriteIntent;
+      const anchor = JSON.parse(small(path23.join(runtime, "execution.lock", "owner.json"))).settingsWriteIntent;
       if ((anchor == null ? void 0 : anchor.token) !== intent.token || (anchor == null ? void 0 : anchor.sha256) !== (0, import_crypto10.createHash)("sha256").update(intentText, "utf8").digest("hex")) throw new Error("Interrupted settings proof is not bound to its execution owner");
       if (settingsDirectoryIdentity(directory) !== intent.directoryIdentity || settingsDirectoryIdentity(runtime) !== intent.runtimeIdentity || small(intentFile) !== intentText || JSON.stringify(readExecutionLeaseOwner(runtime)) !== JSON.stringify(currentOwner)) throw new Error("Interrupted settings installation or proof changed");
       if (exists(file + ".write-lock") && settingsWriteLockToken(file + ".write-lock") !== intent.token) throw new Error("Interrupted settings lock token changed");
-      if (fs19.readdirSync(runtime).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Runtime maintenance is unresolved");
+      if (fs22.readdirSync(runtime).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("Runtime maintenance is unresolved");
     };
     assertContext();
     const primaryStat = statFile(file), text = await readSettingsTextAsync(file);
@@ -6669,44 +14139,44 @@ async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
     if (await settingsFingerprint(file) !== primaryHash || !sameFile(primaryStat, statFile(file))) throw new Error("Saved catalog changed during recovery");
     const intentUpdate = "data.json.write-intent." + intent.token + ".tmp";
     const allowed = /* @__PURE__ */ new Set([intent.temporary, intentUpdate]);
-    const temporaries = () => fs19.readdirSync(directory).filter((n) => n.startsWith("data.json.") && n.endsWith(".tmp")).sort();
+    const temporaries = () => fs22.readdirSync(directory).filter((n) => n.startsWith("data.json.") && n.endsWith(".tmp")).sort();
     const names = temporaries();
     if (names.some((n) => !allowed.has(n))) throw new Error("Unidentified settings temporary requires explicit recovery");
     const artifacts = [...names, ...exists(file + ".write-lock") ? ["data.json.write-lock"] : [], "data.json.write-intent"];
     const records = [];
     for (const name of artifacts) {
-      const target = path20.join(directory, name), stat = statFile(target), hash = await settingsFingerprint(target);
+      const target = path23.join(directory, name), stat = statFile(target), hash = await settingsFingerprint(target);
       if (!sameFile(stat, statFile(target))) throw new Error("Interrupted settings artifact changed");
       records.push({ name, stat, hash });
     }
     assertContext();
     if (JSON.stringify(temporaries()) !== JSON.stringify(names) || exists(archive)) throw new Error("Settings recovery state changed or archive exists");
     if (await settingsFingerprint(file) !== primaryHash) throw new Error("Saved catalog changed before archival");
-    fs19.mkdirSync(archive);
+    fs22.mkdirSync(archive);
     const moved = [];
     try {
       for (const record of records) {
         assertOpen();
-        const target = path20.join(directory, record.name);
+        const target = path23.join(directory, record.name);
         if (!sameFile(record.stat, statFile(target)) || await settingsFingerprint(target) !== record.hash) throw new Error("Interrupted settings artifact changed before archival");
         for (let attempt = 0; ; attempt++) {
           assertOpen();
           if (!sameFile(record.stat, statFile(target))) throw new Error("Interrupted settings artifact identity changed");
           try {
-            await fs19.promises.rename(target, path20.join(archive, record.name));
+            await fs22.promises.rename(target, path23.join(archive, record.name));
             break;
           } catch (error) {
             if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code || "") || attempt >= 4) throw error;
-            await new Promise((resolve10) => setTimeout(resolve10, 50 * (attempt + 1)));
+            await new Promise((resolve11) => setTimeout(resolve11, 50 * (attempt + 1)));
           }
         }
         moved.push(record.name);
       }
       if (await settingsFingerprint(file) !== primaryHash || !sameFile(primaryStat, statFile(file))) throw new Error("Saved catalog changed after archival");
-      for (const record of records) if (await settingsFingerprint(path20.join(archive, record.name)) !== record.hash) throw new Error("Settings recovery archive verification failed");
+      for (const record of records) if (await settingsFingerprint(path23.join(archive, record.name)) !== record.hash) throw new Error("Settings recovery archive verification failed");
       assertOpen();
       const receipt = { schemaVersion: 1, at: (/* @__PURE__ */ new Date()).toISOString(), token: intent.token, owner: currentOwner, primaryHash, moved, artifacts: records.map((r) => ({ name: r.name, hash: r.hash })), temporaryPromoted: false, executionsResumed: false };
-      const handle = await fs19.promises.open(path20.join(archive, "receipt.json"), "wx", 384);
+      const handle = await fs22.promises.open(path23.join(archive, "receipt.json"), "wx", 384);
       try {
         await handle.writeFile(JSON.stringify(receipt, null, 2));
         await handle.sync();
@@ -6714,7 +14184,7 @@ async function recoverInterruptedSettingsWrite(directory, assertOpen = () => {
         await handle.close();
       }
     } catch (error) {
-      fs19.writeFileSync(path20.join(archive, "failure.json"), JSON.stringify({ moved, error: String(error) }), { flag: "wx", mode: 384 });
+      fs22.writeFileSync(path23.join(archive, "failure.json"), JSON.stringify({ moved, error: String(error) }), { flag: "wx", mode: 384 });
       throw error;
     }
   });
@@ -6748,8 +14218,8 @@ function presentationFields(value) {
 }
 
 // cli-plugin-requests.ts
-var fs20 = __toESM(require("fs"));
-var path21 = __toESM(require("path"));
+var fs23 = __toESM(require("fs"));
+var path24 = __toESM(require("path"));
 var import_crypto12 = require("crypto");
 var import_perf_hooks5 = require("perf_hooks");
 
@@ -6830,21 +14300,21 @@ function executionSummary(state, presentation = state) {
 }
 var uuid2 = /^[a-f0-9-]{36}$/;
 function regularDirectory2(directory) {
-  const stat = fs20.lstatSync(directory);
-  if (!stat.isDirectory() || stat.isSymbolicLink() || fs20.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
+  const stat = fs23.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink() || fs23.realpathSync(directory) !== directory) throw new Error("Unsafe CLI request directory");
 }
 function read(file) {
-  const stat = fs20.lstatSync(file);
+  const stat = fs23.lstatSync(file);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) throw new Error("Unsafe CLI request file");
-  return JSON.parse(fs20.readFileSync(file, "utf8"));
+  return JSON.parse(fs23.readFileSync(file, "utf8"));
 }
 function write(file, value) {
-  const fd = fs20.openSync(file, "wx", 384);
+  const fd = fs23.openSync(file, "wx", 384);
   try {
-    fs20.writeFileSync(fd, JSON.stringify(value));
-    fs20.fsyncSync(fd);
+    fs23.writeFileSync(fd, JSON.stringify(value));
+    fs23.fsyncSync(fd);
   } finally {
-    fs20.closeSync(fd);
+    fs23.closeSync(fd);
   }
 }
 async function replace(file, value, check, asyncFlush = true) {
@@ -6855,36 +14325,36 @@ async function replace(file, value, check, asyncFlush = true) {
   const bytes = JSON.stringify(value);
   let owned;
   const sameTemporary = () => {
-    if (!owned || !fs20.existsSync(temp)) return false;
-    const current = fs20.lstatSync(temp);
+    if (!owned || !fs23.existsSync(temp)) return false;
+    const current = fs23.lstatSync(temp);
     return current.isFile() && !current.isSymbolicLink() && current.nlink === 1 && current.dev === owned.dev && current.ino === owned.ino;
   };
   try {
-    const fd = fs20.openSync(temp, "wx", 384);
+    const fd = fs23.openSync(temp, "wx", 384);
     try {
-      owned = fs20.fstatSync(fd);
-      fs20.writeFileSync(fd, bytes);
-      if (asyncFlush) await new Promise((resolve10, reject) => fs20.fsync(fd, (error) => error ? reject(error) : resolve10()));
-      else fs20.fsyncSync(fd);
+      owned = fs23.fstatSync(fd);
+      fs23.writeFileSync(fd, bytes);
+      if (asyncFlush) await new Promise((resolve11, reject) => fs23.fsync(fd, (error) => error ? reject(error) : resolve11()));
+      else fs23.fsyncSync(fd);
     } finally {
-      fs20.closeSync(fd);
+      fs23.closeSync(fd);
     }
     for (let attempt = 0; ; attempt++) {
       if (attempt > 0 && import_perf_hooks5.performance.now() >= deadline) throw lastError;
-      if (!sameTemporary() || fs20.readFileSync(temp, "utf8") !== bytes) throw new Error("CLI publication temporary identity changed");
+      if (!sameTemporary() || fs23.readFileSync(temp, "utf8") !== bytes) throw new Error("CLI publication temporary identity changed");
       check();
-      if (fs20.existsSync(file)) read(file);
+      if (fs23.existsSync(file)) read(file);
       try {
-        fs20.renameSync(temp, file);
+        fs23.renameSync(temp, file);
         return;
       } catch (error) {
         lastError = error;
         if (!["EPERM", "EACCES", "EBUSY"].includes(error.code || "") || attempt >= 12 || import_perf_hooks5.performance.now() >= deadline) throw error;
-        await new Promise((resolve10) => setTimeout(resolve10, Math.min(20 * (attempt + 1), 100)));
+        await new Promise((resolve11) => setTimeout(resolve11, Math.min(20 * (attempt + 1), 100)));
       }
     }
   } finally {
-    if (sameTemporary() && fs20.statSync(temp).size === Buffer.byteLength(bytes) && fs20.readFileSync(temp, "utf8") === bytes) fs20.unlinkSync(temp);
+    if (sameTemporary() && fs23.statSync(temp).size === Buffer.byteLength(bytes) && fs23.readFileSync(temp, "utf8") === bytes) fs23.unlinkSync(temp);
   }
 }
 function validCommand(value) {
@@ -6894,10 +14364,10 @@ function validCommand(value) {
 }
 function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({})) {
   lease.assertOwned();
-  const root = fs20.realpathSync(lease.directory), directory = path21.join(root, "cli-" + lease.token);
-  fs20.mkdirSync(directory, { mode: 448 });
+  const root = fs23.realpathSync(lease.directory), directory = path24.join(root, "cli-" + lease.token);
+  fs23.mkdirSync(directory, { mode: 448 });
   regularDirectory2(directory);
-  const descriptor = path21.join(directory, "host");
+  const descriptor = path24.join(directory, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
   const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1 });
@@ -6916,10 +14386,10 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
     if (previous.protocol !== 1 || previous.owner !== lease.token || previous.pid !== process.pid) throw new Error("CLI host identity changed");
   };
   const receipt = (id, value) => {
-    const file = path21.join(directory, id + ".receipt");
+    const file = path24.join(directory, id + ".receipt");
     return replace(file, { protocol: 1, owner: lease.token, id, ...value }, () => {
       check();
-      if (fs20.existsSync(file)) {
+      if (fs23.existsSync(file)) {
         const previous = read(file);
         if (previous.protocol !== 1 || previous.owner !== lease.token || previous.id !== id) throw new Error("CLI receipt identity changed");
       }
@@ -6930,9 +14400,9 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
     closed = true;
     for (const execution of active.values()) execution.controller.abort();
     check();
-    if (fs20.existsSync(descriptor)) {
+    if (fs23.existsSync(descriptor)) {
       checkDescriptor();
-      fs20.unlinkSync(descriptor);
+      fs23.unlinkSync(descriptor);
     }
   };
   const fail = () => {
@@ -6960,24 +14430,24 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
       }
     }
     if (closed) return;
-    for (const execution of active.values()) if (fs20.existsSync(path21.join(directory, execution.id + ".cancel"))) {
-      read(path21.join(directory, execution.id + ".cancel"));
+    for (const execution of active.values()) if (fs23.existsSync(path24.join(directory, execution.id + ".cancel"))) {
+      read(path24.join(directory, execution.id + ".cancel"));
       execution.controller.abort();
     }
-    for (const name of fs20.readdirSync(directory)) {
+    for (const name of fs23.readdirSync(directory)) {
       if (!name.endsWith(".request")) continue;
       const id = name.slice(0, -8);
       if (!uuid2.test(id)) continue;
-      if (seen.has(id) || fs20.existsSync(path21.join(directory, id + ".receipt"))) continue;
+      if (seen.has(id) || fs23.existsSync(path24.join(directory, id + ".receipt"))) continue;
       seen.add(id);
       let request;
       try {
-        request = read(path21.join(directory, name));
+        request = read(path24.join(directory, name));
       } catch (e) {
         await receipt(id, { status: "rejected", error: "Invalid CLI request" });
         continue;
       }
-      if (!request || request.protocol !== 1 || request.owner !== lease.token || request.id !== id || !validCommand(request) || !Number.isFinite(request.expiresAt) || request.expiresAt < Date.now() || request.expiresAt > Date.now() + 6e4 || fs20.existsSync(path21.join(directory, id + ".cancel"))) {
+      if (!request || request.protocol !== 1 || request.owner !== lease.token || request.id !== id || !validCommand(request) || !Number.isFinite(request.expiresAt) || request.expiresAt < Date.now() || request.expiresAt > Date.now() + 6e4 || fs23.existsSync(path24.join(directory, id + ".cancel"))) {
         await receipt(id, { status: "rejected", error: "Expired, cancelled or invalid CLI request" });
         continue;
       }
@@ -7157,22 +14627,22 @@ var OpenCode2Catalog = class {
     this.lists = /* @__PURE__ */ new Map();
     this.pending = /* @__PURE__ */ new Map();
   }
-  choices(path32, cwd, kind) {
-    return this.lists.get(JSON.stringify([path32, cwd, kind])) || [];
+  choices(path35, cwd, kind) {
+    return this.lists.get(JSON.stringify([path35, cwd, kind])) || [];
   }
-  refresh(path32, cwd, kind) {
-    const key = JSON.stringify([path32, cwd, kind]);
+  refresh(path35, cwd, kind) {
+    const key = JSON.stringify([path35, cwd, kind]);
     const pending = this.pending.get(key);
     if (pending) return pending;
-    const request = this.discover(path32, cwd, kind, this.lists.get(key)).then((choices) => {
+    const request = this.discover(path35, cwd, kind, this.lists.get(key)).then((choices) => {
       this.lists.set(key, choices);
       return choices;
     }).finally(() => this.pending.delete(key));
     this.pending.set(key, request);
     return request;
   }
-  async discover(path32, cwd, kind, previous) {
-    const bin = resolveInteractiveCli("opencode2", path32);
+  async discover(path35, cwd, kind, previous) {
+    const bin = resolveInteractiveCli("opencode2", path35);
     if (!bin) throw new Error("Set the OpenCode 2 CLI executable in AutoOC Settings.");
     await assertOpenCode2(bin);
     const args = kind === "models" ? ["models"] : ["debug", "agents"];
@@ -7180,7 +14650,7 @@ var OpenCode2Catalog = class {
     try {
       let choices = [];
       for (const waitMs of [0, 1e3, 1200, 1800]) {
-        if (waitMs) await new Promise((resolve10) => setTimeout(resolve10, waitMs));
+        if (waitMs) await new Promise((resolve11) => setTimeout(resolve11, waitMs));
         choices = await query();
         if (choices.length && (previous == null ? void 0 : previous.length) === choices.length && choices.every((choice, i) => choice.value === previous[i].value && choice.label === previous[i].label)) break;
         previous = choices;
@@ -7257,8 +14727,8 @@ function addOpenCode2Picker(row, kind, catalog, location, value, change) {
 }
 
 // cli-workflow-adapters.ts
-var fs21 = __toESM(require("fs"));
-var path22 = __toESM(require("path"));
+var fs24 = __toESM(require("fs"));
+var path25 = __toESM(require("path"));
 
 // command-output.ts
 function normalizeCommandOutput(text) {
@@ -7428,6 +14898,17 @@ function decodeCommandBuffer(bytes) {
 }
 
 // cli-workflow-adapters.ts
+function createInteractiveCliWorkflowAdapter(definition, vault, terminal) {
+  return { supports: (task) => task.taskKind === "cli", async execute(task, prompt, signal) {
+    const cwd = task.workingDirectory || definition.settings.workingDirectory || vault;
+    const request = prepareCliTask(task, definition.settings, cwd, prompt, signal);
+    if ((terminal == null ? void 0 : terminal.destination) === "integrated") {
+      if (!terminal.launch) throw new Error("Integrated CLI tasks require a loaded Obsidian terminal host. No external terminal was started.");
+      await terminal.launch(request);
+    } else await launchExternalCliTask(request, definition.settings.linuxTerminal);
+    return { succeeded: true, output: "[opened interactive CLI with preloaded prompt; interactive task result is not observed]" };
+  } };
+}
 function createCopilotWorkflowAdapter(definition, vault) {
   const supports = (task) => task.taskKind === "copilot" && !task.interactiveTerminal && !task.branch && !task.createBranch && (task.copilotAllowAllTools === void 0 || typeof task.copilotAllowAllTools === "boolean");
   return { supports, async execute(task, prompt, signal) {
@@ -7447,7 +14928,7 @@ function createCopilotWorkflowAdapter(definition, vault) {
     }
   } };
 }
-function createOpenCodeWorkflowAdapter(definition, vault) {
+function createOpenCodeWorkflowAdapter(definition, vault, terminal) {
   const supports = (task) => isOpenCodeTask(task.taskKind);
   return { supports, async execute(task, prompt, signal, _recordThread, interaction) {
     if (!supports(task)) throw new Error("Unsupported OpenCode task");
@@ -7469,29 +14950,43 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
     const agent = task.agent || (major === 2 ? definition.settings.defaultOpencode2Agent : definition.settings.defaultAgent) || "build";
     if (task.useRalphLoop) prompt = "/ralph-loop " + prompt;
     if (task.interactiveTerminal) {
-      if (path22.isAbsolute(bin) && !fs21.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
-      await new Promise((resolve10, reject) => {
-        const options = { onLaunched: resolve10, onError: reject, linuxTerminal: definition.settings.linuxTerminal, opencodeMajor: major };
+      if (path25.isAbsolute(bin) && !fs24.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
+      if ((terminal == null ? void 0 : terminal.destination) === "integrated") {
+        if (!terminal.launch) throw new Error("Integrated CLI tasks require a loaded Obsidian terminal host. No external terminal was started.");
+        await terminal.launch({
+          bin,
+          cwd: taskCwd,
+          label: task.name || `OpenCode ${major} CLI task`,
+          major,
+          model,
+          agent: task.forceModel ? "" : agent,
+          prompt,
+          signal
+        });
+        return { succeeded: true, output: "[opened integrated OpenCode CLI with preloaded prompt; interactive task result is not observed]" };
+      }
+      await new Promise((resolve11, reject) => {
+        const options = { onLaunched: resolve11, onError: reject, linuxTerminal: definition.settings.linuxTerminal, opencodeMajor: major };
         if (process.platform === "win32") openOpencodeCliLongPromptWindows(bin, taskCwd, {}, model, task.forceModel ? "" : agent, prompt, options);
         else openOpencodeCli(bin, taskCwd, {}, openCodeInteractiveArgs(major, model, task.forceModel ? "" : agent, prompt), options);
       });
       return { succeeded: true, output: "[opened interactive OpenCode CLI with preloaded prompt; interactive task result is not observed]" };
     }
     const folder = createAuxiliaryDirectory(taskCwd, "runtime");
-    const outFile = path22.join(folder, "stdout.txt"), errFile = path22.join(folder, "stderr.txt"), doneFile = path22.join(folder, "done.txt");
-    const pidFile = path22.join(folder, "process.pid"), promptFile = path22.join(folder, "instruction.txt"), full = path22.join(folder, "input.txt");
-    const scriptFile = path22.join(folder, "launch" + scriptExt());
+    const outFile = path25.join(folder, "stdout.txt"), errFile = path25.join(folder, "stderr.txt"), doneFile = path25.join(folder, "done.txt");
+    const pidFile = path25.join(folder, "process.pid"), promptFile = path25.join(folder, "instruction.txt"), full = path25.join(folder, "input.txt");
+    const scriptFile = path25.join(folder, "launch" + scriptExt());
     let handle;
     let known = false, launchAttempted = false;
     try {
-      fs21.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
-      fs21.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
+      fs24.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
+      fs24.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
       const script = buildOpenCodeScript({ pidFile, secretEnv: {}, safeCwd: taskCwd.replace(/'/g, "''"), gitCmds: "", bin, model, effectiveAgent: agent, effectiveTask: task, promptFile, outFile, errFile, doneFile, taskCwd, major });
       if (process.platform === "win32") writeUtf8BomFile(scriptFile, script);
-      else fs21.writeFileSync(scriptFile, script, { mode: 384 });
+      else fs24.writeFileSync(scriptFile, script, { mode: 384 });
       launchAttempted = true;
       const launched = handle = launchHidden(scriptFile, pidFile);
-      const result = await new Promise((resolve10, reject) => {
+      const result = await new Promise((resolve11, reject) => {
         let ended = false;
         const finish = (error) => {
           if (ended) return;
@@ -7505,7 +15000,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
-        const read2 = (file) => fs21.existsSync(file) ? decodeCommandBuffer(fs21.readFileSync(file)) : "";
+        const read2 = (file) => fs24.existsSync(file) ? decodeCommandBuffer(fs24.readFileSync(file)) : "";
         let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
           var _a;
@@ -7514,7 +15009,7 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
               abort();
               return;
             }
-            const completed = fs21.existsSync(doneFile);
+            const completed = fs24.existsSync(doneFile);
             if (!completed && (!(interaction == null ? void 0 : interaction.onOutput) || Date.now() < nextOutputAt)) return;
             const output = formatTaskOutput(read2(outFile), read2(errFile));
             if (output !== lastOutput) {
@@ -7523,11 +15018,11 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
             }
             nextOutputAt = Date.now() + 500;
             if (!completed) return;
-            const exit = fs21.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
+            const exit = fs24.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
             known = true;
             finish();
-            resolve10({ succeeded: exit === "0", output: output || "(no output)" });
+            resolve11({ succeeded: exit === "0", output: output || "(no output)" });
           } catch (error) {
             finish(error);
           }
@@ -7545,8 +15040,8 @@ function createOpenCodeWorkflowAdapter(definition, vault) {
 }
 
 // release-update.ts
-var fs22 = __toESM(require("fs"));
-var path23 = __toESM(require("path"));
+var fs25 = __toESM(require("fs"));
+var path26 = __toESM(require("path"));
 var import_crypto13 = require("crypto");
 var RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"];
 var RELEASE_DESCRIPTOR = "release-integrity.json";
@@ -7574,28 +15069,28 @@ async function downloadRelease(baseUrl, version, fetcher = fetch) {
   verifyRelease(files2, version);
   return files2;
 }
-function regularPath(root, relative6, create = false) {
+function regularPath(root, relative8, create = false) {
   let current = root;
-  const parts = relative6.split("/");
+  const parts = relative8.split("/");
   for (let i = 0; i < parts.length; i++) {
-    current = path23.join(current, parts[i]);
+    current = path26.join(current, parts[i]);
     let stat;
     try {
-      stat = fs22.lstatSync(current);
+      stat = fs25.lstatSync(current);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
-      throw new Error(`Unsafe release destination: ${relative6}`);
+      throw new Error(`Unsafe release destination: ${relative8}`);
     }
-    if (!stat && i < parts.length - 1 && create) fs22.mkdirSync(current);
+    if (!stat && i < parts.length - 1 && create) fs25.mkdirSync(current);
   }
   return current;
 }
 function hasCompleteInstalledRelease(directory, version) {
   try {
-    const root = fs22.realpathSync(directory);
-    const files2 = Object.fromEntries([...RELEASE_FILES, RELEASE_DESCRIPTOR].map((name) => [name, fs22.readFileSync(regularPath(root, name))]));
+    const root = fs25.realpathSync(directory);
+    const files2 = Object.fromEntries([...RELEASE_FILES, RELEASE_DESCRIPTOR].map((name) => [name, fs25.readFileSync(regularPath(root, name))]));
     verifyRelease(files2, version);
     return true;
   } catch (e) {
@@ -7604,10 +15099,10 @@ function hasCompleteInstalledRelease(directory, version) {
 }
 async function hasCompleteInstalledReleaseAsync(directory, version) {
   try {
-    const root = fs22.realpathSync(directory), files2 = {};
+    const root = fs25.realpathSync(directory), files2 = {};
     for (const name of [...RELEASE_FILES, RELEASE_DESCRIPTOR]) {
       const file = regularPath(root, name);
-      files2[name] = await fs22.promises.readFile(file);
+      files2[name] = await fs25.promises.readFile(file);
       regularPath(root, name);
     }
     verifyRelease(files2, version);
@@ -7619,35 +15114,35 @@ async function hasCompleteInstalledReleaseAsync(directory, version) {
 function installRelease(options) {
   const { files: files2, version, lease } = options;
   verifyRelease(files2, version);
-  const directory = fs22.realpathSync(options.directory);
-  if (fs22.lstatSync(options.directory).isSymbolicLink() || path23.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
+  const directory = fs25.realpathSync(options.directory);
+  if (fs25.lstatSync(options.directory).isSymbolicLink() || path26.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
   lease.assertOwned();
-  const marker = path23.join(lease.directory, "update-pending.json");
-  if (fs22.existsSync(marker)) throw new Error("Previous update requires recovery");
+  const marker = path26.join(lease.directory, "update-pending.json");
+  if (fs25.existsSync(marker)) throw new Error("Previous update requires recovery");
   assertPackageMaintenanceSafe(directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
-  const backup = path23.join(lease.directory, `update-backup-${(0, import_crypto13.randomUUID)()}`);
-  fs22.mkdirSync(backup);
+  const backup = path26.join(lease.directory, `update-backup-${(0, import_crypto13.randomUUID)()}`);
+  fs25.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
   for (const name of names) {
     const source = regularPath(directory, name);
-    const bytes = fs22.existsSync(source) ? fs22.readFileSync(source) : void 0;
+    const bytes = fs25.existsSync(source) ? fs25.readFileSync(source) : void 0;
     previous.set(name, bytes);
     if (bytes) {
-      const target = path23.join(backup, name);
-      fs22.mkdirSync(path23.dirname(target), { recursive: true });
-      fs22.writeFileSync(target, bytes, { flag: "wx" });
+      const target = path26.join(backup, name);
+      fs25.mkdirSync(path26.dirname(target), { recursive: true });
+      fs25.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
-  const record = { schemaVersion: 1, version, backup: path23.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
-  fs22.writeFileSync(path23.join(backup, "recovery.json"), JSON.stringify(record));
-  const fd = fs22.openSync(marker, "wx");
+  const record = { schemaVersion: 1, version, backup: path26.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
+  fs25.writeFileSync(path26.join(backup, "recovery.json"), JSON.stringify(record));
+  const fd = fs25.openSync(marker, "wx");
   try {
-    fs22.writeFileSync(fd, JSON.stringify(record));
-    fs22.fsyncSync(fd);
+    fs25.writeFileSync(fd, JSON.stringify(record));
+    fs25.fsyncSync(fd);
   } finally {
-    fs22.closeSync(fd);
+    fs25.closeSync(fd);
   }
   const written = [];
   try {
@@ -7655,20 +15150,20 @@ function installRelease(options) {
       lease.assertOwned();
       const target = regularPath(directory, name, true);
       written.push(name);
-      fs22.writeFileSync(target, files2[name]);
+      fs25.writeFileSync(target, files2[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs22.readFileSync(regularPath(directory, name))]));
+    const installed = Object.fromEntries(names.map((name) => [name, fs25.readFileSync(regularPath(directory, name))]));
     verifyRelease(installed, version);
-    fs22.unlinkSync(marker);
+    fs25.unlinkSync(marker);
     return { version, backup, installed: names };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath(directory, name);
       const bytes = previous.get(name);
-      if (bytes !== void 0) fs22.writeFileSync(target, bytes);
-      else if (fs22.existsSync(target)) fs22.unlinkSync(target);
+      if (bytes !== void 0) fs25.writeFileSync(target, bytes);
+      else if (fs25.existsSync(target)) fs25.unlinkSync(target);
     }
-    fs22.unlinkSync(marker);
+    fs25.unlinkSync(marker);
     throw error;
   }
 }
@@ -7700,10 +15195,10 @@ async function readPanelCatalog(file) {
 }
 
 // main.ts
-var import_obsidian10 = require("obsidian");
+var import_obsidian11 = require("obsidian");
 var os7 = __toESM(require("os"));
-var fs33 = __toESM(require("fs"));
-var path31 = __toESM(require("path"));
+var fs36 = __toESM(require("fs"));
+var path34 = __toESM(require("path"));
 var crypto2 = __toESM(require("crypto"));
 
 // workflow-handoff.ts
@@ -7773,22 +15268,22 @@ async function executeCodexTask(client, request) {
 // code-runtime.ts
 function executeCode(options) {
   var _a;
-  const fs34 = require("fs");
-  const path32 = require("path");
+  const fs37 = require("fs");
+  const path35 = require("path");
   const vm2 = require("vm");
   const vaultBase = options.vaultBase;
   const defaultCwd = options.cwd;
   const resolveInVault = (p) => {
-    const root = fs34.realpathSync(vaultBase);
-    const resolved = path32.resolve(root, p || ".");
-    if (resolved !== root && !resolved.startsWith(root + path32.sep)) {
+    const root = fs37.realpathSync(vaultBase);
+    const resolved = path35.resolve(root, p || ".");
+    if (resolved !== root && !resolved.startsWith(root + path35.sep)) {
       throw new Error(`Path escapes vault: ${p}`);
     }
     let current = root;
-    for (const component of path32.relative(root, resolved).split(path32.sep).filter(Boolean)) {
-      current = path32.join(current, component);
+    for (const component of path35.relative(root, resolved).split(path35.sep).filter(Boolean)) {
+      current = path35.join(current, component);
       try {
-        if (fs34.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
+        if (fs37.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
       } catch (error) {
         if (error.code === "ENOENT") break;
         throw error;
@@ -7796,10 +15291,10 @@ function executeCode(options) {
     }
     return resolved;
   };
-  const readText = (p) => fs34.readFileSync(p, "utf8");
+  const readText = (p) => fs37.readFileSync(p, "utf8");
   const writeText = (p, content) => {
-    fs34.mkdirSync(path32.dirname(p), { recursive: true });
-    fs34.writeFileSync(p, String(content), "utf8");
+    fs37.mkdirSync(path35.dirname(p), { recursive: true });
+    fs37.writeFileSync(p, String(content), "utf8");
     return p;
   };
   const sandbox = {
@@ -7831,36 +15326,36 @@ function executeCode(options) {
       append: (p, content) => {
         var _a2;
         const full = resolveInVault(p);
-        fs34.mkdirSync(path32.dirname(full), { recursive: true });
-        fs34.appendFileSync(full, String(content), "utf8");
+        fs37.mkdirSync(path35.dirname(full), { recursive: true });
+        fs37.appendFileSync(full, String(content), "utf8");
         (_a2 = options.onVaultMutation) == null ? void 0 : _a2.call(options, { path: full, operation: "append" });
         return full;
       },
-      exists: (p) => fs34.existsSync(resolveInVault(p)),
-      list: (p = ".") => fs34.readdirSync(resolveInVault(p))
+      exists: (p) => fs37.existsSync(resolveInVault(p)),
+      list: (p = ".") => fs37.readdirSync(resolveInVault(p))
     };
   }
   if (options.codeAllowFiles) {
     sandbox.files = {
       cwd: defaultCwd,
-      resolve: (p) => path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p || "."),
-      read: (p) => readText(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p)),
-      write: (p, content) => writeText(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p), content),
+      resolve: (p) => path35.isAbsolute(p) ? path35.resolve(p) : path35.resolve(defaultCwd, p || "."),
+      read: (p) => readText(path35.isAbsolute(p) ? path35.resolve(p) : path35.resolve(defaultCwd, p)),
+      write: (p, content) => writeText(path35.isAbsolute(p) ? path35.resolve(p) : path35.resolve(defaultCwd, p), content),
       append: (p, content) => {
-        const full = path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p);
-        fs34.mkdirSync(path32.dirname(full), { recursive: true });
-        fs34.appendFileSync(full, String(content), "utf8");
+        const full = path35.isAbsolute(p) ? path35.resolve(p) : path35.resolve(defaultCwd, p);
+        fs37.mkdirSync(path35.dirname(full), { recursive: true });
+        fs37.appendFileSync(full, String(content), "utf8");
         return full;
       },
-      exists: (p) => fs34.existsSync(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p)),
-      list: (p = ".") => fs34.readdirSync(path32.isAbsolute(p) ? path32.resolve(p) : path32.resolve(defaultCwd, p))
+      exists: (p) => fs37.existsSync(path35.isAbsolute(p) ? path35.resolve(p) : path35.resolve(defaultCwd, p)),
+      list: (p = ".") => fs37.readdirSync(path35.isAbsolute(p) ? path35.resolve(p) : path35.resolve(defaultCwd, p))
     };
   }
   if (options.codeAllowTerminal) {
     const { execSync } = require("child_process");
     sandbox.terminal = {
       run: (command, options2 = {}) => execSync(String(command), {
-        cwd: options2.cwd ? path32.isAbsolute(options2.cwd) ? options2.cwd : path32.resolve(defaultCwd, options2.cwd) : defaultCwd,
+        cwd: options2.cwd ? path35.isAbsolute(options2.cwd) ? options2.cwd : path35.resolve(defaultCwd, options2.cwd) : defaultCwd,
         timeout: Math.min(Math.max(options2.timeoutMs || 3e4, 1e3), 6e5),
         encoding: "utf8",
         windowsHide: true
@@ -7885,19 +15380,19 @@ function executeCode(options) {
 }
 function codeNodeExecutable() {
   if (!process.versions.electron) return process.execPath;
-  const fs34 = require("fs");
-  const path32 = require("path");
-  const directories = (process.env.PATH || process.env.Path || "").split(path32.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path32.isAbsolute(directory));
+  const fs37 = require("fs");
+  const path35 = require("path");
+  const directories = (process.env.PATH || process.env.Path || "").split(path35.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path35.isAbsolute(directory));
   if (process.platform === "win32") {
     for (const base2 of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
-      if (base2 && path32.isAbsolute(base2)) directories.push(path32.join(base2, "nodejs"));
+      if (base2 && path35.isAbsolute(base2)) directories.push(path35.join(base2, "nodejs"));
     }
   } else directories.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin");
   for (const directory of directories) {
-    const file = path32.join(directory, process.platform === "win32" ? "node.exe" : "node");
+    const file = path35.join(directory, process.platform === "win32" ? "node.exe" : "node");
     try {
-      if (fs34.statSync(file).isFile()) {
-        fs34.accessSync(file, fs34.constants.X_OK);
+      if (fs37.statSync(file).isFile()) {
+        fs37.accessSync(file, fs37.constants.X_OK);
         return file;
       }
     } catch (e) {
@@ -7962,9 +15457,9 @@ async function executeCodeAsync(options, signal) {
     serialization: "json"
   });
   let closed = false, diagnostic = "", startupTimer;
-  const closedPromise = new Promise((resolve10) => child.once("close", () => {
+  const closedPromise = new Promise((resolve11) => child.once("close", () => {
     closed = true;
-    resolve10();
+    resolve11();
   }));
   (_a = child.stderr) == null ? void 0 : _a.on("data", (chunk) => {
     diagnostic = (diagnostic + String(chunk)).slice(-2e3);
@@ -7972,9 +15467,9 @@ async function executeCodeAsync(options, signal) {
   const stop = () => {
     if (!child.pid || closed || child.exitCode !== null || child.signalCode !== null) return;
     if ((signal == null ? void 0 : signal.aborted) && process.platform === "win32") {
-      const path32 = require("path");
+      const path35 = require("path");
       const system = process.env.SystemRoot || "C:\\Windows";
-      const killer = spawn6(path32.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = spawn6(path35.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       const fallback = () => {
         if (!closed) child.kill("SIGKILL");
       };
@@ -7997,7 +15492,7 @@ async function executeCodeAsync(options, signal) {
   };
   let abort;
   try {
-    return await new Promise((resolve10, reject) => {
+    return await new Promise((resolve11, reject) => {
       abort = () => reject(new Error("Code execution stopped; commands already started may still have effects"));
       signal == null ? void 0 : signal.addEventListener("abort", abort, { once: true });
       child.once("error", reject);
@@ -8012,7 +15507,7 @@ async function executeCodeAsync(options, signal) {
             });
           } else if (message.type === "log") log == null ? void 0 : log(message.text);
           else if (message.type === "mutation") onVaultMutation == null ? void 0 : onVaultMutation(message.mutation);
-          else if (message.type === "result") resolve10(message.output);
+          else if (message.type === "result") resolve11(message.output);
           else if (message.type === "error") {
             const error = new Error(message.message);
             error.name = message.name;
@@ -8065,8 +15560,8 @@ async function runWithVaultMutations(factory, execute) {
 }
 
 // obsidian-vault-refresh.ts
-var fs23 = __toESM(require("fs"));
-var path24 = __toESM(require("path"));
+var fs26 = __toESM(require("fs"));
+var path27 = __toESM(require("path"));
 var ObsidianVaultRefresh = class {
   constructor(root, adapter, timeoutMs = 1e4) {
     this.root = root;
@@ -8099,27 +15594,27 @@ var ObsidianVaultRefresh = class {
     };
   }
   relativeFile(file) {
-    if (!path24.isAbsolute(file)) throw new Error("Refresh path escapes vault");
+    if (!path27.isAbsolute(file)) throw new Error("Refresh path escapes vault");
     if (process.platform === "win32") {
-      let current2 = path24.parse(file).root;
+      let current2 = path27.parse(file).root;
       for (const part of file.slice(current2.length).split(/[\\/]/)) {
         if (!part || part === "." || part === ".." || part.includes(":")) throw new Error("Invalid refresh path");
-        current2 = path24.join(current2, part);
-        if (fs23.lstatSync(current2).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
+        current2 = path27.join(current2, part);
+        if (fs26.lstatSync(current2).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
       }
       file = physicalPath(file);
     }
     const root = physicalPath(this.root);
-    const relative6 = path24.relative(root, file);
-    if (!path24.isAbsolute(file) || !relative6 || relative6 === ".." || relative6.startsWith(".." + path24.sep) || path24.isAbsolute(relative6)) {
+    const relative8 = path27.relative(root, file);
+    if (!path27.isAbsolute(file) || !relative8 || relative8 === ".." || relative8.startsWith(".." + path27.sep) || path27.isAbsolute(relative8)) {
       throw new Error("Refresh path escapes vault");
     }
     let current = root;
-    for (const part of relative6.split(path24.sep)) {
-      current = path24.join(current, part);
-      if (fs23.lstatSync(current).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
+    for (const part of relative8.split(path27.sep)) {
+      current = path27.join(current, part);
+      if (fs26.lstatSync(current).isSymbolicLink()) throw new Error("Linked refresh paths are unsupported");
     }
-    return relative6.split(path24.sep).join("/");
+    return relative8.split(path27.sep).join("/");
   }
   async reconcile(files2) {
     if (this.stopped) throw new Error("Plugin unloaded");
@@ -8152,9 +15647,9 @@ var ObsidianVaultRefresh = class {
         try {
           for (const file of files2) {
             check();
-            const relative6 = this.relativeFile(file);
-            if (relative6.split("/").some((part) => part.startsWith("."))) continue;
-            await adapter.reconcileInternalFile(relative6);
+            const relative8 = this.relativeFile(file);
+            if (relative8.split("/").some((part) => part.startsWith("."))) continue;
+            await adapter.reconcileInternalFile(relative8);
             check();
           }
           completed = true;
@@ -8178,8 +15673,8 @@ var ObsidianVaultRefresh = class {
 };
 
 // installed-workflow-host.ts
-var fs30 = __toESM(require("fs"));
-var path30 = __toESM(require("path"));
+var fs33 = __toESM(require("fs"));
+var path33 = __toESM(require("path"));
 
 // code-workflow-adapter.ts
 function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaultMutations) {
@@ -8215,7 +15710,7 @@ function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaul
 }
 
 // codex-workflow-adapter.ts
-var fs24 = __toESM(require("fs"));
+var fs27 = __toESM(require("fs"));
 function codexWorkflowAdapter(createClient, defaults = {}) {
   return {
     supports: (task) => task.taskKind === "codex" && (task.interactiveTerminal === void 0 || typeof task.interactiveTerminal === "boolean"),
@@ -8268,8 +15763,8 @@ function codexWorkflowAdapter(createClient, defaults = {}) {
 }
 function createCodexWorkflowAdapter(definition, vaultBase) {
   const directory = (task) => {
-    const cwd = fs24.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
-    if (!fs24.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
+    const cwd = fs27.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
+    if (!fs27.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
     return cwd;
   };
   const create = (task, callbacks) => {
@@ -8319,17 +15814,18 @@ function combineWorkflowTaskAdapters(adapters) {
     }
   };
 }
-function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations) {
+function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations, terminal) {
   return combineWorkflowTaskAdapters([
     createCodeWorkflowAdapter(vaultBase, definition.settings.workingDirectory || vaultBase, vaultMutations),
     createCodexWorkflowAdapter(definition, vaultBase),
     createCopilotWorkflowAdapter(definition, vaultBase),
-    createOpenCodeWorkflowAdapter(definition, vaultBase)
+    createOpenCodeWorkflowAdapter(definition, vaultBase, terminal),
+    createInteractiveCliWorkflowAdapter(definition, vaultBase, terminal)
   ]);
 }
 
 // code-workflow-host.ts
-var fs26 = __toESM(require("fs"));
+var fs29 = __toESM(require("fs"));
 
 // workflow-session.ts
 async function advanceWorkflowSession(journal, definition, host, options = {}) {
@@ -8420,7 +15916,7 @@ function workflowDelay(value = 0, unit = "seconds") {
 }
 function waitForWorkflowDelay(milliseconds, signal) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return Promise.reject(new Error("Invalid workflow delay"));
-  return new Promise((resolve10, reject) => {
+  return new Promise((resolve11, reject) => {
     let timer;
     let remaining = milliseconds;
     const cleanup = () => {
@@ -8440,7 +15936,7 @@ function waitForWorkflowDelay(milliseconds, signal) {
         if (remaining > 0) schedule();
         else {
           cleanup();
-          resolve10();
+          resolve11();
         }
       }, chunk);
     };
@@ -8496,7 +15992,7 @@ async function reconcileWorkflowTask(journal, definition, read2, host) {
 }
 
 // workflow-branch.ts
-var path25 = __toESM(require("path"));
+var path28 = __toESM(require("path"));
 var import_child_process9 = require("child_process");
 function validateBranchOptions(task) {
   var _a, _b;
@@ -8524,7 +16020,7 @@ function branchRepository(cwd, vault) {
   const directory = physicalPath(git(physicalPath(cwd), ["rev-parse", "--show-toplevel"]));
   if (!isWithinPhysicalPath(vault, directory)) throw new Error("Git repository is outside the selected vault");
   const metadata = physicalPath(git(directory, ["rev-parse", "--absolute-git-dir"]));
-  const common = physicalPath(path25.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
+  const common = physicalPath(path28.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
   if (!isWithinPhysicalPath(vault, metadata) || !isWithinPhysicalPath(vault, common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
 }
@@ -8564,12 +16060,12 @@ function verifyWorkflowBranch(journal, vault) {
 }
 
 // workflow-approval.ts
-var fs25 = __toESM(require("fs"));
-var path26 = __toESM(require("path"));
+var fs28 = __toESM(require("fs"));
+var path29 = __toESM(require("path"));
 var import_crypto14 = require("crypto");
 function responseFile(directory, runId, token) {
   if (!/^[a-f0-9-]+$/.test(token)) throw new Error("Invalid approval identity");
-  return path26.join(directory, `${runId}-${token}.approval.json`);
+  return path29.join(directory, `${runId}-${token}.approval.json`);
 }
 function answerWorkflowApproval(directory, runId, token, approved) {
   var _a;
@@ -8583,7 +16079,7 @@ function answerWorkflowApproval(directory, runId, token, approved) {
   } catch (e) {
     throw new Error("Approval owner is unavailable; reconcile execution");
   }
-  fs25.writeFileSync(responseFile(directory, runId, token), JSON.stringify({ runId, token, approved }), { encoding: "utf8", flag: "wx", mode: 384 });
+  fs28.writeFileSync(responseFile(directory, runId, token), JSON.stringify({ runId, token, approved }), { encoding: "utf8", flag: "wx", mode: 384 });
   return { runId, approval: token, decision: approved ? "approve" : "deny", recorded: true };
 }
 async function awaitWorkflowApproval(journal, directory, request, redact, signal, onCheckpoint) {
@@ -8592,19 +16088,19 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await (onCheckpoint == null ? void 0 : onCheckpoint(journal.snapshot()));
   const file = responseFile(directory, runId, token);
-  const approved = await new Promise((resolve10, reject) => {
+  const approved = await new Promise((resolve11, reject) => {
     const finish = (error, value) => {
       clearInterval(timer);
       signal == null ? void 0 : signal.removeEventListener("abort", abort);
-      error ? reject(error) : resolve10(value);
+      error ? reject(error) : resolve11(value);
     };
     const abort = () => finish(new Error("Approval interrupted; execution requires reconciliation"));
     const timer = setInterval(() => {
       try {
-        if (!fs25.existsSync(file)) return;
-        const stat = fs25.lstatSync(file);
+        if (!fs28.existsSync(file)) return;
+        const stat = fs28.lstatSync(file);
         if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid approval response file");
-        const response = JSON.parse(fs25.readFileSync(file, "utf8"));
+        const response = JSON.parse(fs28.readFileSync(file, "utf8"));
         if (response.runId !== runId || response.token !== token || typeof response.approved !== "boolean") throw new Error("Approval response identity mismatch");
         finish(void 0, response.approved);
       } catch (e) {
@@ -8696,10 +16192,10 @@ async function runCodeWorkflowHost(options) {
       return resumed.snapshot();
     }
     const journal = await catalogTransaction(lease.directory + "/journal-admission", async () => {
-      for (const file of fs26.readdirSync(lease.directory)) {
+      for (const file of fs29.readdirSync(lease.directory)) {
         if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
-        if (fs26.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
-        const prior = JSON.parse(fs26.readFileSync(lease.directory + "/" + file, "utf8"));
+        if (fs29.lstatSync(lease.directory + "/" + file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
+        const prior = JSON.parse(fs29.readFileSync(lease.directory + "/" + file, "utf8"));
         ExecutionJournal.open(lease, file.slice(0, -5), prior.definitionHash);
         const resolved = prior.phase === "abandoned" || prior.disposition || ["completed", "failed"].includes(prior.phase) && !checkpointUncertainties(prior).length;
         if (prior.runId !== options.resumeRunId && !resolved && !admission.permitsPending(prior)) {
@@ -8838,8 +16334,8 @@ function taskProjection(task, workflow, projected, checkpoint) {
 }
 
 // task-history.ts
-var fs27 = __toESM(require("fs"));
-var path27 = __toESM(require("path"));
+var fs30 = __toESM(require("fs"));
+var path30 = __toESM(require("path"));
 function taskElapsedSeconds(task, now = Date.now()) {
   var _a;
   const start = Date.parse(task.lastRun);
@@ -8847,14 +16343,14 @@ function taskElapsedSeconds(task, now = Date.now()) {
   return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1e3)) : void 0;
 }
 function regularDirectory3(directory) {
-  if (!fs27.existsSync(directory)) fs27.mkdirSync(directory);
-  const stat = fs27.lstatSync(directory);
+  if (!fs30.existsSync(directory)) fs30.mkdirSync(directory);
+  const stat = fs30.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Task history requires regular directories");
 }
 function persistTaskHistory(vault, workflow, checkpoint, settings) {
   var _a, _b;
   if (settings.logsEnabled === false) return;
-  const root = fs27.realpathSync(vault);
+  const root = fs30.realpathSync(vault);
   const touched = /* @__PURE__ */ new Set();
   for (const [index, observed] of checkpoint.steps.entries()) {
     const step = workflow.steps.find((item) => item.id === observed.stepId);
@@ -8862,12 +16358,12 @@ function persistTaskHistory(vault, workflow, checkpoint, settings) {
     if (!/^[a-zA-Z0-9_-]+$/.test(step.taskId)) throw new Error("Unsafe task history identity");
     let directory = root;
     for (const part of [".opencode", "logs", step.taskId]) {
-      directory = path27.join(directory, part);
+      directory = path30.join(directory, part);
       regularDirectory3(directory);
     }
     const date = new Date(observed.startedAt), pad = (n) => String(n).padStart(2, "0");
     const timestamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-    const file = path27.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
+    const file = path30.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
     const content = `Run: ${checkpoint.runId}
 Step: ${observed.stepId}
 Status: ${observed.status}
@@ -8876,33 +16372,33 @@ Finished: ${observed.finishedAt || "unknown"}
 
 ${observed.output || "(no output)"}`;
     try {
-      fs27.writeFileSync(file, content, { encoding: "utf8", flag: "wx" });
+      fs30.writeFileSync(file, content, { encoding: "utf8", flag: "wx" });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
-      const stat = fs27.lstatSync(file);
-      if (!stat.isFile() || stat.isSymbolicLink() || fs27.readFileSync(file, "utf8") !== content) throw new Error("Task history conflicts with durable output");
+      const stat = fs30.lstatSync(file);
+      if (!stat.isFile() || stat.isSymbolicLink() || fs30.readFileSync(file, "utf8") !== content) throw new Error("Task history conflicts with durable output");
     }
     touched.add(directory);
   }
   for (const directory of touched) {
-    const files2 = fs27.readdirSync(directory).filter((name) => name.endsWith(".log") && name !== "latest.log").sort();
+    const files2 = fs30.readdirSync(directory).filter((name) => name.endsWith(".log") && name !== "latest.log").sort();
     const max = (_a = settings.maxLogsPerTask) != null ? _a : 50, days = (_b = settings.logRetentionDays) != null ? _b : 30;
     const retained = [];
     for (const name of files2) {
-      const file = path27.join(directory, name), stat2 = fs27.lstatSync(file);
+      const file = path30.join(directory, name), stat2 = fs30.lstatSync(file);
       if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("Task history requires regular files");
       const match = name.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/);
       const date = match ? Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`) : NaN;
-      if (days > 0 && date < Date.now() - days * 864e5) fs27.unlinkSync(file);
+      if (days > 0 && date < Date.now() - days * 864e5) fs30.unlinkSync(file);
       else retained.push(name);
     }
-    while (max > 0 && retained.length > max) fs27.unlinkSync(path27.join(directory, retained.shift()));
-    const latest = path27.join(directory, "latest.log");
-    const stat = fs27.lstatSync(latest, { throwIfNoEntry: false });
+    while (max > 0 && retained.length > max) fs30.unlinkSync(path30.join(directory, retained.shift()));
+    const latest = path30.join(directory, "latest.log");
+    const stat = fs30.lstatSync(latest, { throwIfNoEntry: false });
     if (stat) {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Task history latest must be a regular file");
     }
-    if (retained.length) fs27.writeFileSync(latest, fs27.readFileSync(path27.join(directory, retained[retained.length - 1])));
+    if (retained.length) fs30.writeFileSync(latest, fs30.readFileSync(path30.join(directory, retained[retained.length - 1])));
   }
 }
 
@@ -9021,14 +16517,14 @@ async function persistWorkflowProgress(options) {
 }
 
 // workflow-stop.ts
-var fs28 = __toESM(require("fs"));
-var path28 = __toESM(require("path"));
+var fs31 = __toESM(require("fs"));
+var path31 = __toESM(require("path"));
 var import_crypto15 = require("crypto");
 function readStopRequest(directory, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path28.join(directory, runId + ".stop.json");
+  const file = path31.join(directory, runId + ".stop.json");
   try {
-    const stat = fs28.lstatSync(file);
+    const stat = fs31.lstatSync(file);
     if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid stop request file");
   } catch (error) {
     if (error.code === "ENOENT") return;
@@ -9036,7 +16532,7 @@ function readStopRequest(directory, runId) {
   }
   let value;
   try {
-    value = JSON.parse(fs28.readFileSync(file, "utf8"));
+    value = JSON.parse(fs31.readFileSync(file, "utf8"));
   } catch (e) {
     throw new Error("Invalid stop request");
   }
@@ -9045,8 +16541,8 @@ function readStopRequest(directory, runId) {
 }
 
 // workflow-preflight.ts
-var fs29 = __toESM(require("fs"));
-var path29 = __toESM(require("path"));
+var fs32 = __toESM(require("fs"));
+var path32 = __toESM(require("path"));
 function preflightInstalledWorkflow(definition, vault) {
   var _a, _b;
   assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
@@ -9054,10 +16550,10 @@ function preflightInstalledWorkflow(definition, vault) {
   const checkDirectory = (value) => {
     if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
     const configured = value || root;
-    if (!path29.isAbsolute(configured)) throw new Error("Working directory must be absolute");
+    if (!path32.isAbsolute(configured)) throw new Error("Working directory must be absolute");
     const directory = physicalPath(configured);
     if (!isWithinPhysicalPath(root, directory)) throw new Error("Working directory is outside the selected vault");
-    if (!fs29.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
+    if (!fs32.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
   };
   checkDirectory(definition.settings.workingDirectory);
   for (const item of [definition.workflow, ...definition.workflow.steps, ...(definition.workflows || []).flatMap((w) => [w, ...w.steps]), ...definition.tasks]) {
@@ -9070,6 +16566,12 @@ function preflightInstalledWorkflow(definition, vault) {
     if (definition.workflow.id.startsWith("@task:")) preflightTaskBranch(item, item.workingDirectory || definition.settings.workingDirectory || root, root);
   }
   for (const task of definition.tasks) {
+    const cliError = getCliTaskValidationError(task);
+    if (cliError) throw new Error(cliError);
+    if (task.taskKind === "cli") {
+      prepareCliTask(task, definition.settings, task.workingDirectory || definition.settings.workingDirectory || root, task.prompt);
+      continue;
+    }
     if (task.taskKind === "code") continue;
     if (typeof task.prompt !== "string" || !task.prompt.trim()) throw new Error("Task prompt must be nonempty before execution");
     if (isOpenCodeTask(task.taskKind) && !((_b = task.model || (task.taskKind === "opencode2" ? definition.settings.defaultOpencode2Model : definition.settings.defaultModel)) == null ? void 0 : _b.trim())) throw new Error("OpenCode model must be selected before execution");
@@ -9110,7 +16612,7 @@ Reply ONLY with YES or NO.`,
 var preparingInstallations = /* @__PURE__ */ new Set();
 async function runInstalledWorkflow(options) {
   var _a, _b, _c, _d;
-  if (!path30.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
+  if (!path33.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.stepId !== void 0 && (!options.workflowId || !options.stepId)) throw new Error("A code step requires its parent workflow identity");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
@@ -9124,7 +16626,7 @@ async function runInstalledWorkflow(options) {
   let ownedLease;
   let admission;
   try {
-    if (!options.lease && fs30.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
+    if (!options.lease && fs33.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
     const reader = options.catalogWriter || new SettingsWriter();
     const prepared = await catalogTransaction(configurationFile, async () => {
       var _a2;
@@ -9148,6 +16650,10 @@ async function runInstalledWorkflow(options) {
       if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks, config.workflows);
       const definition2 = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
       preflightInstalledWorkflow(definition2, vault);
+      const terminal2 = { destination: config.cliTerminalDestination === "integrated" ? "integrated" : "external", launch: options.launchInteractiveTerminal };
+      if (!options.reconcile && terminal2.destination === "integrated" && !terminal2.launch && definition2.tasks.some((task) => task.taskKind === "cli" || isOpenCodeTask(task.taskKind) && task.interactiveTerminal)) {
+        throw new Error("Integrated CLI tasks require a loaded Obsidian plugin. Open Obsidian or select External window in AutoOC Settings. No workflow steps were started.");
+      }
       ensureInstalledWorkflowRuntime(location);
       if (!options.lease && !ownedLease) ownedLease = acquireExecutionLease(runtimeDirectory);
       await reader.assertUnchanged(configurationFile);
@@ -9162,9 +16668,9 @@ async function runInstalledWorkflow(options) {
         }
       }
       admission = coordinator == null ? void 0 : coordinator.admit(definition2, vault, options.resumeRunId);
-      return { definition: definition2, replaceCompletedRunId: replaceCompletedRunId2 };
+      return { definition: definition2, replaceCompletedRunId: replaceCompletedRunId2, terminal: terminal2 };
     });
-    const { definition, replaceCompletedRunId } = prepared;
+    const { definition, replaceCompletedRunId, terminal } = prepared;
     const presentation = executionPresentation(definition.workflow, options.taskId);
     let activeRunId = options.resumeRunId;
     const acknowledged = activeRunId ? readStopRequest(runtimeDirectory, activeRunId) : void 0;
@@ -9199,7 +16705,7 @@ async function runInstalledWorkflow(options) {
         lease: options.lease || ownedLease,
         vaultMutations: options.vaultMutations,
         onTaskOutput: options.onTaskOutput,
-        tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations),
+        tasks: createWorkflowTaskAdapter(definition, vault, options.vaultMutations, terminal),
         evaluate: createWorkflowEvaluator(definition, vault, controller.signal),
         onCheckpoint: async (checkpoint) => {
           admission == null ? void 0 : admission.bind(checkpoint);
@@ -9242,9 +16748,9 @@ async function runInstalledWorkflow(options) {
 }
 
 // workflow-code-modals.ts
-var import_obsidian9 = require("obsidian");
-var fs31 = __toESM(require("fs"));
-var CodeStepLogModal = class extends import_obsidian9.Modal {
+var import_obsidian10 = require("obsidian");
+var fs34 = __toESM(require("fs"));
+var CodeStepLogModal = class extends import_obsidian10.Modal {
   constructor(app, title, read2) {
     super(app);
     this.title = title;
@@ -9272,7 +16778,7 @@ var CodeStepLogModal = class extends import_obsidian9.Modal {
     this.contentEl.empty();
   }
 };
-var CodeStepHistoryModal = class extends import_obsidian9.Modal {
+var CodeStepHistoryModal = class extends import_obsidian10.Modal {
   constructor(app, runtime, workflowId, stepId, title, openOutput) {
     super(app);
     this.runtime = runtime;
@@ -9287,14 +16793,14 @@ var CodeStepHistoryModal = class extends import_obsidian9.Modal {
     const status = this.contentEl.createEl("p", { text: "Loading step history\u2026" });
     try {
       const rows = [];
-      const files2 = await fs31.promises.readdir(this.runtime).catch((error) => {
+      const files2 = await fs34.promises.readdir(this.runtime).catch((error) => {
         if (error.code === "ENOENT") return [];
         throw error;
       });
       for (const file of files2) {
         if (this.closed) return;
         if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
-        await new Promise((resolve10) => setTimeout(resolve10, 0));
+        await new Promise((resolve11) => setTimeout(resolve11, 0));
         const state = readExecutionCheckpoint(this.runtime, file.slice(0, -5));
         if (state.workflowId !== this.workflowId) continue;
         state.steps.forEach((step, index) => {
@@ -9327,7 +16833,7 @@ var CodeStepHistoryModal = class extends import_obsidian9.Modal {
 };
 
 // historical-execution-recovery.ts
-var fs32 = __toESM(require("fs"));
+var fs35 = __toESM(require("fs"));
 var import_crypto16 = require("crypto");
 function catalogEntries(catalog) {
   if (!Array.isArray(catalog.tasks) || !Array.isArray(catalog.workflows)) throw new Error("Catalog is unavailable; review cannot continue");
@@ -9367,8 +16873,8 @@ async function closeHistoricalAttempt(observed, lease, reason, acknowledgedUnkno
   return catalogTransaction(location.configurationFile, async () => {
     assertHostIdle();
     lease.assertOwned();
-    if (fs32.existsSync(location.configurationFile + ".write-lock") || fs32.existsSync(location.configurationFile + ".write-intent") || fs32.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs32.readdirSync(location.runtimeDirectory).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("A write or update is pending; wait before reviewing this attempt");
-    const catalog = JSON.parse(fs32.readFileSync(location.configurationFile, "utf8"));
+    if (fs35.existsSync(location.configurationFile + ".write-lock") || fs35.existsSync(location.configurationFile + ".write-intent") || fs35.readdirSync(location.installationDirectory).some((n) => n.startsWith("data.json.") && n.endsWith(".tmp")) || fs35.readdirSync(location.runtimeDirectory).some((n) => n === "update-pending.json" || n.endsWith(".tmp") || n.endsWith(".write-lock"))) throw new Error("A write or update is pending; wait before reviewing this attempt");
+    const catalog = JSON.parse(fs35.readFileSync(location.configurationFile, "utf8"));
     const current = inspectHistoricalAttempt(location, observed.workflowId, observed.runId, catalog);
     if (JSON.stringify(current) !== JSON.stringify(observed)) throw new Error("The recorded attempt changed; open its review again");
     if (acknowledgedUnknownEffects !== true || typeof reason !== "string" || !reason.trim() || reason.length > 1e3) throw new Error("Confirm the unknown outcome and enter a reason of 1\u20131000 characters");
@@ -9396,7 +16902,7 @@ var stoppedLeaseOwners = (() => {
   if (!globalThis[key]) globalThis[key] = /* @__PURE__ */ new Map();
   return globalThis[key];
 })();
-var AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot CLI tasks and workflows. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
+var AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot tasks and workflows, and can launch interactive OpenCode, Codex, Copilot and Claude Code CLIs. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
@@ -9417,7 +16923,7 @@ For complete exports, schemaVersion must be exactly "1.0", "1.4.0", "1.5.0", "1.
 
 Available modules:
 AutoOC supports DAG workflows with four step kinds:
-1. task: runs an OpenCode, Codex or GitHub Copilot CLI task prompt. A workflow may mix all three engines.
+1. task: runs an OpenCode, Codex or GitHub Copilot task prompt, or launches a generic interactive CLI task. A workflow may mix engines; interactive CLI steps acknowledge launch only.
 2. code: runs trusted JavaScript with explicitly enabled capabilities. Node vm is not a security boundary.
 3. delay: pauses the workflow.
 4. workflow: runs a referenced workflow to completion, then uses its final output and success/failure for the parent transition. Use workflowExportId pointing to a workflow exportId in the same package (schema 1.7.0). Include every descendant workflow and task. Forward references and repeated child invocations are allowed; recursive cycles, missing references and more than 16 levels are rejected. Child schedules are ignored. Input reaches the first child step; outputs are local to each invocation. Stop/recovery belongs to the parent run; permissions are never inherited or expanded. The WorkFlows editor can select existing workflows as steps. In-app AI draft creators currently generate a single sequential workflow only: add existing workflows manually after generation; do not generate workflow steps for those creators.
@@ -9428,14 +16934,17 @@ Concurrency for tasks and workflows is optional: omit it to inherit the vault se
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for GitHub Copilot CLI, or "code" for a reusable JavaScript task.
+- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for background GitHub Copilot CLI, "code" for a reusable JavaScript task, or "cli" for a generic interactive CLI task.
+- taskKind "cli" requires cliProvider: "opencode", "opencode2", "codex", "copilot", or "claude", and interactiveTerminal: true. cliProvider is forbidden on other task kinds. This is separate from the legacy OpenCode interactive kinds and from Codex App. The in-app AI draft creators do NOT support generating taskKind "cli" yet; use this type only for direct JSON imports/manual editing, not in creator responses.
+- Generic interactive CLI tasks require a prompt; model is optional and empty/omitted uses the provider's native default, never an AutoOC background default. agent is optional only for OpenCode providers (otherwise omit or use ""); empty uses the native agent. forceModel can omit the agent override. reasoningEffort is optional only for cliProvider "codex". Do not enable Code permissions, copilotAllowAllTools, useRalphLoop, branch or createBranch on generic interactive CLI tasks. Use native CLI authentication and permission prompts; never add automatic approval or permission-bypass flags.
 - For OpenCode 2 tasks, the editor can refresh models and selectable agents for the task's project. Use an agent ID when specifying an agent in a portable task.
 - copilotAllowAllTools: optional boolean, only for taskKind "copilot". False or absent exposes only file reading and search tools. True allows tools to edit files and run commands automatically. Enable only when the user requests those permissions. Copilot runs in the background: interactiveTerminal must be false or absent. Copilot uses the branch currently checked out in the selected folder; branch, createBranch, agent, useRalphLoop and reasoningEffort do not apply.
 - name: short name, preferably snake_case or kebab-case.
 - area: optional grouping area.
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
-- interactiveTerminal: true opens the interactive client for an AI task: OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
-- reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested.
+- interactiveTerminal: true is required for taskKind "cli"; for legacy AI tasks it opens OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
+- Interactive OpenCode tasks and all generic taskKind "cli" providers, including workflow steps, use the vault's CLI terminal destination setting (integrated in Obsidian or external window). Do not export cliTerminalDestination as a task/workflow field. Integrated tasks require a loaded Obsidian plugin; autonomous execution without that host rejects before starting workflow steps. Interactive CLI completion only confirms terminal launch, not the human task result. Background tasks, Code, background Copilot and the Codex app are unchanged.
+- reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested. Also optional for taskKind "cli" with cliProvider "codex", where the value must be supported by the selected native CLI/model.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
 - scheduleTime: "HH:MM", use "09:00" if not relevant.
@@ -9444,14 +16953,14 @@ Task fields:
 - scheduleMonthDays: array 1-31.
 - scheduleIntervalValue: number, usually 10.
 - scheduleIntervalUnit: "seconds" | "minutes" | "hours", usually "minutes".
-- useRalphLoop: true only when the task may need iterations until completion.
-- agent: "build" by default, "plan" for analysis only, or a custom agent if requested.
-- forceModel: true forces the selected model and does not apply the agent; otherwise false.
+- useRalphLoop: true only for legacy OpenCode 1 tasks when the task may need iterations until completion; never for taskKind "cli".
+- agent: "build" by default for legacy OpenCode tasks, "plan" for analysis only, or a custom agent if requested. Generic CLI tasks use the native default instead.
+- forceModel: true forces the selected model and does not apply the agent; otherwise false. Generic CLI tasks may omit model and keep native defaults regardless.
 - branch: optional git branch, usually "".
 - createBranch: true/false.
 - workingDirectory: optional absolute path where this task should run.
 
-Do not include model or forceModel in importable tasks unless the user explicitly asks for them. AutoOC will use the system default model on import.
+Do not include model or forceModel in importable tasks unless the user explicitly asks for them. AutoOC will use the system default model on import for legacy task kinds; generic taskKind "cli" uses the provider's native default instead.
 
 Code steps and code tasks:
 Code runs with vm.runInContext and must always assign output.
@@ -9677,13 +17186,13 @@ Minimal valid workflow example:
             {
               "toStepId": "step-1",
               "mode": "conditional",
-              "condition": "JSON.parse(input).FOUND === "YES"",
+              "condition": "JSON.parse(input).FOUND === 'YES'",
               "conditionLang": "javascript"
             },
             {
               "toStepId": "step-noop",
               "mode": "conditional",
-              "condition": "JSON.parse(input).FOUND !== "YES"",
+              "condition": "JSON.parse(input).FOUND !== 'YES'",
               "conditionLang": "javascript"
             }
           ]
@@ -9730,6 +17239,20 @@ Nested workflow package example (schema 1.7.0):
   ]
 }
 
+Generic interactive CLI import example (direct imports only, not in-app AI draft creators):
+{
+  "autoOCExport": {"schemaVersion": "1.7.0", "pluginVersion": "${PLUGIN_BUILD_VERSION}", "exportedAt": "2026-11-07T00:00:00.000Z"},
+  "tasks": [{
+    "exportId": "interactive-codex", "taskKind": "cli", "cliProvider": "codex",
+    "name": "interactive_review", "prompt": "Review this project with me. Ask before modifying files or running commands.",
+    "interactiveTerminal": true, "scheduleType": "manual", "scheduleTime": "09:00",
+    "scheduleDate": "", "scheduleDays": [], "scheduleMonthDays": [],
+    "scheduleIntervalValue": 10, "scheduleIntervalUnit": "minutes",
+    "useRalphLoop": false, "forceModel": false, "agent": "", "branch": "", "createBranch": false
+  }],
+  "workflows": []
+}
+
 Now write the objective for the AutoOC workflow or task you want to generate:`;
 async function copyTextToClipboard(text) {
   var _a;
@@ -9746,6 +17269,7 @@ async function copyTextToClipboard(text) {
   document.execCommand("copy");
   textarea.remove();
 }
+var CLI_TASK_COMMAND_NOTICE = "Interactive CLI tasks use a provider-specific launcher and a private prompt file; no directly copyable command is available.";
 function getConfiguredAreaNames(settings) {
   var _a, _b;
   const names = /* @__PURE__ */ new Set();
@@ -9779,7 +17303,7 @@ function renderAreaSuggestions(container, areaInput, areaNames, onSelect) {
   }
 }
 function getCopilotTaskValidationError(task) {
-  if (task.copilotAllowAllTools !== void 0 && (task.taskKind !== "copilot" || typeof task.copilotAllowAllTools !== "boolean")) {
+  if (task.copilotAllowAllTools !== void 0 && !(task.taskKind === "cli" && task.copilotAllowAllTools === false) && (task.taskKind !== "copilot" || typeof task.copilotAllowAllTools !== "boolean")) {
     return "copilotAllowAllTools must be a boolean and is only valid for Copilot tasks.";
   }
   if (task.taskKind === "copilot" && task.interactiveTerminal === true) {
@@ -9788,28 +17312,28 @@ function getCopilotTaskValidationError(task) {
   return null;
 }
 function addCopilotTaskSettings(container, draft, defaultModel) {
-  new import_obsidian10.Setting(container).setName("Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.").addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "").onChange((value) => {
+  new import_obsidian11.Setting(container).setName("Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the AutoOC default, then the CLI default.").addText((text) => text.setPlaceholder(defaultModel || "Automatic").setValue(draft.model || "").onChange((value) => {
     draft.model = value.trim();
   }));
-  new import_obsidian10.Setting(container).setName("Allow tools automatically").setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.").addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true).onChange((value) => {
+  new import_obsidian11.Setting(container).setName("Allow tools automatically").setDesc("Allow Copilot to edit files and run commands without asking. Off exposes only file reading and search tools. Folder and URL permissions remain controlled by Copilot.").addToggle((toggle) => toggle.setValue(draft.copilotAllowAllTools === true).onChange((value) => {
     draft.copilotAllowAllTools = value;
   }));
 }
 function addCopilotGlobalSettings(container, plugin) {
   container.createEl("h3", { text: "GitHub Copilot task defaults" });
-  new import_obsidian10.Setting(container).setName("Test Copilot installation").addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
+  new import_obsidian11.Setting(container).setName("Test Copilot installation").addButton((button) => button.setButtonText("Detect & test").onClick(async () => {
     try {
       const bin = resolveCopilotBin(plugin.settings.copilotPath);
       const cwd = plugin.settings.workingDirectory || plugin.app.vault.adapter.basePath || ".";
       const version = await checkCopilotInstallation(bin, cwd);
-      new import_obsidian10.Notice(`AutoOC: ${version}
+      new import_obsidian11.Notice(`AutoOC: ${version}
 ${bin}
 CLI detected. Account access is checked when a task runs.`, 1e4);
     } catch (error) {
-      new import_obsidian10.Notice(`AutoOC: could not start GitHub Copilot CLI \u2014 ${String(error)}`, 1e4);
+      new import_obsidian11.Notice(`AutoOC: could not start GitHub Copilot CLI \u2014 ${String(error)}`, 1e4);
     }
   }));
-  new import_obsidian10.Setting(container).setName("Default Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.").addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "").onChange(async (value) => {
+  new import_obsidian11.Setting(container).setName("Default Copilot model").setDesc("Model ID available to your Copilot account. Empty uses the CLI default; see /model in Copilot for available models.").addText((text) => text.setPlaceholder("Automatic").setValue(plugin.settings.defaultCopilotModel || "").onChange(async (value) => {
     plugin.settings.defaultCopilotModel = value.trim();
     await plugin.saveSettings();
   }));
@@ -9916,7 +17440,7 @@ function parseMonthDays(input) {
   return [...new Set(days)].sort((a, b) => a - b);
 }
 function delay2(ms) {
-  return new Promise((resolve10) => window.setTimeout(resolve10, ms));
+  return new Promise((resolve11) => window.setTimeout(resolve11, ms));
 }
 function preventBackdropClose(modal) {
   const contentEl = modal.contentEl;
@@ -9992,9 +17516,13 @@ function generateId() {
 }
 function toExportTask(task, exportId) {
   var _a, _b;
+  const cliError = getCliTaskValidationError(task);
+  if (cliError) throw new Error(`Task "${task.name}": ${cliError}`);
   return {
     exportId,
     taskKind: task.taskKind,
+    cliProvider: task.cliProvider,
+    model: task.taskKind === "cli" ? task.model || "" : void 0,
     concurrency: task.concurrency,
     disabled: task.disabled,
     copilotAllowAllTools: task.taskKind === "copilot" ? task.copilotAllowAllTools === true : void 0,
@@ -10098,19 +17626,19 @@ function nowTimeString() {
   return `${padTwo(now.getHours())}:${padTwo(now.getMinutes())}`;
 }
 function getOpencodeConfigPath() {
-  return path31.join(os7.homedir(), ".config", "opencode", "opencode.json");
+  return path34.join(os7.homedir(), ".config", "opencode", "opencode.json");
 }
 function getUvCandidates() {
   return [
-    path31.join(os7.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
-    path31.join(os7.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
-    path31.join(os7.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
+    path34.join(os7.homedir(), "AppData", "Local", "hermes", "bin", "uv.exe"),
+    path34.join(os7.homedir(), ".local", "bin", process.platform === "win32" ? "uv.exe" : "uv"),
+    path34.join(os7.homedir(), "AppData", "Roaming", "Python", "Scripts", "uv.exe")
   ];
 }
 function resolveUvBin() {
   for (const candidate of getUvCandidates()) {
     try {
-      if (fs33.existsSync(candidate)) return candidate;
+      if (fs36.existsSync(candidate)) return candidate;
     } catch (e) {
     }
   }
@@ -10261,10 +17789,10 @@ if __name__ == "__main__":
 `;
 }
 function getRalphStateFilePath(vaultBasePath) {
-  return path31.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
+  return path34.join(vaultBasePath, ".opencode", "ralph-loop.local.md");
 }
 function getTaskLogDir(vaultBasePath, taskId) {
-  return path31.join(vaultBasePath, ".opencode", "logs", taskId);
+  return path34.join(vaultBasePath, ".opencode", "logs", taskId);
 }
 function formatTimestampForLog() {
   const now = /* @__PURE__ */ new Date();
@@ -10281,15 +17809,15 @@ function saveLogToFile(vaultBasePath, taskId, output) {
   if (!output || !output.trim()) return null;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    fs33.mkdirSync(logDir, { recursive: true });
+    fs36.mkdirSync(logDir, { recursive: true });
   } catch (e) {
   }
   const timestamp = formatTimestampForLog();
-  const logFile = path31.join(logDir, `${timestamp}.log`);
+  const logFile = path34.join(logDir, `${timestamp}.log`);
   try {
-    fs33.writeFileSync(logFile, output, "utf8");
-    const latestFile = path31.join(logDir, "latest.log");
-    fs33.writeFileSync(latestFile, output, "utf8");
+    fs36.writeFileSync(logFile, output, "utf8");
+    const latestFile = path34.join(logDir, "latest.log");
+    fs36.writeFileSync(latestFile, output, "utf8");
     return logFile;
   } catch (e) {
     return null;
@@ -10298,10 +17826,10 @@ function saveLogToFile(vaultBasePath, taskId, output) {
 function getLogHistory(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs33.existsSync(logDir)) return [];
-    const files2 = fs33.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
+    if (!fs36.existsSync(logDir)) return [];
+    const files2 = fs36.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort().reverse();
     return files2.map((f) => ({
-      file: path31.join(logDir, f),
+      file: path34.join(logDir, f),
       timestamp: formatLogFilenameTimestamp(f)
     }));
   } catch (e) {
@@ -10310,7 +17838,7 @@ function getLogHistory(vaultBasePath, taskId) {
 }
 function readLogFile(filePath) {
   try {
-    return formatLogContent(fs33.readFileSync(filePath, "utf8"));
+    return formatLogContent(fs36.readFileSync(filePath, "utf8"));
   } catch (e) {
     return "(error reading log file)";
   }
@@ -10319,13 +17847,13 @@ function cleanupOldLogs(vaultBasePath, taskId, maxLogs) {
   if (maxLogs <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs33.existsSync(logDir)) return;
-    const files2 = fs33.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
+    if (!fs36.existsSync(logDir)) return;
+    const files2 = fs36.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log").sort();
     while (files2.length > maxLogs) {
       const oldFile = files2.shift();
       if (oldFile) {
         try {
-          fs33.unlinkSync(path31.join(logDir, oldFile));
+          fs36.unlinkSync(path34.join(logDir, oldFile));
         } catch (e) {
         }
       }
@@ -10337,9 +17865,9 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
   if (retentionDays <= 0) return;
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs33.existsSync(logDir)) return;
+    if (!fs36.existsSync(logDir)) return;
     const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1e3;
-    const files2 = fs33.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
+    const files2 = fs36.readdirSync(logDir).filter((f) => f.endsWith(".log") && f !== "latest.log");
     for (const f of files2) {
       const match = f.match(/^(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})\.log$/);
       if (match) {
@@ -10347,7 +17875,7 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
         const fileDate = /* @__PURE__ */ new Date(`${y}-${m}-${d}T${h}:${min}:${s}`);
         if (fileDate.getTime() < cutoff) {
           try {
-            fs33.unlinkSync(path31.join(logDir, f));
+            fs36.unlinkSync(path34.join(logDir, f));
           } catch (e) {
           }
         }
@@ -10359,31 +17887,31 @@ function cleanupLogsByAge(vaultBasePath, taskId, retentionDays) {
 function clearTaskLogs(vaultBasePath, taskId) {
   const logDir = getTaskLogDir(vaultBasePath, taskId);
   try {
-    if (!fs33.existsSync(logDir)) return;
-    const files2 = fs33.readdirSync(logDir);
+    if (!fs36.existsSync(logDir)) return;
+    const files2 = fs36.readdirSync(logDir);
     for (const f of files2) {
       try {
-        fs33.unlinkSync(path31.join(logDir, f));
+        fs36.unlinkSync(path34.join(logDir, f));
       } catch (e) {
       }
     }
     try {
-      fs33.rmdirSync(logDir);
+      fs36.rmdirSync(logDir);
     } catch (e) {
     }
   } catch (e) {
   }
 }
 function clearAllLogs(vaultBasePath) {
-  const logsDir = path31.join(vaultBasePath, ".opencode", "logs");
+  const logsDir = path34.join(vaultBasePath, ".opencode", "logs");
   try {
-    if (!fs33.existsSync(logsDir)) return;
-    const dirs = fs33.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (!fs36.existsSync(logsDir)) return;
+    const dirs = fs36.readdirSync(logsDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
     for (const dir of dirs) {
       clearTaskLogs(vaultBasePath, dir);
     }
     try {
-      fs33.rmdirSync(logsDir);
+      fs36.rmdirSync(logsDir);
     } catch (e) {
     }
   } catch (e) {
@@ -10391,7 +17919,7 @@ function clearAllLogs(vaultBasePath) {
 }
 function deleteSingleLogFile(filePath) {
   try {
-    fs33.unlinkSync(filePath);
+    fs36.unlinkSync(filePath);
   } catch (e) {
   }
 }
@@ -10461,7 +17989,7 @@ function isWorkflowDue(wf) {
   }
   return false;
 }
-var AutoOCPlugin = class extends import_obsidian10.Plugin {
+var AutoOCPlugin = class extends import_obsidian11.Plugin {
   constructor() {
     super(...arguments);
     this.bulkCatalogMutationInProgress = false;
@@ -10472,7 +18000,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     this.settingsLoadRevision = 0;
     this.settingsPublicationState = "ready";
     this.legacyOutputRedaction = new LegacyOutputRedaction(() => {
-      new import_obsidian10.Notice("AutoOC: some old credentials cannot be hidden in output. This notice does not block tasks. Open Settings \u2192 AutoOC \u2192 Legacy credential notice to review or dismiss the reminder.", 12e3);
+      new import_obsidian11.Notice("AutoOC: some old credentials cannot be hidden in output. This notice does not block tasks. Open Settings \u2192 AutoOC \u2192 Legacy credential notice to review or dismiss the reminder.", 12e3);
     }, {
       getItem: (key) => typeof this.app.loadLocalStorage === "function" ? this.app.loadLocalStorage(key) : localStorage.getItem(key),
       setItem: (key, value) => {
@@ -10515,6 +18043,18 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     this.definitionStarts = /* @__PURE__ */ new Map();
     this.vaultRefreshStopped = false;
     this.codeTaskRuns = /* @__PURE__ */ new Map();
+  }
+  async openIntegratedCli(provider, cwd) {
+    if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
+    await this.cliTerminals.open(provider, cwd);
+  }
+  async installCliTerminalSupport() {
+    if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
+    await this.cliTerminals.installSupport();
+  }
+  async showCliTerminals() {
+    if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
+    await this.cliTerminals.show();
   }
   async applyBulkSelection(selection, action) {
     const save = async (transaction) => {
@@ -10672,14 +18212,14 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     const { runtime, names } = this.journalNames();
     return JSON.stringify(names.map((name) => {
       readExecutionCheckpoint(runtime, name.slice(0, -5));
-      return [name, fs33.readFileSync(path31.join(runtime, name), "utf8")];
+      return [name, fs36.readFileSync(path34.join(runtime, name), "utf8")];
     }));
   }
   journalNames() {
     const location = this.selectedExecutionLocation();
     const directory = location.installationDirectory, runtime = location.runtimeDirectory;
-    if (fs33.existsSync(path31.join(directory, "data.json.write-lock")) || fs33.existsSync(path31.join(directory, "data.json.write-intent")) || fs33.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
-    const names = fs33.readdirSync(runtime).sort();
+    if (fs36.existsSync(path34.join(directory, "data.json.write-lock")) || fs36.existsSync(path34.join(directory, "data.json.write-intent")) || fs36.readdirSync(directory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp"))) throw new Error("Unfinished configuration write");
+    const names = fs36.readdirSync(runtime).sort();
     if (names.some((name) => name === "update-pending.json" || name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished runtime write or update");
     return { runtime, names: names.filter((name) => /^[a-zA-Z0-9-]+\.json$/.test(name)) };
   }
@@ -10697,7 +18237,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     for (const part of encodeCapturedJson(captureJsonStructure(entries, 0))) {
       parts.push(part);
       if (import_perf_hooks6.performance.now() >= deadline) {
-        await new Promise((resolve10) => (0, import_timers4.setImmediate)(resolve10));
+        await new Promise((resolve11) => (0, import_timers4.setImmediate)(resolve11));
         deadline = import_perf_hooks6.performance.now() + 4;
       }
     }
@@ -10717,7 +18257,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       if (this.executionAttempted || this.observedJournalSnapshot === void 0 || this.startupPending || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork)) throw error;
       if (this.journalSnapshot() !== this.observedJournalSnapshot) throw error;
       const file = this.selectedExecutionLocation().configurationFile;
-      for (const settings of [this.settings, JSON.parse(fs33.readFileSync(file, "utf8"))]) {
+      for (const settings of [this.settings, JSON.parse(fs36.readFileSync(file, "utf8"))]) {
         if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw error;
         assertIdleCatalog({
           tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10727,7 +18267,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     }
   }
   observationProofPath(token) {
-    return path31.join(this.selectedExecutionLocation(false).runtimeDirectory, "plugin-observation-" + token + ".proof");
+    return path34.join(this.selectedExecutionLocation(false).runtimeDirectory, "plugin-observation-" + token + ".proof");
   }
   async recordObservationProof() {
     const lease = this.pluginExecutionLease;
@@ -10736,18 +18276,18 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     this.assertLifecycleOpen();
     lease.assertOwned();
     const file = this.observationProofPath(lease.token);
-    const fd = fs33.openSync(file, "wx", 384);
+    const fd = fs36.openSync(file, "wx", 384);
     try {
-      const identity = fs33.fstatSync(fd);
+      const identity = fs36.fstatSync(fd);
       const bytes = JSON.stringify({ schemaVersion: 1, token: lease.token, journalHash });
-      fs33.writeFileSync(fd, bytes);
-      await new Promise((resolve10, reject) => fs33.fsync(fd, (error) => error ? reject(error) : resolve10()));
+      fs36.writeFileSync(fd, bytes);
+      await new Promise((resolve11, reject) => fs36.fsync(fd, (error) => error ? reject(error) : resolve11()));
       lease.assertOwned();
       this.assertLifecycleOpen();
-      const current = fs33.lstatSync(file);
-      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs33.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
+      const current = fs36.lstatSync(file);
+      if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || current.ino !== identity.ino || current.dev !== identity.dev || current.size !== Buffer.byteLength(bytes) || fs36.readFileSync(file, "utf8") !== bytes || this.pluginExecutionLease !== lease || this.observedJournalSnapshot !== snapshot) throw new Error("Observation proof identity changed");
     } finally {
-      fs33.closeSync(fd);
+      fs36.closeSync(fd);
     }
     this.observationProof = file;
   }
@@ -10757,7 +18297,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     if (this.observationProof) {
       this.pluginExecutionLease.assertOwned();
       const file = this.observationProof;
-      if (fs33.existsSync(file)) fs33.unlinkSync(file);
+      if (fs36.existsSync(file)) fs36.unlinkSync(file);
       this.observationProof = void 0;
     }
     this.executionAttempted = true;
@@ -10765,11 +18305,11 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   assertClosedObservation(token) {
     const location = this.selectedExecutionLocation(false);
     if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Installed package changed");
-    const file = this.observationProofPath(token), stat = fs33.lstatSync(file);
+    const file = this.observationProofPath(token), stat = fs36.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Invalid observation proof");
-    const proof = JSON.parse(fs33.readFileSync(file, "utf8"));
+    const proof = JSON.parse(fs36.readFileSync(file, "utf8"));
     if (proof.schemaVersion !== 1 || proof.token !== token || proof.journalHash !== require("crypto").createHash("sha256").update(this.journalSnapshot()).digest("hex")) throw new Error("Observed execution state changed");
-    const settings = JSON.parse(fs33.readFileSync(location.configurationFile, "utf8"));
+    const settings = JSON.parse(fs36.readFileSync(location.configurationFile, "utf8"));
     if ([...settings.tasks || [], ...settings.workflows || []].some((entry) => entry.legacyExecution || entry.pendingCodexApproval)) throw new Error("Execution requires reconciliation");
     assertIdleCatalog({
       tasks: (settings.tasks || []).filter((entry) => !entry.runtimeExecution),
@@ -10778,25 +18318,25 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   async completeInstalledRelease() {
     const location = this.selectedExecutionLocation();
-    const manifestFile = path31.join(location.installationDirectory, "manifest.json");
-    const manifestStat = fs33.lstatSync(manifestFile);
+    const manifestFile = path34.join(location.installationDirectory, "manifest.json");
+    const manifestStat = fs36.lstatSync(manifestFile);
     if (!manifestStat.isFile() || manifestStat.isSymbolicLink() || manifestStat.nlink !== 1) throw new Error("Unsafe installed plugin manifest");
-    const startingManifest = await fs33.promises.readFile(manifestFile);
+    const startingManifest = await fs36.promises.readFile(manifestFile);
     const installedManifest = JSON.parse(startingManifest.toString("utf8"));
     if (installedManifest.id !== "auto-oc" || installedManifest.id !== this.manifest.id || installedManifest.version !== PLUGIN_BUILD_VERSION) {
       throw new Error("Installed plugin manifest identity or version differs from the bundle");
     }
-    const mainFile = path31.join(location.installationDirectory, "main.js");
-    const stat = fs33.lstatSync(mainFile);
+    const mainFile = path34.join(location.installationDirectory, "main.js");
+    const stat = fs36.lstatSync(mainFile);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe installed plugin bundle");
-    const startingBundle = await fs33.promises.readFile(mainFile);
+    const startingBundle = await fs36.promises.readFile(mainFile);
     const completePackage = await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION);
     const assertCatalog = await waitForInstalledCatalog(location.installationDirectory, () => {
       this.assertLifecycleOpen();
       this.selectedExecutionLocation();
       for (const [file, bytes] of [[manifestFile, startingManifest], [mainFile, startingBundle]]) {
-        const current = fs33.lstatSync(file);
-        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs33.readFileSync(file).equals(bytes)) {
+        const current = fs36.lstatSync(file);
+        if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1 || !fs36.readFileSync(file).equals(bytes)) {
           throw new Error("Installed plugin identity changed during startup");
         }
       }
@@ -10812,10 +18352,10 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     try {
       const files2 = await downloadRelease(`https://raw.githubusercontent.com/${GITHUB_REPO}/${GITHUB_BRANCH}`, PLUGIN_BUILD_VERSION);
       this.assertLifecycleOpen();
-      if (!files2["main.js"].equals(startingBundle) || !fs33.readFileSync(mainFile).equals(startingBundle)) {
+      if (!files2["main.js"].equals(startingBundle) || !fs36.readFileSync(mainFile).equals(startingBundle)) {
         throw new Error("Bootstrap revision differs from the starting plugin; retry with a coherent release");
       }
-      if (!files2["manifest.json"].equals(startingManifest) || !fs33.readFileSync(manifestFile).equals(startingManifest)) {
+      if (!files2["manifest.json"].equals(startingManifest) || !fs36.readFileSync(manifestFile).equals(startingManifest)) {
         throw new Error("Bootstrap manifest differs from the starting installation");
       }
       this.assertExecutionIdle();
@@ -10825,7 +18365,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       Object.assign(this.manifest, installedManifest);
       return assertCatalog;
     } finally {
-      this.updateInProgress = fs33.existsSync(path31.join(location.runtimeDirectory, "update-pending.json"));
+      this.updateInProgress = fs36.existsSync(path34.join(location.runtimeDirectory, "update-pending.json"));
     }
   }
   async onload() {
@@ -10835,12 +18375,12 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     try {
       try {
         const location = this.selectedExecutionLocation(false);
-        if (fs33.existsSync(location.configurationFile + ".write-intent")) {
+        if (fs36.existsSync(location.configurationFile + ".write-intent")) {
           if (!await hasCompleteInstalledReleaseAsync(location.installationDirectory, PLUGIN_BUILD_VERSION)) throw new Error("Interrupted settings recovery requires a complete verified package");
           this.settingsRecoveryPromise = recoverInterruptedSettingsWrite(location.installationDirectory, () => this.assertLifecycleOpen());
           try {
             const recovered = await this.settingsRecoveryPromise;
-            if (recovered) new import_obsidian10.Notice("AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.", 1e4);
+            if (recovered) new import_obsidian11.Notice("AutoOC: an interrupted settings save was archived. Your saved catalog was kept; no tasks were resumed.", 1e4);
           } finally {
             this.settingsRecoveryPromise = void 0;
           }
@@ -10873,6 +18413,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         this.view = new AutoOCView(leaf, this);
         return this.view;
       });
+      this.cliTerminals = new IntegratedTerminals(this, () => openCliLauncher(this.app, this));
       this.addRibbonIcon("workflow", "AutoOC \u2014 Task Scheduler", () => {
         this.toggleView();
       });
@@ -10885,7 +18426,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         id: "review-older-attempts",
         name: "Review older attempts",
         callback: () => {
-          void this.openHistoricalAttemptsReview().catch((error) => new import_obsidian10.Notice(this.redactSecrets(String(error))));
+          void this.openHistoricalAttemptsReview().catch((error) => new import_obsidian11.Notice(this.redactSecrets(String(error))));
         }
       });
       this.addCommand({ id: "resolve-blocked-executions", name: "Resolve blocked executions", callback: () => this.openBlockedExecutionsReview() });
@@ -10914,7 +18455,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         name: "Check due tasks now",
         callback: async () => {
           await this.runDueAll();
-          new import_obsidian10.Notice("AutoOC: check completed.");
+          new import_obsidian11.Notice("AutoOC: check completed.");
         }
       });
       this.addCommand({
@@ -10927,7 +18468,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         name: "AutoOC: Ralph Loop Assistant (install/activate)",
         callback: async () => {
           const result = await this.ensureRalphLoopPluginEnabled();
-          new import_obsidian10.Notice(
+          new import_obsidian11.Notice(
             result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
           );
         }
@@ -10975,7 +18516,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       } catch (cleanup) {
         console.warn("AutoOC host registration cleanup failed", cleanup);
       }
-      new import_obsidian10.Notice(`AutoOC: startup failed \u2014 ${String(error)}`);
+      new import_obsidian11.Notice(`AutoOC: startup failed \u2014 ${String(error)}`);
       throw error;
     } finally {
       this.startupPending = false;
@@ -10984,20 +18525,35 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   registerWindowCloseGuard() {
     if (typeof window.addEventListener !== "function") return;
     const close = (event) => {
-      var _a, _b;
+      var _a, _b, _c;
       const publishingCLI = ((_a = this.cliRequestHost) == null ? void 0 : _a.hasPendingWork) && !this.sharedWorkflowExecution && !this.runningProcesses.size && !this.runningCodexClients.size && !this.legacyAttempts.size;
       if (this.settingsWriter.hasPendingWrites || publishingCLI || this.settingsRecoveryPromise) {
         event.preventDefault();
         event.returnValue = false;
         if (!this.windowCloseDrain) {
-          new import_obsidian10.Notice("AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.", 8e3);
+          new import_obsidian11.Notice("AutoOC is finishing a save. The window will stay open; close or reload again when saving finishes.", 8e3);
           this.windowCloseDrain = Promise.all([this.settingsWriter.drain(), publishingCLI ? (_b = this.cliRequestHost) == null ? void 0 : _b.drain() : void 0, this.settingsRecoveryPromise]).then(() => {
-            new import_obsidian10.Notice("AutoOC: saving finished. You can close or reload the window.");
+            new import_obsidian11.Notice("AutoOC: saving finished. You can close or reload the window.");
           }).catch((error) => {
             console.warn("AutoOC window kept open after save failure", error);
-            new import_obsidian10.Notice("AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.", 1e4);
+            new import_obsidian11.Notice("AutoOC could not finish saving. The window was kept open; inspect recovery before retrying.", 1e4);
           }).finally(() => {
             this.windowCloseDrain = void 0;
+          });
+        }
+        return;
+      }
+      if (((_c = this.cliTerminals) == null ? void 0 : _c.hasRunningSessions) || this.terminalCloseDrain) {
+        event.preventDefault();
+        event.returnValue = false;
+        if (!this.terminalCloseDrain) {
+          new import_obsidian11.Notice("AutoOC is stopping integrated terminals. Close or reload again after they stop.", 8e3);
+          this.terminalCloseDrain = this.cliTerminals.stopAll().then(() => {
+            new import_obsidian11.Notice("AutoOC: terminal sessions stopped. You can close or reload the window.");
+          }).catch((error) => {
+            new import_obsidian11.Notice(`AutoOC could not confirm terminal cleanup. The window was kept open. ${String(error)}`, 15e3);
+          }).finally(() => {
+            this.terminalCloseDrain = void 0;
           });
         }
         return;
@@ -11009,6 +18565,9 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   async onunload() {
     var _a, _b, _c, _d;
+    const closingTerminals = this.cliTerminals;
+    const terminalCleanup = closingTerminals == null ? void 0 : closingTerminals.dispose();
+    void (terminalCleanup == null ? void 0 : terminalCleanup.catch((error) => console.warn("AutoOC terminal cleanup is uncertain", error)));
     for (const modal of this.draftModals || []) modal.close();
     (_a = this.draftModals) == null ? void 0 : _a.clear();
     for (const controller of this.draftControllers || []) controller.abort();
@@ -11086,6 +18645,8 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       });
     }
     await closingBridge;
+    await terminalCleanup;
+    if (this.cliTerminals === closingTerminals) this.cliTerminals = void 0;
   }
   stopStartupWait() {
     this.startupWaitGeneration++;
@@ -11111,7 +18672,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
             return;
           }
           try {
-            fs33.lstatSync(path31.join(current.runtimeDirectory, "execution.lock"));
+            fs36.lstatSync(path34.join(current.runtimeDirectory, "execution.lock"));
             absentSince = void 0;
             return;
           } catch (error) {
@@ -11127,7 +18688,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
           await this.retryLoadingAutoOC();
         } catch (error) {
           this.stopStartupWait();
-          new import_obsidian10.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
+          new import_obsidian11.Notice("AutoOC: automatic loading stopped. Retry loading AutoOC. " + String(error));
         }
       }, 1e3);
       this.registerInterval(this.startupWaitTimer);
@@ -11176,7 +18737,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         await this.checkForUpdates(true);
         if (this.updateCheckError) throw new Error(this.updateCheckError);
         if (this.updateAvailable) await this.updatePlugin();
-        else new import_obsidian10.Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
+        else new import_obsidian11.Notice(`AutoOC: already up to date (v${this.manifest.version}).`);
       },
       () => this.openBlockedExecutionsReview()
     ));
@@ -11187,12 +18748,12 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       void open();
     } });
     this.addCommand({ id: "resolve-blocked-executions", name: "Resolve blocked executions", callback: () => this.openBlockedExecutionsReview() });
-    new import_obsidian10.Notice(this.startupWaitingForOwner ? "AutoOC is open for consultation while another execution owns the engine." : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 1e4);
+    new import_obsidian11.Notice(this.startupWaitingForOwner ? "AutoOC is open for consultation while another execution owns the engine." : "AutoOC: execution needs attention. Open the panel to consult the saved catalog and the diagnosis.", 1e4);
   }
   closedSessionRecovery() {
     try {
       const location = this.selectedExecutionLocation(false);
-      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs33.existsSync(path31.join(location.runtimeDirectory, "update-pending.json"))) return;
+      if (!hasCompleteInstalledRelease(location.installationDirectory, PLUGIN_BUILD_VERSION) || fs36.existsSync(path34.join(location.runtimeDirectory, "update-pending.json"))) return;
       assertPackageMaintenanceSafe(location.installationDirectory);
       const owner = readExecutionLeaseOwner(location.runtimeDirectory);
       try {
@@ -11203,7 +18764,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       }
       return () => {
         const current = this.selectedExecutionLocation(false);
-        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs33.existsSync(path31.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
+        if (!samePhysicalPath(current.runtimeDirectory, location.runtimeDirectory) || !hasCompleteInstalledRelease(current.installationDirectory, PLUGIN_BUILD_VERSION) || fs36.existsSync(path34.join(current.runtimeDirectory, "update-pending.json"))) throw new Error("Installation changed; retry loading AutoOC");
         assertPackageMaintenanceSafe(current.installationDirectory);
         recoverExecutionLease(current.runtimeDirectory, owner.token);
       };
@@ -11219,7 +18780,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     const base2 = this.app.vault.adapter.basePath;
     if (!base2) throw new Error("AutoOC execution requires a local vault");
     const configDir = this.app.vault.configDir, id = (_a = this.manifest) == null ? void 0 : _a.id;
-    if (!configDir || path31.isAbsolute(configDir) || !id || /[\\/:]/.test(id)) throw new Error("Invalid selected installation");
+    if (!configDir || path34.isAbsolute(configDir) || !id || /[\\/:]/.test(id)) throw new Error("Invalid selected installation");
     const location = resolveInstalledWorkflowLocation(base2, `${configDir}/plugins/${id}`);
     if (this.pluginExecutionLease) {
       if (requireOwnership) this.pluginExecutionLease.assertOwned();
@@ -11312,7 +18873,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
           request.stepId
         );
       } catch (error) {
-        if (!this.lifecycleStopped) new import_obsidian10.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
+        if (!this.lifecycleStopped) new import_obsidian11.Notice(`AutoOC: CLI request failed \u2014 ${this.redactSecrets(String(error))}`);
         throw error;
       }
     }, async (request) => {
@@ -11340,7 +18901,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     const pending = this.withDefinitionStart(
       kind,
       id,
-      (release) => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release, stepId)
+      (release2) => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release2, stepId)
     );
     this.sharedCompletions.add(pending);
     try {
@@ -11394,6 +18955,10 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         catalogWriter: this.settingsWriter.fork(),
         catalogVersion: () => this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations: () => this.createVaultMutationBatch(),
+        launchInteractiveTerminal: (request) => {
+          if (!this.cliTerminals) return Promise.reject(new Error("Integrated terminals are unavailable. No external terminal was started."));
+          return this.cliTerminals.openTask(request);
+        },
         redact: (output) => this.redactSecrets(output),
         onTaskOutput: (event) => {
           if (this.lifecycleStopped || this.sharedWorkflowExecutions.get(workflowId) !== execution || execution.controller.signal.aborted || event.runId !== execution.runId || event.workflowId !== workflowId) return;
@@ -11488,7 +19053,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       throw new Error("Step execution changed; refresh before stopping.");
     }
     this.sharedExecution(workflowId, void 0, observed.runId).controller.abort();
-    new import_obsidian10.Notice("Stop requested. Commands already started may still have effects.");
+    new import_obsidian11.Notice("Stop requested. Commands already started may still have effects.");
   }
   async setCodeStepDisabled(workflowId, stepId, disabled) {
     const save = async (transaction) => {
@@ -11627,14 +19192,14 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     if (this.definitionStarts.has(key)) return onBusy ? await onBusy() : void 0;
     const token = Symbol(key);
     this.definitionStarts.set(key, token);
-    const release = () => {
+    const release2 = () => {
       if (this.definitionStarts.get(key) === token) this.definitionStarts.delete(key);
     };
     try {
       this.refreshStartControls();
-      return await execute(release);
+      return await execute(release2);
     } finally {
-      if (kind !== "task" || ((_b = (_a = this.legacyAttempts) == null ? void 0 : _a.get(id)) == null ? void 0 : _b.releaseStart) !== release) release();
+      if (kind !== "task" || ((_b = (_a = this.legacyAttempts) == null ? void 0 : _a.get(id)) == null ? void 0 : _b.releaseStart) !== release2) release2();
       try {
         this.refreshStartControls();
       } catch (e) {
@@ -11661,7 +19226,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   getMcpBridgePath() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
-    return path31.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
+    return path34.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
   }
   async startMcpBridge() {
   }
@@ -11669,7 +19234,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     const server = this.mcpBridgeServer;
     this.mcpBridgeServer = void 0;
     this.mcpBridgeToken = "";
-    if (server) await new Promise((resolve10) => server.close(() => resolve10()));
+    if (server) await new Promise((resolve11) => server.close(() => resolve11()));
   }
   findTaskByIdOrName(idOrName) {
     return this.settings.tasks.find((task) => task.id === idOrName || task.name === idOrName);
@@ -11722,10 +19287,12 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   getMcpRawTaskPayloadError(payload) {
     if ("steps" in payload) return 'Raw task payloads must not include workflow steps; use kind "workflow".';
     const taskKind = typeof payload.taskKind === "string" ? payload.taskKind : "opencode";
-    if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(taskKind)) return "payload.taskKind must be opencode, opencode2, codex, copilot, or code.";
+    if (!["opencode", "opencode2", "codex", "copilot", "code", "cli"].includes(taskKind)) return "payload.taskKind must be opencode, opencode2, codex, copilot, code, or cli.";
+    const cliError = getCliTaskValidationError(payload);
+    if (cliError) return cliError;
     const copilotError = getCopilotTaskValidationError(payload);
     if (copilotError) return copilotError;
-    if (payload.reasoningEffort !== void 0 && (taskKind !== "codex" || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
+    if (payload.reasoningEffort !== void 0 && (taskKind !== "codex" && !(taskKind === "cli" && payload.cliProvider === "codex") || typeof payload.reasoningEffort !== "string" || !payload.reasoningEffort.trim())) {
       return 'payload.reasoningEffort is only valid as a non-empty string for taskKind "codex".';
     }
     if (payload.interactiveTerminal !== void 0 && typeof payload.interactiveTerminal !== "boolean") return "payload.interactiveTerminal must be a boolean when provided.";
@@ -11993,9 +19560,9 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       }
       await this.saveSettings(false);
       (_a = this.view) == null ? void 0 : _a.refresh();
-      if (showNotice) new import_obsidian10.Notice(`AutoOC: ${models.length} Codex models loaded.`);
+      if (showNotice) new import_obsidian11.Notice(`AutoOC: ${models.length} Codex models loaded.`);
     } catch (error) {
-      if (showNotice) new import_obsidian10.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
+      if (showNotice) new import_obsidian11.Notice(`AutoOC: could not connect to Codex \u2014 ${String(error)}`);
     } finally {
       client.dispose();
     }
@@ -12135,10 +19702,10 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       this.settingsWritableCatalog = localFile ? { file: localFile, version: this.settingsWriter.confirmedVersion(localFile) } : void 0;
       this.settingsPublicationState = "ready";
     };
-    this.legacyOutputRedaction.load(path31.join((location == null ? void 0 : location.installationDirectory) || path31.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path31.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
+    this.legacyOutputRedaction.load(path34.join((location == null ? void 0 : location.installationDirectory) || path34.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path34.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc")), "secrets.vault.json"), tryGetSafeStorage());
     for (const item of [...nextSettings.tasks, ...nextSettings.workflows, ...nextSettings.workflows.flatMap((w) => w.steps || [])]) {
       const error = autoOCDependencyError(item);
-      if (error) new import_obsidian10.Notice(error);
+      if (error) new import_obsidian11.Notice(error);
     }
     nextSettings.tasks = nextSettings.tasks.map((task) => {
       var _a2, _b2;
@@ -12360,9 +19927,9 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   isRalphLoopEnabled() {
     const configPath = getOpencodeConfigPath();
-    if (!fs33.existsSync(configPath)) return false;
+    if (!fs36.existsSync(configPath)) return false;
     try {
-      const raw = fs33.readFileSync(configPath, "utf8");
+      const raw = fs36.readFileSync(configPath, "utf8");
       const data = JSON.parse(raw);
       return Array.isArray(data == null ? void 0 : data.plugin) && data.plugin.includes("opencode-ralph-loop");
     } catch (e) {
@@ -12371,14 +19938,14 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   async ensureRalphLoopPluginEnabled() {
     const configPath = getOpencodeConfigPath();
-    const configDir = path31.dirname(configPath);
-    if (!fs33.existsSync(configDir)) {
-      fs33.mkdirSync(configDir, { recursive: true });
+    const configDir = path34.dirname(configPath);
+    if (!fs36.existsSync(configDir)) {
+      fs36.mkdirSync(configDir, { recursive: true });
     }
     let data = {};
-    if (fs33.existsSync(configPath)) {
+    if (fs36.existsSync(configPath)) {
       try {
-        const raw = fs33.readFileSync(configPath, "utf8");
+        const raw = fs36.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -12390,7 +19957,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     }
     plugins.push("opencode-ralph-loop");
     data.plugin = plugins;
-    fs33.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+    fs36.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     return { changed: true, configPath };
   }
@@ -12398,7 +19965,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     return {
       vaultBasePath,
-      mcpPath: path31.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
+      mcpPath: path34.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "autooc-mcp.py")
     };
   }
   getAutoOcMcpConfigBlock(requireAvailableUv = false) {
@@ -12415,21 +19982,21 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   ensureAutoOcMcpServerFile() {
     const { mcpPath } = this.getAutoOcMcpPaths();
-    fs33.mkdirSync(path31.dirname(mcpPath), { recursive: true });
-    fs33.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
+    fs36.mkdirSync(path34.dirname(mcpPath), { recursive: true });
+    fs36.writeFileSync(mcpPath, getAutoOcMcpServerSource(), "utf8");
     return mcpPath;
   }
   async ensureAutoOcMcpEnabled() {
     const configPath = getOpencodeConfigPath();
-    const configDir = path31.dirname(configPath);
-    if (!fs33.existsSync(configDir)) {
-      fs33.mkdirSync(configDir, { recursive: true });
+    const configDir = path34.dirname(configPath);
+    if (!fs36.existsSync(configDir)) {
+      fs36.mkdirSync(configDir, { recursive: true });
     }
     const mcpPath = this.ensureAutoOcMcpServerFile();
     let data = {};
-    if (fs33.existsSync(configPath)) {
+    if (fs36.existsSync(configPath)) {
       try {
-        const raw = fs33.readFileSync(configPath, "utf8");
+        const raw = fs36.readFileSync(configPath, "utf8");
         data = raw.trim() ? JSON.parse(raw) : {};
       } catch (e) {
         throw new Error(`Could not read valid JSON from ${configPath}`);
@@ -12443,7 +20010,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       mcp["autooc-mcp"] = nextBlock;
       data.mcp = mcp;
       if (!data.$schema) data.$schema = "https://opencode.ai/config.json";
-      fs33.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
+      fs36.writeFileSync(configPath, `${JSON.stringify(data, null, 2)}
 `, "utf8");
     }
     return { changed, configPath, mcpPath };
@@ -12492,8 +20059,8 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         this.assertLifecycleOpen();
         const vaultBasePath = this.app.vault.adapter.basePath || "";
         const location = ((_a = this.manifest) == null ? void 0 : _a.id) && vaultBasePath ? this.selectedExecutionLocation(false) : void 0;
-        const directory = (location == null ? void 0 : location.installationDirectory) || path31.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path31.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc"));
-        this.legacyOutputRedaction.load(path31.join(directory, "secrets.vault.json"), tryGetSafeStorage(), false);
+        const directory = (location == null ? void 0 : location.installationDirectory) || path34.resolve(vaultBasePath, ((_b = this.manifest) == null ? void 0 : _b.dir) || path34.join(this.app.vault.configDir || ".obsidian", "plugins", ((_c = this.manifest) == null ? void 0 : _c.id) || "auto-oc"));
+        this.legacyOutputRedaction.load(path34.join(directory, "secrets.vault.json"), tryGetSafeStorage(), false);
         return this.legacyCredentialNoticeStatus();
       },
       acknowledge: (id) => {
@@ -12523,14 +20090,14 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       this.updateAvailable = comparison > 0 || comparison === 0 && !!incomplete;
       (_a = this.view) == null ? void 0 : _a.refresh();
       if (!silent) {
-        new import_obsidian10.Notice(
+        new import_obsidian11.Notice(
           this.updateAvailable ? `AutoOC: install or repair the complete v${remoteVersion} package.` : `AutoOC: already up to date (v${this.manifest.version}).`
         );
       }
     } catch (e) {
       this.updateCheckError = String(e);
       (_b = this.view) == null ? void 0 : _b.refresh();
-      if (!silent) new import_obsidian10.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
+      if (!silent) new import_obsidian11.Notice(`AutoOC: update check failed \u2014 ${String(e)}`);
     }
   }
   get panelAvailable() {
@@ -12567,7 +20134,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
     await this.withRecoveryLease(inspection, async (lease, assertIdle) => {
       await resetBlockedAttempt(inspection, attempt, lease, modal.reason, true, assertIdle);
     });
-    new import_obsidian10.Notice("Attempt closed with unknown outcome. History and results are preserved. Nothing was started.");
+    new import_obsidian11.Notice("Attempt closed with unknown outcome. History and results are preserved. Nothing was started.");
     return true;
   }
   // Recovery holds the same admission and shutdown barriers as execution. It
@@ -12667,11 +20234,11 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
         maintenanceLease = true;
       }
       (_a = this.view) == null ? void 0 : _a.refresh();
-      new import_obsidian10.Notice("AutoOC: downloading update\u2026");
+      new import_obsidian11.Notice("AutoOC: downloading update\u2026");
       const files2 = await downloadRelease("https://raw.githubusercontent.com/" + GITHUB_REPO + "/" + GITHUB_BRANCH, targetVersion);
       await this.settingsWriter.drain();
       this.assertPackageUpdateIdle();
-      const pluginDir = path31.dirname(this.pluginExecutionLease.directory);
+      const pluginDir = path34.dirname(this.pluginExecutionLease.directory);
       installRelease({ directory: pluginDir, version: targetVersion, files: files2, lease: this.pluginExecutionLease });
       this.lifecycleStopped = true;
       this.ready = false;
@@ -12679,20 +20246,20 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       this.stopStartupWait();
       (_b = this.cliRequestHost) == null ? void 0 : _b.close();
       this.releasePluginExecution(false);
-      new import_obsidian10.Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin\u2026");
+      new import_obsidian11.Notice("AutoOC: updated to v" + targetVersion + ". Reloading plugin\u2026");
       try {
         await this.app.plugins.disablePlugin(this.manifest.id);
         await this.app.plugins.enablePlugin(this.manifest.id);
         const loaded = (_c = this.app.plugins.plugins) == null ? void 0 : _c[this.manifest.id];
         if (!(loaded == null ? void 0 : loaded.panelAvailable) && !(loaded == null ? void 0 : loaded.ready)) throw new Error("New plugin panel did not open");
-        new import_obsidian10.Notice("AutoOC: plugin reloaded.");
+        new import_obsidian11.Notice("AutoOC: plugin reloaded.");
       } catch (e) {
-        new import_obsidian10.Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12e3);
+        new import_obsidian11.Notice("AutoOC: update saved. Restart Obsidian to finish. Do not uninstall the plugin.", 12e3);
       }
     } catch (error) {
-      new import_obsidian10.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
+      new import_obsidian11.Notice("AutoOC: update could not finish \u2014 " + String(error) + ". Your configuration is preserved; do not uninstall the plugin.", 12e3);
     } finally {
-      this.updateInProgress = !!this.pluginExecutionLease && fs33.existsSync(path31.join(this.pluginExecutionLease.directory, "update-pending.json"));
+      this.updateInProgress = !!this.pluginExecutionLease && fs36.existsSync(path34.join(this.pluginExecutionLease.directory, "update-pending.json"));
       if (maintenanceLease && this.pluginExecutionLease && !this.updateInProgress) {
         try {
           this.releasePluginExecution(false);
@@ -12704,6 +20271,7 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
   }
   // Keep CLI options before "--" so prompt text cannot be parsed as opencode flags.
   buildArgs(task) {
+    if (task.taskKind === "cli") throw new Error(CLI_TASK_COMMAND_NOTICE);
     if (task.taskKind === "opencode2" && task.interactiveTerminal) return [
       resolveOpencodeBin(this.settings.opencode2Path || "opencode"),
       ...openCodeInteractiveArgs(2, task.model || this.settings.defaultOpencode2Model || "", task.forceModel ? "" : task.agent || this.settings.defaultOpencode2Agent || "build", task.prompt)
@@ -12739,13 +20307,13 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       const result = await createOpenCodeWorkflowAdapter(definition, cwd).execute(task, prompt);
       return { output: this.redactSecrets(result.output), exitCode: result.succeeded ? 0 : -1 };
     }
-    return new Promise((resolve10) => {
-      const fs34 = require("fs");
-      const path32 = require("path");
+    return new Promise((resolve11) => {
+      const fs37 = require("fs");
+      const path35 = require("path");
       const tmpDir = require("os").tmpdir();
       const evalId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-      const outFile = path32.join(tmpDir, `autooc-eval-${evalId}.txt`);
-      const pidFile = path32.join(tmpDir, `autooc-eval-${evalId}.pid`);
+      const outFile = path35.join(tmpDir, `autooc-eval-${evalId}.txt`);
+      const pidFile = path35.join(tmpDir, `autooc-eval-${evalId}.pid`);
       const bin = resolveOpencodeBin(this.settings.opencodePath);
       const agent = this.getEffectiveAgent();
       const safeCwd = cwd.replace(/'/g, "''");
@@ -12755,15 +20323,15 @@ var AutoOCPlugin = class extends import_obsidian10.Plugin {
       const cleanup = (removeScript = true) => {
         hiddenProc == null ? void 0 : hiddenProc.cleanup(removeScript);
         try {
-          fs34.unlinkSync(scriptFile);
+          fs37.unlinkSync(scriptFile);
         } catch (e) {
         }
         try {
-          fs34.unlinkSync(outFile);
+          fs37.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs34.unlinkSync(pidFile);
+          fs37.unlinkSync(pidFile);
         } catch (e) {
         }
       };
@@ -12818,9 +20386,9 @@ DONE:%s
 %s' "$exit_code" "$combined" > ${shSingleQuoted(outFile)}`
         ].join("\n");
       }
-      const scriptFile = path32.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
+      const scriptFile = path35.join(tmpDir, `autooc-eval-${evalId}${scriptExt()}`);
       if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-      else fs34.writeFileSync(scriptFile, launchScript, "utf8");
+      else fs37.writeFileSync(scriptFile, launchScript, "utf8");
       hiddenProc = launchHidden(scriptFile, pidFile);
       const startedAt = Date.now();
       const poll = setInterval(() => {
@@ -12830,18 +20398,18 @@ DONE:%s
           clearInterval(poll);
           hiddenProc == null ? void 0 : hiddenProc.kill();
           cleanup(true);
-          resolve10({ output: "evaluation timeout", exitCode: -1 });
+          resolve11({ output: "evaluation timeout", exitCode: -1 });
           return;
         }
-        if (!fs34.existsSync(outFile)) return;
+        if (!fs37.existsSync(outFile)) return;
         settled = true;
         clearInterval(poll);
-        const raw = fs34.readFileSync(outFile, "utf8");
+        const raw = fs37.readFileSync(outFile, "utf8");
         cleanup(true);
         const doneMatch = raw.match(/^[\s\S]*?\nDONE:(-?\d+)\n([\s\S]*)$/m);
         const exitCode = doneMatch ? parseInt(doneMatch[1], 10) : -1;
         const output = doneMatch ? doneMatch[2].trim() : raw.trim();
-        resolve10({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
+        resolve11({ output: this.redactSecrets(normalizeCommandOutput(output)), exitCode });
       }, 2e3);
     });
   }
@@ -12950,7 +20518,7 @@ DONE:%s
       try {
         this.openHistoricalExecutionRecovery(workflowId, runId);
       } catch (error) {
-        new import_obsidian10.Notice(this.redactSecrets(String(error)));
+        new import_obsidian11.Notice(this.redactSecrets(String(error)));
       }
     }).open();
   }
@@ -13056,7 +20624,7 @@ DONE:%s
     return this.withDefinitionStart(
       "task",
       task.id,
-      (release) => this.executeTask(task, onComplete, overrides, owner, release),
+      (release2) => this.executeTask(task, onComplete, overrides, owner, release2),
       onComplete ? () => onComplete(this.busyTaskResult(task), -1) : void 0
     );
   }
@@ -13079,13 +20647,21 @@ DONE:%s
     const disabledReason = taskDisabledReason(this.settings.tasks[idx]);
     if (disabledReason) throw new Error(disabledReason);
     if (this.isTaskActive(this.settings.tasks[idx])) {
-      new import_obsidian10.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
+      new import_obsidian11.Notice(`AutoOC: Task "${this.settings.tasks[idx].name}" is already running.`);
       if (onComplete) await onComplete(this.busyTaskResult(this.settings.tasks[idx]), -1);
       return;
     }
     const selectedTask = this.settings.tasks[idx];
     const effectiveTask = { ...selectedTask, ...overrides };
     assertNoRetiredDependency(effectiveTask);
+    const cliError = getCliTaskValidationError(effectiveTask);
+    if (cliError) throw new Error(cliError);
+    if (effectiveTask.taskKind === "cli") prepareCliTask(
+      effectiveTask,
+      this.settings,
+      effectiveTask.workingDirectory || this.settings.workingDirectory || this.app.vault.adapter.basePath || ".",
+      effectiveTask.prompt
+    );
     const binding = effectiveTask.runtimeExecution;
     if (!owner && (binding == null ? void 0 : binding.requiresReconciliation)) throw new Error(`Unfinished attempt ${binding.runId}. Use Abandon attempt on this task after checking its external process has ended. No new task was started.`);
     if (((_a = effectiveTask.legacyExecution) == null ? void 0 : _a.stopState) || (binding == null ? void 0 : binding.phase) !== "abandoned" && (binding == null ? void 0 : binding.terminalUncertainty) && !binding.disposition) {
@@ -13130,13 +20706,13 @@ DONE:%s
     }
     if (effectiveTask.taskKind === "codex") {
       void this.runCodexTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
-        new import_obsidian10.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian11.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
     if (effectiveTask.taskKind === "copilot") {
       void this.runCopilotTask(effectiveTask, onComplete, owner, attempt).catch((error) => {
-        new import_obsidian10.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
+        new import_obsidian11.Notice(this.redactSecrets(`AutoOC: Task could not start. ${String(error)}`), 12e3);
       }).finally(() => this.finishLegacyStart(attempt));
       return;
     }
@@ -13148,7 +20724,7 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: branch must be a string when provided.";
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
+      new import_obsidian11.Notice(`AutoOC: "${task.name}" has an invalid branch.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -13160,7 +20736,7 @@ DONE:%s
         this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
         this.settings.tasks[idx].output = "[AutoOC] Task not launched: invalid git branch name.";
         await this.saveSettings();
-        new import_obsidian10.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
+        new import_obsidian11.Notice(`AutoOC: "${task.name}" has an invalid git branch name.`);
         if (onComplete) await onComplete(this.settings.tasks[idx], -1);
         return;
       }
@@ -13170,16 +20746,16 @@ DONE:%s
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: prompt is empty.";
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: "${task.name}" has an empty prompt.`);
+      new import_obsidian11.Notice(`AutoOC: "${task.name}" has an empty prompt.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
-    if (!((_d = effectiveTask.model) == null ? void 0 : _d.trim())) {
+    if (effectiveTask.taskKind !== "cli" && !((_d = effectiveTask.model) == null ? void 0 : _d.trim())) {
       this.settings.tasks[idx].status = "failed";
       this.settings.tasks[idx].lastRun = (/* @__PURE__ */ new Date()).toISOString();
       this.settings.tasks[idx].output = "[AutoOC] Task not launched: model is empty.";
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: "${task.name}" has no model selected.`);
+      new import_obsidian11.Notice(`AutoOC: "${task.name}" has no model selected.`);
       if (onComplete) await onComplete(this.settings.tasks[idx], -1);
       return;
     }
@@ -13187,12 +20763,15 @@ DONE:%s
     const taskCwd = effectiveTask.workingDirectory || this.settings.workingDirectory || vaultBasePath;
     const secretEnv = {};
     if (effectiveTask.interactiveTerminal) {
+      const cliLabel = effectiveTask.taskKind === "cli" ? INTERACTIVE_CLIS.find((cli) => cli.id === effectiveTask.cliProvider).label : "OpenCode CLI";
       const current = this.settings.tasks[idx];
       let settled2 = false;
       let cancelled2 = false;
+      const launchController = new AbortController();
       const controller2 = { kill: () => {
         cancelled2 = true;
         settled2 = true;
+        launchController.abort();
       } };
       attempt.handle = controller2;
       this.runningProcesses.set(task.id, controller2);
@@ -13200,24 +20779,40 @@ DONE:%s
       const finish = async (error) => {
         var _a2;
         if (!isCurrent()) return;
+        if ((error == null ? void 0 : error.code) === "AUTOOC_TERMINAL_UNCERTAIN") {
+          current.output = this.redactSecrets(`[AutoOC] Interactive terminal outcome is unconfirmed: ${String(error)}`);
+          await this.killTask(task.id, { ...attempt.identity });
+          return;
+        }
         settled2 = true;
         current.status = error ? "failed" : "completed";
-        current.output = error ? `[AutoOC] Could not open interactive OpenCode CLI: ${String(error)}` : "[interactive OpenCode CLI launch confirmed; agent task completion is not tracked]";
+        current.output = error ? `[AutoOC] Could not open interactive ${cliLabel}: ${String(error)}` : `[interactive ${cliLabel} launch confirmed; agent task completion is not tracked]`;
         if (error) (_a2 = this.view) == null ? void 0 : _a2.startGradualSink(task.id);
         await this.saveSettings();
         if (!this.isLegacyCurrent(attempt) || cancelled2 || this.settings.tasks.find((candidate) => candidate.id === task.id) !== current || current.status !== (error ? "failed" : "completed") || this.runningProcesses.get(task.id) !== controller2) return;
         if (this.runningProcesses.get(task.id) === controller2) this.runningProcesses.delete(task.id);
-        new import_obsidian10.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
+        new import_obsidian11.Notice(error ? `AutoOC: could not open CLI task "${task.name}".` : `AutoOC: opened CLI task "${task.name}".`);
         if (onComplete) await onComplete(current, error ? -1 : 0);
       };
       current.status = "running";
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
-      current.output = "[opening interactive OpenCode CLI...]";
+      current.output = `[opening interactive ${cliLabel}...]`;
       (_e = this.view) == null ? void 0 : _e.resetDashboardTaskShift(task.id);
       await this.saveSettings();
       if (!isCurrent()) return;
       this.finishLegacyStart(attempt);
       try {
+        if (effectiveTask.taskKind === "cli") {
+          const request = prepareCliTask(effectiveTask, this.settings, taskCwd, effectiveTask.prompt, launchController.signal);
+          if (this.settings.cliTerminalDestination === "integrated") {
+            if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. No external terminal was started.");
+            await this.cliTerminals.openTask(request);
+          } else {
+            await launchExternalCliTask(request, this.settings.linuxTerminal);
+          }
+          await finish();
+          return;
+        }
         let prompt2 = effectiveTask.prompt;
         if (effectiveTask.useRalphLoop) {
           prompt2 = `/ralph-loop ${prompt2}`;
@@ -13225,6 +20820,21 @@ DONE:%s
         const major = effectiveTask.taskKind === "opencode2" ? 2 : 1;
         const bin2 = checkedOpenCode2Bin || resolveOpencodeBin(this.settings.opencodePath);
         const agent = major === 2 ? effectiveTask.agent || this.settings.defaultOpencode2Agent || "build" : this.getEffectiveAgent(effectiveTask.agent);
+        if (this.settings.cliTerminalDestination === "integrated") {
+          if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. No external terminal was started.");
+          await this.cliTerminals.openTask({
+            bin: bin2,
+            cwd: taskCwd,
+            label: effectiveTask.name,
+            major,
+            model: effectiveTask.model,
+            agent: effectiveTask.forceModel ? "" : agent,
+            prompt: prompt2,
+            signal: launchController.signal
+          });
+          await finish();
+          return;
+        }
         const launchOptions = {
           onError: (error) => {
             void finish(error);
@@ -13253,7 +20863,7 @@ DONE:%s
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.finishLegacyStart(attempt);
-    new import_obsidian10.Notice(`AutoOC: running "${task.name}"\u2026`);
+    new import_obsidian11.Notice(`AutoOC: running "${task.name}"\u2026`);
     const args = this.buildArgs(effectiveTask);
     const bin = checkedOpenCode2Bin || args[0];
     let prompt = effectiveTask.prompt;
@@ -13270,47 +20880,47 @@ DONE:%s
     const promptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.prompt.txt`);
     const tmpFullPromptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
     let fullPromptFile = require("path").resolve(taskCwd, `.autooc-${task.id}-${attempt.identity.token}.full-prompt.txt`);
-    const fs34 = require("fs");
+    const fs37 = require("fs");
     try {
-      fs34.unlinkSync(outFile);
+      fs37.unlinkSync(outFile);
     } catch (e) {
     }
     try {
-      fs34.unlinkSync(errFile);
+      fs37.unlinkSync(errFile);
     } catch (e) {
     }
     try {
-      fs34.unlinkSync(doneFile);
+      fs37.unlinkSync(doneFile);
     } catch (e) {
     }
     try {
-      fs34.unlinkSync(pidFile);
+      fs37.unlinkSync(pidFile);
     } catch (e) {
     }
     try {
-      fs34.unlinkSync(promptFile);
+      fs37.unlinkSync(promptFile);
     } catch (e) {
     }
     try {
-      fs34.unlinkSync(fullPromptFile);
+      fs37.unlinkSync(fullPromptFile);
     } catch (e) {
     }
     try {
-      fs34.unlinkSync(tmpFullPromptFile);
+      fs37.unlinkSync(tmpFullPromptFile);
     } catch (e) {
     }
     if (preparedPrompt.length > SAFE_CLI_PROMPT_LENGTH || prompt.includes("WORKFLOW HANDOFF CONTEXT")) {
       try {
-        fs34.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs37.writeFileSync(fullPromptFile, prompt, "utf8");
       } catch (e) {
         fullPromptFile = tmpFullPromptFile;
-        fs34.writeFileSync(fullPromptFile, prompt, "utf8");
+        fs37.writeFileSync(fullPromptFile, prompt, "utf8");
       }
       const location = fullPromptFile === tmpFullPromptFile ? "temp file" : "workspace file";
       const shortPrompt = `Read the complete task prompt and workflow context from the ${location} at ${fullPromptFile} and follow it exactly.`;
-      fs34.writeFileSync(promptFile, shortPrompt, "utf8");
+      fs37.writeFileSync(promptFile, shortPrompt, "utf8");
     } else {
-      fs34.writeFileSync(promptFile, preparedPrompt, "utf8");
+      fs37.writeFileSync(promptFile, preparedPrompt, "utf8");
     }
     const safeCwd = taskCwd.replace(/'/g, "''");
     let gitCmds = "";
@@ -13338,7 +20948,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const launchScript = buildOpenCodeScript({ pidFile, secretEnv, safeCwd, gitCmds, bin, model, effectiveAgent, effectiveTask, promptFile, outFile, errFile, doneFile, taskCwd, major: effectiveTask.taskKind === "opencode2" ? 2 : 1 });
     const scriptFile = require("path").join(tmpDir, `autooc-${task.id}-${attempt.identity.token}${scriptExt()}`);
     if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-    else fs34.writeFileSync(scriptFile, launchScript, "utf8");
+    else fs37.writeFileSync(scriptFile, launchScript, "utf8");
     let hiddenProc;
     try {
       hiddenProc = launchHidden(scriptFile, pidFile);
@@ -13348,7 +20958,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = `[AutoOC] Task launcher failed: ${String(error)}`;
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: could not launch "${task.name}".`);
+      new import_obsidian11.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
       return;
     }
@@ -13360,31 +20970,31 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
     const cleanupTempFiles = () => {
       hiddenProc.cleanup(true);
       try {
-        fs34.unlinkSync(promptFile);
+        fs37.unlinkSync(promptFile);
       } catch (e) {
       }
       try {
-        fs34.unlinkSync(fullPromptFile);
+        fs37.unlinkSync(fullPromptFile);
       } catch (e) {
       }
       try {
-        fs34.unlinkSync(tmpFullPromptFile);
+        fs37.unlinkSync(tmpFullPromptFile);
       } catch (e) {
       }
       try {
-        fs34.unlinkSync(outFile);
+        fs37.unlinkSync(outFile);
       } catch (e) {
       }
       try {
-        fs34.unlinkSync(errFile);
+        fs37.unlinkSync(errFile);
       } catch (e) {
       }
       try {
-        fs34.unlinkSync(doneFile);
+        fs37.unlinkSync(doneFile);
       } catch (e) {
       }
       try {
-        fs34.unlinkSync(pidFile);
+        fs37.unlinkSync(pidFile);
       } catch (e) {
       }
     };
@@ -13415,7 +21025,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       cleanupTempFiles();
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: could not launch "${task.name}".`);
+      new import_obsidian11.Notice(`AutoOC: could not launch "${task.name}".`);
       if (onComplete) await onComplete(current, -1);
     });
     const timeoutSeconds = (_g = this.settings.taskTimeoutSeconds) != null ? _g : DEFAULT_TASK_TIMEOUT_SECONDS;
@@ -13448,7 +21058,7 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
 [\u23F1 timeout warning: ${timeoutSeconds}s exceeded; still waiting for final result]`;
         await this.saveSettings(false);
         if (!this.isLegacyCurrent(attempt)) return;
-        new import_obsidian10.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
+        new import_obsidian11.Notice(`AutoOC: \u23F1 "${task.name}" exceeded ${timeoutSeconds}s; still waiting.`);
       }
       if (timeoutEnabled && timeoutWarned && Date.now() - startedAt > timeoutMs + 3e5) {
         if (shouldAbortBeforeFinalMutation(t)) return;
@@ -13467,12 +21077,12 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         await this.saveSettings();
         if (wasManuallyStopped(t)) return;
         if (onComplete) await onComplete(t, -1);
-        new import_obsidian10.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
+        new import_obsidian11.Notice(`AutoOC: \u23F1 "${task.name}" timed out.`);
         return;
       }
-      if (!fs34.existsSync(doneFile)) {
-        const stdout2 = fs34.existsSync(outFile) ? decodeCommandBuffer(fs34.readFileSync(outFile)) : "";
-        const stderr2 = fs34.existsSync(errFile) ? decodeCommandBuffer(fs34.readFileSync(errFile)) : "";
+      if (!fs37.existsSync(doneFile)) {
+        const stdout2 = fs37.existsSync(outFile) ? decodeCommandBuffer(fs37.readFileSync(outFile)) : "";
+        const stderr2 = fs37.existsSync(errFile) ? decodeCommandBuffer(fs37.readFileSync(errFile)) : "";
         const normalized2 = this.redactSecrets(formatTaskOutput(stdout2, stderr2));
         if (normalized2) {
           t.output = `${normalized2}
@@ -13489,9 +21099,9 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
       if (pollHandle) clearInterval(pollHandle);
       pollHandle = null;
       if (this.runningProcesses.get(task.id) === controller) this.runningProcesses.delete(task.id);
-      const stdout = fs34.existsSync(outFile) ? decodeCommandBuffer(fs34.readFileSync(outFile)) : "";
-      const stderr = fs34.existsSync(errFile) ? decodeCommandBuffer(fs34.readFileSync(errFile)) : "";
-      const exitCodeRaw = fs34.readFileSync(doneFile, "utf8").trim();
+      const stdout = fs37.existsSync(outFile) ? decodeCommandBuffer(fs37.readFileSync(outFile)) : "";
+      const stderr = fs37.existsSync(errFile) ? decodeCommandBuffer(fs37.readFileSync(errFile)) : "";
+      const exitCodeRaw = fs37.readFileSync(doneFile, "utf8").trim();
       cleanupTempFiles();
       if (shouldAbortBeforeFinalMutation(t)) return;
       const exitCode = /^-?\d+$/.test(exitCodeRaw) ? parseInt(exitCodeRaw, 10) : -1;
@@ -13503,10 +21113,10 @@ if [ $? -eq 0 ]; then echo "Created branch $branch_name"; else git checkout "$sa
         t.output += `
 [exit code: ${exitCode}]`;
         (_c2 = this.view) == null ? void 0 : _c2.startGradualSink(task.id);
-        new import_obsidian10.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
+        new import_obsidian11.Notice(`AutoOC: \u274C "${task.name}" failed (code ${exitCode}).`);
       } else {
         t.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
-        new import_obsidian10.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
+        new import_obsidian11.Notice(`AutoOC: \u2705 "${task.name}" completed.`);
       }
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, task.id, t.output);
@@ -13611,7 +21221,7 @@ ${current.output}`);
     await this.saveSettings();
     if (!this.isLegacyCurrent(attempt)) return;
     this.emitTaskUpdated(current);
-    new import_obsidian10.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
+    new import_obsidian11.Notice(`AutoOC: ${exitCode === 0 ? "\u2705" : "\u274C"} Copilot task "${task.name}" ${exitCode === 0 ? "completed" : "failed"}.`);
     if (onComplete) await onComplete(current, exitCode);
   }
   createCopilotClient(cwd, onOutput) {
@@ -13663,14 +21273,14 @@ ${current.output}`);
     await this.saveSettings();
     if (!isCurrent()) return;
     this.finishLegacyStart(attempt);
-    new import_obsidian10.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
+    new import_obsidian11.Notice(`AutoOC: running Codex task "${task.name}"\u2026`);
     const scheduleSave = () => {
       if (saveTimer) return;
       saveTimer = setTimeout(() => {
         saveTimer = null;
         if (!isCurrent()) return;
         void this.saveSettings(false).catch(() => {
-          new import_obsidian10.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
+          new import_obsidian11.Notice("AutoOC: could not persist Codex progress; previous settings were preserved.");
         });
       }, 1e4);
     };
@@ -13682,9 +21292,9 @@ ${current.output}`);
         if (task.interactiveTerminal) {
           const bin = resolveCodexBin(this.settings.codexPath);
           openCodexApp(bin, taskCwd, (error) => {
-            new import_obsidian10.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
+            new import_obsidian11.Notice(`AutoOC: Codex started, but ChatGPT could not be opened: ${String(error)}`);
           });
-          new import_obsidian10.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
+          new import_obsidian11.Notice(`AutoOC: opened ChatGPT / Codex task "${task.name}".`);
         }
         scheduleSave();
       },
@@ -13706,7 +21316,7 @@ ${current.output}`);
         current.output += `${current.output ? "\n" : ""}[waiting for approval: ${approval.summary}]`;
         void this.saveSettings(false);
         this.emitTaskUpdated(current);
-        new import_obsidian10.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
+        new import_obsidian11.Notice(`AutoOC: Codex task "${task.name}" needs approval.`);
       }
     });
     this.runningCodexClients.set(task.id, client);
@@ -13735,13 +21345,13 @@ ${current.output}`);
       current.output = finalOutput;
       if (successful) {
         current.status = task.scheduleType === "daily" || task.scheduleType === "weekly" || task.scheduleType === "monthly" || task.scheduleType === "interval" ? "pending" : "completed";
-        new import_obsidian10.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
+        new import_obsidian11.Notice(`AutoOC: \u2705 Codex task "${task.name}" completed.`);
       } else {
         current.status = "failed";
         current.output += `
 [Codex status: ${result.status}]`;
         (_c = this.view) == null ? void 0 : _c.startGradualSink(task.id);
-        new import_obsidian10.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+        new import_obsidian11.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
       }
       codexLogOutput = `${metadata}
 [started: ${startedAt}]
@@ -13765,7 +21375,7 @@ ${this.redactSecrets(result.transcript || current.output)}`;
 
 ${current.output}`;
       (_d = this.view) == null ? void 0 : _d.startGradualSink(task.id);
-      new import_obsidian10.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
+      new import_obsidian11.Notice(`AutoOC: \u274C Codex task "${task.name}" failed.`);
     } finally {
       if (saveTimer) clearTimeout(saveTimer);
       if (this.runningCodexClients.get(task.id) === client) this.runningCodexClients.delete(task.id);
@@ -13798,11 +21408,11 @@ ${current.output}`;
     const client = this.runningCodexClients.get(taskId);
     const approval = task == null ? void 0 : task.pendingCodexApproval;
     if (!task || !client || !approval) {
-      new import_obsidian10.Notice("AutoOC: this Codex approval is no longer active.");
+      new import_obsidian11.Notice("AutoOC: this Codex approval is no longer active.");
       return;
     }
     if (!client.resolveApproval(approval.requestId, approved)) {
-      new import_obsidian10.Notice("AutoOC: could not answer the Codex approval.");
+      new import_obsidian11.Notice("AutoOC: could not answer the Codex approval.");
       return;
     }
     task.output += `
@@ -13837,7 +21447,7 @@ ${current.output}`;
       current.lastRun = (/* @__PURE__ */ new Date()).toISOString();
       current.output = "[AutoOC] Code task not launched: code is empty.";
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: "${current.name}" has empty code.`);
+      new import_obsidian11.Notice(`AutoOC: "${current.name}" has empty code.`);
       if (onComplete) await onComplete(current, -1);
       return;
     }
@@ -13849,7 +21459,7 @@ ${current.output}`;
     current.output = "[running code task...]\n";
     (_a = this.view) == null ? void 0 : _a.resetDashboardTaskShift(current.id);
     await this.saveSettings();
-    new import_obsidian10.Notice(`AutoOC: running code task "${current.name}"...`);
+    new import_obsidian11.Notice(`AutoOC: running code task "${current.name}"...`);
     try {
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       this.finishLegacyStart(attempt);
@@ -13867,7 +21477,7 @@ ${current.output}`;
       if (!isCurrent() || this.codeTaskRuns.get(current.id) !== execution || current.status !== "running") return;
       current.output = this.redactSecrets((current.output || "") + out);
       current.status = current.scheduleType === "daily" || current.scheduleType === "weekly" || current.scheduleType === "monthly" || current.scheduleType === "interval" ? "pending" : "completed";
-      new import_obsidian10.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
+      new import_obsidian11.Notice(`AutoOC: \u2705 code task "${current.name}" completed.`);
       if (this.settings.logsEnabled) {
         saveLogToFile(vaultBasePath, current.id, current.output || "(no output)");
         cleanupOldLogs(vaultBasePath, current.id, this.settings.maxLogsPerTask);
@@ -13886,7 +21496,7 @@ ${current.output}`;
         cleanupLogsByAge(vaultBasePath, current.id, this.settings.logRetentionDays);
       }
       await this.saveSettings();
-      new import_obsidian10.Notice(`AutoOC: \u274C code task "${current.name}" failed.`);
+      new import_obsidian11.Notice(`AutoOC: \u274C code task "${current.name}" failed.`);
       if (onComplete) await onComplete(current, -1);
     } finally {
       if (this.codeTaskRuns.get(current.id) === execution) this.codeTaskRuns.delete(current.id);
@@ -13940,7 +21550,7 @@ ${current.output}`;
         if (((_a2 = this.legacyAttempts) == null ? void 0 : _a2.get(id)) === attempt && task.legacyExecution === metadata) {
           await this.saveSettings();
           if (((_b2 = this.legacyAttempts) == null ? void 0 : _b2.get(id)) !== attempt || task.legacyExecution !== metadata || (ownerWorkflow == null ? void 0 : ownerWorkflow.legacyExecution) !== ownerExecution) return "stop-requested";
-          new import_obsidian10.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
+          new import_obsidian11.Notice(metadata.stopState === "error" ? `AutoOC: Stop request failed: ${metadata.stopError}. Outcome unconfirmed.` : "AutoOC: Stop requested; external outcome unconfirmed. Continuation disabled.");
         }
         return "stop-requested";
       })();
@@ -13965,7 +21575,7 @@ ${current.output}`;
       }
       if (!execution.controller.signal.aborted) {
         execution.controller.abort();
-        new import_obsidian10.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
+        new import_obsidian11.Notice("AutoOC: Stop requested; awaiting the observed outcome. Reconciliation may be required.");
       }
       return "stop-requested";
     }
@@ -13997,7 +21607,7 @@ ${current.output}`;
     if (wf.legacyExecution !== execution || ((_h = this.workflowRuntime) == null ? void 0 : _h.has(id))) return;
     if (((_i = this.definitionStarts) == null ? void 0 : _i.get(`workflow:${id}`)) === startToken) (_j = this.definitionStarts) == null ? void 0 : _j.delete(`workflow:${id}`);
     this.refreshStartControls();
-    new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
+    new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" continuation stopped; external task outcome may be unconfirmed.`);
   }
   async runDueAll() {
     if (this.lifecycleStopped || this.startupPending || this.updateInProgress || this.bulkCatalogMutationInProgress) return;
@@ -14017,7 +21627,7 @@ ${current.output}`;
       if (this.definitionDisabledReason("task", dueTasks[i].id)) continue;
       const error = autoOCDependencyError(dueTasks[i]);
       if (error) {
-        new import_obsidian10.Notice(error);
+        new import_obsidian11.Notice(error);
         continue;
       }
       await this.runTask(dueTasks[i]);
@@ -14032,7 +21642,7 @@ ${current.output}`;
       try {
         assertWorkflowDependencies(dueWorkflows[i], this.settings.tasks, this.settings.workflows);
       } catch (error) {
-        new import_obsidian10.Notice(String(error));
+        new import_obsidian11.Notice(String(error));
         continue;
       }
       await this.runWorkflow(dueWorkflows[i]);
@@ -14065,17 +21675,17 @@ ${current.output}`;
     };
     this.settings.tasks.push(copy);
     await this.saveSettings();
-    new import_obsidian10.Notice(`Task "${copy.name}" duplicated.`);
+    new import_obsidian11.Notice(`Task "${copy.name}" duplicated.`);
   }
   async clearTaskLogs(id) {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     clearTaskLogs(vaultBasePath, id);
-    new import_obsidian10.Notice("Logs cleared for this task.");
+    new import_obsidian11.Notice("Logs cleared for this task.");
   }
   async clearAllLogs() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     clearAllLogs(vaultBasePath);
-    new import_obsidian10.Notice("All logs cleared.");
+    new import_obsidian11.Notice("All logs cleared.");
   }
   workflowTaskIds(workflow) {
     return Array.from(new Set(workflow.steps.map((step) => step.taskId).filter(Boolean)));
@@ -14123,7 +21733,7 @@ ${current.output}`;
     };
     this.settings.workflows.push(copy);
     await this.saveSettings();
-    new import_obsidian10.Notice(`Workflow "${copy.name}" duplicated.`);
+    new import_obsidian11.Notice(`Workflow "${copy.name}" duplicated.`);
   }
   ensureUniqueTaskName(name) {
     const existing = new Set(this.settings.tasks.map((t) => t.name));
@@ -14185,13 +21795,13 @@ ${current.output}`;
         title: "Export AutoOC tasks and workflows"
       });
       if (result.canceled || !result.filePath) return;
-      fs33.writeFileSync(result.filePath, json, "utf8");
+      fs36.writeFileSync(result.filePath, json, "utf8");
       const exported = JSON.parse(json);
-      new import_obsidian10.Notice(
+      new import_obsidian11.Notice(
         `AutoOC: exported ${exported.tasks.length} task(s) and ${exported.workflows.length} workflow(s).`
       );
     } catch (e) {
-      new import_obsidian10.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
+      new import_obsidian11.Notice(`AutoOC: export failed \u2014 ${String(e)}`);
     }
   }
   buildExportSelectionPayload(selectedTaskIds, selectedWorkflowIds) {
@@ -14214,7 +21824,7 @@ ${current.output}`;
     };
   }
   async importFromFile(filePath) {
-    const raw = fs33.readFileSync(filePath, "utf8");
+    const raw = fs36.readFileSync(filePath, "utf8");
     const data = JSON.parse(raw);
     return this.importFromData(data);
   }
@@ -14233,37 +21843,39 @@ ${current.output}`;
     }
     for (const workflow of data.workflows || []) for (const step of workflow.steps || []) validateDisabled(step);
     validateNestedWorkflowExport(data);
+    for (const task of data.tasks || []) {
+      const cliError = getCliTaskValidationError(task);
+      if (cliError) throw new Error(`Task "${task.name}": ${cliError}`);
+      const kind = task.taskKind || "opencode";
+      if (!["opencode", "opencode2", "codex", "copilot", "code", "cli"].includes(kind)) throw new Error(`Unsupported taskKind: ${String(kind)}.`);
+      if (kind === "opencode2" && task.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks.");
+      const copilotError = getCopilotTaskValidationError(task);
+      if (copilotError) throw new Error(`Task "${task.name}": ${copilotError}`);
+      if (task.reasoningEffort !== void 0 && (kind !== "codex" && !(kind === "cli" && task.cliProvider === "codex") || typeof task.reasoningEffort !== "string" || !task.reasoningEffort.trim())) {
+        throw new Error(`Task "${task.name}" has reasoningEffort outside a Codex task.`);
+      }
+      if (kind === "code" && task.interactiveTerminal === true) throw new Error(`Task "${task.name}" cannot combine Code with interactiveTerminal.`);
+    }
     const importedWorkflowIds = new Map((data.workflows || []).map((w) => [w, generateId()]));
     const exportIdToWorkflowId = new Map((data.workflows || []).map((w) => [w.exportId, importedWorkflowIds.get(w)]));
     const exportIdToTaskId = /* @__PURE__ */ new Map();
     let tasksImported = 0;
     for (const et of data.tasks || []) {
       const importedTaskKind = et.taskKind || "opencode";
-      if (importedTaskKind === "opencode2" && et.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks.");
-      if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(importedTaskKind)) {
-        throw new Error(`Unsupported taskKind: ${String(importedTaskKind)}.`);
-      }
-      const copilotError = getCopilotTaskValidationError(et);
-      if (copilotError) throw new Error(`Task "${et.name}": ${copilotError}`);
-      if (et.reasoningEffort !== void 0 && (importedTaskKind !== "codex" || typeof et.reasoningEffort !== "string" || !et.reasoningEffort.trim())) {
-        throw new Error(`Task "${et.name}" has reasoningEffort outside a Codex task.`);
-      }
-      if (importedTaskKind === "code" && et.interactiveTerminal === true) {
-        throw new Error(`Task "${et.name}" cannot combine Code with interactiveTerminal.`);
-      }
       const task = {
         id: generateId(),
         taskKind: importedTaskKind,
+        cliProvider: importedTaskKind === "cli" ? et.cliProvider : void 0,
         requiresAutoOCSecrets: et.requiresAutoOCSecrets,
         name: this.ensureUniqueTaskName(et.name),
         area: (_a = et.area) != null ? _a : "",
         prompt: importedTaskKind === "code" ? et.code || et.prompt || "" : et.prompt,
-        model: importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : importedTaskKind === "opencode2" ? this.settings.defaultOpencode2Model || "" : this.getEffectiveDefaultModel(),
+        model: importedTaskKind === "cli" ? et.model || "" : importedTaskKind === "code" ? "" : importedTaskKind === "copilot" ? this.settings.defaultCopilotModel || "" : importedTaskKind === "codex" ? this.getEffectiveCodexModel() : importedTaskKind === "opencode2" ? this.settings.defaultOpencode2Model || "" : this.getEffectiveDefaultModel(),
         copilotAllowAllTools: importedTaskKind === "copilot" ? et.copilotAllowAllTools === true : void 0,
-        agent: importedTaskKind === "opencode2" ? et.agent || this.settings.defaultOpencode2Agent || "build" : importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
-        reasoningEffort: importedTaskKind === "codex" ? et.reasoningEffort || this.settings.defaultCodexReasoningEffort : void 0,
+        agent: importedTaskKind === "cli" ? et.agent || "" : importedTaskKind === "opencode2" ? et.agent || this.settings.defaultOpencode2Agent || "build" : importedTaskKind === "opencode" ? this.getEffectiveAgent(et.agent) : "",
+        reasoningEffort: importedTaskKind === "cli" ? et.reasoningEffort : importedTaskKind === "codex" ? et.reasoningEffort || this.settings.defaultCodexReasoningEffort : void 0,
         useRalphLoop: importedTaskKind === "opencode" ? (_b = et.useRalphLoop) != null ? _b : false : false,
-        forceModel: isOpenCodeTask(importedTaskKind) ? (_c = et.forceModel) != null ? _c : false : false,
+        forceModel: importedTaskKind === "cli" || isOpenCodeTask(importedTaskKind) ? (_c = et.forceModel) != null ? _c : false : false,
         scheduleType: (_d = et.scheduleType) != null ? _d : "manual",
         scheduleTime: (_e = et.scheduleTime) != null ? _e : nowTimeString(),
         scheduleDate: (_f = et.scheduleDate) != null ? _f : "",
@@ -14359,7 +21971,7 @@ ${current.output}`;
     await this.saveSettings();
     for (const item of [...this.settings.tasks, ...this.settings.workflows, ...this.settings.workflows.flatMap((w) => w.steps || [])]) {
       const error = autoOCDependencyError(item);
-      if (error) new import_obsidian10.Notice(error);
+      if (error) new import_obsidian11.Notice(error);
     }
     return { tasksImported, workflowsImported };
   }
@@ -14371,7 +21983,7 @@ ${current.output}`;
     await this.saveSettings();
   }
   async runWorkflow(workflow) {
-    return this.withDefinitionStart("workflow", workflow.id, (release) => this.executeWorkflow(workflow, release));
+    return this.withDefinitionStart("workflow", workflow.id, (release2) => this.executeWorkflow(workflow, release2));
   }
   async executeWorkflow(workflow, releaseStart) {
     assertWorkflowEnabled(this.settings.workflows.find((w) => w.id === workflow.id) || workflow, this.settings.tasks, this.settings.workflows);
@@ -14390,21 +22002,21 @@ ${current.output}`;
       const execution = item.runtimeExecution;
       return execution && !["completed", "failed", "abandoned"].includes(execution.phase) && !this.ownsSharedRun(item.id, execution.runId);
     })) {
-      new import_obsidian10.Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
+      new import_obsidian11.Notice("AutoOC: a durable execution requires resume or reconciliation before starting a workflow.");
       return;
     }
     if (wf.status === "running") {
-      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
+      new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" is already running.`);
       return;
     }
     if (wf.steps.length === 0) {
-      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
+      new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" has no steps.`);
       return;
     }
     for (let i = 0; i < wf.steps.length; i++) {
       const step = wf.steps[i];
       if (step.stepKind === "task" && !this.settings.tasks.find((t) => t.id === step.taskId)) {
-        new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
+        new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${i + 1} references a deleted task.`);
         return;
       }
     }
@@ -14440,13 +22052,13 @@ ${current.output}`;
     if (this.workflowRuntime.get(wf.id) !== context || wf.status !== "running") return;
     releaseStart == null ? void 0 : releaseStart();
     this.refreshStartControls();
-    new import_obsidian10.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
+    new import_obsidian11.Notice(`AutoOC: \u26A1 Starting workflow "${wf.name}" (${wf.steps.length} steps)...`);
     const entryStep = this.findEntryStep(wf);
     if (!entryStep) {
       wf.status = "failed";
       await this.saveSettings();
       if (this.workflowRuntime.get(wf.id) !== context) return;
-      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
+      new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" has no reachable entry step.`);
       return;
     }
     await this.runWorkflowStepById(wf.id, entryStep.id);
@@ -14468,7 +22080,7 @@ ${current.output}`;
     const stepIdx = wf.steps.findIndex((s) => s.id === stepId);
     if (stepIdx === -1) {
       wf.status = "failed";
-      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
+      new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" \u2014 step ${stepId} not found.`);
       await this.saveSettings();
       return;
     }
@@ -14486,7 +22098,7 @@ ${current.output}`;
     return resolveWorkflowTransition(wf.steps, currentStepIndex, lastOutput, lastSucceeded, transitions, this.getRuntimeOutputs(wf.id), {
       evaluate: async (transition, target, input) => {
         var _a, _b;
-        new import_obsidian10.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
+        new import_obsidian11.Notice(`AutoOC: Evaluating transition for "${wf.name}" \u2192 ${target.id}...`);
         const cwd = this.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
         const model = this.settings.defaultAiEngine === "opencode2" ? this.settings.defaultOpencode2Model || "" : ((_a = this.availableModels[0]) == null ? void 0 : _a.value) || this.settings.defaultModel || "opencode/default";
         const prompt = ((_b = transition.evaluatePrompt) == null ? void 0 : _b.trim()) || "Did the previous step complete successfully? If it is safe to continue, reply YES. Otherwise reply NO.";
@@ -14501,7 +22113,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         return result.output;
       },
       onError: (kind, error) => {
-        new import_obsidian10.Notice(`AutoOC: ${kind} error \u2014 ${String(error)}`);
+        new import_obsidian11.Notice(`AutoOC: ${kind} error \u2014 ${String(error)}`);
       }
     });
   }
@@ -14559,7 +22171,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     (_a = this.workflowDelayControllers.get(wf.id)) == null ? void 0 : _a.abort();
     const controller = new AbortController();
     this.workflowDelayControllers.set(wf.id, controller);
-    new import_obsidian10.Notice(`AutoOC: \u23F1 ${spec.output} in "${wf.name}"...`);
+    new import_obsidian11.Notice(`AutoOC: \u23F1 ${spec.output} in "${wf.name}"...`);
     try {
       await waitForWorkflowDelay(spec.milliseconds, controller.signal);
       if (controller.signal.aborted || wf.status !== "running" || this.workflowRuntime.get(wf.id) !== ctx) return;
@@ -14594,13 +22206,13 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (this.workflowRuntime.get(wf.id) !== ctx) return;
       const masked = this.redactSecrets(out);
       if (ctx) ctx.stepOutputs.set(step.id, masked);
-      new import_obsidian10.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
+      new import_obsidian11.Notice(`AutoOC: \u2699 Code step completed in "${wf.name}" (${out.length} chars)`);
       await this.completeStep(wf, step, stepIndex, true, masked);
     } catch (err) {
       if (this.workflowRuntime.get(wf.id) !== ctx) return;
       const msg = this.redactSecrets(`[code error: ${String(err)}]`);
       if (ctx) ctx.stepOutputs.set(step.id, msg);
-      new import_obsidian10.Notice(this.redactSecrets(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`));
+      new import_obsidian11.Notice(this.redactSecrets(`AutoOC: \u274C Code step failed in "${wf.name}" \u2014 ${String(err)}`));
       await this.completeStep(wf, step, stepIndex, false, msg);
     }
   }
@@ -14616,7 +22228,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     const taskIdx = this.settings.tasks.findIndex((t) => t.id === step.taskId);
     if (taskIdx === -1) {
       wf.status = "failed";
-      new import_obsidian10.Notice(`AutoOC: Workflow "${wf.name}" failed \u2014 task not found at step ${stepIndex + 1}.`);
+      new import_obsidian11.Notice(`AutoOC: Workflow "${wf.name}" failed \u2014 task not found at step ${stepIndex + 1}.`);
       await this.saveSettings();
       return;
     }
@@ -14661,7 +22273,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         completedTask.output += failedByTask ? `
 [Workflow failed at step ${stepIndex + 1}/${currentWf.steps.length}]` : `
 [Workflow completed at step ${stepIndex + 1}/${currentWf.steps.length}]`;
-        new import_obsidian10.Notice(
+        new import_obsidian11.Notice(
           failedByTask ? `AutoOC: \u274C Workflow "${currentWf.name}" failed at step ${stepIndex + 1}/${currentWf.steps.length}.` : `AutoOC: \u2705 Workflow "${currentWf.name}" completed at step ${stepIndex + 1}/${currentWf.steps.length}.`
         );
         this.workflowRuntime.delete(currentWf.id);
@@ -14672,7 +22284,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       if (nextIdx === -1) {
         if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
         currentWf.status = "failed";
-        new import_obsidian10.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
+        new import_obsidian11.Notice(`AutoOC: \u274C Workflow "${currentWf.name}" \u2014 transition target ${nextStepId} not found.`);
         await this.saveSettings();
         return;
       }
@@ -14681,7 +22293,7 @@ Reply ONLY with YES or NO.`, model, cwd);
       await this.saveSettings();
       if (!isCurrentExecution()) return;
       if (this.stoppingWorkflows.has(currentWf.id) || currentWf.status !== "running") return;
-      new import_obsidian10.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
+      new import_obsidian11.Notice(`AutoOC: \u26A1 Workflow "${currentWf.name}" \u2192 step ${nextIdx + 1}/${currentWf.steps.length} (${reason})`);
       setTimeout(() => {
         if (!isCurrentExecution()) return;
         this.runWorkflowStepById(currentWf.id, nextStepId);
@@ -14717,7 +22329,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         wfRef2.status = succeeded ? "completed" : "failed";
         await this.saveSettings();
         if (this.workflowRuntime.get(wf.id) !== ctx) return;
-        new import_obsidian10.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
+        new import_obsidian11.Notice(succeeded ? `AutoOC: \u2705 Workflow "${wfRef2.name}" completed.` : `AutoOC: \u274C Workflow "${wfRef2.name}" failed.`);
       }
       this.workflowRuntime.delete(wf.id);
       return;
@@ -14729,7 +22341,7 @@ Reply ONLY with YES or NO.`, model, cwd);
         wfRef.currentStep = nextIdx;
         await this.saveSettings();
         if (!isCurrentExecution()) return;
-        new import_obsidian10.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
+        new import_obsidian11.Notice(`AutoOC: \u26A1 Workflow "${wfRef.name}" \u2192 step ${nextIdx + 1}/${wfRef.steps.length} (${reason})`);
         setTimeout(() => {
           if (isCurrentExecution()) this.runWorkflowStepById(wf.id, nextStepId);
         }, 200);
@@ -14737,7 +22349,7 @@ Reply ONLY with YES or NO.`, model, cwd);
     }
   }
 };
-var AutoOCView = class extends import_obsidian10.ItemView {
+var AutoOCView = class extends import_obsidian11.ItemView {
   constructor(leaf, plugin) {
     super(leaf);
     this.selectionMode = false;
@@ -14868,7 +22480,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         this.render();
       } catch (error) {
         button.disabled = false;
-        new import_obsidian10.Notice(`AutoOC: Could not change availability. ${String(error)}`);
+        new import_obsidian11.Notice(`AutoOC: Could not change availability. ${String(error)}`);
       }
     };
   }
@@ -15369,21 +22981,21 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       "autooc-mcp": this.plugin.getAutoOcMcpConfigBlock()
     };
     await copyTextToClipboard(JSON.stringify(snippet, null, 2));
-    new import_obsidian10.Notice("AutoOC: autooc-mcp install JSON copied.");
+    new import_obsidian11.Notice("AutoOC: autooc-mcp install JSON copied.");
   }
   async installAutoOcMcpInOpenCode() {
     try {
       const result = await this.plugin.ensureAutoOcMcpEnabled();
-      new import_obsidian10.Notice(
+      new import_obsidian11.Notice(
         result.changed ? `AutoOC: autooc-mcp installed at ${result.configPath}. Restart OpenCode.` : `AutoOC: autooc-mcp was already configured at ${result.configPath}.`
       );
     } catch (e) {
-      new import_obsidian10.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
+      new import_obsidian11.Notice(`AutoOC: could not install autooc-mcp \u2014 ${String(e)}`);
     }
   }
   async copyUvInstallCommand() {
     await copyTextToClipboard(getUvInstallCommand());
-    new import_obsidian10.Notice("AutoOC: uv install command copied.");
+    new import_obsidian11.Notice("AutoOC: uv install command copied.");
   }
   // Renders the extension header at the top of the panel: title,
   // version, check-updates button, and a status pill when an update
@@ -15450,7 +23062,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       else if (task) this.openTaskInList(task);
       else if (workflow) this.openWorkflowInList(workflow);
       else {
-        new import_obsidian10.Notice("This item was removed. Refresh the Dashboard.");
+        new import_obsidian11.Notice("This item was removed. Refresh the Dashboard.");
         this.refresh();
       }
     };
@@ -15466,7 +23078,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       } else if (task) {
         if (history) new LogHistoryModal(this.app, task, this.plugin).open();
         else new LiveLogModal(this.app, task, this.plugin).open();
-      } else new import_obsidian10.Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
+      } else new import_obsidian11.Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
     this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
       items: () => dashboardItems(
@@ -15611,7 +23223,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         try {
           await callback();
         } catch (error) {
-          new import_obsidian10.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
+          new import_obsidian11.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
         } finally {
           if (button.isConnected) button.disabled = false;
         }
@@ -15670,12 +23282,12 @@ var AutoOCView = class extends import_obsidian10.ItemView {
     const binding = (_a = step.codeExecution) == null ? void 0 : _a.runtimeExecution;
     if (binding && !state.stop && binding.phase !== "abandoned" && (binding.requiresReconciliation || !["completed", "failed"].includes(binding.phase) || binding.terminalUncertainty && !binding.disposition)) {
       details.createEl("p", { text: "This step has an interrupted attempt or unconfirmed effects. Review its log and history before closing the attempt." });
-      const resolve10 = details.createEl("button", { text: "Review interrupted attempt" });
-      resolve10.onclick = async () => {
+      const resolve11 = details.createEl("button", { text: "Review interrupted attempt" });
+      resolve11.onclick = async () => {
         try {
           await this.plugin.resolveCodeStepAttempt(workflow.id, step.id);
         } catch (error) {
-          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
         }
       };
     }
@@ -15725,7 +23337,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
     var _a;
     const workflow = this.plugin.settings.workflows.find((item) => item.id === workflowId);
     if (!(workflow == null ? void 0 : workflow.steps.some((step) => step.id === stepId && step.stepKind === "code"))) {
-      new import_obsidian10.Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
+      new import_obsidian11.Notice("This workflow code step was removed or changed. Refresh the list to see the current catalog.");
       this.render();
       return;
     }
@@ -15839,7 +23451,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       new ExecutionStatusHelpModal(this.app, snapshot, showDetails, this.plugin.manifest.version, true).open();
       return;
     }
-    new import_obsidian10.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12e3);
+    new import_obsidian11.Notice(this.plugin.redactSecrets(`AutoOC: Task could not start. ${message}`), 12e3);
   }
   renderExecutionStatus(parent, item, kind) {
     if (!item.runtimeExecution) return;
@@ -15858,7 +23470,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
     };
   }
   renderTaskCard(parent, task) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o;
     const dependencyError = autoOCDependencyError(task);
     if (dependencyError) parent.createEl("p", { text: dependencyError, cls: "mod-warning" });
     const stopIdentity = this.plugin.taskStopIdentity(task);
@@ -15871,7 +23483,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       } catch (error) {
         button.disabled = false;
         button.textContent = label;
-        new import_obsidian10.Notice(`AutoOC: ${String(error)}`);
+        new import_obsidian11.Notice(`AutoOC: ${String(error)}`);
       }
     };
     const card = parent.createDiv(`auto-oc-card auto-oc-status-${task.status}`);
@@ -15882,11 +23494,11 @@ var AutoOCView = class extends import_obsidian10.ItemView {
     if (task.disabled) summary.createEl("span", { text: "Disabled", cls: "auto-oc-badge auto-oc-badge-disabled" });
     const title = summary.createEl("span", { text: task.name, cls: "auto-oc-task-name" });
     summary.createEl("span", {
-      text: (task.taskKind || "opencode") === "code" ? "Code" : task.taskKind === "codex" ? task.interactiveTerminal ? "ChatGPT / Codex" : "Codex" : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.taskKind === "opencode2" ? "OpenCode 2 CLI" : task.interactiveTerminal ? "OpenCode 1 CLI" : "OpenCode 1",
+      text: (task.taskKind || "opencode") === "code" ? "Code" : task.taskKind === "cli" ? ((_a = INTERACTIVE_CLIS.find((cli) => cli.id === task.cliProvider)) == null ? void 0 : _a.label) || "Invalid CLI provider" : task.taskKind === "codex" ? task.interactiveTerminal ? "ChatGPT / Codex" : "Codex" : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.taskKind === "opencode2" ? "OpenCode 2 CLI" : task.interactiveTerminal ? "OpenCode 1 CLI" : "OpenCode 1",
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`
     });
     const badge = summary.createEl("span", {
-      text: ((_a = task.runtimeExecution) == null ? void 0 : _a.disposition) ? `${task.status} \xB7 human disposition ${task.runtimeExecution.disposition.at} \xB7 external outcome unknown` : task.status === "abandoned" ? "abandoned \xB7 outcome unknown" : ((_b = task.legacyExecution) == null ? void 0 : _b.stopState) ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_c = task.runtimeExecution) == null ? void 0 : _c.requiresReconciliation) ? "reconciliation required" : task.status,
+      text: ((_b = task.runtimeExecution) == null ? void 0 : _b.disposition) ? `${task.status} \xB7 human disposition ${task.runtimeExecution.disposition.at} \xB7 external outcome unknown` : task.status === "abandoned" ? "abandoned \xB7 outcome unknown" : ((_c = task.legacyExecution) == null ? void 0 : _c.stopState) ? "stop outcome unconfirmed" : task.pendingCodexApproval ? "waiting approval" : task.status !== "running" && ((_d = task.runtimeExecution) == null ? void 0 : _d.requiresReconciliation) ? "reconciliation required" : task.status,
       cls: `auto-oc-badge auto-oc-badge-${task.status}`
     });
     this.renderExecutionStatus(summary, task, "task");
@@ -15939,7 +23551,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       try {
         new LogHistoryModal(this.app, task, this.plugin).open();
       } catch (err) {
-        new import_obsidian10.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        new import_obsidian11.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
       }
     };
     if (task.status === "failed") {
@@ -15950,17 +23562,22 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         task.status = "pending";
         await this.plugin.saveSettings();
         this.render();
-        new import_obsidian10.Notice(`AutoOC: "${task.name}" reset to pending.`);
+        new import_obsidian11.Notice(`AutoOC: "${task.name}" reset to pending.`);
       };
     }
     const details = card.createDiv("auto-oc-card-details");
     const isExpanded = this.expandedTasks.has(task.id);
     details.style.display = isExpanded ? "block" : "none";
     const meta = details.createDiv("auto-oc-card-meta");
-    const modelLabel = task.taskKind === "codex" ? (_f = (_e = (_d = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _d.label) != null ? _e : task.model) != null ? _f : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_h = (_g = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _g.label) != null ? _h : task.model;
-    meta.createEl("span", { text: `\u{1F5C2} ${((_i = task.area) == null ? void 0 : _i.trim()) || "No area"}` });
+    const modelLabel = task.taskKind === "cli" ? task.model || "Native default" : task.taskKind === "codex" ? (_g = (_f = (_e = this.plugin.availableCodexModels.find((m) => m.value === task.model)) == null ? void 0 : _e.label) != null ? _f : task.model) != null ? _g : "Automatic" : task.taskKind === "copilot" ? task.model || this.plugin.settings.defaultCopilotModel || "Automatic" : (_i = (_h = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _h.label) != null ? _i : task.model;
+    meta.createEl("span", { text: `\u{1F5C2} ${((_j = task.area) == null ? void 0 : _j.trim()) || "No area"}` });
     if ((task.taskKind || "opencode") === "code") {
       meta.createEl("span", { text: "{ } Code task" });
+    } else if (task.taskKind === "cli") {
+      meta.createEl("span", { text: `${((_k = INTERACTIVE_CLIS.find((cli) => cli.id === task.cliProvider)) == null ? void 0 : _k.label) || "Invalid CLI provider"} (interactive)` });
+      meta.createEl("span", { text: `Model: ${modelLabel}` });
+      if (isOpenCodeTask(task.cliProvider)) meta.createEl("span", { text: `Agent: ${task.forceModel ? "Native default" : task.agent || "Native default"}` });
+      if (task.cliProvider === "codex" && task.reasoningEffort) meta.createEl("span", { text: `Reasoning: ${task.reasoningEffort}` });
     } else if (task.taskKind === "codex") {
       meta.createEl("span", { text: `\u2726 Codex \xB7 ${modelLabel || "Automatic"}` });
       if (task.interactiveTerminal) meta.createEl("span", { text: "ChatGPT app task" });
@@ -15985,8 +23602,8 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       const days = task.scheduleDays.map((d) => DAY_NAMES[d]).join(", ");
       scheduleText = `\u{1F501} ${days || "no days"} at ${task.scheduleTime}`;
     } else if (task.scheduleType === "interval") {
-      const value = (_j = task.scheduleIntervalValue) != null ? _j : 10;
-      const unit = (_k = task.scheduleIntervalUnit) != null ? _k : "minutes";
+      const value = (_l = task.scheduleIntervalValue) != null ? _l : 10;
+      const unit = (_m = task.scheduleIntervalUnit) != null ? _m : "minutes";
       scheduleText = `\u{1F501} Every ${value} ${unit}`;
     } else {
       const days = (task.scheduleMonthDays || []).join(", ");
@@ -16022,18 +23639,18 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         try {
           await this.plugin.confirmTerminalDisposition(terminalBinding.workflowId || standaloneTaskWorkflow(task.id).id, terminalBinding.runId);
         } catch (error) {
-          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
         }
       };
     }
-    if (((_l = task.runtimeExecution) == null ? void 0 : _l.workflowId) === standaloneTaskWorkflow(task.id).id && ["ready", "in_flight"].includes((_m = task.runtimeExecution) == null ? void 0 : _m.phase) && task.status !== "running" && !this.plugin.ownsExecution(task.runtimeExecution.workflowId, task.runtimeExecution.runId)) {
+    if (((_n = task.runtimeExecution) == null ? void 0 : _n.workflowId) === standaloneTaskWorkflow(task.id).id && ["ready", "in_flight"].includes((_o = task.runtimeExecution) == null ? void 0 : _o.phase) && task.status !== "running" && !this.plugin.ownsExecution(task.runtimeExecution.workflowId, task.runtimeExecution.runId)) {
       const abandon = actions.createEl("button", { text: "Abandon attempt", cls: "auto-oc-btn-stop" });
       abandon.onclick = async (e) => {
         e.stopPropagation();
         try {
           await this.plugin.confirmAbandonTaskExecution(task.id);
         } catch (error) {
-          new import_obsidian10.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
+          new import_obsidian11.Notice(this.plugin.redactSecrets(`AutoOC: ${String(error)}`), 12e3);
         }
       };
     }
@@ -16094,15 +23711,18 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       try {
         new LogHistoryModal(this.app, task, this.plugin).open();
       } catch (err) {
-        new import_obsidian10.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+        new import_obsidian11.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
       }
     };
     const btnCmd = actions.createEl("button", {
       text: "\u{1F50D} Command",
       cls: "auto-oc-btn-cmd"
     });
+    btnCmd.disabled = task.taskKind === "cli";
+    if (btnCmd.disabled) btnCmd.title = CLI_TASK_COMMAND_NOTICE;
     btnCmd.onclick = (e) => {
       e.stopPropagation();
+      if (task.taskKind === "cli") return;
       const cmd = this.plugin.buildCommand(task);
       new CommandPreviewModal(this.app, task.name, cmd).open();
     };
@@ -16115,7 +23735,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       try {
         new CreateTaskModal(this.app, this.plugin, task).open();
       } catch (err) {
-        new import_obsidian10.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+        new import_obsidian11.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
       }
     };
     const btnDuplicate = actions.createEl("button", {
@@ -16240,7 +23860,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
     renderWorkflowResults(resultsRoot);
   }
   renderWorkflowCard(parent, workflow) {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     try {
       assertWorkflowDependencies(workflow, this.plugin.settings.tasks, this.plugin.settings.workflows);
     } catch (error) {
@@ -16271,7 +23891,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       try {
         await this.plugin.runWorkflow(workflow);
       } catch (error) {
-        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
       }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
@@ -16310,7 +23930,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         workflow.status = "pending";
         await this.plugin.saveSettings();
         this.render();
-        new import_obsidian10.Notice(`Workflow "${workflow.name}" reset to pending.`);
+        new import_obsidian11.Notice(`Workflow "${workflow.name}" reset to pending.`);
       };
     }
     const details = card.createDiv("auto-oc-card-details");
@@ -16426,6 +24046,10 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       const modelLabel = (_j = (_i = this.plugin.availableModels.find((m) => m.value === task.model)) == null ? void 0 : _i.label) != null ? _j : task.model;
       if ((task.taskKind || "opencode") === "code") {
         taskMeta.createSpan({ text: "{ } Code task" });
+      } else if (task.taskKind === "cli") {
+        taskMeta.createSpan({ text: `${((_k = INTERACTIVE_CLIS.find((cli) => cli.id === task.cliProvider)) == null ? void 0 : _k.label) || "Invalid CLI provider"} (interactive)` });
+        taskMeta.createSpan({ text: `Model: ${task.model || "Native default"}` });
+        if (isOpenCodeTask(task.cliProvider)) taskMeta.createSpan({ text: `Agent: ${task.forceModel ? "Native default" : task.agent || "Native default"}` });
       } else {
         taskMeta.createSpan({ text: `\u{1F916} ${modelLabel || "(no model)"}` });
         taskMeta.createSpan({ text: `\u2699\uFE0F ${this.plugin.getEffectiveAgent(task.agent)}` });
@@ -16462,15 +24086,18 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         try {
           new LogHistoryModal(this.app, task, this.plugin).open();
         } catch (err) {
-          new import_obsidian10.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
+          new import_obsidian11.Notice(`AutoOC: could not open history \u2014 ${String(err)}`);
         }
       };
       const btnCmd = taskActions.createEl("button", {
         text: "\u{1F50D} Command",
         cls: "auto-oc-btn-cmd"
       });
+      btnCmd.disabled = task.taskKind === "cli";
+      if (btnCmd.disabled) btnCmd.title = CLI_TASK_COMMAND_NOTICE;
       btnCmd.onclick = (e) => {
         e.stopPropagation();
+        if (task.taskKind === "cli") return;
         new CommandPreviewModal(this.app, task.name, this.plugin.buildCommand(task)).open();
       };
       const btnEditTask = taskActions.createEl("button", {
@@ -16482,7 +24109,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         try {
           new CreateTaskModal(this.app, this.plugin, task).open();
         } catch (err) {
-          new import_obsidian10.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
+          new import_obsidian11.Notice(`AutoOC: could not open task editor \u2014 ${String(err)}`);
         }
       };
     }
@@ -16519,8 +24146,8 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         const days = wfScheduleMonthDays.join(", ");
         schedMeta.createEl("span", { text: `\u{1F501} Day ${days || "no days"} of each month at ${wfScheduleTime}` });
       } else if (wfScheduleType === "interval") {
-        const value = (_k = workflow.scheduleIntervalValue) != null ? _k : 10;
-        const unit = (_l = workflow.scheduleIntervalUnit) != null ? _l : "minutes";
+        const value = (_l = workflow.scheduleIntervalValue) != null ? _l : 10;
+        const unit = (_m = workflow.scheduleIntervalUnit) != null ? _m : "minutes";
         schedMeta.createEl("span", { text: `\u{1F501} Every ${value} ${unit}` });
       }
     }
@@ -16539,7 +24166,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         try {
           await this.plugin.confirmTerminalDisposition(workflow.id, durableExecution.runId);
         } catch (error) {
-          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
         } finally {
           this.refresh();
         }
@@ -16562,7 +24189,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
         try {
           await this.plugin.recoverSharedWorkflow(workflow.id, durableExecution.runId);
         } catch (error) {
-          new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+          new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
         } finally {
           this.refresh();
         }
@@ -16578,7 +24205,7 @@ var AutoOCView = class extends import_obsidian10.ItemView {
       try {
         await this.plugin.runWorkflow(workflow);
       } catch (error) {
-        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
       }
     };
     if (this.plugin.isWorkflowExecuting(workflow.id)) {
@@ -16646,7 +24273,7 @@ ${sharedCount} task(s) are also used by other workflows and will be kept.` : "";
     };
   }
 };
-var ConfirmModal = class extends import_obsidian10.Modal {
+var ConfirmModal = class extends import_obsidian11.Modal {
   constructor(app, titleText, bodyText, requireReason = false) {
     super(app);
     this.titleText = titleText;
@@ -16656,8 +24283,8 @@ var ConfirmModal = class extends import_obsidian10.Modal {
   }
   openAndWait() {
     this.open();
-    return new Promise((resolve10) => {
-      this.resolve = resolve10;
+    return new Promise((resolve11) => {
+      this.resolve = resolve11;
     });
   }
   onOpen() {
@@ -16667,17 +24294,17 @@ var ConfirmModal = class extends import_obsidian10.Modal {
     setupModalX(this);
     contentEl.createEl("h3", { text: this.titleText });
     contentEl.createEl("p", { text: this.bodyText, cls: "setting-item-description" });
-    if (this.requireReason) new import_obsidian10.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
+    if (this.requireReason) new import_obsidian11.Setting(contentEl).setName("Reason for this human decision").addTextArea((text) => text.onChange((value) => {
       this.reason = value;
     }));
-    new import_obsidian10.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
+    new import_obsidian11.Setting(contentEl).addButton((btn) => btn.setButtonText("Cancel").onClick(() => {
       var _a;
       (_a = this.resolve) == null ? void 0 : _a.call(this, false);
       this.close();
     })).addButton((btn) => btn.setButtonText("Confirm").setWarning().onClick(() => {
       var _a;
       if (this.requireReason && (!this.reason.trim() || this.reason.length > 1e3)) {
-        new import_obsidian10.Notice("Enter a reason of 1\u20131000 characters");
+        new import_obsidian11.Notice("Enter a reason of 1\u20131000 characters");
         return;
       }
       (_a = this.resolve) == null ? void 0 : _a.call(this, true);
@@ -16691,7 +24318,7 @@ var ConfirmModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var AutoOCRecoveryView = class extends import_obsidian10.ItemView {
+var AutoOCRecoveryView = class extends import_obsidian11.ItemView {
   constructor(leaf, reason, retry, recoverClosedSession, waitingForOwner = false, sameProcessOwner = false, readCatalog, updatePackage, reviewBlocked) {
     super(leaf);
     this.reason = reason;
@@ -16725,7 +24352,7 @@ var AutoOCRecoveryView = class extends import_obsidian10.ItemView {
         try {
           await this.updatePackage();
         } catch (error) {
-          new import_obsidian10.Notice("AutoOC: " + String(error));
+          new import_obsidian11.Notice("AutoOC: " + String(error));
         } finally {
           update.disabled = false;
         }
@@ -16749,7 +24376,7 @@ var AutoOCRecoveryView = class extends import_obsidian10.ItemView {
           this.recoverClosedSession();
           await this.retry();
         } catch (error) {
-          new import_obsidian10.Notice("AutoOC: " + String(error));
+          new import_obsidian11.Notice("AutoOC: " + String(error));
           recover.disabled = false;
         }
       };
@@ -16760,7 +24387,7 @@ var AutoOCRecoveryView = class extends import_obsidian10.ItemView {
       try {
         await this.retry();
       } catch (error) {
-        new import_obsidian10.Notice("AutoOC: " + String(error));
+        new import_obsidian11.Notice("AutoOC: " + String(error));
         button.disabled = false;
       }
     };
@@ -16787,7 +24414,7 @@ var AutoOCRecoveryView = class extends import_obsidian10.ItemView {
     this.contentEl.empty();
   }
 };
-var CreateTaskModal = class extends import_obsidian10.Modal {
+var CreateTaskModal = class extends import_obsidian11.Modal {
   constructor(app, plugin, editTask, saveDraft) {
     super(app);
     this.saveDraft = saveDraft;
@@ -16817,7 +24444,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
     };
   }
   onOpen() {
-    var _a, _b, _c;
+    var _a, _b, _c, _d;
     const { contentEl } = this;
     contentEl.empty();
     const dependencyError = autoOCDependencyError(this.draft);
@@ -16829,11 +24456,11 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
     this.focusNameOnNextOpen = false;
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     const taskKind = this.draft.taskKind || "opencode";
-    const taskType = taskKind === "opencode2" && this.draft.interactiveTerminal ? "cli2" : taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind === "codex" && this.draft.interactiveTerminal ? "codex-app" : taskKind;
+    const taskType = taskKind === "cli" ? "interactive-cli" : taskKind === "opencode2" && this.draft.interactiveTerminal ? "cli2" : taskKind === "opencode" && this.draft.interactiveTerminal ? "cli" : taskKind === "codex" && this.draft.interactiveTerminal ? "codex-app" : taskKind;
     headerBar.createEl("h3", {
       text: this.editTask ? "Edit Task" : "New Task"
     });
-    if (!this.editTask) new import_obsidian10.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a draft. Review and edit it here before creating the task.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
+    if (!this.editTask) new import_obsidian11.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a draft. Review and edit it here before creating the task.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
       this.aiDraftModal = this.plugin.openAiDraft("task", this.draft.prompt || this.draft.name || "", (generated) => {
         if (this.editorClosed) return;
         this.draft = generated.tasks[0];
@@ -16843,7 +24470,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       });
     }));
     if (this.saveDraft) contentEl.createEl("p", { text: "This task is part of an unsaved workflow draft. Changes stay in the editor until you create the workflow." });
-    new import_obsidian10.Setting(contentEl).setName("Task type").setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.").addDropdown((dd) => {
+    new import_obsidian11.Setting(contentEl).setName("Task type").setDesc("Choose the CLI and version this task uses. OpenCode 1 and OpenCode 2 use separate executable paths in Settings.").addDropdown((dd) => {
       dd.addOption("opencode", "OpenCode 1 task");
       dd.addOption("opencode2", "OpenCode 2 task");
       dd.addOption("codex", "Codex task");
@@ -16852,11 +24479,25 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       dd.addOption("code", "Code task");
       dd.addOption("cli", "OpenCode 1 CLI task (interactive)");
       dd.addOption("cli2", "OpenCode 2 CLI task (interactive)");
+      dd.addOption("interactive-cli", "CLI task (interactive)");
       dd.setValue(taskType);
       dd.onChange((v) => {
-        this.draft.taskKind = v === "opencode2" || v === "cli2" ? "opencode2" : v === "code" ? "code" : v === "copilot" ? "copilot" : v === "codex" || v === "codex-app" ? "codex" : "opencode";
-        this.draft.interactiveTerminal = v === "cli" || v === "cli2" || v === "codex-app";
-        if (v === "codex" || v === "codex-app") {
+        this.draft.taskKind = v === "interactive-cli" ? "cli" : v === "opencode2" || v === "cli2" ? "opencode2" : v === "code" ? "code" : v === "copilot" ? "copilot" : v === "codex" || v === "codex-app" ? "codex" : "opencode";
+        this.draft.interactiveTerminal = v === "interactive-cli" || v === "cli" || v === "cli2" || v === "codex-app";
+        this.draft.cliProvider = v === "interactive-cli" ? "opencode" : void 0;
+        if (v === "interactive-cli") {
+          this.draft.model = "";
+          this.draft.agent = "";
+          this.draft.reasoningEffort = void 0;
+          this.draft.useRalphLoop = false;
+          this.draft.forceModel = false;
+          this.draft.branch = "";
+          this.draft.createBranch = false;
+          this.draft.copilotAllowAllTools = void 0;
+          this.draft.codeAllowVault = void 0;
+          this.draft.codeAllowFiles = void 0;
+          this.draft.codeAllowTerminal = void 0;
+        } else if (v === "codex" || v === "codex-app") {
           this.draft.model = "";
           this.draft.reasoningEffort = this.plugin.settings.defaultCodexReasoningEffort;
         } else if (v === "copilot") {
@@ -16882,16 +24523,38 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
         this.onOpen();
       });
     });
-    new import_obsidian10.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+    if (taskKind === "cli") {
+      new import_obsidian11.Setting(contentEl).setName("Harness").setDesc("Uses the selected CLI's native authentication and permission prompts. No automatic approval is enabled.").addDropdown((dd) => {
+        INTERACTIVE_CLIS.forEach((cli) => dd.addOption(cli.id, cli.label));
+        dd.setValue(this.draft.cliProvider || "");
+        dd.onChange((value) => {
+          this.draft.cliProvider = value;
+          this.draft.model = "";
+          this.draft.agent = "";
+          this.draft.reasoningEffort = void 0;
+          this.draft.forceModel = false;
+          this.draft.useRalphLoop = false;
+          this.draft.branch = "";
+          this.draft.createBranch = false;
+          this.draft.copilotAllowAllTools = void 0;
+          this.draft.codeAllowVault = void 0;
+          this.draft.codeAllowFiles = void 0;
+          this.draft.codeAllowTerminal = void 0;
+          this.draft.interactiveTerminal = true;
+          this.onOpen();
+        });
+      });
+    }
+    new import_obsidian11.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. The maximum simultaneous runs is set in AutoOC settings. Inside a workflow, the workflow's choice applies.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
       this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
-    new import_obsidian10.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Name").setDesc("Short task identifier").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a2 = this.draft.name) != null ? _a2 : "").onChange((v) => this.draft.name = v);
       if (shouldFocusName) window.setTimeout(() => text.inputEl.focus(), 50);
     });
-    new import_obsidian10.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a2 = this.draft.area) != null ? _a2 : "").onChange((v) => this.draft.area = v.trim());
@@ -16901,14 +24564,14 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
     });
     if (taskKind === "code") {
       const initialCode = (_a = this.draft.code) != null ? _a : "// Set output to pass data forward\noutput = input;";
-      new import_obsidian10.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.").addTextArea((ta) => {
+      new import_obsidian11.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to return data.").addTextArea((ta) => {
         ta.setValue(initialCode).onChange((v) => this.draft.code = v);
         ta.inputEl.addClass("auto-oc-modal-textarea");
         setupCodeTextarea(ta.inputEl, this.app);
         ta.inputEl.rows = 12;
         ta.inputEl.style.width = "100%";
       });
-      new import_obsidian10.Setting(contentEl).setName("Variables").setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Variables").setDesc("Input variable starts empty for scheduled runs; output variable is saved as task output").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
       }).addText((text) => {
@@ -16918,7 +24581,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
     } else {
       const promptNotice = contentEl.createDiv("auto-oc-prompt-notice");
       promptNotice.style.display = "none";
-      new import_obsidian10.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
+      new import_obsidian11.Setting(contentEl).setName("Prompt / Goal").setDesc(`Text to send to ${taskKind === "cli" ? ((_b = INTERACTIVE_CLIS.find((cli) => cli.id === this.draft.cliProvider)) == null ? void 0 : _b.label) || "the selected CLI" : taskKind === "copilot" ? "GitHub Copilot CLI" : taskKind === "codex" ? "Codex" : "OpenCode"}`).addTextArea((ta) => {
         var _a2, _b2;
         const updatePromptNotice = (value) => {
           if (taskKind === "opencode" && this.draft.interactiveTerminal && value.length > SAFE_CLI_PROMPT_LENGTH) {
@@ -16945,14 +24608,14 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       });
     }
     contentEl.createDiv("auto-oc-modal-section-title").setText(isOpenCodeTask(taskKind) ? "\u{1F4C2} Workspace & Git" : "\u{1F4C2} Workspace");
-    new import_obsidian10.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Project Path").setDesc("Absolute path to the project (empty = vault root)").addText((text) => {
       var _a2;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.app.vault.adapter.basePath || "C:\\path\\to\\project").setValue((_a2 = this.draft.workingDirectory) != null ? _a2 : "").onChange((v) => this.draft.workingDirectory = v);
     });
     let branchInput = null;
     if (isOpenCodeTask(taskKind)) {
-      new import_obsidian10.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Git Branch").setDesc("Branch to work on").addText((text) => {
         var _a2;
         branchInput = text.inputEl;
         text.inputEl.addClass("auto-oc-modal-input");
@@ -16960,7 +24623,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       }).addButton(
         (btn) => btn.setButtonText("\u{1F50D} Discover").onClick(async () => {
           const taskCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
-          new import_obsidian10.Notice("AutoOC: Fetching branches...");
+          new import_obsidian11.Notice("AutoOC: Fetching branches...");
           try {
             const branches = listGitBranches(taskCwd);
             if (branches.length > 0) {
@@ -16968,26 +24631,51 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
               if (selected) {
                 this.draft.branch = selected;
                 if (branchInput) branchInput.value = selected;
-                new import_obsidian10.Notice(`AutoOC: Selected branch ${selected}`);
+                new import_obsidian11.Notice(`AutoOC: Selected branch ${selected}`);
               }
             } else {
-              new import_obsidian10.Notice("AutoOC: No branches found.");
+              new import_obsidian11.Notice("AutoOC: No branches found.");
             }
           } catch (e) {
-            new import_obsidian10.Notice(`AutoOC: Could not list branches: ${String(e)}`);
+            new import_obsidian11.Notice(`AutoOC: Could not list branches: ${String(e)}`);
           }
         })
       );
-      new import_obsidian10.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Create Branch").setDesc("Automatically create the branch if it doesn't exist").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.createBranch) != null ? _a2 : false);
         tog.onChange((v) => this.draft.createBranch = v);
       });
     }
-    if (taskKind === "opencode") {
+    if (taskKind === "cli") {
+      new import_obsidian11.Setting(contentEl).setName("Model (optional)").setDesc("Empty uses the selected CLI's native default, not AutoOC's background model.").addText((text) => text.setValue(this.draft.model || "").setPlaceholder("Native default").onChange((value) => {
+        this.draft.model = value.trim();
+      }));
+      if (isOpenCodeTask(this.draft.cliProvider)) {
+        new import_obsidian11.Setting(contentEl).setName("Agent (optional)").setDesc("OpenCode agent ID. Empty uses the CLI's native default.").addText((text) => text.setValue(this.draft.agent || "").setPlaceholder("Native default").onChange((value) => {
+          this.draft.agent = value.trim();
+        }));
+        new import_obsidian11.Setting(contentEl).setName("Force model").setDesc("Omit the agent override. An empty model still uses the CLI's native default.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
+          this.draft.forceModel = value;
+        }));
+      }
+      if (this.draft.cliProvider === "codex") {
+        new import_obsidian11.Setting(contentEl).setName("Reasoning effort (optional)").addDropdown((dd) => {
+          dd.addOption("", "Native default");
+          const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
+          efforts.forEach((effort) => dd.addOption(effort, effort));
+          const current = this.draft.reasoningEffort || "";
+          if (current && !efforts.includes(current)) dd.addOption(current, current);
+          dd.setValue(current).onChange((value) => {
+            this.draft.reasoningEffort = value || void 0;
+          });
+        });
+      }
+      contentEl.createEl("p", { text: "Uses the global CLI terminal destination. AutoOC confirms launch only, not completion of the human-controlled session.", cls: "setting-item-description" });
+    } else if (taskKind === "opencode") {
       const agentCwd = this.draft.workingDirectory || this.plugin.settings.workingDirectory || this.app.vault.adapter.basePath || ".";
       const projectAgents = this.plugin.availableAgents.filter((a) => isValidAgentName(a.value));
-      new import_obsidian10.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
+      new import_obsidian11.Setting(contentEl).setName("Agent").setDesc(`AI agent personality to use (${projectAgents.length} loaded). Use Refresh Agents after changing Project Path.`).addDropdown((dd) => {
         var _a2;
         projectAgents.forEach((a) => dd.addOption(a.value, a.label));
         const current = (_a2 = this.draft.agent) != null ? _a2 : this.plugin.getEffectiveAgent();
@@ -16999,15 +24687,15 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.agent = v);
       });
-      new import_obsidian10.Setting(contentEl).addButton(
+      new import_obsidian11.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Agents").onClick(() => {
           this.plugin.refreshAgents(agentCwd);
-          new import_obsidian10.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
+          new import_obsidian11.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded from project/global config.`);
           this.contentEl.empty();
           this.onOpen();
         })
       );
-      new import_obsidian10.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
+      new import_obsidian11.Setting(contentEl).setName("Model").setDesc("AI model to use").addDropdown((dd) => {
         var _a2;
         const models = this.plugin.availableModels;
         models.forEach((m) => dd.addOption(m.value, m.label));
@@ -17020,18 +24708,18 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
         dd.setValue(current || "");
         dd.onChange((v) => this.draft.model = v);
       });
-      new import_obsidian10.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Force model").setDesc("Skip --agent so OpenCode uses exactly the selected model.").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.forceModel) != null ? _a2 : false);
         tog.onChange((v) => this.draft.forceModel = v);
       });
-      new import_obsidian10.Setting(contentEl).addButton(
+      new import_obsidian11.Setting(contentEl).addButton(
         (btn) => btn.setButtonText("\u{1F504} Refresh Models").onClick(() => {
           this.plugin.refreshModels();
-          new import_obsidian10.Notice("AutoOC: models updated. Reopen dialog.");
+          new import_obsidian11.Notice("AutoOC: models updated. Reopen dialog.");
         })
       );
-      new import_obsidian10.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Ralph Loop").setDesc("Wrap prompt with /ralph-loop to auto-continue until DONE").addToggle((tog) => {
         var _a2;
         tog.setValue((_a2 = this.draft.useRalphLoop) != null ? _a2 : false);
         tog.onChange((v) => this.draft.useRalphLoop = v);
@@ -17039,20 +24727,20 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
         (btn) => btn.setButtonText("Installation Assistant").onClick(async () => {
           try {
             const result = await this.plugin.ensureRalphLoopPluginEnabled();
-            new import_obsidian10.Notice(
+            new import_obsidian11.Notice(
               result.changed ? `Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `Ralph Loop was already active at ${result.configPath}.`
             );
           } catch (e) {
-            new import_obsidian10.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+            new import_obsidian11.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
           }
         })
       );
     } else if (taskKind === "opencode2") {
-      (_b = this.draft).model || (_b.model = this.plugin.settings.defaultOpencode2Model || "");
-      (_c = this.draft).agent || (_c.agent = this.plugin.settings.defaultOpencode2Agent || "build");
+      (_c = this.draft).model || (_c.model = this.plugin.settings.defaultOpencode2Model || "");
+      (_d = this.draft).agent || (_d.agent = this.plugin.settings.defaultOpencode2Agent || "build");
       const location = () => this.plugin.openCode2Location(this.draft.workingDirectory);
       addOpenCode2Picker(
-        new import_obsidian10.Setting(contentEl).setName("OpenCode 2 model"),
+        new import_obsidian11.Setting(contentEl).setName("OpenCode 2 model"),
         "models",
         this.plugin.openCode2Catalog,
         location,
@@ -17062,7 +24750,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
         }
       );
       addOpenCode2Picker(
-        new import_obsidian10.Setting(contentEl).setName("OpenCode 2 agent"),
+        new import_obsidian11.Setting(contentEl).setName("OpenCode 2 agent"),
         "agents",
         this.plugin.openCode2Catalog,
         location,
@@ -17071,12 +24759,12 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
           this.draft.agent = value;
         }
       );
-      new import_obsidian10.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
+      new import_obsidian11.Setting(contentEl).setName("Force model").setDesc("Omit --agent so the CLI uses the selected model without an agent override.").addToggle((toggle) => toggle.setValue(!!this.draft.forceModel).onChange((value) => {
         this.draft.forceModel = value;
       }));
       contentEl.createEl("p", { text: this.draft.interactiveTerminal ? "Opens OpenCode 2 mini with your model, agent and prompt. AutoOC confirms startup; the terminal session remains under your control." : "Runs OpenCode 2 with a private server. AutoOC captures the result and waits for completion. Explicitly denied permissions remain denied.", cls: "setting-item-description" });
     } else if (taskKind === "codex") {
-      new import_obsidian10.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
+      new import_obsidian11.Setting(contentEl).setName("Codex model").setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.").addDropdown((dd) => {
         var _a2, _b2;
         dd.addOption("", "Automatic");
         this.plugin.availableCodexModels.forEach((entry) => dd.addOption(entry.value, entry.label));
@@ -17093,7 +24781,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
         await this.plugin.refreshCodexModels(true);
         this.onOpen();
       }));
-      new import_obsidian10.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
+      new import_obsidian11.Setting(contentEl).setName("Reasoning effort").setDesc("How much reasoning Codex should use for this task.").addDropdown((dd) => {
         const efforts = this.plugin.getCodexReasoningEfforts(this.draft.model);
         efforts.forEach((effort) => dd.addOption(effort, effort));
         const current = this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -17105,20 +24793,20 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       addCopilotTaskSettings(contentEl, this.draft, this.plugin.settings.defaultCopilotModel);
     } else {
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
-      new import_obsidian10.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowVault);
         tog.onChange((v) => this.draft.codeAllowVault = v);
       });
-      new import_obsidian10.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use Project Path or the vault root.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowFiles);
         tog.onChange((v) => this.draft.codeAllowFiles = v);
       });
-      new import_obsidian10.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }).").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }).").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowTerminal);
         tog.onChange((v) => this.draft.codeAllowTerminal = v);
       });
     }
-    new import_obsidian10.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
+    new import_obsidian11.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a2;
       dd.addOption("manual", "Manual (run only when I press play)");
       dd.addOption("once", "Once (specific date and time)");
@@ -17133,14 +24821,14 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian10.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(todayString()).setValue((_a2 = this.draft.scheduleDate) != null ? _a2 : "").onChange((v) => this.draft.scheduleDate = v);
       });
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian10.Setting(contentEl).setName("Weekdays");
+      const daySetting = new import_obsidian11.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -17165,7 +24853,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       });
     }
     if (this.draft.scheduleType === "monthly") {
-      new import_obsidian10.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("1, 15, 31").setValue(((_a2 = this.draft.scheduleMonthDays) != null ? _a2 : []).join(", ")).onChange((v) => {
@@ -17175,7 +24863,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       });
     }
     if (this.draft.scheduleType === "interval") {
-      new import_obsidian10.Setting(contentEl).setName("Interval").setDesc("Run the task repeatedly every X units").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Interval").setDesc("Run the task repeatedly every X units").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -17194,42 +24882,48 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
       });
     }
     if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
-      new import_obsidian10.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("09:00").setValue((_a2 = this.draft.scheduleTime) != null ? _a2 : "").onChange((v) => this.draft.scheduleTime = v);
       });
     }
-    new import_obsidian10.Setting(contentEl).addButton(
+    new import_obsidian11.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.saveDraft ? "Apply to workflow draft" : this.editTask ? "Save Changes" : "Create Task").setCta().onClick(async () => {
-        var _a2, _b2, _c2, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
+        var _a2, _b2, _c2, _d2, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t;
         if (!((_a2 = this.draft.name) == null ? void 0 : _a2.trim())) {
-          new import_obsidian10.Notice("Name is required.");
+          new import_obsidian11.Notice("Name is required.");
           return;
         }
         const savingTaskKind = this.draft.taskKind || "opencode";
+        if (savingTaskKind === "cli") this.draft.interactiveTerminal = true;
+        const cliError = getCliTaskValidationError(this.draft);
+        if (cliError) {
+          new import_obsidian11.Notice(cliError);
+          return;
+        }
         if (savingTaskKind !== "code" && !((_b2 = this.draft.prompt) == null ? void 0 : _b2.trim())) {
-          new import_obsidian10.Notice("Prompt is required.");
+          new import_obsidian11.Notice("Prompt is required.");
           return;
         }
         if (savingTaskKind === "code" && !(this.draft.code || "").trim()) {
-          new import_obsidian10.Notice("Code is required.");
+          new import_obsidian11.Notice("Code is required.");
           return;
         }
         if (isOpenCodeTask(savingTaskKind) && !((_c2 = this.draft.model) != null ? _c2 : "").trim()) {
-          new import_obsidian10.Notice("You must select a model.");
+          new import_obsidian11.Notice("You must select a model.");
           return;
         }
-        if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_d = this.draft.scheduleTime) != null ? _d : "")) {
-          new import_obsidian10.Notice("Invalid time. Use HH:MM format.");
+        if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_d2 = this.draft.scheduleTime) != null ? _d2 : "")) {
+          new import_obsidian11.Notice("Invalid time. Use HH:MM format.");
           return;
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_e = this.draft.scheduleDate) != null ? _e : "")) {
-          new import_obsidian10.Notice("Invalid date. Use YYYY-MM-DD format.");
+          new import_obsidian11.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.draft.scheduleType === "monthly" && ((_f = this.draft.scheduleMonthDays) != null ? _f : []).length === 0) {
-          new import_obsidian10.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
+          new import_obsidian11.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         if (this.saveDraft) {
@@ -17263,8 +24957,9 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
               prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt || "",
               concurrency: this.draft.concurrency,
               taskKind: savingTaskKind,
+              cliProvider: savingTaskKind === "cli" ? this.draft.cliProvider : void 0,
               interactiveTerminal: savingTaskKind === "code" ? void 0 : !!this.draft.interactiveTerminal,
-              reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort : void 0,
+              reasoningEffort: savingTaskKind === "codex" || savingTaskKind === "cli" && this.draft.cliProvider === "codex" ? this.draft.reasoningEffort : void 0,
               copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : void 0,
               ...existing ? { runtimeExecution: existing.runtimeExecution, legacyExecution: existing.legacyExecution } : {},
               status: existing.status,
@@ -17278,16 +24973,17 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
           const task = {
             id: generateId(),
             taskKind: savingTaskKind,
+            cliProvider: savingTaskKind === "cli" ? this.draft.cliProvider : void 0,
             concurrency: this.draft.concurrency,
             name: this.draft.name,
             prompt: savingTaskKind === "code" ? this.draft.code || "" : this.draft.prompt,
-            model: savingTaskKind === "code" ? "" : this.draft.model,
+            model: savingTaskKind === "code" ? "" : this.draft.model || "",
             area: (_j = this.draft.area) != null ? _j : "",
-            agent: savingTaskKind === "opencode2" ? this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build" : savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
-            reasoningEffort: savingTaskKind === "codex" ? this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort : void 0,
+            agent: savingTaskKind === "cli" ? this.draft.agent || "" : savingTaskKind === "opencode2" ? this.draft.agent || this.plugin.settings.defaultOpencode2Agent || "build" : savingTaskKind === "opencode" ? this.plugin.getEffectiveAgent(this.draft.agent) : "",
+            reasoningEffort: savingTaskKind === "cli" && this.draft.cliProvider === "codex" ? this.draft.reasoningEffort : savingTaskKind === "codex" ? this.draft.reasoningEffort || this.plugin.settings.defaultCodexReasoningEffort : void 0,
             copilotAllowAllTools: savingTaskKind === "copilot" ? this.draft.copilotAllowAllTools === true : void 0,
             useRalphLoop: savingTaskKind === "opencode" ? (_k = this.draft.useRalphLoop) != null ? _k : false : false,
-            forceModel: isOpenCodeTask(savingTaskKind) ? (_l = this.draft.forceModel) != null ? _l : false : false,
+            forceModel: savingTaskKind === "cli" || isOpenCodeTask(savingTaskKind) ? (_l = this.draft.forceModel) != null ? _l : false : false,
             scheduleType: (_m = this.draft.scheduleType) != null ? _m : "manual",
             scheduleTime: (_n = this.draft.scheduleTime) != null ? _n : nowTimeString(),
             scheduleDate: (_o = this.draft.scheduleDate) != null ? _o : "",
@@ -17317,10 +25013,10 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
             btn.setDisabled(true);
             try {
               await this.plugin.saveGeneratedDefinitionDraft([task]);
-              new import_obsidian10.Notice(`Task "${task.name}" saved.`);
+              new import_obsidian11.Notice(`Task "${task.name}" saved.`);
               this.close();
             } catch (error) {
-              new import_obsidian10.Notice(`Could not save the task: ${error.message}. Your draft is still available.`);
+              new import_obsidian11.Notice(`Could not save the task: ${error.message}. Your draft is still available.`);
             } finally {
               this.savingGeneratedDraft = false;
               btn.setDisabled(false);
@@ -17334,7 +25030,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
           if (areaChanged) (_t = this.plugin.view) == null ? void 0 : _t.render();
           this.plugin.emitTaskUpdated(updatedTask);
         }
-        new import_obsidian10.Notice(`Task "${this.draft.name}" saved.`);
+        new import_obsidian11.Notice(`Task "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -17346,7 +25042,7 @@ var CreateTaskModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var EditWorkflowStepModal = class extends import_obsidian10.Modal {
+var EditWorkflowStepModal = class extends import_obsidian11.Modal {
   constructor(app, plugin, workflow, step) {
     super(app);
     this.plugin = plugin;
@@ -17365,17 +25061,17 @@ var EditWorkflowStepModal = class extends import_obsidian10.Modal {
     contentEl.createEl("h3", {
       text: this.step.stepKind === "delay" ? "Edit Delay Step" : "Edit Code Step"
     });
-    new import_obsidian10.Setting(contentEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(this.step.stepKind === "delay" ? "Delay" : "Code").setValue(this.draft.name || "").onChange((v) => this.draft.name = v.trim());
     });
-    new import_obsidian10.Setting(contentEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder(((_a = this.workflow.area) == null ? void 0 : _a.trim()) || "No area").setValue(this.draft.area || this.workflow.area || "").onChange((v) => this.draft.area = v.trim());
     });
     if (this.step.stepKind === "delay") {
-      new import_obsidian10.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -17393,13 +25089,13 @@ var EditWorkflowStepModal = class extends import_obsidian10.Modal {
       });
     } else {
       const initialCode = this.draft.code || "";
-      new import_obsidian10.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
+      new import_obsidian11.Setting(contentEl).setName("JavaScript code").setDesc("Available variables: input, outputs, JSON, Math, Date, String, Number, Boolean, Array, Object, RegExp. Set output to pass data forward.").addTextArea((text) => {
         text.inputEl.addClass("auto-oc-modal-textarea");
         text.inputEl.rows = 12;
         text.setValue(initialCode).onChange((v) => this.draft.code = v);
         setupCodeTextarea(text.inputEl, this.app);
       });
-      new import_obsidian10.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Variables").setDesc("Input variable receives previous step output; output variable is returned to the next step").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("input").setValue(this.draft.codeInputVar || "input").onChange((v) => this.draft.codeInputVar = v || "input");
       }).addText((text) => {
@@ -17407,15 +25103,15 @@ var EditWorkflowStepModal = class extends import_obsidian10.Modal {
         text.setPlaceholder("output").setValue(this.draft.codeOutputVar || "output").onChange((v) => this.draft.codeOutputVar = v || "output");
       });
       contentEl.createDiv("auto-oc-modal-section-title").setText("Code permissions");
-      new import_obsidian10.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Vault API").setDesc("Expose vault.read/write/append/exists/list, confined to this Obsidian vault.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowVault);
         tog.onChange((v) => this.draft.codeAllowVault = v);
       });
-      new import_obsidian10.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Local files API").setDesc("Expose files.read/write/append/exists/list for local paths. Relative paths use AutoOC working directory or the vault root.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowFiles);
         tog.onChange((v) => this.draft.codeAllowFiles = v);
       });
-      new import_obsidian10.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
+      new import_obsidian11.Setting(contentEl).setName("Terminal API").setDesc("Expose terminal.run(command, { cwd, timeoutMs }). Commands run from AutoOC working directory or the vault root by default.").addToggle((tog) => {
         tog.setValue(!!this.draft.codeAllowTerminal);
         tog.onChange((v) => this.draft.codeAllowTerminal = v);
       });
@@ -17424,7 +25120,7 @@ var EditWorkflowStepModal = class extends import_obsidian10.Modal {
         cls: "setting-item-description auto-oc-workflow-section-help"
       });
     }
-    new import_obsidian10.Setting(contentEl).addButton(
+    new import_obsidian11.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Save Step").setCta().onClick(async () => {
         var _a, _b;
         if (!((_a = this.draft.area) == null ? void 0 : _a.trim())) this.draft.area = this.workflow.area || "";
@@ -17438,7 +25134,7 @@ var EditWorkflowStepModal = class extends import_obsidian10.Modal {
         }
         await this.plugin.saveSettings();
         (_b = this.plugin.view) == null ? void 0 : _b.refresh();
-        new import_obsidian10.Notice("AutoOC: workflow step saved.");
+        new import_obsidian11.Notice("AutoOC: workflow step saved.");
         this.close();
       })
     );
@@ -17447,7 +25143,7 @@ var EditWorkflowStepModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var CreateWorkflowModal = class extends import_obsidian10.Modal {
+var CreateWorkflowModal = class extends import_obsidian11.Modal {
   constructor(app, plugin, editWorkflow) {
     var _a;
     super(app);
@@ -17492,7 +25188,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
     headerBar.createEl("h3", {
       text: this.editWorkflow ? "Edit Workflow" : "New Workflow"
     });
-    if (!this.editWorkflow) new import_obsidian10.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
+    if (!this.editWorkflow) new import_obsidian11.Setting(contentEl).setName("Start from a description").setDesc("AI prepares a sequential workflow and its tasks. Nothing is saved until you create the workflow.").addButton((button) => button.setButtonText("Create with AI").onClick(() => {
       this.aiDraftModal = this.plugin.openAiDraft("workflow", this.draft.description || this.draft.name || "", (generated) => {
         if (this.editorClosed) return;
         this.draft = generated.workflow;
@@ -17522,16 +25218,16 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       text: "Tip: configure the transition on the step that just finished, not on the next step. Example: Step 1 -> Step 2 means Step 1 decides whether Step 2 starts.",
       cls: "auto-oc-workflow-guide-tip"
     });
-    new import_obsidian10.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
+    new import_obsidian11.Setting(contentEl).setName("Concurrency").setDesc("Use the vault default, run alone, or allow parallel work in the same vault. Parallel runs can edit the same files, so give them different outputs. Separate projects only keeps folder and Git repository checks. Interactive sessions and branch changes run alone. Workflows sharing a reusable task cannot overlap. The steps within this workflow still follow their transitions in order.").addDropdown((dd) => dd.addOption("inherit", "Use vault default").addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.draft.concurrency || "inherit").onChange((v) => {
       this.draft.concurrency = v === "inherit" ? void 0 : v;
     }));
-    new import_obsidian10.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Name").setDesc("Workflow identifier").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.name) != null ? _a : "").onChange((v) => this.draft.name = v);
       window.setTimeout(() => text.inputEl.focus(), 50);
     });
-    new import_obsidian10.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Area").setDesc("Optional dashboard grouping area").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setPlaceholder("No area").setValue((_a = this.draft.area) != null ? _a : "").onChange((v) => {
@@ -17552,7 +25248,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
         });
       });
     });
-    new import_obsidian10.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Description").setDesc("Optional description").addText((text) => {
       var _a;
       text.inputEl.addClass("auto-oc-modal-input");
       text.setValue((_a = this.draft.description) != null ? _a : "").onChange((v) => this.draft.description = v);
@@ -17562,12 +25258,12 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       text: "Handoff passes context from the task that just finished to the next task at runtime only. It does not edit the original task prompt.",
       cls: "setting-item-description auto-oc-workflow-section-help"
     });
-    new import_obsidian10.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
+    new import_obsidian11.Setting(contentEl).setName("Pass Git Branch").setDesc("The next task checks out the same branch used by the previous task. Useful when one step creates/edits code and the next step reviews or tests it.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffBranch) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffBranch = v);
     });
-    new import_obsidian10.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
+    new import_obsidian11.Setting(contentEl).setName("Pass Output Context").setDesc("The previous task output is appended to the next task prompt only for that workflow run. The saved task is not modified.").addToggle((tog) => {
       var _a;
       tog.setValue((_a = this.draft.handoffOutput) != null ? _a : false);
       tog.onChange((v) => this.draft.handoffOutput = v);
@@ -17577,7 +25273,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       text: "This schedule belongs to the workflow itself. The individual task schedules are not used while the workflow is running.",
       cls: "setting-item-description auto-oc-workflow-section-help"
     });
-    new import_obsidian10.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
+    new import_obsidian11.Setting(contentEl).setName("Schedule Type").addDropdown((dd) => {
       var _a;
       dd.addOption("manual", "Manual (run only when I press play)");
       dd.addOption("once", "Once (specific date and time)");
@@ -17592,14 +25288,14 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       });
     });
     if (this.draft.scheduleType === "once") {
-      new import_obsidian10.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Date").setDesc("Format YYYY-MM-DD").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(todayString()).setValue((_a = this.draft.scheduleDate) != null ? _a : "").onChange((v) => this.draft.scheduleDate = v);
       });
     }
     if (this.draft.scheduleType === "weekly") {
-      const daySetting = new import_obsidian10.Setting(contentEl).setName("Weekdays");
+      const daySetting = new import_obsidian11.Setting(contentEl).setName("Weekdays");
       daySetting.settingEl.style.flexWrap = "wrap";
       DAY_NAMES.forEach((name, idx) => {
         daySetting.addToggle((tog) => {
@@ -17624,7 +25320,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       });
     }
     if (this.draft.scheduleType === "monthly") {
-      new import_obsidian10.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Days of month").setDesc("Numbers from 1 to 31 separated by comma, semicolon, or spaces. Example: 1, 15, 31").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("1, 15, 31").setValue(((_a = this.draft.scheduleMonthDays) != null ? _a : []).join(", ")).onChange((v) => {
@@ -17634,7 +25330,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       });
     }
     if (this.draft.scheduleType === "interval") {
-      new import_obsidian10.Setting(contentEl).setName("Interval").setDesc("Run the workflow repeatedly every X units").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Interval").setDesc("Run the workflow repeatedly every X units").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.inputEl.type = "number";
@@ -17653,7 +25349,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       });
     }
     if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval") {
-      new import_obsidian10.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
+      new import_obsidian11.Setting(contentEl).setName("Time").setDesc("Format HH:MM (24h)").addText((text) => {
         var _a;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder("09:00").setValue((_a = this.draft.scheduleTime) != null ? _a : "").onChange((v) => this.draft.scheduleTime = v);
@@ -17666,27 +25362,27 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
     });
     const stepsContainer = contentEl.createDiv("auto-oc-workflow-steps-container");
     this.renderStepsList(stepsContainer);
-    new import_obsidian10.Setting(contentEl).addButton(
+    new import_obsidian11.Setting(contentEl).addButton(
       (btn) => btn.setButtonText(this.editWorkflow ? "Save Changes" : "Create Workflow").setCta().onClick(async () => {
         var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m, _n, _o, _p, _q, _r, _s, _t, _u, _v, _w, _x, _y, _z, _A, _B, _C;
         if (!((_a = this.draft.name) == null ? void 0 : _a.trim())) {
-          new import_obsidian10.Notice("Name is required.");
+          new import_obsidian11.Notice("Name is required.");
           return;
         }
         if (this.selectedSteps.length < 2) {
-          new import_obsidian10.Notice("A workflow needs at least 2 steps.");
+          new import_obsidian11.Notice("A workflow needs at least 2 steps.");
           return;
         }
         if (this.draft.scheduleType !== "manual" && this.draft.scheduleType !== "interval" && !/^\d{2}:\d{2}$/.test((_b = this.draft.scheduleTime) != null ? _b : "")) {
-          new import_obsidian10.Notice("Invalid time. Use HH:MM format.");
+          new import_obsidian11.Notice("Invalid time. Use HH:MM format.");
           return;
         }
         if (this.draft.scheduleType === "once" && !/^\d{4}-\d{2}-\d{2}$/.test((_c = this.draft.scheduleDate) != null ? _c : "")) {
-          new import_obsidian10.Notice("Invalid date. Use YYYY-MM-DD format.");
+          new import_obsidian11.Notice("Invalid date. Use YYYY-MM-DD format.");
           return;
         }
         if (this.draft.scheduleType === "monthly" && ((_d = this.draft.scheduleMonthDays) != null ? _d : []).length === 0) {
-          new import_obsidian10.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
+          new import_obsidian11.Notice("Enter one or more valid days of the month from 1 to 31, separated by comma or semicolon.");
           return;
         }
         const steps = this.selectedSteps.map((src, idx) => {
@@ -17719,7 +25415,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
         try {
           workflowClosure(candidate, [...this.plugin.settings.workflows.filter((w) => w.id !== candidate.id), candidate]);
         } catch (error) {
-          new import_obsidian10.Notice(error.message);
+          new import_obsidian11.Notice(error.message);
           return;
         }
         let updatedWorkflow = null;
@@ -17782,10 +25478,10 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
             btn.setDisabled(true);
             try {
               await this.plugin.saveGeneratedDefinitionDraft(this.draftTasks, workflow);
-              new import_obsidian10.Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
+              new import_obsidian11.Notice(`Workflow "${this.draft.name}" and its tasks saved.`);
               this.close();
             } catch (error) {
-              new import_obsidian10.Notice(`Could not save the workflow: ${error.message}. Your draft is still available.`);
+              new import_obsidian11.Notice(`Could not save the workflow: ${error.message}. Your draft is still available.`);
             } finally {
               this.savingGeneratedDraft = false;
               btn.setDisabled(false);
@@ -17799,7 +25495,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
           if (areaChanged) (_C = this.plugin.view) == null ? void 0 : _C.render();
           this.plugin.emitWorkflowUpdated(updatedWorkflow);
         }
-        new import_obsidian10.Notice(`Workflow "${this.draft.name}" saved.`);
+        new import_obsidian11.Notice(`Workflow "${this.draft.name}" saved.`);
         this.close();
       })
     );
@@ -17872,19 +25568,19 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
         delete this.stepConfigs[step.id];
         this.renderStepsList(container);
       };
-      new import_obsidian10.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+      new import_obsidian11.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(this.defaultWorkflowStepName(step, i)).setValue(step.name || "").onChange((v) => {
           step.name = v.trim();
         });
       });
-      new import_obsidian10.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
+      new import_obsidian11.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
         var _a2;
         text.inputEl.addClass("auto-oc-modal-input");
         text.setPlaceholder(((_a2 = this.draft.area) == null ? void 0 : _a2.trim()) || "No area").setValue(step.area || this.draft.area || "").onChange((v) => step.area = v.trim());
       });
       if (step.stepKind === "workflow") {
-        new import_obsidian10.Setting(stepEl).setName("Workflow").setDesc("Runs to completion before continuing. Its schedule is ignored; permissions stay unchanged.").addDropdown((dd) => {
+        new import_obsidian11.Setting(stepEl).setName("Workflow").setDesc("Runs to completion before continuing. Its schedule is ignored; permissions stay unchanged.").addDropdown((dd) => {
           var _a2;
           dd.addOption("", "Select a workflow");
           for (const child of this.plugin.settings.workflows) if (child.id !== ((_a2 = this.editWorkflow) == null ? void 0 : _a2.id)) dd.addOption(child.id, child.name);
@@ -17896,20 +25592,20 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
       }
       if (step.stepKind === "code") {
         const initialCode = step.code || "";
-        new import_obsidian10.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
+        new import_obsidian11.Setting(stepEl).setName("JavaScript code").setDesc("Runs inside the workflow. Previous output is available as the input variable; assign the output variable to pass data forward.").addTextArea((text) => {
           text.inputEl.addClass("auto-oc-modal-textarea");
           text.inputEl.rows = 6;
           text.setValue(initialCode).onChange((v) => step.code = v);
           setupCodeTextarea(text.inputEl, this.app);
         });
-        new import_obsidian10.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
+        new import_obsidian11.Setting(stepEl).setName("Variables").setDesc("Input and output variable names").addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
           text.setPlaceholder("input").setValue(step.codeInputVar || "input").onChange((v) => step.codeInputVar = v || "input");
         }).addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
           text.setPlaceholder("output").setValue(step.codeOutputVar || "output").onChange((v) => step.codeOutputVar = v || "output");
         });
-        new import_obsidian10.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
+        new import_obsidian11.Setting(stepEl).setName("Code permissions").setDesc("Expose optional APIs to this code step").addToggle((tog) => {
           tog.setTooltip("Vault API");
           tog.setValue(!!step.codeAllowVault);
           tog.onChange((v) => step.codeAllowVault = v);
@@ -17926,7 +25622,7 @@ var CreateWorkflowModal = class extends import_obsidian10.Modal {
           tog.toggleEl.insertAdjacentHTML("afterend", `<span class="auto-oc-day-label">Terminal</span>`);
         });
       } else if (step.stepKind === "delay") {
-        new import_obsidian10.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
+        new import_obsidian11.Setting(stepEl).setName("Delay").setDesc("Pause the workflow before continuing").addText((text) => {
           var _a2;
           text.inputEl.addClass("auto-oc-modal-input");
           text.inputEl.type = "number";
@@ -18124,7 +25820,7 @@ Reply ONLY with YES or NO.`;
           if (newTasks.length > 0) {
             const newest = newTasks[newTasks.length - 1];
             this.selectedSteps.push({ id: generateId(), stepKind: "task", taskId: newest.id, area: this.draft.area || newest.area || "", transitions: [], position: { x: 0, y: 0 } });
-            new import_obsidian10.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
+            new import_obsidian11.Notice(`AutoOC: Task "${newest.name}" added to workflow chain.`);
           }
           this.renderStepsList(container);
         }, 200);
@@ -18223,7 +25919,7 @@ Reply ONLY with YES or NO.`;
     this.contentEl.empty();
   }
 };
-var ExportModal = class extends import_obsidian10.Modal {
+var ExportModal = class extends import_obsidian11.Modal {
   constructor(app, plugin, taskIds, workflowIds) {
     super(app);
     this.selectedTaskIds = /* @__PURE__ */ new Set();
@@ -18245,10 +25941,10 @@ var ExportModal = class extends import_obsidian10.Modal {
       text: "Select the items you want to share. Selected workflows automatically include their referenced tasks so the file remains importable on another machine.",
       cls: "setting-item-description"
     });
-    new import_obsidian10.Setting(contentEl).setName("Export name (optional)").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Export name (optional)").addText((text) => {
       text.setPlaceholder("My tasks").onChange((v) => this.name = v);
     });
-    new import_obsidian10.Setting(contentEl).setName("Description (optional)").addText((text) => {
+    new import_obsidian11.Setting(contentEl).setName("Description (optional)").addText((text) => {
       text.setPlaceholder("Shared AutoOC configuration").onChange((v) => this.description = v);
     });
     contentEl.createDiv("auto-oc-modal-section-title").setText("\u{1F4CB} Tasks");
@@ -18366,7 +26062,7 @@ ${stepNames}` : stepNames;
     btnCopy.onclick = async () => {
       const payload = getPayload();
       if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-        new import_obsidian10.Notice("AutoOC: nothing selected to export.");
+        new import_obsidian11.Notice("AutoOC: nothing selected to export.");
         return;
       }
       const json = this.plugin.buildExportJson(
@@ -18377,9 +26073,9 @@ ${stepNames}` : stepNames;
       );
       try {
         await navigator.clipboard.writeText(json);
-        new import_obsidian10.Notice("AutoOC: JSON copied to clipboard.");
+        new import_obsidian11.Notice("AutoOC: JSON copied to clipboard.");
       } catch (e) {
-        new import_obsidian10.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
+        new import_obsidian11.Notice(`AutoOC: could not copy \u2014 ${String(e)}`);
       }
     };
     const btnSave = btnRow.createEl("button", {
@@ -18389,7 +26085,7 @@ ${stepNames}` : stepNames;
     btnSave.onclick = async () => {
       const payload = getPayload();
       if (payload.tasks.length === 0 && payload.workflows.length === 0) {
-        new import_obsidian10.Notice("AutoOC: nothing selected to export.");
+        new import_obsidian11.Notice("AutoOC: nothing selected to export.");
         return;
       }
       await this.plugin.exportToFile(
@@ -18405,7 +26101,7 @@ ${stepNames}` : stepNames;
     this.contentEl.empty();
   }
 };
-var ImportModal = class extends import_obsidian10.Modal {
+var ImportModal = class extends import_obsidian11.Modal {
   constructor(app, plugin) {
     super(app);
     this.filePath = null;
@@ -18488,12 +26184,12 @@ var ImportModal = class extends import_obsidian10.Modal {
       btnImport.textContent = "Importing\u2026";
       try {
         const result = await this.plugin.importFromData(this.previewData);
-        new import_obsidian10.Notice(
+        new import_obsidian11.Notice(
           `AutoOC: imported ${result.tasksImported} task(s) and ${result.workflowsImported} workflow(s).`
         );
         this.close();
       } catch (e) {
-        new import_obsidian10.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
+        new import_obsidian11.Notice(`AutoOC: import failed \u2014 ${String(e)}`);
         btnImport.disabled = false;
         btnImport.textContent = "Import";
       }
@@ -18508,7 +26204,7 @@ var ImportModal = class extends import_obsidian10.Modal {
     this.renderPreview();
   }
   renderFilePanel(panel) {
-    new import_obsidian10.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
+    new import_obsidian11.Setting(panel).setName("JSON file").setDesc("Choose an AutoOC export file").addButton(
       (btn) => btn.setButtonText("Choose file\u2026").onClick(async () => {
         const chosen = await this.chooseFile();
         if (chosen) {
@@ -18554,21 +26250,21 @@ var ImportModal = class extends import_obsidian10.Modal {
         this.lastValidation = result;
         if (!result.ok) {
           this.previewData = null;
-          new import_obsidian10.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+          new import_obsidian11.Notice(`AutoOC: pasted JSON has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
         } else {
           this.previewData = data;
           this.filePath = null;
           this.selectedLibraryFile = null;
           if (result.warnings.length > 0) {
-            new import_obsidian10.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+            new import_obsidian11.Notice(`AutoOC: parsed ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
           } else {
-            new import_obsidian10.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+            new import_obsidian11.Notice(`AutoOC: parsed ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
           }
         }
       } catch (e) {
         this.previewData = null;
         this.lastValidation = { ok: false, errors: [`Could not parse JSON: ${String(e)}`], warnings: [] };
-        new import_obsidian10.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
+        new import_obsidian11.Notice(`AutoOC: could not parse JSON \u2014 ${String(e)}`, 8e3);
       }
       this.renderPreview();
       this.updateImportButton();
@@ -18601,7 +26297,7 @@ var ImportModal = class extends import_obsidian10.Modal {
         this.pastedJson = formatted;
         parse3();
       } catch (e) {
-        new import_obsidian10.Notice(`AutoOC: cannot format \u2014 ${String(e)}`);
+        new import_obsidian11.Notice(`AutoOC: cannot format \u2014 ${String(e)}`);
       }
     };
   }
@@ -18679,7 +26375,7 @@ var ImportModal = class extends import_obsidian10.Modal {
         return result.filePaths[0];
       }
     } catch (e) {
-      new import_obsidian10.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
+      new import_obsidian11.Notice(`AutoOC: file picker failed \u2014 ${String(e)}`);
     }
     return null;
   }
@@ -18687,25 +26383,25 @@ var ImportModal = class extends import_obsidian10.Modal {
     var _a, _b, _c, _d, _e, _f, _g, _h;
     if (!this.filePath) return;
     try {
-      const raw = fs33.readFileSync(this.filePath, "utf8");
+      const raw = fs36.readFileSync(this.filePath, "utf8");
       const data = JSON.parse(raw);
       this.validateExport(data);
       const result = this.validateExport(data);
       this.lastValidation = result;
       if (!result.ok) {
         this.previewData = null;
-        new import_obsidian10.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        new import_obsidian11.Notice(`AutoOC: file has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
       } else {
         this.previewData = data;
         if (result.warnings.length > 0) {
-          new import_obsidian10.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          new import_obsidian11.Notice(`AutoOC: loaded ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
         } else {
-          new import_obsidian10.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          new import_obsidian11.Notice(`AutoOC: loaded ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
         }
       }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian10.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
+      new import_obsidian11.Notice(`AutoOC: could not read file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -18724,7 +26420,7 @@ var ImportModal = class extends import_obsidian10.Modal {
       this.libraryEntries = data.library;
     } catch (e) {
       this.libraryError = String(e);
-      new import_obsidian10.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
+      new import_obsidian11.Notice(`AutoOC: library load failed \u2014 ${String(e)}`);
     }
   }
   async loadLibraryFile(fileName) {
@@ -18738,18 +26434,18 @@ var ImportModal = class extends import_obsidian10.Modal {
       this.lastValidation = result;
       if (!result.ok) {
         this.previewData = null;
-        new import_obsidian10.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
+        new import_obsidian11.Notice(`AutoOC: "${fileName}" has ${result.errors.length} error(s) \u2014 see the preview panel.`, 8e3);
       } else {
         this.previewData = data;
         if (result.warnings.length > 0) {
-          new import_obsidian10.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
+          new import_obsidian11.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_b = (_a = data.tasks) == null ? void 0 : _a.length) != null ? _b : 0} task(s), ${(_d = (_c = data.workflows) == null ? void 0 : _c.length) != null ? _d : 0} workflow(s) with ${result.warnings.length} warning(s).`, 6e3);
         } else {
-          new import_obsidian10.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
+          new import_obsidian11.Notice(`AutoOC: loaded "${fileName}" \u2014 ${(_f = (_e = data.tasks) == null ? void 0 : _e.length) != null ? _f : 0} task(s), ${(_h = (_g = data.workflows) == null ? void 0 : _g.length) != null ? _h : 0} workflow(s).`);
         }
       }
     } catch (e) {
       this.previewData = null;
-      new import_obsidian10.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
+      new import_obsidian11.Notice(`AutoOC: could not load file \u2014 ${String(e)}`, 8e3);
     }
     this.renderPreview();
     this.updateImportButton();
@@ -18808,12 +26504,14 @@ var ImportModal = class extends import_obsidian10.Modal {
           errors.push(where + ".prompt is missing or empty.");
         }
         const taskKind = t.taskKind || "opencode";
-        if (!["opencode", "opencode2", "codex", "copilot", "code"].includes(taskKind)) {
-          errors.push(where + ".taskKind is invalid. Expected opencode, opencode2, codex, copilot, or code.");
+        if (!["opencode", "opencode2", "codex", "copilot", "code", "cli"].includes(taskKind)) {
+          errors.push(where + ".taskKind is invalid. Expected opencode, opencode2, codex, copilot, code, or cli.");
         }
+        const cliError = getCliTaskValidationError(t);
+        if (cliError) errors.push(where + ": " + cliError);
         const copilotError = getCopilotTaskValidationError(t);
         if (copilotError) errors.push(where + ": " + copilotError);
-        if (t.reasoningEffort !== void 0 && (taskKind !== "codex" || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
+        if (t.reasoningEffort !== void 0 && (taskKind !== "codex" && !(taskKind === "cli" && t.cliProvider === "codex") || typeof t.reasoningEffort !== "string" || !t.reasoningEffort.trim())) {
           errors.push(where + ".reasoningEffort is only valid for Codex tasks.");
         }
         if (t.interactiveTerminal !== void 0 && typeof t.interactiveTerminal !== "boolean") {
@@ -19036,7 +26734,7 @@ var ImportModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var LiveLogModal = class extends import_obsidian10.Modal {
+var LiveLogModal = class extends import_obsidian11.Modal {
   constructor(app, task, plugin) {
     super(app);
     this.renderEl = null;
@@ -19088,7 +26786,7 @@ var LiveLogModal = class extends import_obsidian10.Modal {
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.lastRenderedContent);
-      new import_obsidian10.Notice("Log copied.");
+      new import_obsidian11.Notice("Log copied.");
     };
     const btnClear = toolbar.createEl("button", {
       text: "\u{1F5D1} Clear View",
@@ -19116,7 +26814,7 @@ var LiveLogModal = class extends import_obsidian10.Modal {
       if (this.lastRenderedContent !== newContent) {
         this.lastRenderedContent = newContent;
         this.renderEl.empty();
-        void import_obsidian10.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
+        void import_obsidian11.MarkdownRenderer.render(this.app, newContent, this.renderEl, "", this.plugin);
         if (this.autoScroll) {
           this.renderEl.scrollTop = this.renderEl.scrollHeight;
         }
@@ -19139,7 +26837,7 @@ var LiveLogModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var LogHistoryModal = class extends import_obsidian10.Modal {
+var LogHistoryModal = class extends import_obsidian11.Modal {
   constructor(app, task, plugin) {
     super(app);
     this.task = task;
@@ -19173,7 +26871,7 @@ var LogHistoryModal = class extends import_obsidian10.Modal {
       if (confirm(`Delete ALL ${history.length} logs for "${this.task.name}"?`)) {
         clearTaskLogs(vaultBasePath, this.task.id);
         this.close();
-        new import_obsidian10.Notice("All logs cleared.");
+        new import_obsidian11.Notice("All logs cleared.");
       }
     };
     const list2 = contentEl.createDiv("auto-oc-log-history-list");
@@ -19204,7 +26902,7 @@ var LogHistoryModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var LogPreviewModal = class extends import_obsidian10.Modal {
+var LogPreviewModal = class extends import_obsidian11.Modal {
   constructor(app, taskName, timestamp, content, plugin) {
     super(app);
     this.taskName = taskName;
@@ -19226,7 +26924,7 @@ var LogPreviewModal = class extends import_obsidian10.Modal {
     });
     btnCopy.onclick = () => {
       navigator.clipboard.writeText(this.content);
-      new import_obsidian10.Notice("Log copied.");
+      new import_obsidian11.Notice("Log copied.");
     };
     const btnClose = toolbar.createEl("button", {
       text: "\u2716 Close",
@@ -19234,14 +26932,14 @@ var LogPreviewModal = class extends import_obsidian10.Modal {
     });
     btnClose.onclick = () => this.close();
     const renderEl = contentEl.createDiv("auto-oc-log-rendered markdown-rendered");
-    void import_obsidian10.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
+    void import_obsidian11.MarkdownRenderer.render(this.app, this.content, renderEl, "", this.plugin);
     renderEl.scrollTop = renderEl.scrollHeight;
   }
   onClose() {
     this.contentEl.empty();
   }
 };
-var BranchSelectorModal = class extends import_obsidian10.Modal {
+var BranchSelectorModal = class extends import_obsidian11.Modal {
   constructor(app, branches) {
     super(app);
     this.selectedBranch = null;
@@ -19249,8 +26947,8 @@ var BranchSelectorModal = class extends import_obsidian10.Modal {
     this.branches = branches;
   }
   async open() {
-    return new Promise((resolve10) => {
-      this.resolveSelection = resolve10;
+    return new Promise((resolve11) => {
+      this.resolveSelection = resolve11;
       super.open();
     });
   }
@@ -19278,7 +26976,7 @@ var BranchSelectorModal = class extends import_obsidian10.Modal {
     this.resolveSelection = null;
   }
 };
-var TextPreviewModal = class extends import_obsidian10.Modal {
+var TextPreviewModal = class extends import_obsidian11.Modal {
   constructor(app, titleText, bodyText) {
     super(app);
     this.titleText = titleText;
@@ -19289,10 +26987,10 @@ var TextPreviewModal = class extends import_obsidian10.Modal {
     contentEl.createEl("h3", { text: this.titleText });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.bodyText || "(empty)";
-    new import_obsidian10.Setting(contentEl).addButton(
+    new import_obsidian11.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.bodyText || "");
-        new import_obsidian10.Notice("Output copied.");
+        new import_obsidian11.Notice("Output copied.");
       })
     );
   }
@@ -19300,7 +26998,7 @@ var TextPreviewModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var CommandPreviewModal = class extends import_obsidian10.Modal {
+var CommandPreviewModal = class extends import_obsidian11.Modal {
   constructor(app, taskName, cmd) {
     super(app);
     this.taskName = taskName;
@@ -19315,10 +27013,10 @@ var CommandPreviewModal = class extends import_obsidian10.Modal {
     });
     const pre = contentEl.createEl("pre", { cls: "auto-oc-output-pre" });
     pre.textContent = this.cmd;
-    new import_obsidian10.Setting(contentEl).addButton(
+    new import_obsidian11.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("Copy").onClick(() => {
         navigator.clipboard.writeText(this.cmd);
-        new import_obsidian10.Notice("Command copied.");
+        new import_obsidian11.Notice("Command copied.");
       })
     );
   }
@@ -19326,7 +27024,7 @@ var CommandPreviewModal = class extends import_obsidian10.Modal {
     this.contentEl.empty();
   }
 };
-var DiagnosticModal = class extends import_obsidian10.Modal {
+var DiagnosticModal = class extends import_obsidian11.Modal {
   constructor(app, plugin) {
     super(app);
     this.logEl = null;
@@ -19347,10 +27045,10 @@ var DiagnosticModal = class extends import_obsidian10.Modal {
       (_b = this.hiddenProc) == null ? void 0 : _b.cleanup(true);
     }
     this.hiddenProc = null;
-    const fs34 = require("fs");
+    const fs37 = require("fs");
     for (const file of this.tempFiles) {
       try {
-        fs34.unlinkSync(file);
+        fs37.unlinkSync(file);
       } catch (e) {
       }
     }
@@ -19367,27 +27065,27 @@ var DiagnosticModal = class extends import_obsidian10.Modal {
     const bin = resolveOpencodeBin(this.plugin.settings.opencodePath);
     contentEl.createEl("p", { text: `Detected binary: ${bin}`, cls: "setting-item-description" });
     contentEl.createEl("p", { text: `Default model: ${this.plugin.getEffectiveDefaultModel() || "(not configured)"}`, cls: "setting-item-description" });
-    new import_obsidian10.Setting(contentEl).addButton(
+    new import_obsidian11.Setting(contentEl).addButton(
       (btn) => btn.setButtonText("\u25B6 Launch test: 'di hola'").setCta().onClick(() => {
         this.cleanupDiagnostics(true);
         if (this.logEl) this.logEl.textContent = "[launching detached process\u2026]\n";
         const bin2 = resolveOpencodeBin(this.plugin.settings.opencodePath);
         const model = this.plugin.getEffectiveDefaultModel();
         if (!model) {
-          new import_obsidian10.Notice("AutoOC: no model selected. Reload models in Settings.");
+          new import_obsidian11.Notice("AutoOC: no model selected. Reload models in Settings.");
           return;
         }
-        const fs34 = require("fs");
-        const path32 = require("path");
+        const fs37 = require("fs");
+        const path35 = require("path");
         const osTmp = require("os").tmpdir();
-        const outFile = path32.join(osTmp, "autooc-diag.txt");
-        const pidFile = path32.join(osTmp, "autooc-diag.pid");
+        const outFile = path35.join(osTmp, "autooc-diag.txt");
+        const pidFile = path35.join(osTmp, "autooc-diag.pid");
         try {
-          fs34.unlinkSync(outFile);
+          fs37.unlinkSync(outFile);
         } catch (e) {
         }
         try {
-          fs34.unlinkSync(pidFile);
+          fs37.unlinkSync(pidFile);
         } catch (e) {
         }
         let launchScript;
@@ -19435,9 +27133,9 @@ DONE:" + $exitCode)`
 DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
           ].join("\n");
         }
-        const scriptFile = path32.join(osTmp, `autooc-diag${scriptExt()}`);
+        const scriptFile = path35.join(osTmp, `autooc-diag${scriptExt()}`);
         if (isWindows()) writeUtf8BomFile(scriptFile, launchScript);
-        else fs34.writeFileSync(scriptFile, launchScript, "utf8");
+        else fs37.writeFileSync(scriptFile, launchScript, "utf8");
         this.tempFiles = [outFile, pidFile, scriptFile];
         if (this.logEl) this.logEl.textContent += `Script: ${scriptFile}
 
@@ -19450,13 +27148,13 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
             if (this.logEl) this.logEl.textContent += "\n\n[timeout]";
             return;
           }
-          if (!fs34.existsSync(outFile)) {
+          if (!fs37.existsSync(outFile)) {
             if (this.logEl) this.logEl.textContent += ".";
             return;
           }
           if (this.pollHandle) clearInterval(this.pollHandle);
           this.pollHandle = null;
-          const raw = fs34.readFileSync(outFile, "utf8");
+          const raw = fs37.readFileSync(outFile, "utf8");
           this.cleanupDiagnostics(false);
           const doneMatch = raw.match(/\nDONE:(-?\d+)\s*$/);
           const output = doneMatch ? raw.slice(0, doneMatch.index).trim() : raw.trim();
@@ -19479,7 +27177,7 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
     this.contentEl.empty();
   }
 };
-var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
+var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
     this.plugin = plugin;
@@ -19490,14 +27188,14 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
     const credentialIssue = this.plugin.legacyCredentialNoticeStatus();
-    if (credentialIssue) new import_obsidian10.Setting(containerEl).setName("Legacy credential notice").setDesc(credentialIssue.acknowledged ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here." : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
-    new import_obsidian10.Setting(containerEl).setName("Resolve blocked executions").setDesc("Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openBlockedExecutionsReview()));
-    new import_obsidian10.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
+    if (credentialIssue) new import_obsidian11.Setting(containerEl).setName("Legacy credential notice").setDesc(credentialIssue.acknowledged ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here." : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
+    new import_obsidian11.Setting(containerEl).setName("Resolve blocked executions").setDesc("Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openBlockedExecutionsReview()));
+    new import_obsidian11.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
       button.setDisabled(true);
       try {
         await this.plugin.openHistoricalAttemptsReview();
       } catch (error) {
-        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
       } finally {
         button.setDisabled(false);
       }
@@ -19507,16 +27205,16 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
       saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
       applyDiameter: (diameter) => this.plugin.applyDashboardBubbleDiameter(diameter)
     });
-    new import_obsidian10.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
+    new import_obsidian11.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
       this.plugin.settings.defaultConcurrency = value;
       try {
         await this.plugin.saveSettings(false);
       } catch (error) {
-        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
       }
     }));
     let requestedLimit = String((_a = this.plugin.settings.maxConcurrentExecutions) != null ? _a : 0);
-    new import_obsidian10.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
+    new import_obsidian11.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
       text.inputEl.type = "number";
       text.inputEl.min = "0";
       text.inputEl.step = "1";
@@ -19526,21 +27224,21 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
     }).addButton((button) => button.setButtonText("Apply").onClick(async () => {
       const limit = Number(requestedLimit);
       if (!/^\d+$/.test(requestedLimit) || !Number.isSafeInteger(limit)) {
-        new import_obsidian10.Notice("Enter a whole number of zero or more. Zero means Unlimited.");
+        new import_obsidian11.Notice("Enter a whole number of zero or more. Zero means Unlimited.");
         return;
       }
       button.setDisabled(true);
       try {
         this.plugin.settings.maxConcurrentExecutions = limit;
         await this.plugin.saveSettings(false);
-        new import_obsidian10.Notice(`Maximum simultaneous runs: ${limit === 0 ? "Unlimited" : limit}.`);
+        new import_obsidian11.Notice(`Maximum simultaneous runs: ${limit === 0 ? "Unlimited" : limit}.`);
       } catch (error) {
-        new import_obsidian10.Notice(this.plugin.redactSecrets(String(error)));
+        new import_obsidian11.Notice(this.plugin.redactSecrets(String(error)));
       } finally {
         button.setDisabled(false);
       }
     }));
-    new import_obsidian10.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
+    new import_obsidian11.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;
         await this.plugin.saveSettings();
@@ -19549,7 +27247,7 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
     containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
     const location = () => this.plugin.openCode2Location();
     addOpenCode2Picker(
-      new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Refresh Models lists models from the OpenCode 2 CLI configured under Interactive CLI launchers. New OpenCode 2 tasks use the model you choose here."),
+      new import_obsidian11.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Refresh Models lists models from the OpenCode 2 CLI configured under Interactive CLI launchers. New OpenCode 2 tasks use the model you choose here."),
       "models",
       this.plugin.openCode2Catalog,
       location,
@@ -19560,7 +27258,7 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
       }
     );
     addOpenCode2Picker(
-      new import_obsidian10.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Default: build."),
+      new import_obsidian11.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Default: build."),
       "agents",
       this.plugin.openCode2Catalog,
       location,
@@ -19573,7 +27271,7 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
     addInteractiveCliSettings(containerEl, this.plugin);
     addCopilotGlobalSettings(containerEl, this.plugin);
     containerEl.createEl("h3", { text: "Codex task defaults" });
-    new import_obsidian10.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
+    new import_obsidian11.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
       dropdown.addOption("", "Automatic");
       this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
       const current = this.plugin.settings.defaultCodexModel || "";
@@ -19591,7 +27289,7 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
       await this.plugin.refreshCodexModels(true);
       this.display();
     }));
-    new import_obsidian10.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
+    new import_obsidian11.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
       const efforts = this.plugin.getCodexReasoningEfforts();
       efforts.forEach((effort) => dropdown.addOption(effort, effort));
       const current = this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -19602,7 +27300,7 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
       });
     });
     containerEl.createEl("h3", { text: "CLI folders and terminals" });
-    new import_obsidian10.Setting(containerEl).setName("Working Directory").setDesc(
+    new import_obsidian11.Setting(containerEl).setName("Working Directory").setDesc(
       "Default folder for interactive CLI sessions and supported tasks. Empty = vault folder."
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
@@ -19610,14 +27308,14 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
+    new import_obsidian11.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
       (tog) => tog.setValue(!!this.plugin.settings.defaultInteractiveTerminal).onChange(async (v) => {
         this.plugin.settings.defaultInteractiveTerminal = v;
         await this.plugin.saveSettings();
       })
     );
     if (process.platform === "linux") {
-      new import_obsidian10.Setting(containerEl).setName("Linux terminal emulator").setDesc(
+      new import_obsidian11.Setting(containerEl).setName("Linux terminal emulator").setDesc(
         "Command used to open interactive CLI sessions. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
       ).addText(
         (text) => text.setPlaceholder("auto-detect (e.g. konsole)").setValue(this.plugin.settings.linuxTerminal || "").onChange(async (v) => {
@@ -19626,7 +27324,7 @@ var AutoOCSettingTab = class extends import_obsidian10.PluginSettingTab {
         })
       );
     }
-    new import_obsidian10.Setting(containerEl).setName("Shared Library URL").setDesc(
+    new import_obsidian11.Setting(containerEl).setName("Shared Library URL").setDesc(
       `GitHub repo or raw URL used by the Import \u2192 Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.
 Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     ).addText(
@@ -19636,7 +27334,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         this.display();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
+    new import_obsidian11.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a2 = this.plugin.settings.taskTimeoutSeconds) != null ? _a2 : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
@@ -19653,13 +27351,13 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
       cls: "setting-item-description"
     });
-    new import_obsidian10.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
+    new import_obsidian11.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
       (tog) => tog.setValue(this.plugin.settings.logsEnabled).onChange(async (v) => {
         this.plugin.settings.logsEnabled = v;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
+    new import_obsidian11.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder("50").setValue(String((_a2 = this.plugin.settings.maxLogsPerTask) != null ? _a2 : 50)).onChange(async (v) => {
@@ -19671,7 +27369,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian10.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
+    new import_obsidian11.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder("30").setValue(String((_a2 = this.plugin.settings.logRetentionDays) != null ? _a2 : 30)).onChange(async (v) => {
@@ -19683,7 +27381,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian10.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
+    new import_obsidian11.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
       (btn) => btn.setButtonText("\u{1F9F9} Clear All Logs").setWarning().onClick(async () => {
         if (confirm("Delete ALL log files for ALL tasks? This cannot be undone.")) {
           await this.plugin.clearAllLogs();
@@ -19699,26 +27397,26 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
       cls: "setting-item-description"
     });
-    new import_obsidian10.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
+    new import_obsidian11.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
       (btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
         try {
           const result = await this.plugin.ensureRalphLoopPluginEnabled();
-          new import_obsidian10.Notice(
+          new import_obsidian11.Notice(
             result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
           );
           this.display();
         } catch (e) {
-          new import_obsidian10.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+          new import_obsidian11.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
         }
       })
     ).addButton(
       (btn) => btn.setButtonText("Show status path").onClick(() => {
         const basePath = this.app.vault.adapter.basePath || ".";
         const statePath = getRalphStateFilePath(basePath);
-        new import_obsidian10.Notice(`Ralph state file: ${statePath}`);
+        new import_obsidian11.Notice(`Ralph state file: ${statePath}`);
       })
     );
-    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 1 agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+    new import_obsidian11.Setting(containerEl).setName("Default OpenCode 1 agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       const agents = this.plugin.availableAgents;
       agents.forEach((a) => dd.addOption(a.value, a.label));
       const current = this.plugin.getEffectiveAgent();
@@ -19739,7 +27437,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     refreshAgentsBtn.style.marginBottom = "8px";
     refreshAgentsBtn.onclick = () => {
       this.plugin.refreshAgents();
-      new import_obsidian10.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
+      new import_obsidian11.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
       this.display();
     };
     containerEl.createEl("p", {
@@ -19755,7 +27453,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = agentsBody.createEl("tr");
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
-    new import_obsidian10.Setting(containerEl).setName("Default OpenCode 1 model").addDropdown((dd) => {
+    new import_obsidian11.Setting(containerEl).setName("Default OpenCode 1 model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
       const current = this.plugin.getEffectiveDefaultModel();
@@ -19778,7 +27476,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
     refreshBtn.style.marginBottom = "8px";
     refreshBtn.onclick = () => {
       this.plugin.refreshModels();
-      new import_obsidian10.Notice("AutoOC: models reloaded. Refresh this panel.");
+      new import_obsidian11.Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
     containerEl.createEl("p", {

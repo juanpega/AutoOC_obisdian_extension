@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import { InteractiveTerminalLaunchUncertainError } from "./interactive-task-terminal";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
 import { createAuxiliaryDirectory, completeAuxiliaryDirectory, auxiliaryCompletionRecord, AUXILIARY_COMPLETION } from './execution-files';
@@ -141,6 +142,7 @@ export interface CliLaunchOptions {
   onLaunched?: () => void;
   linuxTerminal?: string;
   opencodeMajor?: 1 | 2;
+  promptArgs?: (instruction: string) => string[];
 }
 
 export function openOpencodeCli(
@@ -240,8 +242,8 @@ export function openOpencodeCliLongPromptWindows(
       checkDirectory,
       `Set-Location -LiteralPath ${psSingleQuoted(path.resolve(cwd))}`,
       "try {",
-      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application -ErrorAction Stop | Select-Object -First 1`,
-      `  $cliArgs = @(${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)})`,
+      `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application,ExternalScript -ErrorAction Stop | Select-Object -First 1`,
+      `  $cliArgs = @(${options.promptArgs ? options.promptArgs(instruction).map(psSingleQuoted).join(", ") : `${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)}`})`,
       "  & $target.Source @cliArgs",
       "  exit $LASTEXITCODE",
       "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
@@ -299,13 +301,13 @@ export function openOpencodeCliLongPromptWindows(
       try { state = JSON.parse(fs.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, "")); }
       catch { return; } // A partial write is retried; it is never a success.
       if (state.attempt !== attempt) return;
-      if (state.status === "error") finish(new Error("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
+      if (state.status === "error") finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
       else if (state.confirmed === true && (state.status === "started" || state.status === "ended")) finish();
-      else if (state.status === "ended") finish(new Error("Interactive CLI exited without confirmed startup"));
+      else if (state.status === "ended") finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI exited without confirmed startup"));
       if (state.ended === true && (state.status === "ended" || state.status === "error")) { stopPolling(); cleanup(); }
     };
     poll = setInterval(readState, 100);
-    timeout = setTimeout(() => finish(new Error("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 30000);
+    timeout = setTimeout(() => finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 30000);
     const launcher = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
       // A detached hidden PowerShell can exit without executing its command on
       // Windows. The observer does not need a new process group; unref below
@@ -316,7 +318,7 @@ export function openOpencodeCliLongPromptWindows(
     launcher.on?.("exit", () => {
       readState();
       stopPolling();
-      finish(new Error("Interactive CLI observer exited without startup confirmation; prompt retained"));
+      finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI observer exited without startup confirmation; prompt retained"));
     });
     launcher.unref();
   } catch (error) {

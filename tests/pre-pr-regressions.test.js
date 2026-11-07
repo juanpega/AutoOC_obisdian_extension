@@ -418,7 +418,8 @@ test("workflow prompt documents the canonical export contract", () => {
   assert.match(prompt, /"codex" for Codex in ChatGPT/);
   assert.match(prompt, /reasoningEffort: optional for taskKind "codex"/);
   assert.match(prompt, /ChatGPT\/Codex app for taskKind "codex"/);
-  assert.match(prompt, /workflow may mix all three engines/);
+  assert.match(prompt, /workflow may mix engines; interactive CLI steps acknowledge launch only/);
+  assert.match(prompt, /"cli" requires cliProvider: "opencode", "opencode2", "codex", "copilot", or "claude"/);
   assert.match(prompt, /forceModel: true forces the selected model and does not apply the agent/);
   assert.match(prompt, /transitions array is the recommended canonical form/);
   assert.match(prompt, /importer validates transitions when provided/);

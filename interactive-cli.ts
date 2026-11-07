@@ -14,6 +14,7 @@ export interface InteractiveCliSettings {
   copilotPath: string;
   claudePath?: string;
   cliLauncherEnabled?: Partial<Record<InteractiveCliProvider, boolean>>;
+  cliTerminalDestination?: "integrated" | "external";
   workingDirectory: string;
   linuxTerminal?: string;
 }
@@ -89,15 +90,20 @@ export function windowsInteractiveCliScripts(bin: string, cwd: string, label: st
   return { runner, helper };
 }
 
-export async function launchInteractiveCli(provider: InteractiveCliProvider, cwd: string, settings: InteractiveCliSettings): Promise<void> {
+export function prepareInteractiveCli(provider: InteractiveCliProvider, cwd: string, settings: InteractiveCliSettings) {
   const cli = INTERACTIVE_CLIS.find(item => item.id === provider);
-  if (!cli || settings.cliLauncherEnabled?.[provider] === false) return Promise.reject(new Error("This CLI is disabled. Enable it in AutoOC Settings."));
+  if (!cli || settings.cliLauncherEnabled?.[provider] === false) throw new Error("This CLI is disabled. Enable it in AutoOC Settings.");
   const bin = resolveInteractiveCli(provider, settings[cli.pathKey]);
-  if (!bin) return Promise.reject(new Error(`${cli.label} was not found. Check its executable path in AutoOC Settings.`));
-  if (!path.isAbsolute(cwd)) return Promise.reject(new Error("Choose an absolute project folder."));
+  if (!bin) throw new Error(`${cli.label} was not found. Check its executable path in AutoOC Settings.`);
+  if (!path.isAbsolute(cwd)) throw new Error("Choose an absolute project folder.");
   try { if (!fs.statSync(cwd).isDirectory()) throw new Error(); }
-  catch { return Promise.reject(new Error(`Folder does not exist: ${cwd}`)); }
-  if (!["win32", "darwin", "linux"].includes(process.platform)) return Promise.reject(new Error("Interactive CLIs require Windows, macOS or Linux."));
+  catch { throw new Error(`Folder does not exist: ${cwd}`); }
+  if (!["win32", "darwin", "linux"].includes(process.platform)) throw new Error("Interactive CLIs require Windows, macOS or Linux.");
+  return { cli, bin, cwd };
+}
+
+export async function launchInteractiveCli(provider: InteractiveCliProvider, cwd: string, settings: InteractiveCliSettings): Promise<void> {
+  const { cli, bin } = prepareInteractiveCli(provider, cwd, settings);
   if (provider === "opencode2") await assertOpenCode2(bin);
   if (process.platform !== "win32") return new Promise((resolve, reject) => {
     try { openOpencodeCli(bin, cwd, {}, [], { linuxTerminal: settings.linuxTerminal, onLaunched: resolve, onError: reject }); }

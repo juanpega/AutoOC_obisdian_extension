@@ -396,3 +396,145 @@ test('OpenCode version checks explain mismatches without changing tasks or execu
   await button(modern).onclick();assert.match(modern.description,/Could not check/);assert.equal(button(modern).disabled,false);
   assert.equal(JSON.stringify(h.host.settings),before);assert.equal(h.saved.length,0);assert.equal(h.launches.length,0);
 });
+
+function terminalSettings(h) {
+  const root = new h.Element(); h.addInteractiveCliSettings(root, h.host);
+  const row = root.all().find(el => el.name === 'CLI terminal destination');
+  const support = root.all().find(el => el.name === 'Integrated terminal support');
+  return { root, destination: row.children.find(el => el.tag === 'select'), support,
+    button: label => root.all().find(el => el.tag === 'button' && el.textContent.includes(label)) };
+}
+
+test('destination Settings default to external and save both modes without downloads or unrelated changes', async () => {
+  const h = ui(), installs = [], shown = [], refreshes = [];
+  h.host.installCliTerminalSupport = async () => { installs.push(true); };
+  h.host.showCliTerminals = async () => { shown.push(true); };
+  h.host.settings.tasks = [{ id: 'keep' }]; h.host.settings.workflows = [{ id: 'preserve' }];
+  const before = JSON.stringify(h.host.settings), originalSave = h.host.saveSettings;
+  h.host.saveSettings = async refresh => { refreshes.push(refresh); await originalSave(); };
+  const view = terminalSettings(h); h.modal();
+  assert.equal(view.destination.value, 'external'); assert.equal(JSON.stringify(h.host.settings), before);
+  assert.equal(h.saved.length, 0); assert.equal(installs.length, 0); assert.equal(shown.length, 0);
+  await view.destination.change('integrated');
+  assert.equal(h.host.settings.cliTerminalDestination, 'integrated'); assert.equal(view.destination.disabled, false);
+  assert.equal(JSON.parse(h.saved[0]).cliTerminalDestination, 'integrated');
+  const reopened = terminalSettings(h); assert.equal(reopened.destination.value, 'integrated');
+  await reopened.destination.change('external');
+  assert.equal(h.host.settings.cliTerminalDestination, 'external'); assert.equal(JSON.parse(h.saved[1]).cliTerminalDestination, 'external');
+  assert.deepEqual(refreshes, [false, false]); assert.equal(installs.length, 0); assert.equal(shown.length, 0);
+  assert.equal(h.launches.length, 0);
+  const { cliTerminalDestination, ...rest } = h.host.settings; assert.equal(JSON.stringify(rest), before);
+});
+
+for (const previous of [undefined, 'external', 'integrated']) test(`destination save failure rolls back previous preference ${previous}`, async () => {
+  const h = ui(); if (previous !== undefined) h.host.settings.cliTerminalDestination = previous;
+  h.host.saveSettings = async () => { throw Error('disk failure'); };
+  const { destination } = terminalSettings(h);
+  await destination.change(previous === 'integrated' ? 'external' : 'integrated');
+  assert.equal(h.host.settings.cliTerminalDestination, previous);
+  assert.equal(destination.value, previous || 'external'); assert.equal(destination.disabled, false);
+  assert.match(h.notices.at(-1), /Terminal destination could not be saved/);
+});
+
+test('destination changes serialize while saving and permit a subsequent change after completion', async () => {
+  const h = ui(); let finish; const writes = [];
+  h.host.saveSettings = () => { writes.push(h.host.settings.cliTerminalDestination); return new Promise(resolve => { finish = resolve; }); };
+  const { destination } = terminalSettings(h);
+  const first = destination.change('integrated');
+  assert.equal(destination.disabled, true); await destination.change('external'); await destination.change('integrated');
+  assert.deepEqual(writes, ['integrated']); assert.equal(h.host.settings.cliTerminalDestination, 'integrated');
+  assert.equal(destination.value, 'integrated'); finish(); await first;
+  assert.equal(destination.disabled, false);
+  const second = destination.change('external'); assert.deepEqual(writes, ['integrated', 'external']);
+  finish(); await second; assert.equal(destination.value, 'external'); assert.equal(destination.disabled, false);
+});
+
+test('failed destination save does not overwrite a newer preference owned by another writer', async () => {
+  const h = ui(); let fail;
+  h.host.saveSettings = () => new Promise((resolve, reject) => { fail = reject; });
+  const { destination } = terminalSettings(h), changing = destination.change('integrated');
+  h.host.settings.cliTerminalDestination = 'external'; fail(Error('conflict')); await changing;
+  assert.equal(h.host.settings.cliTerminalDestination, 'external'); assert.equal(destination.value, 'external');
+  assert.equal(destination.disabled, false);
+});
+
+test('Settings support install is explicit, suppresses duplicate clicks and reenables after failure', async () => {
+  const h = ui(); let finish, fail, calls = 0;
+  h.host.installCliTerminalSupport = () => { calls++; return new Promise((resolve, reject) => { finish = resolve; fail = reject; }); };
+  const view = terminalSettings(h), install = view.button('Download and install');
+  h.modal(); await view.destination.change('integrated');
+  assert.equal(calls, 0); assert.equal(h.saved.length, 1);
+  const first = install.onclick(); assert.equal(install.disabled, true); await install.onclick(); assert.equal(calls, 1);
+  assert.match(view.support.description, /Installing verified/); fail(Error('offline')); await first;
+  assert.equal(install.disabled, false); assert.match(view.support.description, /could not be installed.*offline/);
+  const retry = install.onclick(); assert.equal(calls, 2); finish(); await retry;
+  assert.equal(install.disabled, false); assert.match(view.support.description, /Terminal support is ready/);
+  assert.equal(h.saved.length, 1); assert.equal(h.launches.length, 0);
+});
+
+test('Show existing terminals is a Settings action with visible failure and no install', async () => {
+  const h = ui(); let installs = 0, shown = 0;
+  h.host.installCliTerminalSupport = async () => { installs++; };
+  h.host.showCliTerminals = async () => { shown++; throw Error('view unavailable'); };
+  const view = terminalSettings(h), modal = h.modal();
+  assert.equal(h.button(modal, 'Show existing terminals'), undefined);
+  await view.button('Show existing terminals').onclick();
+  assert.equal(shown, 1); assert.equal(installs, 0); assert.equal(h.saved.length, 0);
+  assert.match(h.notices.at(-1), /view unavailable/);
+  h.host.showCliTerminals = async () => { shown++; };
+  await view.button('Show existing terminals').onclick(); assert.equal(shown, 2);
+});
+
+test('stopped host rejects destination writes, support downloads and show-existing actions from Settings', async () => {
+  const h = ui(); let installs = 0, shown = 0;
+  h.host.installCliTerminalSupport = async () => { installs++; };
+  h.host.showCliTerminals = async () => { shown++; };
+  const view = terminalSettings(h); h.host.isLifecycleStopped = () => true;
+  await view.destination.change('integrated'); await view.button('Download and install').onclick();
+  await view.button('Show existing terminals').onclick();
+  assert.equal(h.saved.length, 0); assert.equal(installs, 0); assert.equal(shown, 0);
+  assert.equal(h.host.settings.cliTerminalDestination, undefined); assert.equal(view.destination.value, 'external');
+  assert.notEqual(view.destination.disabled, true); assert.notEqual(view.button('Download and install').disabled, true);
+});
+
+test('invalid destination values cannot write settings', async () => {
+  const h = ui(), { destination } = terminalSettings(h);
+  await destination.change('invalid'); assert.equal(h.saved.length, 0);
+  assert.equal(h.host.settings.cliTerminalDestination, undefined); assert.equal(destination.value, 'external');
+});
+
+test('launcher defaults to external with read-only destination and no configuration or support controls', async () => {
+  const h = ui(); let integrated = 0, installs = 0;
+  h.host.openIntegratedCli = async () => { integrated++; };
+  h.host.installCliTerminalSupport = async () => { installs++; };
+  const modal = h.modal();
+  assert.ok(modal.contentEl.all().some(el => el.textContent.includes('Terminal: External window')));
+  assert.equal(modal.contentEl.all().filter(el => el.tag === 'select').length, 1);
+  assert.equal(h.button(modal, 'Download and install'), undefined); assert.equal(h.button(modal, 'Show existing terminals'), undefined);
+  await h.button(modal, 'Open in project').onclick();
+  assert.equal(h.launches.length, 1); assert.equal(integrated, 0); assert.equal(installs, 0); assert.equal(h.saved.length, 0);
+  assert.equal(h.host.settings.cliTerminalDestination, undefined);
+});
+
+test('saved integrated destination persists across modals and each modal captures its opening preference', async () => {
+  const h = ui(), integrated = []; h.host.openIntegratedCli = async (...args) => { integrated.push(args); };
+  const external = h.modal(), view = terminalSettings(h);
+  await view.destination.change('integrated');
+  const first = h.modal(), second = h.modal();
+  assert.ok(first.contentEl.all().some(el => el.textContent.includes('Terminal: Integrated in Obsidian')));
+  await h.button(external, 'Open in project').onclick(); assert.equal(h.launches.length, 1);
+  await h.button(first, 'Open in project').onclick(); assert.equal(integrated.length, 1);
+  await view.destination.change('external');
+  await h.button(second, 'Open in project').onclick(); assert.equal(integrated.length, 2);
+  assert.equal(integrated[0][0], 'codex'); assert.equal(integrated[0][1], h.folder);
+  const last = h.modal(); await h.button(last, 'Open in project').onclick();
+  assert.equal(h.launches.length, 2); assert.equal(h.saved.length, 2);
+});
+
+test('integrated preference without host support reports error and never falls back externally', async () => {
+  const h = ui(); h.host.settings.cliTerminalDestination = 'integrated';
+  const modal = h.modal(); await h.button(modal, 'Open in project').onclick();
+  assert.equal(h.launches.length, 0); assert.equal(h.saved.length, 0); assert.notEqual(modal.didClose, true);
+  assert.match(modal.contentEl.all().find(el => el.attrs.role === 'alert').textContent, /Integrated terminals are unavailable.*no external session was started/);
+  assert.equal(h.button(modal, 'Open in project').disabled, false);
+});
