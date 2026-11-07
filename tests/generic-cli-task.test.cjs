@@ -71,7 +71,10 @@ function harness(overrides = {}) {
   const launchers = raw('cli-launchers'), code = raw('code-runtime');
   const load = loader({
     'cli-launchers': {...launchers, openOpencodeCli: (...args) => external.push(args),
-      openOpencodeCliLongPromptWindows: (...args) => external.push(args)},
+      openOpencodeCliLongPromptWindows: (...args) => external.push(args),
+      // Dispatch uses a fake terminal transport, including its availability probe.
+      // Real probe success/failure is covered by interactive-cli-external.test.cjs.
+      resolveLinuxTerminal: () => 'xterm'},
     // Real trusted interpreter and filesystem; only replace its subprocess transport.
     'code-runtime': {...code, executeCodeAsync: async options => code.executeCode(options)},
     'opencode-version': {assertOpenCode2: async bin => { versions.push(bin); }}, ...overrides,

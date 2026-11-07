@@ -221,7 +221,8 @@ test('installed host passes global destination outside hash, preserves Code hand
   assert.equal(definition.settings.cliTerminalDestination, undefined);
   assert.equal(requests[0].prompt, h.load('workflow-handoff').workflowTaskPrompt('Task instruction', f.catalog.workflows[0],
     {stepId: 'before', output: 'handoff from Code'}));
-  assert.equal(requests[0].cwd, root); assert.equal(requests[0].label, 'Synthetic terminal');
+  // The installed host canonicalizes vault paths (macOS /var and Windows short paths).
+  assert.equal(requests[0].cwd, fs.realpathSync.native(root)); assert.equal(requests[0].label, 'Synthetic terminal');
   assert.equal(requests[0].signal instanceof AbortSignal, true);
   assert.equal(done.steps.at(-1).output, ack);
   const reconciled = await run({vault: root, workflowId: 'parent', resumeRunId: done.runId, reconcile: true, redact: s => s});
