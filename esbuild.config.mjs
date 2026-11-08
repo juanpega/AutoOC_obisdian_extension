@@ -5,13 +5,14 @@ import { readFileSync } from "node:fs";
 import { writeReleaseIntegrity } from "./scripts/release-artifacts.mjs";
 
 const prod = process.argv[2] === "production";
+const terminalLicenses = ["@xterm/xterm", "@xterm/addon-fit"].map(name =>
+  `/*! ${name}\n${readFileSync(new URL(`./node_modules/${name}/LICENSE`, import.meta.url), "utf8")}\n*/`).join("\n");
 
 const context = await esbuild.context({
   entryPoints: ["main.ts"],
   bundle: true,
   loader: { ".css": "text" },
-  banner: { js: ["@xterm/xterm", "@xterm/addon-fit"].map(name =>
-    `/*! ${name}\n${readFileSync(new URL(`./node_modules/${name}/LICENSE`, import.meta.url), "utf8")}\n*/`).join("\n") },
+  banner: { js: terminalLicenses },
   external: [
     "node:*",
     "obsidian",
@@ -46,6 +47,12 @@ const cliContext = await esbuild.context({
 const runtimeContext = await esbuild.context({
   entryPoints: ["autooc-runtime.ts"], bundle: true, platform: "node",
   format: "cjs", target: "node18", outfile: "autooc-runtime.cjs",
+  banner: { js: terminalLicenses },
+  define: {
+    AUTOOC_TERMINAL_JS: JSON.stringify(readFileSync(new URL("./node_modules/@xterm/xterm/lib/xterm.js", import.meta.url), "utf8")),
+    AUTOOC_TERMINAL_FIT_JS: JSON.stringify(readFileSync(new URL("./node_modules/@xterm/addon-fit/lib/addon-fit.js", import.meta.url), "utf8")),
+    AUTOOC_TERMINAL_CSS: JSON.stringify(readFileSync(new URL("./node_modules/@xterm/xterm/css/xterm.css", import.meta.url), "utf8")),
+  },
 });
 
 if (prod) {

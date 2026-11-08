@@ -6,7 +6,8 @@ import * as path from "path";
 import { psSingleQuoted } from "./cli-launchers";
 import { INTERACTIVE_CLIS, prepareInteractiveCli, type InteractiveCliProvider, type InteractiveCliSettings } from "./interactive-cli";
 import { interactiveCliTaskArgs } from "./interactive-cli-profile";
-import { installTerminalSupport, loadTerminalPty, type IDisposable, type Pty } from "./terminal-pty";
+import { installTerminalSupport, verifyTerminalSupport, type IDisposable } from "./terminal-pty";
+import { createTerminalSession, type IndependentTerminal } from "./terminal-session";
 import { assertOpenCode2 } from "./opencode-version";
 import { InteractiveTerminalLaunchUncertainError, type InteractiveTaskTerminalRequest } from "./interactive-task-terminal";
 import { createAuxiliaryDirectory, completeAuxiliaryDirectory } from "./execution-files";
@@ -25,13 +26,14 @@ interface Session {
   terminal: Terminal;
   fit: FitAddon;
   element: HTMLElement;
-  pty: Pty;
+  pty: IndependentTerminal;
   subscriptions: IDisposable[];
   opened: boolean;
   exited: boolean;
   exitCode?: number;
   closing?: Promise<boolean>;
   cleanup?: () => void;
+  detaching?: boolean;
 }
 
 export function integratedCliCommand(bin: string, args: string[] = []): { file: string; args: string[] } {
@@ -65,11 +67,12 @@ export class IntegratedTerminals {
   private generation = 0;
   private disposed = false;
   private opening = false;
+  private openingAbort?: AbortController;
   private openingQueue: Promise<void> = Promise.resolve();
   private queuedTasks = 0;
   private stoppingAll = false;
-  private pendingCleanup = new Set<Pty>();
-  private pendingCleanupCallbacks = new Map<Pty, () => void>();
+  private pendingCleanup = new Set<IndependentTerminal>();
+  private pendingCleanupCallbacks = new Map<IndependentTerminal, () => void>();
   private listeners = new Set<(focus: boolean) => void>();
 
   constructor(private host: TerminalHost, private newSession: () => void) {
@@ -126,14 +129,19 @@ export class IntegratedTerminals {
     if (this.opening) throw new Error("A terminal is already opening. Wait before launching another session.");
     if (this.sessions.length >= 12) throw new Error("Close a terminal before opening another (12 sessions maximum).");
     this.opening = true;
+    const openingAbort = this.openingAbort = new AbortController();
+    const cancelOpening = () => openingAbort.abort();
+    request?.signal?.addEventListener("abort", cancelOpening, { once: true });
+    if (request?.signal?.aborted) cancelOpening();
     const generation = this.generation;
     let session: Session | undefined;
     let terminal: Terminal | undefined;
-    let pty: Pty | undefined;
+    let pty: IndependentTerminal | undefined;
     let auxiliaryDirectory: string | undefined;
+    let hostOwnsAuxiliary = false;
     let spawnAttempted = false;
     const cleanup = () => {
-      if (auxiliaryDirectory) {
+      if (auxiliaryDirectory && !hostOwnsAuxiliary) {
         completeAuxiliaryDirectory(auxiliaryDirectory, "interactive");
         auxiliaryDirectory = undefined;
       }
@@ -154,7 +162,7 @@ export class IntegratedTerminals {
       const { cli, bin } = prepareInteractiveCli(provider, cwd, settings);
       if (provider === "opencode2") await assertOpenCode2(bin);
       assertOpening();
-      const backend = await loadTerminalPty(this.pluginDirectory());
+      await verifyTerminalSupport(this.pluginDirectory());
       assertOpening();
       await this.show();
       assertOpening();
@@ -181,7 +189,9 @@ export class IntegratedTerminals {
       assertOpening();
       // A throwing spawn may already have created a native process without returning its handle.
       spawnAttempted = true;
-      pty = backend.spawn(command.file, command.args, { cwd, env, cols: 100, rows: 30, name: "xterm-256color" });
+      pty = await createTerminalSession({ pluginDirectory: this.pluginDirectory(), file: command.file, args: command.args,
+        options: { cwd, env, cols: 100, rows: 30, name: "xterm-256color" }, auxiliaryDirectory }, openingAbort.signal);
+      hostOwnsAuxiliary = true;
       this.pendingCleanup.add(pty);
       if (request) this.pendingCleanupCallbacks.set(pty, cleanup);
       assertOpening();
@@ -217,6 +227,7 @@ export class IntegratedTerminals {
       try {
         if (pty) {
           await pty.kill();
+          pty.disconnect();
           cleanup();
           this.pendingCleanup.delete(pty);
           this.pendingCleanupCallbacks.delete(pty);
@@ -228,7 +239,10 @@ export class IntegratedTerminals {
       if (cleanupError) throw new InteractiveTerminalLaunchUncertainError(`${String(error)} Terminal cleanup is unconfirmed (PID ${pty?.pid}); AutoOC still tracks it. Use Retry failed terminal cleanup. ${String(cleanupError)}`);
       if (spawnAttempted && !pty && auxiliaryDirectory) throw new InteractiveTerminalLaunchUncertainError(`${String(error)} Terminal launch is unconfirmed; prompt evidence was retained at ${auxiliaryDirectory}. Check for a running terminal before retrying.`);
       throw error;
-    } finally { this.opening = false; }
+    } finally {
+      request?.signal?.removeEventListener("abort", cancelOpening);
+      this.opening = false; this.openingAbort = undefined;
+    }
   }
 
   async show(): Promise<void> {
@@ -244,6 +258,18 @@ export class IntegratedTerminals {
   private changed(focus = false) { for (const listener of this.listeners) listener(focus); }
   select(id: number) { this.activeId = id; this.changed(true); }
 
+  async detach(id: number): Promise<void> {
+    this.assertOpen();
+    const session = this.sessions.find(item => item.id === id);
+    if (!session || session.exited || session.closing || session.detaching) return;
+    session.detaching = true; this.changed();
+    try {
+      const shell = require("electron").shell;
+      await session.pty.detach(url => shell.openExternal(url));
+      new Notice("Terminal connected outside Obsidian. You can restart Obsidian or AutoOC without stopping this session.", 10000);
+    } finally { session.detaching = false; this.changed(); }
+  }
+
   async requestClose(id: number) {
     const session = this.sessions.find(item => item.id === id);
     if (!session) return;
@@ -256,10 +282,12 @@ export class IntegratedTerminals {
     if (index < 0) return Promise.resolve(true);
     const session = this.sessions[index];
     if (session.closing) return session.closing;
+    if (session.detaching) return Promise.resolve(false);
     session.closing = (async () => {
       try { await session.pty.kill(); }
       catch (error) { new Notice(`Terminal could not be stopped (PID ${session.pty.pid}); session kept for inspection. ${String(error)}`, 15000); return false; }
       session.cleanup?.();
+      session.pty.disconnect();
       for (const subscription of session.subscriptions) subscription.dispose();
       session.terminal.dispose(); session.element.remove();
       const currentIndex = this.sessions.indexOf(session);
@@ -273,12 +301,13 @@ export class IntegratedTerminals {
   }
 
   get hasPendingCleanup() { return this.pendingCleanup.size > 0; }
-  get hasRunningSessions() { return this.opening || this.queuedTasks > 0 || this.hasPendingCleanup || this.sessions.some(session => !session.exited); }
+  get hasRunningSessions() { return this.opening || this.queuedTasks > 0 || this.hasPendingCleanup || this.sessions.some(session => session.detaching || (!session.exited && !session.pty.detached)); }
 
   async retryPendingCleanup(): Promise<void> {
     const results = await Promise.all([...this.pendingCleanup].map(async pty => {
       try {
         await pty.kill();
+        pty.disconnect();
         this.pendingCleanupCallbacks.get(pty)?.();
         this.pendingCleanupCallbacks.delete(pty);
         this.pendingCleanup.delete(pty);
@@ -292,9 +321,11 @@ export class IntegratedTerminals {
 
   async stopAll(): Promise<void> {
     this.generation++;
+    this.openingAbort?.abort();
     this.stoppingAll = true;
     try {
-      const [closed] = await Promise.all([Promise.all([...this.sessions].map(session => this.close(session.id))), this.retryPendingCleanup()]);
+      // Released sessions belong to the independent host, not plugin lifecycle.
+      const [closed] = await Promise.all([Promise.all(this.sessions.filter(session => !session.pty.detached).map(session => this.close(session.id))), this.retryPendingCleanup()]);
       if (closed.some(value => !value)) throw new Error("Some AutoOC terminal processes could not be stopped. Their sessions and observers have been retained; do not assume their work ended.");
     } finally { this.stoppingAll = false; }
   }
@@ -302,6 +333,12 @@ export class IntegratedTerminals {
   async dispose(): Promise<void> {
     this.disposed = true;
     await this.stopAll();
+    for (const session of this.sessions) {
+      for (const subscription of session.subscriptions) subscription.dispose();
+      session.pty.disconnect();
+      session.terminal.dispose(); session.element.remove();
+    }
+    this.sessions.length = 0;
     this.listeners.clear();
     for (const leaf of this.host.app.workspace.getLeavesOfType(TERMINAL_VIEW_TYPE)) {
       if (leaf.view instanceof TerminalView && leaf.view.manager === this) leaf.detach();
@@ -315,7 +352,9 @@ class TerminalView extends ItemView {
   private tabs!: HTMLElement;
   private screen!: HTMLElement;
   private status!: HTMLElement;
+  private redraw!: HTMLButtonElement;
   private frame?: number;
+  private repaintRequested = false;
 
   constructor(leaf: WorkspaceLeaf, readonly manager: IntegratedTerminals) { super(leaf); }
   getViewType() { return TERMINAL_VIEW_TYPE; }
@@ -329,6 +368,10 @@ class TerminalView extends ItemView {
     const toolbar = root.createDiv("auto-oc-terminal-toolbar");
     this.tabs = toolbar.createDiv("auto-oc-terminal-tabs");
     this.tabs.setAttr("role", "tablist"); this.tabs.setAttr("aria-label", "CLI sessions");
+    this.redraw = toolbar.createEl("button", { text: "↻", attr: {
+      "aria-label": "Redraw active terminal", title: "Redraw active terminal without restarting the session or clearing its history",
+    } });
+    this.redraw.onclick = () => this.fit(true);
     const add = toolbar.createEl("button", { text: "+", attr: { "aria-label": "New CLI session", title: "New CLI session" } });
     add.onclick = () => this.manager.add();
     this.status = root.createDiv("auto-oc-terminal-status");
@@ -342,6 +385,7 @@ class TerminalView extends ItemView {
   private render(focus = false) {
     this.tabs.empty();
     const active = this.manager.sessions.find(session => session.id === this.manager.activeId);
+    this.redraw.disabled = !active;
     for (const session of this.manager.sessions) {
       const group = this.tabs.createDiv("auto-oc-terminal-tab");
       group.toggleClass("is-active", session === active);
@@ -357,6 +401,13 @@ class TerminalView extends ItemView {
         event.preventDefault(); this.manager.select(sessions[next].id);
         this.tabs.querySelector<HTMLButtonElement>(`#auto-oc-terminal-tab-${sessions[next].id}`)?.focus();
       };
+      if (!session.exited) {
+        const external = group.createEl("button", { text: session.detaching ? "Connecting…" : "↗", attr: {
+          "aria-label": `Open ${label} outside Obsidian`, title: "Open the same session outside Obsidian so it survives restarting Obsidian or AutoOC",
+        } });
+        external.disabled = !!session.detaching || !!session.closing;
+        external.onclick = () => { void this.manager.detach(session.id).catch(error => new Notice(String(error), 15000)); };
+      }
       group.createEl("button", { text: "x", attr: { "aria-label": `Close ${label}`, title: "Close session" } }).onclick = () => this.manager.requestClose(session.id);
     }
     if (!active) {
@@ -371,7 +422,7 @@ class TerminalView extends ItemView {
       };
       return;
     }
-    this.status.setText(`${active.exited ? `Exited (${active.exitCode})` : "Running"} | ${active.cwd}`);
+    this.status.setText(`${active.exited ? `Exited (${active.exitCode})` : active.pty.detached ? "Running outside Obsidian · input is in the external window" : "Running"} | ${active.cwd}`);
     this.status.title = active.cwd;
     active.element.id = `auto-oc-terminal-${active.id}`;
     active.element.setAttr("role", "tabpanel"); active.element.setAttr("aria-labelledby", `auto-oc-terminal-tab-${active.id}`);
@@ -382,7 +433,9 @@ class TerminalView extends ItemView {
     this.fit(); if (focus) active.terminal.focus();
   }
 
-  private fit() {
+  private fit(repaint = false) {
+    // Resize/theme events may coalesce with a manual redraw: retain that intent.
+    this.repaintRequested = this.repaintRequested || repaint;
     if (this.frame !== undefined) window.cancelAnimationFrame(this.frame);
     this.frame = window.requestAnimationFrame(() => {
       this.frame = undefined;
@@ -391,13 +444,25 @@ class TerminalView extends ItemView {
       const styles = this.screen.ownerDocument.defaultView!.getComputedStyle(this.contentEl);
       active.terminal.options.fontFamily = styles.getPropertyValue("--font-monospace").trim() || "monospace";
       active.terminal.options.theme = { background: styles.getPropertyValue("--background-primary").trim(), foreground: styles.getPropertyValue("--text-normal").trim(), cursor: styles.getPropertyValue("--text-accent").trim(), selectionBackground: styles.getPropertyValue("--text-selection").trim() };
-      try { active.fit.fit(); } catch (error) { console.warn("AutoOC terminal fit failed", error); }
+      try {
+        if (this.repaintRequested) active.terminal.clearTextureAtlas();
+        active.fit.fit();
+        if (this.repaintRequested) {
+          active.terminal.refresh(0, active.terminal.rows - 1);
+          this.repaintRequested = false;
+          active.terminal.focus();
+        }
+      } catch (error) {
+        console.warn("AutoOC terminal fit failed", error);
+        if (this.repaintRequested) new Notice("Terminal redraw failed. The session was not restarted; try again when the panel is visible.");
+      }
     });
   }
 
   async onClose() {
     this.unsubscribe?.(); this.observer?.disconnect();
     if (this.frame !== undefined) window.cancelAnimationFrame(this.frame);
+    this.repaintRequested = false;
     // The manager owns sessions: closing a workspace leaf only hides them.
     for (const session of this.manager.sessions) session.element.remove();
     this.contentEl.empty();

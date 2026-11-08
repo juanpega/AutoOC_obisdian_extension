@@ -281,8 +281,8 @@ export async function installTerminalSupport(pluginDirectory: string): Promise<v
     }
 }
 
-/** Carga local y offline. No descarga, instala, compila ni inicia una shell. */
-export async function loadTerminalPty(pluginDirectory: string): Promise<TerminalPty> {
+/** Preflight local sin cargar modulos nativos ni crear procesos. */
+export async function verifyTerminalSupport(pluginDirectory: string): Promise<string> {
     const root = await supportRoot(pluginDirectory, false);
     const directory = path.join(root, DIRECTORY);
     try {
@@ -290,6 +290,12 @@ export async function loadTerminalPty(pluginDirectory: string): Promise<Terminal
     } catch (error) {
         throw new Error(`Terminal PTY: soporte ausente, incompleto o alterado. Usa la instalacion opt-in si no existe; no se reparara automaticamente. ${String(error)}`);
     }
+    return directory;
+}
+
+/** Carga local y offline. No descarga, instala, compila ni inicia una shell. */
+export async function loadTerminalPty(pluginDirectory: string): Promise<TerminalPty> {
+    const directory = await verifyTerminalSupport(pluginDirectory);
     // createRequire evita que esbuild integre JS nativo/workers o resuelva otro node-pty.
     let nativeRequire: (id: string) => any = createRequire(path.join(directory, 'package.json'));
     if ((process as NodeJS.Process & { type?: string }).type === 'renderer') {

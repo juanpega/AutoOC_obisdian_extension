@@ -13,7 +13,7 @@
     "release-integrity.json"
   ],
   "scripts": {
-    "pretest": "node --test tests/integrated-terminal.test.cjs tests/terminal-pty-lifecycle.test.cjs tests/interactive-task-terminal.test.cjs tests/interactive-cli-profile.test.cjs tests/generic-cli-task.test.cjs tests/interactive-cli-external.test.cjs",
+    "pretest": "node --test tests/integrated-terminal.test.cjs tests/terminal-pty-lifecycle.test.cjs tests/interactive-task-terminal.test.cjs tests/interactive-cli-profile.test.cjs tests/generic-cli-task.test.cjs tests/interactive-cli-external.test.cjs tests/terminal-session-host.test.cjs tests/terminal-session.test.cjs",
     "test": "node --test --test-concurrency=4 tests/pre-pr-regressions.test.js tests/posix-launcher.test.js tests/codex-client.test.js tests/copilot-client.test.js tests/copilot-integration.test.js tests/settings-writer.test.js tests/workflow-routing.test.cjs tests/workflow-nesting.test.cjs tests/code-runtime.test.cjs tests/obsidian-vault-refresh.test.cjs tests/execution-lease.test.cjs tests/execution-journal.test.cjs tests/autooc-cli.test.cjs tests/runtime-bundle.test.cjs tests/cli-workflow-adapters.test.cjs tests/release-artifacts.test.cjs tests/release-update.test.cjs tests/packaged-runtime.test.cjs tests/workflow-compatibility.test.cjs tests/candidate-scope.test.cjs tests/interactive-handoff.test.cjs tests/execution-abandonment.test.cjs tests/cli-plugin-requests.test.cjs tests/cli-plugin-coexistence.test.cjs tests/live-log.test.cjs tests/cooperative-json.test.cjs tests/workflow-edit.test.cjs tests/settings-crash-recovery.test.cjs tests/retired-dependency.test.cjs tests/legacy-credential-notice.test.cjs tests/execution-concurrency.test.cjs tests/settings-write-inspection.test.cjs tests/execution-status-help.test.cjs tests/blocked-execution-recovery.test.cjs tests/ai-draft.test.cjs tests/opencode-resolution.test.cjs tests/catalog-bulk.test.cjs tests/catalog-transaction.test.cjs tests/interactive-cli.test.cjs tests/opencode-v2.test.cjs tests/workflow-code-controls.test.cjs tests/code-editor.test.cjs tests/dashboard-bubble-settings.test.cjs tests/dashboard-areas.test.cjs && npm run test:lifecycle",
     "test:settings-recovery": "node --test tests/settings-crash-recovery.test.cjs tests/settings-writer.test.js tests/execution-lease.test.cjs tests/settings-write-inspection.test.cjs && npm run test:lifecycle",
     "dev": "node esbuild.config.mjs",
@@ -21,7 +21,7 @@
     "deploy": "node esbuild.config.mjs production && node deploy.mjs",
     "pack:release": "node scripts/package-release.mjs",
     "test:lifecycle": "node --test --test-concurrency=1 tests/plugin-lifecycle.test.cjs",
-    "test:terminals": "node --test tests/interactive-cli.test.cjs tests/integrated-terminal.test.cjs tests/terminal-pty-lifecycle.test.cjs tests/interactive-task-terminal.test.cjs tests/interactive-cli-profile.test.cjs tests/generic-cli-task.test.cjs tests/interactive-cli-external.test.cjs"
+    "test:terminals": "node --test tests/interactive-cli.test.cjs tests/integrated-terminal.test.cjs tests/terminal-pty-lifecycle.test.cjs tests/interactive-task-terminal.test.cjs tests/interactive-cli-profile.test.cjs tests/generic-cli-task.test.cjs tests/interactive-cli-external.test.cjs tests/terminal-session-host.test.cjs tests/terminal-session.test.cjs"
   },
   "keywords": [],
   "license": "MIT",

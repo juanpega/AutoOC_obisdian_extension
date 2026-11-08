@@ -42,9 +42,22 @@ en un auxiliar propio hasta confirmar la salida/parada del proceso. Si la apertu
 o parada queda incierta se conserva evidencia, sin relanzar ni limpiar por timeout.
 Copilot usa --interactive, nunca su modo no interactivo -p; Codex y Claude reciben
 una instruccion posicional. No se añaden autoaprobaciones o bypasses de permisos.
-Las pestañas permiten cerrar sesiones con confirmacion; descargar AutoOC las
-detiene, a diferencia de una ventana externa. Comprobar hashes del candidato y su
-carga real: compartir version con una publicacion anterior no acredita esta funcion.
+Las pestañas permiten cerrar sesiones con confirmacion. En el candidato de terminales
+independientes, las nuevas sesiones integradas requieren ademas Node.js 18+ en PATH:
+un host separado conserva el PTY y el prompt. El boton ↗ conecta la misma sesion a un
+cliente local en el navegador externo; esperar la confirmacion antes de reiniciar
+Obsidian o AutoOC. Solo las sesiones liberadas mediante esa confirmacion sobreviven
+a la descarga del plugin; las demas se detienen normalmente. No se repite el prompt
+ni se transfiere el PTY de sesiones abiertas con builds anteriores.
+
+La URL externa contiene una credencial privada: no compartirla ni registrarla.
+El servidor escucha solo en 127.0.0.1 y no descarga recursos externos. Cerrar la
+pestaña no detiene el proceso: conservar la pestaña o URL para volver a acceder y
+usar Detener sesion para terminarlo. No hay reintegracion automatica al recargar el
+plugin. El boton ↻ de la vista integrada recalcula y repinta sin reiniciar procesos,
+borrar la conversacion ni enviar entrada al agente. Comprobar hashes del candidato
+y su carga real: compartir version con una publicacion anterior no acredita estas
+funciones. La aceptacion visual y la continuidad nativa deben verificarse aparte.
 
 ## Workflows anidados (candidato de desarrollo)
 

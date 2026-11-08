@@ -36,6 +36,16 @@ Each session opens directly in a terminal and uses that CLI's own authentication
 
 If an executable is missing or disabled, the dialog offers **Configure CLIs**. **Working Directory** sets the initial folder; leaving it empty uses the vault. Linux retains the **Linux terminal emulator** setting. The previous Codex command keeps its identifier to preserve shortcuts and is now named **Open Codex CLI**.
 
+## Sacar una terminal de Obsidian (candidato de desarrollo)
+
+En las pestañas de **AutoOC Terminals**, el botón **↗** abre la misma sesión en el navegador externo. Espera al aviso de conexión confirmada antes de reiniciar Obsidian o AutoOC. No se inicia otro agente ni se repite el prompt. La entrada pasa a la ventana externa; Obsidian conserva una vista de la salida mientras siga abierto.
+
+Si la terminal integrada se dibuja mal, pulsa **↻** junto a **+**: recalcula su tamaño y repinta la pantalla sin reiniciar la sesión, limpiar la conversación ni enviar comandos al agente.
+
+Las nuevas sesiones integradas usan un host Node independiente: requieren **Node.js 18+ en PATH**, el soporte PTY opt-in instalado y **Windows x64** compatible con ese soporte. El cliente externo se sirve solo en `127.0.0.1`, con una credencial privada por sesión y sin recursos web externos. No compartas su URL: permite controlar esa terminal. No hay campos nuevos en tareas/workflows ni cambios en el prompt de sus creadores.
+
+Solo las sesiones cuya salida al navegador se haya confirmado sobreviven a la descarga del plugin. Cerrar la pestaña del navegador desconecta la vista, no detiene el proceso; conserva la pestaña o su URL para volver a acceder. Usa **Detener sesión** para terminarlo. Si la apertura falla, mantén Obsidian abierto y vuelve a usar **↗**: no lances otra tarea. Las sesiones iniciadas con la arquitectura anterior no se transfieren en caliente; tampoco hay reintegración automática tras recargar el plugin. Esta capacidad en las fuentes no acredita instalación, publicación ni validación visual en Obsidian.
+
 ## Create from a description
 
 In **New Task** and **New Workflow**, **Create with AI** opens a form where you describe the objective and choose an engine and model. It uses the integrated **WF Builder Prompt** and the configured CLI session; generation can be canceled.

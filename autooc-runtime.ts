@@ -25,3 +25,7 @@ export type { RunCheckpoint } from "./execution-journal";
 
 export { executionCoordinator, validateConcurrency } from "./execution-coordinator";
 export type { ConcurrencyPolicy } from "./execution-coordinator";
+
+// Private terminal host entry point; importing the runtime never starts a host.
+import { startTerminalSessionHost } from "./terminal-session-host";
+if (require.main === module && process.argv[2] === "--autooc-terminal-host") startTerminalSessionHost();

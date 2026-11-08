@@ -113,7 +113,9 @@ function harness() {
     target.subscriptions.push(result); return result;
   };
   class Terminal extends EventEmitter {
-    constructor(options) { super(); this.options = options; this.subscriptions = []; this.output = []; this.opens = 0; this.disposes = 0; terminals.push(this); }
+    constructor(options) { super(); this.options = options; this.subscriptions = []; this.output = []; this.opens = 0; this.disposes = 0; this.rows = 30; this.refreshes = []; this.atlasClears = 0; terminals.push(this); }
+    refresh(start, end) { this.refreshes.push([start, end]); }
+    clearTextureAtlas() { this.atlasClears++; }
     loadAddon(fit) { this.fit = fit; }
     onData(fn) { return subscription(this, 'input', fn); }
     onResize(fn) { return subscription(this, 'resize', fn); }
@@ -128,6 +130,14 @@ function harness() {
     if (faults.spawn) throw Error('spawn failed');
     const pty = new EventEmitter();
     Object.assign(pty, { pid: 1000 + ptys.length, subscriptions: [], writes: [], sizes: [], kills: 0,
+      detached: false, disconnects: 0,
+      disconnect() { this.disconnects++; },
+      async detach(open) {
+        await open('http://127.0.0.1:12345/#synthetic-token');
+        await faults.detachGate?.promise;
+        if (faults.detach) throw Error('external connection unconfirmed');
+        this.detached = true;
+      },
       write(data) { this.writes.push(data); }, resize(cols, rows) { if (faults.resize) throw Error('resize failed'); this.sizes.push([cols, rows]); },
       async kill() { this.kills++; if (faults.kill) throw Error('kill failed'); await (this.killGate || faults.killGate)?.promise; },
       onData(fn) { return subscription(this, 'data', fn); },
@@ -185,13 +195,29 @@ function harness() {
       './interactive-cli': backend, './opencode-profile': evaluate('opencode-profile.ts', {}),
     }),
     './interactive-task-terminal': taskTerminal,
-    obsidian, '@xterm/xterm': { Terminal }, '@xterm/addon-fit': { FitAddon: class { fit() {} } },
+    obsidian, '@xterm/xterm': { Terminal }, '@xterm/addon-fit': { FitAddon: class { fit() { this.calls = (this.calls || 0) + 1; } } },
     '@xterm/xterm/css/xterm.css': '/* test */', path: path.win32,
     './cli-launchers': launchers, './interactive-cli': backend,
     './opencode-version': { assertOpenCode2: (...args) => version(...args) },
-    './terminal-pty': { loadTerminalPty: async directory => { loads.push(directory); return load(directory); },
+    electron: { shell: { openExternal: async url => { external.push(url); } } },
+    './terminal-session': { createTerminalSession: async (config, signal) => {
+      if (signal.aborted) throw Error('Terminal opening was cancelled while sessions were stopping.');
+      const pty = native.spawn(config.file, config.args, config.options);
+      if (config.auxiliaryDirectory) {
+        let completed = false;
+        const finish = () => {
+          if (completed) return; completed = true;
+          auxiliaryFiles.completeAuxiliaryDirectory(config.auxiliaryDirectory, 'interactive');
+        };
+        pty.on('exit', finish);
+        const kill = pty.kill.bind(pty);
+        pty.kill = async () => { await kill(); finish(); };
+      }
+      return pty;
+    } },
+    './terminal-pty': { verifyTerminalSupport: async directory => { loads.push(directory); await load(directory); },
       installTerminalSupport: async directory => { installs.push(directory); } },
-  }, { process, document: { createElement: tag => new Element(tag) },
+  }, { process, AbortController, document: { createElement: tag => new Element(tag) },
     ResizeObserver: class { constructor(fn) { this.fn = fn; observers.push(this); } observe() {} disconnect() { this.disconnected = true; } },
     window: { requestAnimationFrame(fn) { frames.set(++sequence, fn); return sequence; }, cancelAnimationFrame(id) { frames.delete(id); } },
   });
@@ -212,6 +238,89 @@ function harness() {
     modal(selected = 'codex') { const modal = new ui.CliLauncherModal(app, host, () => {}, selected); modal.open(); return modal; },
   };
 }
+
+test('manual redraw repaints and fits only the active terminal without restarting or sending input', async () => {
+  const h = harness(); await h.manager.open('codex', h.folder); await h.manager.open('codex', h.folder);
+  const [background, active] = h.manager.sessions;
+  active.terminal.write('Keep conversation');
+  const refresh = h.view.contentEl.all().find(el => el.attrs['aria-label'] === 'Redraw active terminal');
+  assert.equal(refresh.disabled, false); refresh.onclick();
+  for (const [id, callback] of [...h.frames]) { h.frames.delete(id); callback(); }
+  assert.equal(background.terminal.atlasClears, 0); assert.equal(active.terminal.atlasClears, 1);
+  assert.deepEqual(active.terminal.refreshes, [[0, 29]]); assert.equal(active.fit.calls, 1);
+  assert.deepEqual(active.terminal.output, ['Keep conversation']);
+  assert.equal(h.spawns.length, 2); assert.equal(active.terminal.opens, 1); assert.equal(active.terminal.disposes, 0);
+  for (const pty of h.ptys) { assert.equal(pty.kills, 0); assert.deepEqual(pty.writes, []); }
+  await h.manager.dispose();
+});
+
+test('redraw intent survives resize coalescing and waits for a visible terminal', async () => {
+  const h = harness(); await h.manager.open('codex', h.folder);
+  const active = h.manager.sessions[0], screen = active.element.parentElement;
+  const runFrames = () => { for (const [id, callback] of [...h.frames]) { h.frames.delete(id); callback(); } };
+  screen.clientWidth = 0;
+  h.view.contentEl.all().find(el => el.attrs['aria-label'] === 'Redraw active terminal').onclick();
+  h.observers[0].fn(); runFrames();
+  assert.equal(active.terminal.atlasClears, 0);
+  screen.clientWidth = 800; h.observers[0].fn(); runFrames();
+  assert.equal(active.terminal.atlasClears, 1); assert.deepEqual(active.terminal.refreshes, [[0, 29]]);
+  assert.equal(h.spawns.length, 1); assert.equal(h.ptys[0].kills, 0);
+  await h.manager.dispose();
+});
+
+test('redraw button is disabled without a session and remains usable on exited output', async () => {
+  const h = harness(); await h.manager.show();
+  const refresh = h.view.contentEl.all().find(el => el.attrs['aria-label'] === 'Redraw active terminal');
+  assert.equal(refresh.disabled, true);
+  await h.manager.open('codex', h.folder); assert.equal(refresh.disabled, false);
+  h.ptys[0].emit('exit', {exitCode:0}); refresh.onclick();
+  for (const [id, callback] of [...h.frames]) { h.frames.delete(id); callback(); }
+  assert.equal(h.terminals[0].atlasClears, 1); assert.equal(h.spawns.length, 1);
+  await h.manager.requestClose(h.manager.activeId); assert.equal(refresh.disabled, true);
+  await h.manager.dispose();
+});
+
+test('external button transfers the same session and plugin disposal leaves its process running', async () => {
+  const h = harness(); await h.manager.open('codex', h.folder);
+  const session = h.manager.sessions[0], pty = h.ptys[0];
+  assert.ok(h.view.contentEl.all().some(el => el.attrs['aria-label']?.includes('outside Obsidian')));
+  await h.manager.detach(session.id);
+  assert.equal(h.spawns.length, 1); assert.equal(h.external.length, 1);
+  assert.equal(h.manager.sessions[0], session); assert.equal(pty.detached, true);
+  assert.equal(h.manager.hasRunningSessions, false);
+  await h.manager.stopAll(); assert.equal(pty.kills, 0);
+  await h.manager.dispose(); assert.equal(pty.kills, 0); assert.equal(pty.disconnects, 1);
+  assert.equal(session.terminal.disposes, 1);
+});
+
+test('failed external confirmation preserves the integrated session and unload protection', async () => {
+  const h = harness(); await h.manager.open('codex', h.folder); h.faults.detach = true;
+  await assert.rejects(h.manager.detach(h.manager.activeId), /unconfirmed/);
+  assert.equal(h.ptys[0].detached, false); assert.equal(h.ptys[0].kills, 0);
+  assert.equal(h.manager.hasRunningSessions, true); assert.equal(h.spawns.length, 1);
+  assert.equal(h.manager.sessions[0].detaching, false);
+  await h.manager.dispose(); assert.equal(h.ptys[0].kills, 1);
+});
+
+test('unload cannot stop or dispose a session while external handoff is pending', async () => {
+  const h = harness(); await h.manager.open('codex', h.folder);
+  h.faults.detachGate = deferred();
+  const detaching = h.manager.detach(h.manager.activeId);
+  assert.equal(h.manager.hasRunningSessions, true);
+  await assert.rejects(h.manager.stopAll(), /could not be stopped/);
+  assert.equal(h.ptys[0].kills, 0); assert.equal(h.terminals[0].disposes, 0);
+  h.faults.detachGate.resolve(); await detaching;
+  await h.manager.dispose(); assert.equal(h.ptys[0].kills, 0);
+});
+
+test('explicit stop still requires confirmation and stops a released terminal', async () => {
+  const h = harness(); await h.manager.open('codex', h.folder);
+  await h.manager.detach(h.manager.activeId);
+  await h.manager.requestClose(h.manager.activeId); assert.equal(h.ptys[0].kills, 0);
+  await h.button(h.modals.at(-1).contentEl, 'Stop and close').onclick();
+  assert.equal(h.ptys[0].kills, 1); assert.equal(h.manager.sessions.length, 0);
+  await h.manager.dispose();
+});
 
 test('integratedCliCommand passes literal .exe paths directly without shell arguments', () => {
   const h = harness();
@@ -318,7 +427,7 @@ for (const stage of ['load', 'reveal']) test(`dispose during pending ${stage} pr
   const opening = h.manager.open('codex', h.folder);
   await reached.promise;
   await h.manager.dispose(); gate.resolve({ spawn() { throw Error('must not spawn'); } });
-  await assert.rejects(opening, /AutoOC has closed/);
+  await assert.rejects(opening, /AutoOC has closed|opening was cancelled/);
   assert.equal(h.spawns.length, 0); assert.equal(h.manager.sessions.length, 0);
   await assert.rejects(h.manager.show(), /closed/); await assert.rejects(h.manager.installSupport(), /closed/);
   assert.throws(() => h.manager.add(), /closed/);
