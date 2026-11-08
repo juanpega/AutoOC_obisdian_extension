@@ -30,7 +30,7 @@ test('owned runs are Running despite durable recovery flags; approvals, stops an
   const tasks=[task('a',{status:'running',runtimeExecution:binding})];
   let owner=true;const checks=[];
   const project=()=>h.dashboardItems(tasks,[],(w,r)=>{checks.push([w,r]);return owner&&w==='@task:a'&&r==='live'});
-  const dashboard=new h.AreaDashboard(root,state,{items:project,diameter:()=>32,open(){},log(){},history(){}});
+  const dashboard=new h.AreaDashboard(root,state,{items:project,open(){},log(){},history(){}});
   assert.equal(root.all().find(el=>el.classes.has('auto-oc-area-node')).attrs['aria-label'],'Task a, task, Running');
   assert.ok(!root.all().some(el=>el.textContent==='Review the recorded result and execution controls before continuing.'));
   state.attentionOnly=true;assert.equal(h.dashboardVisibleItems(project(),state).length,0);
@@ -56,7 +56,7 @@ test('workflow and isolated Code use exact run ownership without changing histor
 test('real Dashboard adapter forwards the installed host ownership check for a running task',()=>{
   const h=harness(),root=new h.Element(),seen=[];
   const plugin={settings:{tasks:[task('a',{status:'running',runtimeExecution:{workflowId:'@task:a',runId:'live',phase:'in_flight',requiresReconciliation:true}})],workflows:[]},
-    getDashboardBubbleDiameter:()=>32,ownsExecution:(w,r)=>{seen.push([w,r]);return true}};
+    ownsExecution:(w,r)=>{seen.push([w,r]);return true}};
   new h.AutoOCView({},plugin).renderDashboard(root);
   assert.deepEqual(seen,[['@task:a','live']]);
   assert.equal(root.all().find(el=>el.classes.has('auto-oc-area-node')).attrs['aria-label'],'Task a, task, Running');
@@ -89,7 +89,7 @@ test('Dashboard type buttons filter their areas, include Code tasks and preserve
   const tasks=[task('a'),task('code',{taskKind:'code',area:'Operations'}),task('off',{disabled:true,area:''})];
   const workflows=[flow('parent',[{id:'nested',stepKind:'workflow',workflowId:'child'},code('inline')]),flow('child',[],{area:'Marketing'})];
   const before=JSON.stringify([tasks,workflows]);
-  const dashboard=new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,workflows),diameter:()=>32,open(){},log(){},history(){}});
+  const dashboard=new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,workflows),open(){},log(){},history(){}});
   const filter=kind=>root.all().find(el=>el.attrs['data-area-kind-filter']===kind);
   const nodes=()=>root.all().filter(el=>el.classes.has('auto-oc-area-node'));
   const areas=()=>root.all().filter(el=>el.classes.has('auto-oc-area-group')).map(el=>el.children[0].children[0].textContent);
@@ -119,7 +119,7 @@ test('Dashboard type buttons filter their areas, include Code tasks and preserve
   assert.equal(filter('all').attrs['aria-pressed'],'true');assert.equal(filter('task').attrs['aria-pressed'],'false');
   const reopened=new h.Element();
   state.kindFilter='workflow';
-  new h.AreaDashboard(reopened,state,{items:()=>h.dashboardItems(tasks,workflows),diameter:()=>32,open(){},log(){},history(){}});
+  new h.AreaDashboard(reopened,state,{items:()=>h.dashboardItems(tasks,workflows),open(){},log(){},history(){}});
   assert.equal(reopened.all().find(el=>el.attrs['data-area-kind-filter']==='workflow').attrs['aria-pressed'],'true');
   assert.equal(reopened.all().filter(el=>el.classes.has('auto-oc-area-node')).length,2);
 });
@@ -128,7 +128,7 @@ test('Dashboard type filters combine with search, attention and disabled toggles
   const h=harness(),root=new h.Element(),state=h.createAreaDashboardState();
   const tasks=[task('code',{taskKind:'code',name:'Needle Code',status:'failed'}),task('off',{disabled:true,name:'Needle off',status:'failed'}),task('ready',{name:'Needle ready'})];
   const workflows=[flow('w',[code('needle')],{status:'failed'}),flow('off',[code('needle')],{disabled:true,status:'failed'})];
-  new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,workflows),diameter:()=>32,open(){},log(){},history(){}});
+  new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,workflows),open(){},log(){},history(){}});
   const filter=kind=>root.all().find(el=>el.attrs['data-area-kind-filter']===kind);
   const ids=()=>root.all().filter(el=>el.classes.has('auto-oc-area-node')).map(el=>JSON.parse(el.attrs['data-area-item-key'])[1]).sort();
   const toggle=(label,checked)=>{
@@ -154,7 +154,7 @@ test('area Dashboard renders bounded Code detail, keeps toolbar, selection, focu
   const h=harness(),root=new h.Element(),state=h.createAreaDashboardState(),tasks=[task('a')];
   const wf=flow('w',Array.from({length:120},(_,i)=>code(String(i))));
   let opened, logged, history;
-  const dashboard=new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,[wf]),diameter:()=>16,open:i=>opened=i,log:i=>logged=i,history:i=>history=i});
+  const dashboard=new h.AreaDashboard(root,state,{items:()=>h.dashboardItems(tasks,[wf]),open:i=>opened=i,log:i=>logged=i,history:i=>history=i});
   const all=()=>root.all(),button=text=>all().find(el=>el.tag==='button'&&el.textContent===text);
   assert.equal(all().filter(el=>el.classes.has('auto-oc-area-step')).length,40);
   const search=all().find(el=>el.tag==='input'&&el.attrs['aria-label']==='Search Dashboard');search.focus();
@@ -174,11 +174,11 @@ test('area Dashboard renders bounded Code detail, keeps toolbar, selection, focu
   search.value='Code 119';search.oninput();
   assert.equal(all().filter(el=>el.classes.has('auto-oc-area-step')).length,1);
   assert.equal(all().find(el=>el.classes.has('auto-oc-area-step')).attrs['aria-label'],'Code 119, code, Ready');
-  assert.ok(all().some(el=>el.classes.has('auto-oc-area-orb')&&el.style.width==='16px'));
+  assert.ok(all().some(el=>el.classes.has('auto-oc-area-orb')&&el.style.width==='30px'));
 });
 
 test('Dashboard integration opens exact Code controls and clears stale list filters without running anything',()=>{
-  const h=harness(),plugin={settings:{tasks:[task('a')],workflows:[flow('w',[code('s')])]},getDashboardBubbleDiameter:()=>30};
+  const h=harness(),plugin={settings:{tasks:[task('a')],workflows:[flow('w',[code('s')])]}};
   const view=new h.AutoOCView({},plugin),root=new h.Element();let opened;
   view.openWorkflowCodeEntry=(wf,step)=>opened=[wf,step];view.filterText='old';view.filterArea='missing';view.taskSource='catalog';
   view.renderDashboard(root);

@@ -5,9 +5,20 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
-## Terminales CLI integradas (candidato 1.7.21)
+## Terminales CLI integradas y Settings (candidato 1.7.22)
 
-`Settings > AutoOC > Interactive CLI launchers > CLI terminal destination` elige
+En el candidato de Settings ordenados, `Settings > AutoOC` se agrupa en General,
+Harnesses, Terminals, Execution, Logs, Library y Maintenance. Se retira el control
+de tamaño de burbujas: tareas y pasos quedan fijos a 30 px, sin cambiar las letras.
+Los valores históricos se conservan pero no se aplican; no se migra el catálogo.
+Las rutas, visibilidad y defaults de cada CLI se reúnen
+en Harnesses; Check version está disponible para todos, sin acreditar login.
+OpenCode 2 también muestra tablas refrescables de sus propios modelos/agentes por
+proyecto. Ralph Loop permanece específico de OpenCode 1; no anunciarlo para otros
+motores. Abrir Settings no autoriza instalar soporte, cambiar configuración global
+ni consultar proveedores automáticamente. Comprobar hashes/carga del candidato.
+
+`Settings > AutoOC > Terminals > Interactive CLI launchers > CLI terminal destination` elige
 terminal integrada o ventana externa para sesiones manuales y tareas CLI
 interactivas de todos los harness, tambien dentro de workflows. No cambia tareas en
 segundo plano, Code ni la apertura de la aplicacion Codex. Las integradas
@@ -42,9 +53,22 @@ en un auxiliar propio hasta confirmar la salida/parada del proceso. Si la apertu
 o parada queda incierta se conserva evidencia, sin relanzar ni limpiar por timeout.
 Copilot usa --interactive, nunca su modo no interactivo -p; Codex y Claude reciben
 una instruccion posicional. No se añaden autoaprobaciones o bypasses de permisos.
-Las pestañas permiten cerrar sesiones con confirmacion; descargar AutoOC las
-detiene, a diferencia de una ventana externa. Comprobar hashes del candidato y su
-carga real: compartir version con una publicacion anterior no acredita esta funcion.
+Las pestañas permiten cerrar sesiones con confirmacion. En el candidato de terminales
+independientes, las nuevas sesiones integradas requieren ademas Node.js 18+ en PATH:
+un host separado conserva el PTY y el prompt. El boton ↗ conecta la misma sesion a un
+cliente local en el navegador externo; esperar la confirmacion antes de reiniciar
+Obsidian o AutoOC. Solo las sesiones liberadas mediante esa confirmacion sobreviven
+a la descarga del plugin; las demas se detienen normalmente. No se repite el prompt
+ni se transfiere el PTY de sesiones abiertas con builds anteriores.
+
+La URL externa contiene una credencial privada: no compartirla ni registrarla.
+El servidor escucha solo en 127.0.0.1 y no descarga recursos externos. Cerrar la
+pestaña no detiene el proceso: conservar la pestaña o URL para volver a acceder y
+usar Detener sesion para terminarlo. No hay reintegracion automatica al recargar el
+plugin. El boton ↻ de la vista integrada recalcula y repinta sin reiniciar procesos,
+borrar la conversacion ni enviar entrada al agente. Comprobar hashes del candidato
+y su carga real: compartir version con una publicacion anterior no acredita estas
+funciones. La aceptacion visual y la continuidad nativa deben verificarse aparte.
 
 ## Workflows anidados (candidato de desarrollo)
 

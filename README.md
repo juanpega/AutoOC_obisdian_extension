@@ -10,6 +10,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Development tracking:** [1.7.13 delivery record: changes, flows, contracts, limitations, and release preparation](docs/autoOC/04_Desarrollo/entrega-1.7.13-20261101/README.md) (in Spanish).
 
+**Candidato 1.7.22:** [terminales independientes, Settings ordenados y límites de validación](docs/autoOC/04_Desarrollo/settings-ordenados/Notas_version-1.7.22.md).
+
 ## Area dashboard
 
 Since 1.7.12, **Dashboard** groups workflows and tasks by their **Area** field, with a **No area** group for unassigned items. To reorganize them, change their area in the editor or through the selection actions. Positions from the previous map remain saved in the settings.
@@ -18,7 +20,7 @@ Debajo de **Your areas**, pulsa **Workflows** o **Tasks** para mostrar solo ese 
 
 Each item has a bubble and a visible name: a double ring for workflows, a terminal icon for AI tasks, and **{ }** for Code. Select a workflow to see its steps, including Code and delays, then select a step to access **Log**, **History**, or **Open controls**. The latter opens the usual run, stop, edit, and disable controls. A workflow's log belongs to its current step; steps have their own results and are not considered completed simply because the workflow finished.
 
-Search includes step and area names. **Needs attention** filters recorded issues; **Show disabled** displays disabled items in gray. Each area can be collapsed, and **Collapse areas / Expand areas** apply to all groups. Selection, search, and collapsed groups persist during the panel session. Exact task and step bubble sizes remain available in Settings (10–80 px).
+Search includes step and area names. **Needs attention** filters recorded issues; **Show disabled** displays disabled items in gray. Each area can be collapsed, and **Collapse areas / Expand areas** apply to all groups. Selection, search, and collapsed groups persist during the panel session. Las burbujas de tareas y pasos tienen un diámetro fijo de **30 px**, sin ajuste en Settings y sin cambiar el tamaño de las letras. Las preferencias antiguas se conservan pero no se aplican.
 
 Since 1.7.13, a run controlled by this instance shows **Running** without turning internal recovery markers into warnings. AutoOC checks the identity of that specific attempt; having Obsidian open is not enough. Warnings for pending approval, an unconfirmed stop, failure, or unconfirmed control remain visible.
 
@@ -26,15 +28,31 @@ Counters distinguish top-level items from running steps. They show recorded stat
 
 ## Open an interactive CLI
 
+### Settings organizados (candidato de desarrollo)
+
+Settings agrupa las opciones existentes en **General**, **Harnesses**, **Terminals**, **Execution**, **Logs**, **Library** y **Maintenance**, con navegación y secciones plegables. Se mantienen las opciones salvo el tamaño de burbujas, retirado expresamente para fijar tareas y pasos a 30 px; no se migran preferencias. En **Harnesses**, cada motor reúne su ejecutable, visibilidad y defaults compatibles; Claude sigue siendo una CLI interactiva, no un motor nuevo de tareas de fondo. **Check version** está disponible para los cinco harnesses y no acredita autenticación.
+
+OpenCode 2 ofrece también tablas y recarga de sus propios modelos/agentes por ejecutable y proyecto. Las listas no se consultan automáticamente al abrir Settings ni se mezclan con las de OpenCode 1. El modo interactivo predeterminado existente se identifica para OpenCode 1 y 2. Ralph Loop sigue visible dentro de OpenCode 1, sin prometer compatibilidad con los demás. Esta organización en fuentes no acredita su instalación ni aceptación visual en Obsidian.
+
 OpenCode 1 and OpenCode 2 are configured as separate engines, with their own executable paths, models, and agents. **Check version** identifies the installation, and existing tasks keep their engine. See the [OpenCode 2 guide](docs/opencode-2.md) for automated tasks, interactive sessions, and drafts.
 
 **💻 CLI** brings together OpenCode, Codex CLI, GitHub Copilot CLI, and Claude Code. The selector shows available executables you have enabled and lets you open the project folder or choose another folder.
 
-In **Settings → AutoOC → Interactive CLI launchers**, enable the launchers you want and configure their executables. **Auto-detect** searches `PATH` first; you can also enter an absolute path without arguments. OpenCode, Codex, and Copilot share these paths with their tasks. Claude Code is an interactive launcher; it does not add a scheduled task type.
+In **Settings → AutoOC → Harnesses**, enable the launchers you want and configure their executables. **Auto-detect** searches `PATH` first; you can also enter an absolute path without arguments. OpenCode, Codex, and Copilot share these paths with their tasks. Claude Code is an interactive launcher; it does not add a scheduled task type. Shared destination and support are under **Terminals → Interactive CLI launchers** (previous builds grouped paths there too).
 
 Each session opens directly in a terminal and uses that CLI's own authentication, model, and approvals. Codex starts as `codex`, without opening the desktop application; Claude uses `claude`, its [official interactive entry point](https://code.claude.com/docs/en/cli-reference). AutoOC adds no prompts or automatic permissions. These sessions do not create tasks or acquire the scheduler's execution lease; manage them from their terminals.
 
 If an executable is missing or disabled, the dialog offers **Configure CLIs**. **Working Directory** sets the initial folder; leaving it empty uses the vault. Linux retains the **Linux terminal emulator** setting. The previous Codex command keeps its identifier to preserve shortcuts and is now named **Open Codex CLI**.
+
+## Sacar una terminal de Obsidian (candidato de desarrollo)
+
+En las pestañas de **AutoOC Terminals**, el botón **↗** abre la misma sesión en el navegador externo. Espera al aviso de conexión confirmada antes de reiniciar Obsidian o AutoOC. No se inicia otro agente ni se repite el prompt. La entrada pasa a la ventana externa; Obsidian conserva una vista de la salida mientras siga abierto.
+
+Si la terminal integrada se dibuja mal, pulsa **↻** junto a **+**: recalcula su tamaño y repinta la pantalla sin reiniciar la sesión, limpiar la conversación ni enviar comandos al agente.
+
+Las nuevas sesiones integradas usan un host Node independiente: requieren **Node.js 18+ en PATH**, el soporte PTY opt-in instalado y **Windows x64** compatible con ese soporte. El cliente externo se sirve solo en `127.0.0.1`, con una credencial privada por sesión y sin recursos web externos. No compartas su URL: permite controlar esa terminal. No hay campos nuevos en tareas/workflows ni cambios en el prompt de sus creadores.
+
+Solo las sesiones cuya salida al navegador se haya confirmado sobreviven a la descarga del plugin. Cerrar la pestaña del navegador desconecta la vista, no detiene el proceso; conserva la pestaña o su URL para volver a acceder. Usa **Detener sesión** para terminarlo. Si la apertura falla, mantén Obsidian abierto y vuelve a usar **↗**: no lances otra tarea. Las sesiones iniciadas con la arquitectura anterior no se transfieren en caliente; tampoco hay reintegración automática tras recargar el plugin. Esta capacidad en las fuentes no acredita instalación, publicación ni validación visual en Obsidian.
 
 ## Create from a description
 

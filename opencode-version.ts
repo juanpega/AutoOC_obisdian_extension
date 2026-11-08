@@ -30,6 +30,15 @@ export async function detectOpenCodeVersion(bin: string): Promise<{ version: str
   return detected;
 }
 
+/** Read-only version check for CLIs whose version format is not OpenCode semver. */
+export async function readCliVersion(bin: string): Promise<string> {
+  const output = await readOpenCodeOutput(bin, ["--version"], os.tmpdir(), 10000, 65536)
+    .catch(() => { throw new Error("Could not check the CLI version. Check its executable path in AutoOC Settings."); });
+  const version = output.trim();
+  if (!version) throw new Error("The CLI returned an empty version response.");
+  return version.slice(0, 256);
+}
+
 export async function assertOpenCode2(bin: string): Promise<void> {
   const detected = await detectOpenCodeVersion(bin);
   if (detected.major !== 2) throw new Error(`OpenCode 2 CLI requires version 2.x; detected ${detected.version}. Select its executable in AutoOC Settings, or use an OpenCode 1 task. Nothing was launched.`);

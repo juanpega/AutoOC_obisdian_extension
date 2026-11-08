@@ -1,6 +1,5 @@
 import { AreaDashboard, createAreaDashboardState, dashboardItems, type DashboardItem } from "./dashboard-areas";
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
-import { loadDashboardBubbleDiameter, saveDashboardBubbleDiameter, applyDashboardBubbleDiameter, addDashboardBubbleSizeSetting } from "./dashboard-bubble-settings";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import { INTERACTIVE_CLIS, type InteractiveCliProvider } from "./interactive-cli";
@@ -29,7 +28,8 @@ import { buildOpenCodeScript } from "./opencode-script";
 import { isOpenCodeTask, openCodeRunArgs, openCodeInteractiveArgs } from "./opencode-profile";
 import { assertOpenCode2 } from "./opencode-version";
 import { OpenCode2Catalog } from "./opencode2-catalog";
-import { addOpenCode2Picker } from "./opencode2-picker";
+import { addOpenCode2Picker, addOpenCode2CatalogList } from "./opencode2-picker";
+import { createSettingsLayout } from "./settings-layout";
 import { createOpenCodeWorkflowAdapter } from "./cli-workflow-adapters";
 import { downloadRelease, installRelease, hasCompleteInstalledRelease, hasCompleteInstalledReleaseAsync } from "./release-update";
 import { assertPackageMaintenanceSafe } from "./package-maintenance";
@@ -642,6 +642,7 @@ interface AutoOCSettings {
   logRetentionDays: number;
   libraryUrl: string;
   dashboardPositions?: Record<string, { x: number; y: number; size?: number; sizePx?: number }>;
+  // Historical visual preferences are retained on save but no longer rendered.
   dashboardTaskBubbleSize: "sm" | "md" | "lg" | "xl";
   dashboardTaskBubbleDiameter?: number;
   linuxTerminal?: string;
@@ -2755,21 +2756,6 @@ export default class AutoOCPlugin extends Plugin {
   private refreshOpenViews():void {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view instanceof AutoOCView) leaf.view.refresh();
-    }
-  }
-
-  getDashboardBubbleDiameter(): number {
-    return loadDashboardBubbleDiameter(this.app, this.manifest.id, this.settings);
-  }
-
-  saveDashboardBubbleDiameter(diameter: number): void {
-    this.assertLifecycleOpen();
-    saveDashboardBubbleDiameter(this.app, this.manifest.id, diameter);
-  }
-
-  applyDashboardBubbleDiameter(diameter: number): void {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof AutoOCView) applyDashboardBubbleDiameter(leaf.view.containerEl, diameter);
     }
   }
 
@@ -6702,7 +6688,7 @@ class AutoOCView extends ItemView {
     this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
       items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows,
         (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)),
-      diameter: () => this.plugin.getDashboardBubbleDiameter(), open,
+      open,
       log: item => showLog(item, false), history: item => showLog(item, true),
     });
   }
@@ -11192,6 +11178,7 @@ class DiagnosticModal extends Modal {
 
 class AutoOCSettingTab extends PluginSettingTab {
   private plugin: AutoOCPlugin;
+  private expandedSections = new Map<string, boolean>();
 
   constructor(app: App, plugin: AutoOCPlugin) {
     super(app, plugin);
@@ -11200,21 +11187,25 @@ class AutoOCSettingTab extends PluginSettingTab {
 
   display() {
     const { containerEl } = this;
+    const scrollTop = containerEl.scrollTop;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC — Settings" });
+    const { general, engines, terminals, execution, logging, library, maintenance } =
+      createSettingsLayout(containerEl, this.expandedSections, this.plugin.settings.defaultAiEngine);
+    addInteractiveCliSettings(terminals, this.plugin, { providers: engines });
 
     const credentialIssue = this.plugin.legacyCredentialNoticeStatus();
-    if (credentialIssue) new Setting(containerEl).setName("Legacy credential notice")
+    if (credentialIssue) new Setting(maintenance).setName("Legacy credential notice")
       .setDesc(credentialIssue.acknowledged
         ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here."
         : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.")
       .addButton(button => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
 
-    new Setting(containerEl).setName('Resolve blocked executions')
+    new Setting(maintenance).setName('Resolve blocked executions')
       .setDesc('Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.')
       .addButton(button=>button.setButtonText('Review').onClick(()=>this.plugin.openBlockedExecutionsReview()));
 
-    new Setting(containerEl).setName('Review older attempts')
+    new Setting(maintenance).setName('Review older attempts')
       .setDesc('Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.')
       .addButton(button=>button.setButtonText('Review').onClick(async()=>{
         button.setDisabled(true);
@@ -11223,13 +11214,7 @@ class AutoOCSettingTab extends PluginSettingTab {
         finally {button.setDisabled(false);}
       }));
 
-    addDashboardBubbleSizeSetting(containerEl, {
-      getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
-      saveDiameter: diameter => this.plugin.saveDashboardBubbleDiameter(diameter),
-      applyDiameter: diameter => this.plugin.applyDashboardBubbleDiameter(diameter),
-    });
-
-    new Setting(containerEl).setName("Default concurrency")
+    new Setting(execution).setName("Default concurrency")
       .setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.")
       .addDropdown(dropdown=>dropdown.addOption("exclusive","Run alone").addOption("parallel","Parallel in this vault").addOption("independent","Separate projects only")
         .setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async value=>{
@@ -11238,7 +11223,7 @@ class AutoOCSettingTab extends PluginSettingTab {
           catch(error){new Notice(this.plugin.redactSecrets(String(error)));}
         }));
     let requestedLimit=String(this.plugin.settings.maxConcurrentExecutions ?? 0);
-    new Setting(containerEl).setName("Maximum simultaneous runs")
+    new Setting(execution).setName("Maximum simultaneous runs")
       .setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.")
       .addText(text=>{
         text.inputEl.type="number";text.inputEl.min="0";text.inputEl.step="1";
@@ -11258,7 +11243,7 @@ class AutoOCSettingTab extends PluginSettingTab {
         finally {button.setDisabled(false);}
       }));
 
-    new Setting(containerEl)
+    new Setting(general)
       .setName("Default AI engine")
       .setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.")
       .addDropdown((dropdown) => dropdown
@@ -11271,24 +11256,27 @@ class AutoOCSettingTab extends PluginSettingTab {
           if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
             this.plugin.settings.defaultAiEngine = value;
             await this.plugin.saveSettings();
+            this.expandedSections.set(value, true);
+            this.display();
           }
         }));
 
-    containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
+    engines.opencode2.createEl("h3", { text: "OpenCode 2 task defaults" });
     const location = () => this.plugin.openCode2Location();
-    addOpenCode2Picker(new Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Refresh Models lists models from the OpenCode 2 CLI configured under Interactive CLI launchers. New OpenCode 2 tasks use the model you choose here."),
+    addOpenCode2Picker(new Setting(engines.opencode2).setName("Default OpenCode 2 model").setDesc("Refresh Models uses this harness executable and the General working directory. New OpenCode 2 tasks use the model you choose here."),
       "models", this.plugin.openCode2Catalog, location, () => this.plugin.settings.defaultOpencode2Model || "", async value => {
         this.plugin.settings.defaultOpencode2Model = value; await this.plugin.saveSettings(false);
-      });
-    addOpenCode2Picker(new Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Default: build."),
+      }, () => this.display());
+    addOpenCode2Picker(new Setting(engines.opencode2).setName("Default OpenCode 2 agent").setDesc("Default: build."),
       "agents", this.plugin.openCode2Catalog, location, () => this.plugin.settings.defaultOpencode2Agent || "build", async value => {
         this.plugin.settings.defaultOpencode2Agent = value || "build"; await this.plugin.saveSettings(false);
-      });
-    addInteractiveCliSettings(containerEl, this.plugin);
-    addCopilotGlobalSettings(containerEl, this.plugin);
+      }, () => this.display());
+    addOpenCode2CatalogList(engines.opencode2, "models", this.plugin.openCode2Catalog, location, () => this.display());
+    addOpenCode2CatalogList(engines.opencode2, "agents", this.plugin.openCode2Catalog, location, () => this.display());
+    addCopilotGlobalSettings(engines.copilot, this.plugin);
 
-    containerEl.createEl("h3", { text: "Codex task defaults" });
-    new Setting(containerEl)
+    engines.codex.createEl("h3", { text: "Codex task defaults" });
+    new Setting(engines.codex)
       .setName("Default Codex model")
       .setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`)
       .addDropdown((dropdown) => {
@@ -11311,7 +11299,7 @@ class AutoOCSettingTab extends PluginSettingTab {
         this.display();
       }));
 
-    new Setting(containerEl)
+    new Setting(engines.codex)
       .setName("Default Codex reasoning")
       .addDropdown((dropdown) => {
         const efforts = this.plugin.getCodexReasoningEfforts();
@@ -11324,9 +11312,7 @@ class AutoOCSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "CLI folders and terminals" });
-
-    new Setting(containerEl)
+    new Setting(general)
       .setName("Working Directory")
       .setDesc(
         "Default folder for interactive CLI sessions and supported tasks. Empty = vault folder."
@@ -11341,9 +11327,9 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(terminals)
       .setName("Default CLI task mode")
-      .setDesc("New OpenCode tasks open an interactive terminal by default.")
+      .setDesc("New OpenCode 1 and OpenCode 2 tasks open an interactive terminal by default. Existing tasks, background Copilot and the Codex app are unchanged; generic CLI tasks are always interactive.")
       .addToggle((tog) =>
         tog
           .setValue(!!this.plugin.settings.defaultInteractiveTerminal)
@@ -11354,7 +11340,7 @@ class AutoOCSettingTab extends PluginSettingTab {
       );
 
     if (process.platform === "linux") {
-      new Setting(containerEl)
+      new Setting(terminals)
         .setName("Linux terminal emulator")
         .setDesc(
           "Command used to open interactive CLI sessions. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
@@ -11370,11 +11356,10 @@ class AutoOCSettingTab extends PluginSettingTab {
         );
     }
 
-    new Setting(containerEl)
+    const libraryDescription = () => `GitHub repo or raw URL used by the Import → Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.\nResolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`;
+    const librarySetting = new Setting(library)
       .setName("Shared Library URL")
-      .setDesc(
-        `GitHub repo or raw URL used by the Import → Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.\nResolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
-      )
+      .setDesc(libraryDescription())
       .addText((text) =>
         text
           .setPlaceholder(DEFAULT_SETTINGS.libraryUrl)
@@ -11382,13 +11367,13 @@ class AutoOCSettingTab extends PluginSettingTab {
           .onChange(async (v) => {
             this.plugin.settings.libraryUrl = v.trim();
             await this.plugin.saveSettings();
-            this.display();
+            librarySetting.setDesc(libraryDescription());
           })
       );
 
-    new Setting(containerEl)
+    new Setting(execution)
       .setName("Task Timeout (seconds)")
-      .setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.")
+      .setDesc("Timeout for supported background AI tasks. Legacy paths may warn and keep waiting; shared/runtime adapters may request cancellation at the limit and leave effects requiring review. Interactive terminal sessions and Code timeouts are separate. Default 7200 s (2 h); 0 disables the time-based limit/warning where supported.")
       .addText((text) =>
         text
           .setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS))
@@ -11402,13 +11387,12 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Logging" });
-    containerEl.createEl("p", {
+    logging.createEl("p", {
       text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
       cls: "setting-item-description",
     });
 
-    new Setting(containerEl)
+    new Setting(logging)
       .setName("Enable Log Persistence")
       .setDesc("Save task logs to files when execution completes")
       .addToggle((tog) =>
@@ -11420,7 +11404,7 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(logging)
       .setName("Max Logs Per Task")
       .setDesc("Maximum number of log files to keep per task (0 = unlimited)")
       .addText((text) =>
@@ -11436,7 +11420,7 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(logging)
       .setName("Log Retention (days)")
       .setDesc("Delete logs older than this many days (0 = no age limit)")
       .addText((text) =>
@@ -11452,7 +11436,7 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
-    new Setting(containerEl)
+    new Setting(logging)
       .setName("Clear All Logs")
       .setDesc("Delete all log files for every task")
       .addButton((btn) =>
@@ -11466,43 +11450,7 @@ class AutoOCSettingTab extends PluginSettingTab {
           })
       );
 
-    containerEl.createEl("h3", { text: "Ralph Loop" });
-    containerEl.createEl("p", {
-      text: "Enable opencode-ralph-loop in ~/.config/opencode/opencode.json to use auto-continuation with /ralph-loop.",
-      cls: "setting-item-description",
-    });
-    containerEl.createEl("p", {
-      text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
-      cls: "setting-item-description",
-    });
-
-    new Setting(containerEl)
-      .setName("Ralph Loop Assistant")
-      .setDesc("Add opencode-ralph-loop to OpenCode configuration file")
-      .addButton((btn) =>
-        btn.setButtonText("Install / Activate").setCta().onClick(async () => {
-          try {
-            const result = await this.plugin.ensureRalphLoopPluginEnabled();
-            new Notice(
-              result.changed
-                ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
-                : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
-            );
-            this.display();
-          } catch (e) {
-            new Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
-          }
-        })
-      )
-      .addButton((btn) =>
-        btn.setButtonText("Show status path").onClick(() => {
-          const basePath = (this.app.vault.adapter as any).basePath || ".";
-          const statePath = getRalphStateFilePath(basePath);
-          new Notice(`Ralph state file: ${statePath}`);
-        })
-      );
-
-    new Setting(containerEl)
+    new Setting(engines.opencode)
       .setName("Default OpenCode 1 agent")
       .setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`)
       .addDropdown((dd) => {
@@ -11519,8 +11467,8 @@ class AutoOCSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "Available OpenCode 1 agents" });
-    const refreshAgentsBtn = containerEl.createEl("button", {
+    engines.opencode.createEl("h3", { text: "Available OpenCode 1 agents" });
+    const refreshAgentsBtn = engines.opencode.createEl("button", {
       text: "🔄 Reload Agent List",
       cls: "auto-oc-btn-secondary",
     });
@@ -11530,11 +11478,11 @@ class AutoOCSettingTab extends PluginSettingTab {
       new Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
       this.display();
     };
-    containerEl.createEl("p", {
+    engines.opencode.createEl("p", {
       text: `${this.plugin.availableAgents.length} agents loaded from \`opencode agent list\``,
       cls: "setting-item-description",
     });
-    const agentsTable = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const agentsTable = engines.opencode.createEl("table", { cls: "auto-oc-models-table" });
     const agentsHead = agentsTable.createEl("thead");
     const agentsHeader = agentsHead.createEl("tr");
     agentsHeader.createEl("th", { text: "agent" });
@@ -11544,7 +11492,7 @@ class AutoOCSettingTab extends PluginSettingTab {
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
 
-    new Setting(containerEl)
+    new Setting(engines.opencode)
       .setName("Default OpenCode 1 model")
       .addDropdown((dd) => {
         const models = this.plugin.availableModels;
@@ -11562,8 +11510,8 @@ class AutoOCSettingTab extends PluginSettingTab {
         });
       });
 
-    containerEl.createEl("h3", { text: "Available OpenCode 1 models" });
-    const refreshBtn = containerEl.createEl("button", {
+    engines.opencode.createEl("h3", { text: "Available OpenCode 1 models" });
+    const refreshBtn = engines.opencode.createEl("button", {
       text: "🔄 Reload Model List",
       cls: "auto-oc-btn-secondary",
     });
@@ -11573,11 +11521,11 @@ class AutoOCSettingTab extends PluginSettingTab {
       new Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
-    containerEl.createEl("p", {
+    engines.opencode.createEl("p", {
       text: `${this.plugin.availableModels.length} models loaded from \`opencode models\``,
       cls: "setting-item-description",
     });
-    const table = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const table = engines.opencode.createEl("table", { cls: "auto-oc-models-table" });
     const thead = table.createEl("thead");
     const hr = thead.createEl("tr");
     hr.createEl("th", { text: "provider/model" });
@@ -11586,5 +11534,32 @@ class AutoOCSettingTab extends PluginSettingTab {
       const tr = tbody.createEl("tr");
       tr.createEl("td", { text: m.value, cls: "auto-oc-model-value" });
     });
+
+    engines.opencode.createEl("h3", { text: "Ralph Loop · OpenCode 1" });
+    engines.opencode.createEl("p", {
+      text: "OpenCode 1 integration only. Enable opencode-ralph-loop in ~/.config/opencode/opencode.json to use /ralph-loop. This installer is not a shared auto-continuation setting for OpenCode 2, Codex, Copilot or Claude.",
+      cls: "setting-item-description",
+    });
+    engines.opencode.createEl("p", {
+      text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
+      cls: "setting-item-description",
+    });
+    new Setting(engines.opencode)
+      .setName("Ralph Loop Assistant")
+      .setDesc("Add opencode-ralph-loop to OpenCode configuration file")
+      .addButton((btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
+        try {
+          const result = await this.plugin.ensureRalphLoopPluginEnabled();
+          new Notice(result.changed
+            ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.`
+            : `AutoOC: Ralph Loop was already active at ${result.configPath}.`);
+          this.display();
+        } catch (e) { new Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`); }
+      }))
+      .addButton((btn) => btn.setButtonText("Show status path").onClick(() => {
+        const basePath = (this.app.vault.adapter as any).basePath || ".";
+        new Notice(`Ralph state file: ${getRalphStateFilePath(basePath)}`);
+      }));
+    containerEl.scrollTop = scrollTop;
   }
 }
