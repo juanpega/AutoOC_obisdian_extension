@@ -2,7 +2,7 @@
 
 ## Requisito · versión 3 · 08/11/2026
 
-Estado: implementado en fuentes; pendiente de aceptación visual, instalación autorizada y cierre del requisito.
+Estado: implementado e instalado en este proyecto para prueba; pendiente de habilitar/cargar el plugin, aceptación visual y cierre del requisito.
 
 El usuario debe poder sacar una terminal integrada de AutoOC a una ventana externa mediante un botón, para poder reiniciar Obsidian o el propio plugin sin interrumpir el trabajo de esa sesión.
 
@@ -42,7 +42,7 @@ Iteración con validación visual del usuario. El requisito no se considera agot
 
 ### Decisiones pendientes
 
-- Rama creada con autorización del usuario: `feat/detachable-terminals`, a partir de `feat/terminal-integration`. El usuario autoriza después commit local e instalación en este proyecto para probarlo. Se preservan los cambios locales previos; no se autoriza push ni publicación. La instalación queda bloqueada por AutoOC cargado con reserva viva; ver `seguimiento.md`.
+- Rama creada con autorización del usuario: `feat/detachable-terminals`, a partir de `feat/terminal-integration`. El usuario autoriza después commit local e instalación en este proyecto para probarlo. Código en `25600f3`; instalación completada tras su confirmación de disponibilidad y comprobar ausencia de reserva. Se preservan los cambios locales previos; no se autoriza push ni publicación. Ver `seguimiento.md`.
 - Volver a integrar una terminal externa no forma parte todavía del alcance solicitado.
 - Las vistas pueden recuperar hasta aproximadamente 1 Mi de caracteres de salida reciente; se informa del truncado si la conexión perdió salida anterior. No hay persistencia de todo el scrollback en disco.
 - Cerrar el navegador no detiene el proceso: conservar la pestaña o su URL privada para reconectar. Tras finalizar el proceso, el host deja 30 segundos para consultar su salida final y termina.

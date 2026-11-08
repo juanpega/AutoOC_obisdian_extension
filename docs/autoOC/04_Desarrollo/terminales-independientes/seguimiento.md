@@ -41,3 +41,11 @@ El usuario solicita commit e instalación en este mismo proyecto para probarlo. 
 Instalación seleccionada: `C:/Dev/AutoOC_obisidian_extension/.obsidian/plugins/auto-oc`. Su CLI anuncia 1.7.21 y `maintain-release`. `status` muestra una reserva cuyo PID **2740** pertenece a un renderer Obsidian vivo. La inspección oficial desde el candidato rechaza con `Unload AutoOC normally; execution reservation is present`. La CLI de Obsidian instalada no está habilitada; no se modifica su configuración ni se mata el proceso.
 
 **Instalación bloqueada y no ejecutada**: es necesario descargar AutoOC normalmente desde Obsidian antes de instalar. Las terminales iniciadas con el plugin anterior se detienen al descargarlo; la sesión que aloje esta conversación tampoco se puede migrar por este cambio aún no instalado. No se borra ni recupera la reserva viva, no se sustituye el paquete a escondidas ni se modifican catálogo, journals o secretos. El requisito permanece pendiente de prueba visual y aceptación.
+
+## Instalación local completada tras liberar el plugin
+
+El usuario confirma «Ya se puede». La consulta oficial muestra `executionLockPresent:false`; la inspección de mantenimiento y la integridad del candidato son correctas. Se ejecuta `maintain-release --install` desde el candidato del proyecto hacia su propia instalación Obsidian, sin decisiones de disposición (`applied:[]`). Se instalan los siete artefactos del candidato de código **25600f3**, versión 1.7.21.
+
+Verificación posterior: integridad instalada válida, siete archivos idénticos al candidato y `data.json` idéntico byte a byte al respaldo previo. La CLI instalada confirma versión y capacidades. No se ejecutan tareas, no se recuperan reservas ni se modifican históricos. Respaldo oficial en `runtime/maintenance-backup-6c0dcde7-1c0d-4eeb-b91a-230672bdc14e` bajo la instalación; recibo privado en `C:/Users/gilro/AppData/Local/Temp/opencode/detachable-terminals-install-result.json`.
+
+El recibo informa `loadedInObsidian:false` y `reloadRequired:true`. **Instalado no equivale a cargado ni aceptado**: falta habilitar AutoOC en Obsidian y probar visualmente ↻ y, en una sesión nueva, ↗. No se reinicia Obsidian ni se presenta como verificada la continuidad nativa tras su reinicio. Los cinco archivos ajenos modificados permanecen fuera del commit y sin alteraciones.
