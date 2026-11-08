@@ -1,6 +1,6 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { INTERACTIVE_CLIS, configuredInteractiveClis, launchInteractiveCli, resolveInteractiveCli, type InteractiveCliProvider, type InteractiveCliSettings } from "./interactive-cli";
-import { detectOpenCodeVersion } from "./opencode-version";
+import { detectOpenCodeVersion, readCliVersion } from "./opencode-version";
 
 interface CliSettingsHost {
   manifest?: { id: string };
@@ -16,13 +16,14 @@ export function openCliLauncher(app: App, host: CliSettingsHost, selected?: Inte
   new CliLauncherModal(app, host, () => {
     const settings = (app as any).setting;
     if (!settings?.open || !settings?.openTabById || !host.manifest?.id) {
-      new Notice("Open Settings → AutoOC → Interactive CLI launchers to configure your CLIs."); return;
+      new Notice("Open Settings → AutoOC → Harnesses to configure your CLIs."); return;
     }
     settings.open(); settings.openTabById(host.manifest.id);
   }, selected).open();
 }
 
-export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHost) {
+export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHost,
+  options: { providers?: Partial<Record<InteractiveCliProvider, HTMLElement>> } = {}) {
   root.createEl("h3", { text: "Interactive CLI launchers" });
   root.createEl("p", { text: "Choose which CLIs appear under 💻 CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
   new Setting(root).setName("CLI terminal destination")
@@ -49,7 +50,7 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
     });
   if (host.installCliTerminalSupport) {
     const support = new Setting(root).setName("Integrated terminal support")
-      .setDesc("Windows x64 only. Runs with your user permissions; closing AutoOC stops its integrated sessions. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
+      .setDesc("Windows x64 only; Node.js 18+ in PATH. Sessions run with your user permissions. Sessions confirmed outside Obsidian via ↗ survive plugin unload; other integrated sessions stop. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
     let installing = false;
     support.addButton(button => button.setButtonText("Download and install terminal support").onClick(async () => {
       if (installing || host.isLifecycleStopped()) return;
@@ -65,8 +66,9 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
     }));
   }
   for (const cli of INTERACTIVE_CLIS) {
+    const providerRoot = options.providers?.[cli.id] || root;
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
-    new Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.")
+    new Setting(providerRoot).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available. This does not disable existing scheduled tasks.")
       .addToggle(toggle => toggle.setValue(host.settings.cliLauncherEnabled?.[cli.id] !== false).onChange(async enabled => {
         const previous = host.settings.cliLauncherEnabled;
         const updated = { ...previous, [cli.id]: enabled };
@@ -74,7 +76,7 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
         try { await host.saveSettings(false); }
         catch { if (host.settings.cliLauncherEnabled === updated) host.settings.cliLauncherEnabled = previous; toggle.setValue(previous?.[cli.id] !== false); new Notice("CLI preference could not be saved. Try again."); }
       }));
-    const row = new Setting(root).setName(`${cli.label} executable`);
+    const row = new Setting(providerRoot).setName(`${cli.label} executable`);
     const describe = () => {
       const detected = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
       row.setDesc(detected ? `Detected: ${detected}`
@@ -95,15 +97,20 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
         if (!found) { new Notice(`${cli.label} was not found. Install it or enter its executable path.`); return; }
         input.value = found; await savePath(found);
       }));
-    if (cli.id === "opencode" || cli.id === "opencode2") row.addButton(button => button.setButtonText("Check version").onClick(async () => {
+    row.addButton(button => button.setButtonText("Check version").onClick(async () => {
+      if (host.isLifecycleStopped()) return;
       button.setDisabled(true);
       try {
         const bin = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
         if (!bin) throw new Error("Executable not found. Set its full path first.");
-        const detected = await detectOpenCodeVersion(bin);
-        const expected = cli.id === "opencode2" ? 2 : 1;
-        row.setDesc(detected.major === expected ? `Detected ${detected.version} — compatible with ${cli.label}.`
-          : `Detected ${detected.version}. Choose the matching OpenCode CLI and task type, or set a different executable. Existing tasks have not been changed.`);
+        if (cli.id === "opencode" || cli.id === "opencode2") {
+          const detected = await detectOpenCodeVersion(bin);
+          const expected = cli.id === "opencode2" ? 2 : 1;
+          row.setDesc(detected.major === expected ? `Detected ${detected.version} — compatible with ${cli.label}.`
+            : `Detected ${detected.version}. Choose the matching OpenCode CLI and task type, or set a different executable. Existing tasks have not been changed.`);
+        } else {
+          row.setDesc(`${cli.label}: ${await readCliVersion(bin)}. Version detected; authentication is checked by the CLI, not by this test.`);
+        }
       } catch (error) { row.setDesc((error as Error).message); }
       finally { button.setDisabled(false); }
     }));

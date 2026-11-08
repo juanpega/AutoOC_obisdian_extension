@@ -239,6 +239,16 @@ function harness() {
   };
 }
 
+test('terminal spacing stays outside the session box measured by FitAddon', () => {
+  const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
+  const screen = css.match(/\.auto-oc-terminal-screen\s*\{([^}]+)\}/)?.[1];
+  const host = css.match(/\.auto-oc-terminal-host\s*\{([^}]+)\}/)?.[1];
+  assert.ok(screen); assert.ok(host);
+  assert.match(screen, /padding:\s*0\s*;/);
+  assert.match(host, /padding:\s*8px\s*;/);
+  assert.match(host, /box-sizing:\s*border-box\s*;/);
+});
+
 test('manual redraw repaints and fits only the active terminal without restarting or sending input', async () => {
   const h = harness(); await h.manager.open('codex', h.folder); await h.manager.open('codex', h.folder);
   const [background, active] = h.manager.sessions;

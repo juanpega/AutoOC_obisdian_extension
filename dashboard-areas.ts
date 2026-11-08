@@ -117,7 +117,7 @@ export class AreaDashboard {
   private stepLimit = 40;
   private inspectedWorkflow?: string;
   constructor(parent: HTMLElement, private state: AreaDashboardState, private host: {
-    items(): DashboardItem[]; diameter(): number;
+    items(): DashboardItem[];
     open(item: DashboardItem): void;
     log(item: DashboardItem): void; history(item: DashboardItem): void;
   }) {
@@ -199,7 +199,8 @@ export class AreaDashboard {
     const orb = parent.createSpan({ cls: `auto-oc-area-orb${item.kind === "workflow" ? "" : " auto-oc-dashboard-task-bubble"}` });
     orb.setAttr("data-kind", item.kind); orb.setAttr("aria-hidden", "true");
     orb.setAttr("data-state", item.disabled ? "disabled" : item.attention ? "attention" : item.status);
-    const size = item.kind === "workflow" ? Math.max(36, this.host.diameter()) : this.host.diameter();
+    // Fixed task/step diameter; workflows retain their existing double-ring size.
+    const size = item.kind === "workflow" ? 36 : 30;
     orb.style.width = orb.style.height = `${size}px`;
     if (item.kind === "code") orb.setText("{ }"); else setIcon(orb, item.kind === "workflow" ? "workflow" : item.kind === "delay" ? "clock" : "terminal");
     if (this.previous.has(item.key) && this.previous.get(item.key) !== `${item.status}:${item.disabled}:${item.attention}`) orb.addClass("auto-oc-area-changed");

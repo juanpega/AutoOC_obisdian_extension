@@ -5,9 +5,20 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
-## Terminales CLI integradas (candidato 1.7.21)
+## Terminales CLI integradas y Settings (candidato 1.7.22)
 
-`Settings > AutoOC > Interactive CLI launchers > CLI terminal destination` elige
+En el candidato de Settings ordenados, `Settings > AutoOC` se agrupa en General,
+Harnesses, Terminals, Execution, Logs, Library y Maintenance. Se retira el control
+de tamaño de burbujas: tareas y pasos quedan fijos a 30 px, sin cambiar las letras.
+Los valores históricos se conservan pero no se aplican; no se migra el catálogo.
+Las rutas, visibilidad y defaults de cada CLI se reúnen
+en Harnesses; Check version está disponible para todos, sin acreditar login.
+OpenCode 2 también muestra tablas refrescables de sus propios modelos/agentes por
+proyecto. Ralph Loop permanece específico de OpenCode 1; no anunciarlo para otros
+motores. Abrir Settings no autoriza instalar soporte, cambiar configuración global
+ni consultar proveedores automáticamente. Comprobar hashes/carga del candidato.
+
+`Settings > AutoOC > Terminals > Interactive CLI launchers > CLI terminal destination` elige
 terminal integrada o ventana externa para sesiones manuales y tareas CLI
 interactivas de todos los harness, tambien dentro de workflows. No cambia tareas en
 segundo plano, Code ni la apertura de la aplicacion Codex. Las integradas

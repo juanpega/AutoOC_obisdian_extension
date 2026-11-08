@@ -6,13 +6,14 @@ const { PassThrough } = require('node:stream');
 
 function harness(overrides = {}) {
   class Element {
-    constructor(options = {}) { this.textContent = options.text || ''; this.children = []; this.style = {}; this.attrs = options.attr || {}; this.dataset = {}; this.value = ''; }
+    constructor(options = {}) { this.textContent = options.text || ''; this.children = []; this.style = {}; this.attrs = options.attr || {}; this.dataset = {}; this.value = ''; this.events = {}; }
     createEl(tag, options = {}) { const el = new Element(options); el.tag = tag; this.children.push(el); return el; }
     createDiv(options) { return this.createEl('div', options); }
     createSpan(options) { return this.createEl('span', options); }
     empty() { this.children = []; }
     setText(value) { this.textContent = value; }
-    addClass() {} removeClass() {} toggleClass() {} addEventListener() {} focus() {} select() {}
+    addClass() {} removeClass() {} toggleClass() {} addEventListener(name, callback) { this.events[name] = callback; } focus() { this.focused = true; } select() {}
+    scrollIntoView() { this.scrolled = true; }
     setAttr(key, value) { this.attrs[key] = value; }
     setAttribute(key, value) { this.attrs[key] = value; }
     all() { return [this, ...this.children.flatMap(child => child.all())]; }
@@ -353,6 +354,100 @@ test('OpenCode 2 drafts remain editable and preserve their version and defaults 
   await save.onclick();assert.equal(h.plugin.settings.tasks[0].taskKind,'opencode2');assert.equal(h.plugin.settings.tasks[0].model,'provider/v2');
 });
 
+test('organized Settings preserves every existing option without saving or probing providers on open', () => {
+  const h = harness({child_process: {...require('node:child_process'), execFile() { assert.fail('Opening Settings must not query a CLI'); }}});
+  h.plugin.isRalphLoopEnabled = () => false;
+  h.plugin.legacyCredentialNoticeStatus = () => ({acknowledged:false});
+  const before = JSON.stringify(h.plugin.settings);
+  const settings = new h.AutoOCSettingTab(h.plugin.app, h.plugin); settings.containerEl = new h.Element(); settings.display();
+  assert.equal(JSON.stringify(h.plugin.settings), before); assert.equal(h.writes(), 0);
+  const all = settings.containerEl.all();
+  for (const name of ['Legacy credential notice','Resolve blocked executions','Review older attempts',
+    'Default concurrency','Maximum simultaneous runs','Default AI engine','Default OpenCode 2 model','Default OpenCode 2 agent',
+    'CLI terminal destination','Integrated terminal support','Test Copilot installation','Default Copilot model','Default Codex model',
+    'Default Codex reasoning','Working Directory','Default CLI task mode','Shared Library URL','Task Timeout (seconds)',
+    'Enable Log Persistence','Max Logs Per Task','Log Retention (days)','Clear All Logs','Ralph Loop Assistant',
+    'Default OpenCode 1 agent','Default OpenCode 1 model']) assert.equal(all.filter(el => el.name === name).length, 1, name);
+  for (const label of ['OpenCode 1 CLI','OpenCode 2 CLI','Codex CLI','GitHub Copilot CLI','Claude Code CLI']) {
+    assert.ok(all.some(el => el.name === `Show ${label}`)); assert.ok(all.some(el => el.name === `${label} executable`));
+  }
+  if (process.platform === 'linux') assert.ok(all.some(el => el.name === 'Linux terminal emulator'));
+  const sections = settings.containerEl.children.filter(el => el.tag === 'details').map(el => el.children[0].textContent);
+  assert.deepEqual(sections, ['General','Harnesses','Terminals','Execution','Logs','Library','Maintenance']);
+  const harnesses = all.find(el => el.tag === 'details' && el.children[0]?.textContent === 'Harnesses');
+  const v1 = harnesses.all().find(el => el.tag === 'details' && el.children[0]?.textContent === 'OpenCode 1');
+  const v2 = harnesses.all().find(el => el.tag === 'details' && el.children[0]?.textContent === 'OpenCode 2');
+  assert.ok(v1.all().some(el => el.name === 'Ralph Loop Assistant'));
+  assert.ok(!v2.all().some(el => el.name === 'Ralph Loop Assistant'));
+  assert.ok(v2.all().some(el => el.textContent === 'Available OpenCode 2 models'));
+  assert.ok(v2.all().some(el => el.textContent === 'Available OpenCode 2 agents'));
+});
+
+test('Settings omits bubble sizing and ignores old preferences without modifying them or local storage', () => {
+  const h=harness();h.plugin.isRalphLoopEnabled=()=>false;
+  Object.assign(h.plugin.settings,{dashboardTaskBubbleSize:'xl',dashboardTaskBubbleDiameter:79});
+  h.plugin.app.loadLocalStorage=()=>assert.fail('Retired visual preferences must not be read');
+  h.plugin.app.saveLocalStorage=()=>assert.fail('Retired visual preferences must not be deleted or rewritten');
+  const before=JSON.stringify(h.plugin.settings);
+  const settings=new h.AutoOCSettingTab(h.plugin.app,h.plugin);settings.containerEl=new h.Element();settings.display();
+  assert.ok(!settings.containerEl.all().some(el=>el.name==='Task and step bubble size'));
+  assert.equal(JSON.stringify(h.plugin.settings),before);assert.equal(h.writes(),0);
+});
+
+test('OpenCode 2 catalog tables refresh the current project and never overwrite saved defaults', async () => {
+  const h=harness(),calls=[],cache=new Map();h.plugin.isRalphLoopEnabled=()=>false;
+  Object.assign(h.plugin.settings,{opencode2Path:'v2-only',workingDirectory:'/first',defaultOpencode2Model:'provider/saved',defaultOpencode2Agent:'saved-agent'});
+  h.plugin.openCode2Catalog={choices:(bin,cwd,kind)=>cache.get(JSON.stringify([bin,cwd,kind]))||[],
+    async refresh(bin,cwd,kind){calls.push({bin,cwd,kind});cache.set(JSON.stringify([bin,cwd,kind]),[{value:'provider/listed',label:'Listed'}]);}};
+  const settings=new h.AutoOCSettingTab(h.plugin.app,h.plugin);settings.containerEl=new h.Element();settings.display();
+  h.plugin.settings.workingDirectory='/second';
+  const row=settings.containerEl.all().find(el=>el.name==='OpenCode 2 models catalog');
+  await row.all().find(el=>el.tag==='button').onclick();
+  assert.deepEqual(calls,[{bin:'v2-only',cwd:'/second',kind:'models'}]);
+  assert.equal(h.plugin.settings.defaultOpencode2Model,'provider/saved');assert.equal(h.plugin.settings.defaultOpencode2Agent,'saved-agent');
+  assert.ok(settings.containerEl.all().some(el=>el.tag==='td'&&el.textContent==='provider/listed'));
+  assert.equal(h.writes(),0);
+});
+
+test('Settings navigation reopens sections and retains disclosure/scroll state without catalog writes', () => {
+  const h = harness(); h.plugin.isRalphLoopEnabled = () => false;
+  const settings = new h.AutoOCSettingTab(h.plugin.app, h.plugin); settings.containerEl = new h.Element(); settings.display();
+  const section = title => settings.containerEl.all().find(el => el.tag === 'details' && el.children[0]?.textContent === title);
+  assert.equal(section('Codex / ChatGPT').open, true); assert.equal(section('OpenCode 1').open, false);
+  section('General').open = false; section('General').events.toggle(); settings.containerEl.scrollTop = 123;
+  settings.display(); assert.equal(section('General').open, false); assert.equal(settings.containerEl.scrollTop, 123);
+  const jump = settings.containerEl.all().find(el => el.tag === 'button' && el.textContent === 'General'); jump.onclick();
+  assert.equal(section('General').open, true); assert.equal(section('General').children[0].focused, true);
+  assert.equal(section('General').children[0].scrolled, true); assert.equal(h.writes(), 0);
+});
+
+test('version checks are available for Codex, Copilot and Claude without claiming authentication', async () => {
+  const calls = [];
+  const h = harness({child_process: {...require('node:child_process'), execFile(bin,args,options,callback) {
+    calls.push({bin,args}); callback(null, 'synthetic-cli 1.2.3');
+  }}});
+  h.plugin.isRalphLoopEnabled = () => false;
+  Object.assign(h.plugin.settings, {codexPath:process.execPath,copilotPath:process.execPath,claudePath:process.execPath});
+  const settings = new h.AutoOCSettingTab(h.plugin.app,h.plugin);settings.containerEl=new h.Element();settings.display();
+  assert.equal(calls.length,0);
+  for(const label of ['Codex CLI','GitHub Copilot CLI','Claude Code CLI']) {
+    const row=settings.containerEl.all().find(el=>el.name===`${label} executable`);
+    await row.all().find(el=>el.tag==='button'&&el.textContent==='Check version').onclick();
+    assert.match(row.desc,/synthetic-cli 1.2.3/);assert.match(row.desc,/authentication is checked by the CLI/);
+  }
+  assert.equal(calls.length,3);for(const call of calls)assert.deepEqual(Array.from(call.args),['--version']);
+  assert.equal(h.writes(),0);
+});
+
+test('library edits update the resolved URL without replacing the focused Settings control', async () => {
+  const h=harness();h.plugin.isRalphLoopEnabled=()=>false;
+  const settings=new h.AutoOCSettingTab(h.plugin.app,h.plugin);settings.containerEl=new h.Element();settings.display();
+  const row=settings.containerEl.all().find(el=>el.name==='Shared Library URL'),input=row.children.find(el=>el.tag==='input');
+  await input.change('https://github.com/example/library');
+  assert.equal(settings.containerEl.all().find(el=>el.name==='Shared Library URL'),row);
+  assert.match(row.desc,/example\/library/);assert.equal(h.writes(),1);
+});
+
 test('OpenCode 2 pickers share Settings choices with tasks and use the current project for refresh', async () => {
   const commands = [];
   const h = harness({child_process: {...require('node:child_process'), execFile(bin, args, options, callback) {
@@ -376,10 +471,10 @@ test('OpenCode 2 pickers share Settings choices with tasks and use the current p
   h.plugin.isRalphLoopEnabled = () => false;
   settings.display();
   const settingsRoot = settings.containerEl;
-  const labels = settingsRoot.children.map(el => el.name || el.textContent);
-  const engineRow = labels.indexOf('Default AI engine');
-  assert.ok(engineRow >= 0);
-  assert.deepEqual(labels.slice(engineRow + 1, engineRow + 3), ['OpenCode 2 task defaults', 'Default OpenCode 2 model']);
+  const section = title => settingsRoot.all().find(el => el.tag === 'details' && el.children[0]?.textContent === title);
+  assert.ok(section('General').all().some(el => el.name === 'Default AI engine'));
+  assert.ok(section('OpenCode 2').all().some(el => el.name === 'Default OpenCode 2 model'));
+  assert.ok(section('OpenCode 2').all().some(el => el.textContent === 'OpenCode 2 task defaults'));
   assert.ok(control(settingsRoot, 'Default OpenCode 1 model', 'select'));
   await control(settingsRoot, 'Default OpenCode 2 model', 'button').onclick();
   assert.deepEqual(values(control(settingsRoot, 'Default OpenCode 2 model', 'select')), ['provider/listed','provider/custom','']);

@@ -1,8 +1,8 @@
 # Terminales independientes de Obsidian
 
-## Requisito · versión 3 · 08/11/2026
+## Requisito · versión 4 · 08/11/2026
 
-Estado: implementado e instalado en este proyecto para prueba; pendiente de habilitar/cargar el plugin, aceptación visual y cierre del requisito.
+Estado: funcionalidad inicial y corrección posterior de geometría instaladas para prueba. Pendiente de cargar el candidato corregido, aceptación visual y cierre del requisito.
 
 El usuario debe poder sacar una terminal integrada de AutoOC a una ventana externa mediante un botón, para poder reiniciar Obsidian o el propio plugin sin interrumpir el trabajo de esa sesión.
 
@@ -18,6 +18,7 @@ El usuario debe poder sacar una terminal integrada de AutoOC a una ventana exter
 - Al confirmar la conexión externa, la entrada pasa al navegador. La vista integrada puede seguir mostrando la salida mientras el plugin permanezca cargado.
 - La barra de la terminal integrada incluye un botón **↻** para recalcular el tamaño y repintar la terminal activa cuando se visualice mal. Refresca los recursos gráficos y las filas visibles sin reiniciar el PTY o el agente, borrar el buffer/historial ni reenviar el prompt o pulsaciones como Ctrl+L. No se habilita cuando no hay sesión activa.
 - El repintado manual pendiente se conserva si coincide con eventos de tamaño/tema; si el panel está oculto, se aplica cuando vuelva a tener dimensiones utilizables. No se presenta este control como una corrección demostrada de la causa del fallo visual intermitente, aún no reproducido en Obsidian.
+- La geometría comunicada a xterm y al PTY debe excluir el margen interior reservado por la interfaz. El texto y la última fila deben permanecer dentro del panel tras cambiar su tamaño o pulsar ↻. Reproducido un recorte con xterm real en un panel sintético; falta confirmar la corrección en Obsidian real.
 
 ### Restricción técnica identificada
 

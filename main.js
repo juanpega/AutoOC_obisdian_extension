@@ -7155,7 +7155,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.21",
+      version: "1.7.22",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -9199,7 +9199,7 @@ var AreaDashboard = class {
     orb.setAttr("data-kind", item.kind);
     orb.setAttr("aria-hidden", "true");
     orb.setAttr("data-state", item.disabled ? "disabled" : item.attention ? "attention" : item.status);
-    const size = item.kind === "workflow" ? Math.max(36, this.host.diameter()) : this.host.diameter();
+    const size = item.kind === "workflow" ? 36 : 30;
     orb.style.width = orb.style.height = `${size}px`;
     if (item.kind === "code") orb.setText("{ }");
     else (0, import_obsidian2.setIcon)(orb, item.kind === "workflow" ? "workflow" : item.kind === "delay" ? "clock" : "terminal");
@@ -9460,128 +9460,8 @@ function setupCodeTextarea(textarea, app) {
   } else mount();
 }
 
-// dashboard-bubble-settings.ts
-var import_obsidian3 = require("obsidian");
-var validDiameter = (value) => typeof value === "number" && Number.isInteger(value) && value >= 10 && value <= 80;
-function preferenceStorage(app, pluginId) {
-  const key = `${pluginId}:${app.vault.configDir}:dashboard-task-diameter`;
-  if (typeof app.loadLocalStorage === "function" && typeof app.saveLocalStorage === "function") {
-    return { read: () => app.loadLocalStorage(key), write: (value) => app.saveLocalStorage(key, value) };
-  }
-  const base2 = app.vault.adapter.basePath;
-  if (!base2) throw new Error("Cannot identify the vault for the visual preference");
-  const scopedKey = `${key}:${base2}`;
-  return {
-    read: () => JSON.parse(localStorage.getItem(scopedKey) || "null"),
-    write: (value) => localStorage.setItem(scopedKey, JSON.stringify(value))
-  };
-}
-function loadDashboardBubbleDiameter(app, pluginId, legacy) {
-  try {
-    const value = preferenceStorage(app, pluginId).read();
-    if (validDiameter(value)) return value;
-  } catch (e) {
-  }
-  return dashboardTaskDiameter(legacy);
-}
-function saveDashboardBubbleDiameter(app, pluginId, diameter) {
-  if (!validDiameter(diameter)) throw new Error("Enter a whole number from 10 to 80.");
-  preferenceStorage(app, pluginId).write(diameter);
-}
-function applyDashboardBubbleDiameter(root, diameter) {
-  for (const bubble of Array.from(root.querySelectorAll(".auto-oc-dashboard-task-bubble"))) {
-    bubble.style.width = bubble.style.height = `${diameter}px`;
-  }
-}
-function dashboardTaskDiameter(settings) {
-  if (validDiameter(settings.dashboardTaskBubbleDiameter)) return settings.dashboardTaskBubbleDiameter;
-  switch (settings.dashboardTaskBubbleSize) {
-    case "sm":
-      return 24;
-    case "lg":
-      return 38;
-    case "xl":
-      return 48;
-    default:
-      return 30;
-  }
-}
-function addDashboardBubbleSizeSetting(container, host) {
-  let input, apply, reset;
-  let saving = false;
-  const row = new import_obsidian3.Setting(container).setName("Task and step bubble size").setDesc("Exact diameter in pixels (10\u201380). Preview changes below; Apply updates the Dashboard. Saved on this device for this vault.");
-  row.addText((text) => {
-    input = text.inputEl;
-    input.type = "number";
-    input.min = "10";
-    input.max = "80";
-    input.step = "1";
-    input.style.width = "80px";
-    input.setAttribute("aria-label", "Task and step bubble size in pixels");
-    text.setValue(String(host.getDiameter())).onChange(() => preview());
-  });
-  row.addButton((button) => {
-    apply = button.buttonEl;
-    button.setButtonText("Apply").setCta().onClick(() => save());
-  });
-  row.addButton((button) => {
-    reset = button.buttonEl;
-    button.setButtonText("Reset to default").onClick(() => {
-      if (saving) return;
-      input.value = "30";
-      preview();
-      return save();
-    });
-  });
-  const sample = container.createDiv("auto-oc-bubble-size-preview");
-  sample.createSpan({ text: "Preview" });
-  const bubble = sample.createDiv({ cls: "auto-oc-bubble-size-sample", attr: { "aria-hidden": "true" } });
-  const feedback = sample.createSpan({ attr: { role: "status", "aria-live": "polite" } });
-  const value = () => input.value.trim() ? Number(input.value) : NaN;
-  function preview() {
-    const diameter = value(), valid = validDiameter(diameter);
-    input.setAttribute("aria-invalid", String(!valid));
-    apply.disabled = saving || !valid || diameter === host.getDiameter();
-    if (valid) {
-      bubble.style.width = bubble.style.height = `${diameter}px`;
-      feedback.setText(`${diameter} px`);
-    } else feedback.setText("Enter a whole number from 10 to 80.");
-  }
-  async function save() {
-    const diameter = value();
-    if (saving || !validDiameter(diameter)) return;
-    saving = true;
-    input.disabled = apply.disabled = reset.disabled = true;
-    apply.setText("Saving\u2026");
-    feedback.setText("Saving size\u2026");
-    try {
-      await host.saveDiameter(diameter);
-      feedback.setText(`Saved: ${diameter} px`);
-      try {
-        host.applyDiameter(diameter);
-      } catch (e) {
-        feedback.setText(`Saved: ${diameter} px. Reopen the Dashboard to refresh its bubbles.`);
-      }
-    } catch (e) {
-      feedback.setText("Could not save the size. Your previous size is kept. Try Apply again.");
-    } finally {
-      saving = false;
-      input.disabled = reset.disabled = false;
-      apply.setText("Apply");
-      apply.disabled = value() === host.getDiameter();
-    }
-  }
-  input.addEventListener("keydown", (event) => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      void save();
-    }
-  });
-  preview();
-}
-
 // interactive-cli-ui.ts
-var import_obsidian4 = require("obsidian");
+var import_obsidian3 = require("obsidian");
 
 // interactive-cli.ts
 var fs7 = __toESM(require("fs"));
@@ -10692,6 +10572,14 @@ async function detectOpenCodeVersion(bin) {
   if (!detected) throw new Error("The executable did not report a supported OpenCode version. Check its path in AutoOC Settings.");
   return detected;
 }
+async function readCliVersion(bin) {
+  const output = await readOpenCodeOutput(bin, ["--version"], os3.tmpdir(), 1e4, 65536).catch(() => {
+    throw new Error("Could not check the CLI version. Check its executable path in AutoOC Settings.");
+  });
+  const version = output.trim();
+  if (!version) throw new Error("The CLI returned an empty version response.");
+  return version.slice(0, 256);
+}
 async function assertOpenCode2(bin) {
   const detected = await detectOpenCodeVersion(bin);
   if (detected.major !== 2) throw new Error(`OpenCode 2 CLI requires version 2.x; detected ${detected.version}. Select its executable in AutoOC Settings, or use an OpenCode 1 task. Nothing was launched.`);
@@ -10839,17 +10727,18 @@ function openCliLauncher(app, host, selected) {
     var _a;
     const settings = app.setting;
     if (!(settings == null ? void 0 : settings.open) || !(settings == null ? void 0 : settings.openTabById) || !((_a = host.manifest) == null ? void 0 : _a.id)) {
-      new import_obsidian4.Notice("Open Settings \u2192 AutoOC \u2192 Interactive CLI launchers to configure your CLIs.");
+      new import_obsidian3.Notice("Open Settings \u2192 AutoOC \u2192 Harnesses to configure your CLIs.");
       return;
     }
     settings.open();
     settings.openTabById(host.manifest.id);
   }, selected).open();
 }
-function addInteractiveCliSettings(root, host) {
+function addInteractiveCliSettings(root, host, options = {}) {
+  var _a;
   root.createEl("h3", { text: "Interactive CLI launchers" });
   root.createEl("p", { text: "Choose which CLIs appear under \u{1F4BB} CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
-  new import_obsidian4.Setting(root).setName("CLI terminal destination").setDesc("Where manual CLIs and interactive CLI tasks for all harnesses open, including workflow steps. Background tasks, the Codex app and existing terminals are unchanged. Integrated tasks require Obsidian to be open.").addDropdown((dropdown) => {
+  new import_obsidian3.Setting(root).setName("CLI terminal destination").setDesc("Where manual CLIs and interactive CLI tasks for all harnesses open, including workflow steps. Background tasks, the Codex app and existing terminals are unchanged. Integrated tasks require Obsidian to be open.").addDropdown((dropdown) => {
     let saving = false;
     dropdown.addOption("external", "External window").addOption("integrated", "Integrated in Obsidian").setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external").onChange(async (value) => {
       if (saving || host.isLifecycleStopped() || value !== "integrated" && value !== "external") {
@@ -10864,7 +10753,7 @@ function addInteractiveCliSettings(root, host) {
         await host.saveSettings(false);
       } catch (e) {
         if (host.settings.cliTerminalDestination === value) host.settings.cliTerminalDestination = previous;
-        new import_obsidian4.Notice("Terminal destination could not be saved. Try again.");
+        new import_obsidian3.Notice("Terminal destination could not be saved. Try again.");
       } finally {
         saving = false;
         dropdown.setDisabled(false);
@@ -10873,7 +10762,7 @@ function addInteractiveCliSettings(root, host) {
     });
   });
   if (host.installCliTerminalSupport) {
-    const support = new import_obsidian4.Setting(root).setName("Integrated terminal support").setDesc("Windows x64 only. Runs with your user permissions; closing AutoOC stops its integrated sessions. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
+    const support = new import_obsidian3.Setting(root).setName("Integrated terminal support").setDesc("Windows x64 only; Node.js 18+ in PATH. Sessions run with your user permissions. Sessions confirmed outside Obsidian via \u2197 survive plugin unload; other integrated sessions stop. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
     let installing = false;
     support.addButton((button) => button.setButtonText("Download and install terminal support").onClick(async () => {
       if (installing || host.isLifecycleStopped()) return;
@@ -10895,15 +10784,16 @@ function addInteractiveCliSettings(root, host) {
       try {
         await host.showCliTerminals();
       } catch (error) {
-        new import_obsidian4.Notice(String(error));
+        new import_obsidian3.Notice(String(error));
       }
     }));
   }
   for (const cli of INTERACTIVE_CLIS) {
+    const providerRoot = ((_a = options.providers) == null ? void 0 : _a[cli.id]) || root;
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
-    new import_obsidian4.Setting(root).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available.").addToggle((toggle) => {
-      var _a;
-      return toggle.setValue(((_a = host.settings.cliLauncherEnabled) == null ? void 0 : _a[cli.id]) !== false).onChange(async (enabled) => {
+    new import_obsidian3.Setting(providerRoot).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available. This does not disable existing scheduled tasks.").addToggle((toggle) => {
+      var _a2;
+      return toggle.setValue(((_a2 = host.settings.cliLauncherEnabled) == null ? void 0 : _a2[cli.id]) !== false).onChange(async (enabled) => {
         const previous = host.settings.cliLauncherEnabled;
         const updated = { ...previous, [cli.id]: enabled };
         host.settings.cliLauncherEnabled = updated;
@@ -10912,11 +10802,11 @@ function addInteractiveCliSettings(root, host) {
         } catch (e) {
           if (host.settings.cliLauncherEnabled === updated) host.settings.cliLauncherEnabled = previous;
           toggle.setValue((previous == null ? void 0 : previous[cli.id]) !== false);
-          new import_obsidian4.Notice("CLI preference could not be saved. Try again.");
+          new import_obsidian3.Notice("CLI preference could not be saved. Try again.");
         }
       });
     });
-    const row = new import_obsidian4.Setting(root).setName(`${cli.label} executable`);
+    const row = new import_obsidian3.Setting(providerRoot).setName(`${cli.label} executable`);
     const describe = () => {
       const detected = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
       row.setDesc(detected ? `Detected: ${detected}` : `Not found. Install ${cli.label} separately or enter its executable path. Use a path or command name without arguments.`);
@@ -10931,7 +10821,7 @@ function addInteractiveCliSettings(root, host) {
       } catch (e) {
         if (host.settings[cli.pathKey] === updated) host.settings[cli.pathKey] = previous || defaultCommand;
         input.value = host.settings[cli.pathKey] || defaultCommand;
-        new import_obsidian4.Notice("CLI path could not be saved. Try again.");
+        new import_obsidian3.Notice("CLI path could not be saved. Try again.");
       }
       describe();
     };
@@ -10941,20 +10831,25 @@ function addInteractiveCliSettings(root, host) {
     }).addButton((button) => button.setButtonText("Auto-detect").onClick(async () => {
       const found = resolveInteractiveCli(cli.id);
       if (!found) {
-        new import_obsidian4.Notice(`${cli.label} was not found. Install it or enter its executable path.`);
+        new import_obsidian3.Notice(`${cli.label} was not found. Install it or enter its executable path.`);
         return;
       }
       input.value = found;
       await savePath(found);
     }));
-    if (cli.id === "opencode" || cli.id === "opencode2") row.addButton((button) => button.setButtonText("Check version").onClick(async () => {
+    row.addButton((button) => button.setButtonText("Check version").onClick(async () => {
+      if (host.isLifecycleStopped()) return;
       button.setDisabled(true);
       try {
         const bin = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
         if (!bin) throw new Error("Executable not found. Set its full path first.");
-        const detected = await detectOpenCodeVersion(bin);
-        const expected = cli.id === "opencode2" ? 2 : 1;
-        row.setDesc(detected.major === expected ? `Detected ${detected.version} \u2014 compatible with ${cli.label}.` : `Detected ${detected.version}. Choose the matching OpenCode CLI and task type, or set a different executable. Existing tasks have not been changed.`);
+        if (cli.id === "opencode" || cli.id === "opencode2") {
+          const detected = await detectOpenCodeVersion(bin);
+          const expected = cli.id === "opencode2" ? 2 : 1;
+          row.setDesc(detected.major === expected ? `Detected ${detected.version} \u2014 compatible with ${cli.label}.` : `Detected ${detected.version}. Choose the matching OpenCode CLI and task type, or set a different executable. Existing tasks have not been changed.`);
+        } else {
+          row.setDesc(`${cli.label}: ${await readCliVersion(bin)}. Version detected; authentication is checked by the CLI, not by this test.`);
+        }
       } catch (error) {
         row.setDesc(error.message);
       } finally {
@@ -10964,7 +10859,7 @@ function addInteractiveCliSettings(root, host) {
     describe();
   }
 }
-var CliLauncherModal = class extends import_obsidian4.Modal {
+var CliLauncherModal = class extends import_obsidian3.Modal {
   constructor(app, host, configure, selected) {
     super(app);
     this.host = host;
@@ -10990,7 +10885,7 @@ var CliLauncherModal = class extends import_obsidian4.Modal {
     } else if (!requested) this.selected = (_b = available[0]) == null ? void 0 : _b.id;
     let updateButtons = () => {
     };
-    if (available.length) new import_obsidian4.Setting(root).setName("CLI").addDropdown((dropdown) => {
+    if (available.length) new import_obsidian3.Setting(root).setName("CLI").addDropdown((dropdown) => {
       if (!this.selected) dropdown.addOption("", "Choose a CLI");
       for (const cli of available) dropdown.addOption(cli.id, cli.label);
       dropdown.setValue(this.selected || "").onChange((value) => {
@@ -11210,7 +11105,7 @@ async function launchExternalCliTask(request2, linuxTerminal) {
 }
 
 // integrated-terminal.ts
-var import_obsidian5 = require("obsidian");
+var import_obsidian4 = require("obsidian");
 var fs10 = __toESM(require("fs"));
 var path12 = __toESM(require("path"));
 
@@ -11603,7 +11498,7 @@ function integratedCliCommand(bin, args = []) {
   const command = `& ${[bin, ...args].map(psSingleQuoted).join(" ")}; if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE } elseif (!$?) { exit 1 }`;
   return { file, args: ["-NoLogo", "-NoProfile", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")] };
 }
-var CloseTerminalModal = class extends import_obsidian5.Modal {
+var CloseTerminalModal = class extends import_obsidian4.Modal {
   constructor(app, label, confirm2) {
     super(app);
     this.label = label;
@@ -11642,10 +11537,10 @@ var IntegratedTerminals = class {
     this.listeners = /* @__PURE__ */ new Set();
     host.registerView(TERMINAL_VIEW_TYPE, (leaf) => new TerminalView(leaf, this));
     host.addCommand({ id: "show-cli-terminals", name: "Show integrated CLI terminals", callback: () => {
-      void this.show().catch((error) => new import_obsidian5.Notice(String(error)));
+      void this.show().catch((error) => new import_obsidian4.Notice(String(error)));
     } });
     host.addCommand({ id: "retry-cli-terminal-cleanup", name: "Retry failed terminal cleanup", callback: () => {
-      void this.retryPendingCleanup().catch((error) => new import_obsidian5.Notice(String(error), 15e3));
+      void this.retryPendingCleanup().catch((error) => new import_obsidian4.Notice(String(error), 15e3));
     } });
   }
   pluginDirectory() {
@@ -11795,7 +11690,7 @@ var IntegratedTerminals = class {
           try {
             current.pty.resize(cols, rows);
           } catch (error) {
-            new import_obsidian5.Notice(`Terminal resize failed: ${String(error)}`);
+            new import_obsidian4.Notice(`Terminal resize failed: ${String(error)}`);
           }
         }
       }));
@@ -11873,7 +11768,7 @@ var IntegratedTerminals = class {
     try {
       const shell = require("electron").shell;
       await session.pty.detach((url) => shell.openExternal(url));
-      new import_obsidian5.Notice("Terminal connected outside Obsidian. You can restart Obsidian or AutoOC without stopping this session.", 1e4);
+      new import_obsidian4.Notice("Terminal connected outside Obsidian. You can restart Obsidian or AutoOC without stopping this session.", 1e4);
     } finally {
       session.detaching = false;
       this.changed();
@@ -11898,7 +11793,7 @@ var IntegratedTerminals = class {
       try {
         await session.pty.kill();
       } catch (error) {
-        new import_obsidian5.Notice(`Terminal could not be stopped (PID ${session.pty.pid}); session kept for inspection. ${String(error)}`, 15e3);
+        new import_obsidian4.Notice(`Terminal could not be stopped (PID ${session.pty.pid}); session kept for inspection. ${String(error)}`, 15e3);
         return false;
       }
       (_a = session.cleanup) == null ? void 0 : _a.call(session);
@@ -11968,7 +11863,7 @@ var IntegratedTerminals = class {
     }
   }
 };
-var TerminalView = class extends import_obsidian5.ItemView {
+var TerminalView = class extends import_obsidian4.ItemView {
   constructor(leaf, manager) {
     super(leaf);
     this.manager = manager;
@@ -12036,7 +11931,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
         } });
         external.disabled = !!session.detaching || !!session.closing;
         external.onclick = () => {
-          void this.manager.detach(session.id).catch((error) => new import_obsidian5.Notice(String(error), 15e3));
+          void this.manager.detach(session.id).catch((error) => new import_obsidian4.Notice(String(error), 15e3));
         };
       }
       group.createEl("button", { text: "x", attr: { "aria-label": `Close ${label}`, title: "Close session" } }).onclick = () => this.manager.requestClose(session.id);
@@ -12049,7 +11944,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
       empty.createEl("p", { text: "Launch a configured harness in a project folder. Each session gets its own terminal tab." });
       empty.createEl("button", { text: "New CLI session", cls: "mod-cta" }).onclick = () => this.manager.add();
       if (this.manager.hasPendingCleanup) empty.createEl("button", { text: "Retry failed terminal cleanup" }).onclick = () => {
-        void this.manager.retryPendingCleanup().catch((error) => new import_obsidian5.Notice(String(error), 15e3));
+        void this.manager.retryPendingCleanup().catch((error) => new import_obsidian4.Notice(String(error), 15e3));
       };
       return;
     }
@@ -12089,7 +11984,7 @@ var TerminalView = class extends import_obsidian5.ItemView {
         }
       } catch (error) {
         console.warn("AutoOC terminal fit failed", error);
-        if (this.repaintRequested) new import_obsidian5.Notice("Terminal redraw failed. The session was not restarted; try again when the panel is visible.");
+        if (this.repaintRequested) new import_obsidian4.Notice("Terminal redraw failed. The session was not restarted; try again when the panel is visible.");
       }
     });
   }
@@ -12227,8 +12122,8 @@ async function applyBulkCatalogAction(catalog, selection, action, state, save) {
 }
 
 // catalog-bulk-modal.ts
-var import_obsidian6 = require("obsidian");
-var BulkCatalogModal = class extends import_obsidian6.Modal {
+var import_obsidian5 = require("obsidian");
+var BulkCatalogModal = class extends import_obsidian5.Modal {
   // Modal.open() owns `selection` for restoring the editor's DOM selection.
   constructor(app, host, selectedItems, action, onSaved) {
     super(app);
@@ -12252,7 +12147,7 @@ var BulkCatalogModal = class extends import_obsidian6.Modal {
     let area = this.action.type === "area" ? this.action.area : "";
     if (this.action.type === "area") {
       let input;
-      new import_obsidian6.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
+      new import_obsidian5.Setting(root).setName("Area").setDesc("Choose an existing area or type a new one. Leave empty to remove the area.").addText((text) => {
         input = text.inputEl;
         text.setValue(area).setPlaceholder("No area").onChange((value) => {
           area = value;
@@ -12272,7 +12167,7 @@ var BulkCatalogModal = class extends import_obsidian6.Modal {
     const feedback = root.createDiv("auto-oc-bulk-feedback");
     feedback.setAttr("role", "alert");
     for (const issue of issues) feedback.createEl("p", { text: issue });
-    new import_obsidian6.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
+    new import_obsidian5.Setting(root).addButton((button) => button.setButtonText("Cancel").onClick(() => {
       if (!this.saving) this.close();
     })).addButton((button) => {
       button.setButtonText(availability ? `${disabling ? "Disable" : "Enable"} ${this.selectedItems.length} items` : deleting ? `Delete ${this.selectedItems.length} items` : "Apply area").setDisabled(issues.length > 0);
@@ -12293,7 +12188,7 @@ var BulkCatalogModal = class extends import_obsidian6.Modal {
         }
         this.saving = false;
         this.close();
-        new import_obsidian6.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
+        new import_obsidian5.Notice(availability ? `${disabling ? "Disabled" : "Enabled"} ${this.selectedItems.length} items.` : deleting ? `Deleted ${this.selectedItems.length} items.` : `Updated the area of ${this.selectedItems.length} items.`);
         this.onSaved();
       });
     });
@@ -12304,7 +12199,7 @@ var BulkCatalogModal = class extends import_obsidian6.Modal {
 };
 
 // ai-draft-modal.ts
-var import_obsidian7 = require("obsidian");
+var import_obsidian6 = require("obsidian");
 
 // ai-draft.ts
 var import_crypto7 = require("crypto");
@@ -12481,7 +12376,7 @@ async function saveGeneratedDefinition(catalog, drafts, workflow, save) {
 }
 
 // ai-draft-modal.ts
-var AiDraftModal = class extends import_obsidian7.Modal {
+var AiDraftModal = class extends import_obsidian6.Modal {
   constructor(app, options) {
     super(app);
     this.options = options;
@@ -12502,7 +12397,7 @@ var AiDraftModal = class extends import_obsidian7.Modal {
     this.contentEl.createEl("h2", { text: this.options.kind === "task" ? "Create a task with AI" : "Create a workflow with AI" });
     this.contentEl.createEl("p", { text: "Describe the outcome you want. AI prepares a draft using the WF Builder Prompt, then you finish in the editor. Nothing is saved or scheduled yet." });
     let objectiveInput;
-    new import_obsidian7.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
+    new import_obsidian6.Setting(this.contentEl).setName("Objective").setDesc("Include the desired result, useful context and any constraints.").addTextArea((text) => {
       objectiveInput = text.inputEl;
       text.inputEl.rows = 7;
       text.inputEl.maxLength = 2e4;
@@ -12527,7 +12422,7 @@ var AiDraftModal = class extends import_obsidian7.Modal {
       customModel.settingEl.style.display = "none";
       modelInput.value = this.model;
     };
-    new import_obsidian7.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
+    new import_obsidian6.Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.").addDropdown((dropdown) => {
       engineInput = dropdown.selectEl;
       dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex").addOption("copilot", "GitHub Copilot");
       dropdown.setValue(this.engine).onChange((value) => {
@@ -12539,7 +12434,7 @@ var AiDraftModal = class extends import_obsidian7.Modal {
         invalidate();
       });
     });
-    new import_obsidian7.Setting(this.contentEl).setName("Model").setDesc("Used to generate the draft and prefill tasks using this engine. Lists models loaded in AutoOC or used by your tasks. You can change each task's model in the editor.").addDropdown((dropdown) => {
+    new import_obsidian6.Setting(this.contentEl).setName("Model").setDesc("Used to generate the draft and prefill tasks using this engine. Lists models loaded in AutoOC or used by your tasks. You can change each task's model in the editor.").addDropdown((dropdown) => {
       modelDropdown = dropdown;
       dropdown.onChange((value) => {
         customModel.settingEl.hidden = value !== customValue;
@@ -12551,7 +12446,7 @@ var AiDraftModal = class extends import_obsidian7.Modal {
         invalidate();
       });
     });
-    const customModel = new import_obsidian7.Setting(this.contentEl).setName("Other model").setDesc("Enter a model ID available to this engine and your account. Empty uses the CLI default.").addText((text) => {
+    const customModel = new import_obsidian6.Setting(this.contentEl).setName("Other model").setDesc("Enter a model ID available to this engine and your account. Empty uses the CLI default.").addText((text) => {
       modelInput = text.inputEl;
       text.setValue(this.model).onChange((value) => {
         this.model = value.trim();
@@ -12563,7 +12458,7 @@ var AiDraftModal = class extends import_obsidian7.Modal {
     const preview = this.contentEl.createDiv("auto-oc-ai-draft-preview");
     let generateButton, cancelButton;
     let result;
-    const actions = new import_obsidian7.Setting(this.contentEl);
+    const actions = new import_obsidian6.Setting(this.contentEl);
     actions.addButton((button) => {
       generateButton = button.buttonEl;
       button.setButtonText("Generate draft").setCta().onClick(async () => {
@@ -13398,8 +13293,8 @@ async function resetBlockedAttempt(observed, attempt, lease, reason, acknowledge
 }
 
 // blocked-execution-modal.ts
-var import_obsidian8 = require("obsidian");
-var BlockedExecutionModal = class extends import_obsidian8.Modal {
+var import_obsidian7 = require("obsidian");
+var BlockedExecutionModal = class extends import_obsidian7.Modal {
   constructor(app, inspect, reset, reconnect, describeError, selectedRunId) {
     super(app);
     this.inspect = inspect;
@@ -13760,14 +13655,14 @@ var LegacyOutputRedaction = class {
 };
 
 // legacy-credential-notice.ts
-var import_obsidian9 = require("obsidian");
+var import_obsidian8 = require("obsidian");
 var explanations = {
   "storage-unavailable": "This device cannot currently access the secure storage used to read the old credentials.",
   "decryption-failed": "Some old credentials could not be decrypted with the secure storage available on this device.",
   "invalid-store": "The historical credential file is incomplete or has an unsupported structure.",
   "unreadable-store": "The historical credential file could not be read. Check that this operating-system account can access it, then retry."
 };
-var LegacyCredentialNoticeModal = class extends import_obsidian9.Modal {
+var LegacyCredentialNoticeModal = class extends import_obsidian8.Modal {
   constructor(app, host) {
     super(app);
     this.host = host;
@@ -13795,7 +13690,7 @@ var LegacyCredentialNoticeModal = class extends import_obsidian9.Modal {
       if (!issue.dismissible) root.createEl("p", { text: "The reminder cannot be saved until the file can be read and identified." });
     }
     if (this.message) root.createEl("p", { text: this.message });
-    const controls = new import_obsidian9.Setting(root);
+    const controls = new import_obsidian8.Setting(root);
     controls.settingEl.style.display = "block";
     controls.controlEl.style.flexWrap = "wrap";
     controls.addButton((button) => button.setButtonText("Try reading again").onClick(() => {
@@ -14740,7 +14635,8 @@ var OpenCode2Catalog = class {
 };
 
 // opencode2-picker.ts
-function addOpenCode2Picker(row, kind, catalog, location, value, change) {
+var import_obsidian9 = require("obsidian");
+function addOpenCode2Picker(row, kind, catalog, location, value, change, refreshed) {
   const label = kind === "models" ? "model" : "agent";
   let dropdown, manual;
   let shown = location();
@@ -14789,6 +14685,7 @@ function addOpenCode2Picker(row, kind, catalog, location, value, change) {
       if (isCurrent()) {
         fill();
         row.setDesc(choices.length ? `${choices.length} OpenCode 2 ${kind} available for this project.` : kind === "models" ? "OpenCode 2 returned no models. Check the provider connection or enter a model ID." : "OpenCode 2 returned no selectable agents. Check the project configuration or enter an agent ID.");
+        refreshed == null ? void 0 : refreshed();
       }
     } catch (error) {
       if (isCurrent()) row.setDesc(error.message);
@@ -14801,6 +14698,68 @@ function addOpenCode2Picker(row, kind, catalog, location, value, change) {
     }
   }));
   fill();
+}
+function addOpenCode2CatalogList(root, kind, catalog, location, refreshed) {
+  root.createEl("h3", { text: `Available OpenCode 2 ${kind}` });
+  const selected = location();
+  const choices = catalog.choices(selected.executable, selected.cwd, kind);
+  const row = new import_obsidian9.Setting(root).setName(`OpenCode 2 ${kind} catalog`).setDesc(`${choices.length} ${kind} loaded. Snapshot: ${selected.executable} \xB7 ${selected.cwd}. Refresh after changing executable/project; manual IDs remain available above.`);
+  row.addButton((button) => button.setButtonText(kind === "models" ? "Reload Model List" : "Reload Agent List").onClick(async () => {
+    button.setDisabled(true);
+    row.setDesc(`Loading OpenCode 2 ${kind}\u2026`);
+    try {
+      const current = location();
+      await catalog.refresh(current.executable, current.cwd, kind);
+      refreshed();
+    } catch (error) {
+      row.setDesc(error.message);
+    } finally {
+      button.setDisabled(false);
+    }
+  }));
+  const table = root.createEl("table", { cls: "auto-oc-models-table", attr: { "aria-label": `Available OpenCode 2 ${kind}` } });
+  const header = table.createEl("thead").createEl("tr");
+  header.createEl("th", { text: kind === "models" ? "provider/model" : "agent", attr: { scope: "col" } });
+  const body = table.createEl("tbody");
+  for (const choice of choices) body.createEl("tr").createEl("td", { text: choice.value, cls: "auto-oc-model-value" });
+}
+
+// settings-layout.ts
+function createSettingsLayout(root, expanded, selectedEngine) {
+  root.addClass("auto-oc-settings");
+  const navigation = root.createEl("nav", { cls: "auto-oc-settings-navigation", attr: { "aria-label": "Settings sections" } });
+  const section = (parent, id, title, description, open = true) => {
+    var _a;
+    const details = parent.createEl("details", { cls: "auto-oc-settings-section" });
+    details.open = (_a = expanded.get(id)) != null ? _a : open;
+    const summary = details.createEl("summary", { text: title });
+    details.addEventListener("toggle", () => expanded.set(id, details.open));
+    const body = details.createDiv("auto-oc-settings-section-body");
+    if (description) body.createEl("p", { text: description, cls: "setting-item-description" });
+    return { details, summary, body };
+  };
+  const top = (id, title, description) => {
+    const item = section(root, id, title, description);
+    navigation.createEl("button", { text: title, attr: { type: "button" } }).onclick = () => {
+      item.details.open = true;
+      expanded.set(id, true);
+      item.summary.focus();
+      item.summary.scrollIntoView({ block: "start" });
+    };
+    return item.body;
+  };
+  const general = top("general", "General", "Defaults for new work. Existing tasks keep their engine and overrides.");
+  const harnesses = top("harnesses", "Harnesses", "Each CLI keeps its own executable, authentication and supported capabilities. Expand a harness to configure it.");
+  const engines = {};
+  for (const [id, label] of [["opencode", "OpenCode 1"], ["opencode2", "OpenCode 2"], ["codex", "Codex / ChatGPT"], ["copilot", "GitHub Copilot CLI"], ["claude", "Claude Code \xB7 interactive CLI"]]) {
+    engines[id] = section(harnesses, id, label, "", id === selectedEngine).body;
+  }
+  const terminals = top("terminals", "Terminals", "Shared terminal destination and support for manual sessions and interactive CLI tasks.");
+  const execution = top("execution", "Execution", "Scheduling/execution limits do not add permissions or stop work already running.");
+  const logging = top("logging", "Logs", "Persistence and retention. Deleting logs still requires confirmation.");
+  const library = top("library", "Library", "Source used to browse and import shared task/workflow packages.");
+  const maintenance = top("maintenance", "Maintenance", "Review blocked/older attempts and historical notices. Nothing starts automatically.");
+  return { general, engines, terminals, execution, logging, library, maintenance };
 }
 
 // cli-workflow-adapters.ts
@@ -19289,18 +19248,6 @@ var AutoOCPlugin = class extends import_obsidian11.Plugin {
       if (leaf.view instanceof AutoOCView) leaf.view.refresh();
     }
   }
-  getDashboardBubbleDiameter() {
-    return loadDashboardBubbleDiameter(this.app, this.manifest.id, this.settings);
-  }
-  saveDashboardBubbleDiameter(diameter) {
-    this.assertLifecycleOpen();
-    saveDashboardBubbleDiameter(this.app, this.manifest.id, diameter);
-  }
-  applyDashboardBubbleDiameter(diameter) {
-    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
-      if (leaf.view instanceof AutoOCView) applyDashboardBubbleDiameter(leaf.view.containerEl, diameter);
-    }
-  }
   getMcpBridgePath() {
     const vaultBasePath = this.app.vault.adapter.basePath || ".";
     return path35.join(vaultBasePath, ".obsidian", "plugins", "auto-oc", "mcp-bridge.json");
@@ -23163,7 +23110,6 @@ var AutoOCView = class extends import_obsidian11.ItemView {
         this.plugin.settings.workflows,
         (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)
       ),
-      diameter: () => this.plugin.getDashboardBubbleDiameter(),
       open,
       log: (item) => showLog(item, false),
       history: (item) => showLog(item, true)
@@ -27257,17 +27203,21 @@ DONE:%s' "$combined" "$exit_code" > ${shSingleQuoted(outFile)}`
 var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
   constructor(app, plugin) {
     super(app, plugin);
+    this.expandedSections = /* @__PURE__ */ new Map();
     this.plugin = plugin;
   }
   display() {
     var _a;
     const { containerEl } = this;
+    const scrollTop = containerEl.scrollTop;
     containerEl.empty();
     containerEl.createEl("h2", { text: "AutoOC \u2014 Settings" });
+    const { general, engines, terminals, execution, logging, library, maintenance } = createSettingsLayout(containerEl, this.expandedSections, this.plugin.settings.defaultAiEngine);
+    addInteractiveCliSettings(terminals, this.plugin, { providers: engines });
     const credentialIssue = this.plugin.legacyCredentialNoticeStatus();
-    if (credentialIssue) new import_obsidian11.Setting(containerEl).setName("Legacy credential notice").setDesc(credentialIssue.acknowledged ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here." : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
-    new import_obsidian11.Setting(containerEl).setName("Resolve blocked executions").setDesc("Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openBlockedExecutionsReview()));
-    new import_obsidian11.Setting(containerEl).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
+    if (credentialIssue) new import_obsidian11.Setting(maintenance).setName("Legacy credential notice").setDesc(credentialIssue.acknowledged ? "Reminder dismissed on this device. Some historical values still cannot be hidden in output. You can retry reading them here." : "Some historical credentials cannot be read for output masking. This notice does not block tasks. Review it, retry, or dismiss the reminder while keeping the file.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openLegacyCredentialNotice(() => this.display())));
+    new import_obsidian11.Setting(maintenance).setName("Resolve blocked executions").setDesc("Review and reset a selected blocked attempt while keeping its history. Nothing starts automatically.").addButton((button) => button.setButtonText("Review").onClick(() => this.plugin.openBlockedExecutionsReview()));
+    new import_obsidian11.Setting(maintenance).setName("Review older attempts").setDesc("Review unfinished runs left behind by an earlier task or workflow attempt. Keeps current items and history; nothing runs automatically.").addButton((button) => button.setButtonText("Review").onClick(async () => {
       button.setDisabled(true);
       try {
         await this.plugin.openHistoricalAttemptsReview();
@@ -27277,12 +27227,7 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
         button.setDisabled(false);
       }
     }));
-    addDashboardBubbleSizeSetting(containerEl, {
-      getDiameter: () => this.plugin.getDashboardBubbleDiameter(),
-      saveDiameter: (diameter) => this.plugin.saveDashboardBubbleDiameter(diameter),
-      applyDiameter: (diameter) => this.plugin.applyDashboardBubbleDiameter(diameter)
-    });
-    new import_obsidian11.Setting(containerEl).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
+    new import_obsidian11.Setting(execution).setName("Default concurrency").setDesc("Applies to tasks and workflows set to Use vault default, including existing items without an explicit choice. Parallel runs can share this vault and use the same AI engine. Give them different output files to avoid overwriting each other's work. Changes apply to new runs.").addDropdown((dropdown) => dropdown.addOption("exclusive", "Run alone").addOption("parallel", "Parallel in this vault").addOption("independent", "Separate projects only").setValue(this.plugin.settings.defaultConcurrency || "parallel").onChange(async (value) => {
       this.plugin.settings.defaultConcurrency = value;
       try {
         await this.plugin.saveSettings(false);
@@ -27291,7 +27236,7 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
       }
     }));
     let requestedLimit = String((_a = this.plugin.settings.maxConcurrentExecutions) != null ? _a : 0);
-    new import_obsidian11.Setting(containerEl).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
+    new import_obsidian11.Setting(execution).setName("Maximum simultaneous runs").setDesc("Enter 0 for Unlimited, or a whole number such as 4. Counts tasks and workflows together across buttons, schedules and the CLI. Your computer and AI provider still have their own limits. Lowering this value does not stop work already running. There is no automatic queue or retry.").addText((text) => {
       text.inputEl.type = "number";
       text.inputEl.min = "0";
       text.inputEl.step = "1";
@@ -27315,16 +27260,18 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
         button.setDisabled(false);
       }
     }));
-    new import_obsidian11.Setting(containerEl).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
+    new import_obsidian11.Setting(general).setName("Default AI engine").setDesc("Engine selected for new AI tasks. Choosing OpenCode 2 also uses its model and agent for workflow AI evaluation. Existing tasks keep their selected engine.").addDropdown((dropdown) => dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex / ChatGPT").addOption("copilot", "GitHub Copilot CLI").setValue(this.plugin.settings.defaultAiEngine).onChange(async (value) => {
       if (value === "opencode" || value === "opencode2" || value === "codex" || value === "copilot") {
         this.plugin.settings.defaultAiEngine = value;
         await this.plugin.saveSettings();
+        this.expandedSections.set(value, true);
+        this.display();
       }
     }));
-    containerEl.createEl("h3", { text: "OpenCode 2 task defaults" });
+    engines.opencode2.createEl("h3", { text: "OpenCode 2 task defaults" });
     const location = () => this.plugin.openCode2Location();
     addOpenCode2Picker(
-      new import_obsidian11.Setting(containerEl).setName("Default OpenCode 2 model").setDesc("Refresh Models lists models from the OpenCode 2 CLI configured under Interactive CLI launchers. New OpenCode 2 tasks use the model you choose here."),
+      new import_obsidian11.Setting(engines.opencode2).setName("Default OpenCode 2 model").setDesc("Refresh Models uses this harness executable and the General working directory. New OpenCode 2 tasks use the model you choose here."),
       "models",
       this.plugin.openCode2Catalog,
       location,
@@ -27332,10 +27279,11 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
       async (value) => {
         this.plugin.settings.defaultOpencode2Model = value;
         await this.plugin.saveSettings(false);
-      }
+      },
+      () => this.display()
     );
     addOpenCode2Picker(
-      new import_obsidian11.Setting(containerEl).setName("Default OpenCode 2 agent").setDesc("Default: build."),
+      new import_obsidian11.Setting(engines.opencode2).setName("Default OpenCode 2 agent").setDesc("Default: build."),
       "agents",
       this.plugin.openCode2Catalog,
       location,
@@ -27343,12 +27291,14 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
       async (value) => {
         this.plugin.settings.defaultOpencode2Agent = value || "build";
         await this.plugin.saveSettings(false);
-      }
+      },
+      () => this.display()
     );
-    addInteractiveCliSettings(containerEl, this.plugin);
-    addCopilotGlobalSettings(containerEl, this.plugin);
-    containerEl.createEl("h3", { text: "Codex task defaults" });
-    new import_obsidian11.Setting(containerEl).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
+    addOpenCode2CatalogList(engines.opencode2, "models", this.plugin.openCode2Catalog, location, () => this.display());
+    addOpenCode2CatalogList(engines.opencode2, "agents", this.plugin.openCode2Catalog, location, () => this.display());
+    addCopilotGlobalSettings(engines.copilot, this.plugin);
+    engines.codex.createEl("h3", { text: "Codex task defaults" });
+    new import_obsidian11.Setting(engines.codex).setName("Default Codex model").setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`).addDropdown((dropdown) => {
       dropdown.addOption("", "Automatic");
       this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
       const current = this.plugin.settings.defaultCodexModel || "";
@@ -27366,7 +27316,7 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
       await this.plugin.refreshCodexModels(true);
       this.display();
     }));
-    new import_obsidian11.Setting(containerEl).setName("Default Codex reasoning").addDropdown((dropdown) => {
+    new import_obsidian11.Setting(engines.codex).setName("Default Codex reasoning").addDropdown((dropdown) => {
       const efforts = this.plugin.getCodexReasoningEfforts();
       efforts.forEach((effort) => dropdown.addOption(effort, effort));
       const current = this.plugin.settings.defaultCodexReasoningEffort || efforts[0];
@@ -27376,8 +27326,7 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: "CLI folders and terminals" });
-    new import_obsidian11.Setting(containerEl).setName("Working Directory").setDesc(
+    new import_obsidian11.Setting(general).setName("Working Directory").setDesc(
       "Default folder for interactive CLI sessions and supported tasks. Empty = vault folder."
     ).addText(
       (text) => text.setPlaceholder("C:\\path\\to\\your\\project").setValue(this.plugin.settings.workingDirectory).onChange(async (v) => {
@@ -27385,14 +27334,14 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian11.Setting(containerEl).setName("Default CLI task mode").setDesc("New OpenCode tasks open an interactive terminal by default.").addToggle(
+    new import_obsidian11.Setting(terminals).setName("Default CLI task mode").setDesc("New OpenCode 1 and OpenCode 2 tasks open an interactive terminal by default. Existing tasks, background Copilot and the Codex app are unchanged; generic CLI tasks are always interactive.").addToggle(
       (tog) => tog.setValue(!!this.plugin.settings.defaultInteractiveTerminal).onChange(async (v) => {
         this.plugin.settings.defaultInteractiveTerminal = v;
         await this.plugin.saveSettings();
       })
     );
     if (process.platform === "linux") {
-      new import_obsidian11.Setting(containerEl).setName("Linux terminal emulator").setDesc(
+      new import_obsidian11.Setting(terminals).setName("Linux terminal emulator").setDesc(
         "Command used to open interactive CLI sessions. Empty = auto-detect (x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)."
       ).addText(
         (text) => text.setPlaceholder("auto-detect (e.g. konsole)").setValue(this.plugin.settings.linuxTerminal || "").onChange(async (v) => {
@@ -27401,17 +27350,16 @@ var AutoOCSettingTab = class extends import_obsidian11.PluginSettingTab {
         })
       );
     }
-    new import_obsidian11.Setting(containerEl).setName("Shared Library URL").setDesc(
-      `GitHub repo or raw URL used by the Import \u2192 Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.
-Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
-    ).addText(
+    const libraryDescription = () => `GitHub repo or raw URL used by the Import \u2192 Browse Library feature. GitHub URLs like https://github.com/user/repo are converted automatically.
+Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`;
+    const librarySetting = new import_obsidian11.Setting(library).setName("Shared Library URL").setDesc(libraryDescription()).addText(
       (text) => text.setPlaceholder(DEFAULT_SETTINGS.libraryUrl).setValue(this.plugin.settings.libraryUrl).onChange(async (v) => {
         this.plugin.settings.libraryUrl = v.trim();
         await this.plugin.saveSettings();
-        this.display();
+        librarySetting.setDesc(libraryDescription());
       })
     );
-    new import_obsidian11.Setting(containerEl).setName("Task Timeout (seconds)").setDesc("Soft warning time. If OpenCode exceeds this time, AutoOC warns but keeps waiting for the final result. Default 7200 s (2 h). Use 0 to disable timeout warnings.").addText(
+    new import_obsidian11.Setting(execution).setName("Task Timeout (seconds)").setDesc("Timeout for supported background AI tasks. Legacy paths may warn and keep waiting; shared/runtime adapters may request cancellation at the limit and leave effects requiring review. Interactive terminal sessions and Code timeouts are separate. Default 7200 s (2 h); 0 disables the time-based limit/warning where supported.").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder(String(DEFAULT_TASK_TIMEOUT_SECONDS)).setValue(String((_a2 = this.plugin.settings.taskTimeoutSeconds) != null ? _a2 : DEFAULT_TASK_TIMEOUT_SECONDS)).onChange(async (v) => {
@@ -27423,18 +27371,17 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    containerEl.createEl("h3", { text: "Logging" });
-    containerEl.createEl("p", {
+    logging.createEl("p", {
       text: "Logs are saved to `.opencode/logs/{task-id}/` in your vault. Each execution creates a timestamped log file.",
       cls: "setting-item-description"
     });
-    new import_obsidian11.Setting(containerEl).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
+    new import_obsidian11.Setting(logging).setName("Enable Log Persistence").setDesc("Save task logs to files when execution completes").addToggle(
       (tog) => tog.setValue(this.plugin.settings.logsEnabled).onChange(async (v) => {
         this.plugin.settings.logsEnabled = v;
         await this.plugin.saveSettings();
       })
     );
-    new import_obsidian11.Setting(containerEl).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
+    new import_obsidian11.Setting(logging).setName("Max Logs Per Task").setDesc("Maximum number of log files to keep per task (0 = unlimited)").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder("50").setValue(String((_a2 = this.plugin.settings.maxLogsPerTask) != null ? _a2 : 50)).onChange(async (v) => {
@@ -27446,7 +27393,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian11.Setting(containerEl).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
+    new import_obsidian11.Setting(logging).setName("Log Retention (days)").setDesc("Delete logs older than this many days (0 = no age limit)").addText(
       (text) => {
         var _a2;
         return text.setPlaceholder("30").setValue(String((_a2 = this.plugin.settings.logRetentionDays) != null ? _a2 : 30)).onChange(async (v) => {
@@ -27458,42 +27405,14 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         });
       }
     );
-    new import_obsidian11.Setting(containerEl).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
+    new import_obsidian11.Setting(logging).setName("Clear All Logs").setDesc("Delete all log files for every task").addButton(
       (btn) => btn.setButtonText("\u{1F9F9} Clear All Logs").setWarning().onClick(async () => {
         if (confirm("Delete ALL log files for ALL tasks? This cannot be undone.")) {
           await this.plugin.clearAllLogs();
         }
       })
     );
-    containerEl.createEl("h3", { text: "Ralph Loop" });
-    containerEl.createEl("p", {
-      text: "Enable opencode-ralph-loop in ~/.config/opencode/opencode.json to use auto-continuation with /ralph-loop.",
-      cls: "setting-item-description"
-    });
-    containerEl.createEl("p", {
-      text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
-      cls: "setting-item-description"
-    });
-    new import_obsidian11.Setting(containerEl).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton(
-      (btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
-        try {
-          const result = await this.plugin.ensureRalphLoopPluginEnabled();
-          new import_obsidian11.Notice(
-            result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`
-          );
-          this.display();
-        } catch (e) {
-          new import_obsidian11.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
-        }
-      })
-    ).addButton(
-      (btn) => btn.setButtonText("Show status path").onClick(() => {
-        const basePath = this.app.vault.adapter.basePath || ".";
-        const statePath = getRalphStateFilePath(basePath);
-        new import_obsidian11.Notice(`Ralph state file: ${statePath}`);
-      })
-    );
-    new import_obsidian11.Setting(containerEl).setName("Default OpenCode 1 agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
+    new import_obsidian11.Setting(engines.opencode).setName("Default OpenCode 1 agent").setDesc(`Agent used by default (${this.plugin.availableAgents.length} loaded)`).addDropdown((dd) => {
       const agents = this.plugin.availableAgents;
       agents.forEach((a) => dd.addOption(a.value, a.label));
       const current = this.plugin.getEffectiveAgent();
@@ -27506,8 +27425,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: "Available OpenCode 1 agents" });
-    const refreshAgentsBtn = containerEl.createEl("button", {
+    engines.opencode.createEl("h3", { text: "Available OpenCode 1 agents" });
+    const refreshAgentsBtn = engines.opencode.createEl("button", {
       text: "\u{1F504} Reload Agent List",
       cls: "auto-oc-btn-secondary"
     });
@@ -27517,11 +27436,11 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       new import_obsidian11.Notice(`AutoOC: ${this.plugin.availableAgents.length} agents loaded.`);
       this.display();
     };
-    containerEl.createEl("p", {
+    engines.opencode.createEl("p", {
       text: `${this.plugin.availableAgents.length} agents loaded from \`opencode agent list\``,
       cls: "setting-item-description"
     });
-    const agentsTable = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const agentsTable = engines.opencode.createEl("table", { cls: "auto-oc-models-table" });
     const agentsHead = agentsTable.createEl("thead");
     const agentsHeader = agentsHead.createEl("tr");
     agentsHeader.createEl("th", { text: "agent" });
@@ -27530,7 +27449,7 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = agentsBody.createEl("tr");
       tr.createEl("td", { text: a.value, cls: "auto-oc-model-value" });
     });
-    new import_obsidian11.Setting(containerEl).setName("Default OpenCode 1 model").addDropdown((dd) => {
+    new import_obsidian11.Setting(engines.opencode).setName("Default OpenCode 1 model").addDropdown((dd) => {
       const models = this.plugin.availableModels;
       models.forEach((m) => dd.addOption(m.value, m.label));
       const current = this.plugin.getEffectiveDefaultModel();
@@ -27545,8 +27464,8 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
         await this.plugin.saveSettings();
       });
     });
-    containerEl.createEl("h3", { text: "Available OpenCode 1 models" });
-    const refreshBtn = containerEl.createEl("button", {
+    engines.opencode.createEl("h3", { text: "Available OpenCode 1 models" });
+    const refreshBtn = engines.opencode.createEl("button", {
       text: "\u{1F504} Reload Model List",
       cls: "auto-oc-btn-secondary"
     });
@@ -27556,11 +27475,11 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       new import_obsidian11.Notice("AutoOC: models reloaded. Refresh this panel.");
       this.display();
     };
-    containerEl.createEl("p", {
+    engines.opencode.createEl("p", {
       text: `${this.plugin.availableModels.length} models loaded from \`opencode models\``,
       cls: "setting-item-description"
     });
-    const table = containerEl.createEl("table", { cls: "auto-oc-models-table" });
+    const table = engines.opencode.createEl("table", { cls: "auto-oc-models-table" });
     const thead = table.createEl("thead");
     const hr = thead.createEl("tr");
     hr.createEl("th", { text: "provider/model" });
@@ -27569,5 +27488,27 @@ Resolved: ${normalizeLibraryUrl(this.plugin.settings.libraryUrl)}`
       const tr = tbody.createEl("tr");
       tr.createEl("td", { text: m.value, cls: "auto-oc-model-value" });
     });
+    engines.opencode.createEl("h3", { text: "Ralph Loop \xB7 OpenCode 1" });
+    engines.opencode.createEl("p", {
+      text: "OpenCode 1 integration only. Enable opencode-ralph-loop in ~/.config/opencode/opencode.json to use /ralph-loop. This installer is not a shared auto-continuation setting for OpenCode 2, Codex, Copilot or Claude.",
+      cls: "setting-item-description"
+    });
+    engines.opencode.createEl("p", {
+      text: `Current status: ${this.plugin.isRalphLoopEnabled() ? "enabled" : "not configured"}`,
+      cls: "setting-item-description"
+    });
+    new import_obsidian11.Setting(engines.opencode).setName("Ralph Loop Assistant").setDesc("Add opencode-ralph-loop to OpenCode configuration file").addButton((btn) => btn.setButtonText("Install / Activate").setCta().onClick(async () => {
+      try {
+        const result = await this.plugin.ensureRalphLoopPluginEnabled();
+        new import_obsidian11.Notice(result.changed ? `AutoOC: Ralph Loop enabled at ${result.configPath}. Restart OpenCode.` : `AutoOC: Ralph Loop was already active at ${result.configPath}.`);
+        this.display();
+      } catch (e) {
+        new import_obsidian11.Notice(`AutoOC: error enabling Ralph Loop: ${String(e)}`);
+      }
+    })).addButton((btn) => btn.setButtonText("Show status path").onClick(() => {
+      const basePath = this.app.vault.adapter.basePath || ".";
+      new import_obsidian11.Notice(`Ralph state file: ${getRalphStateFilePath(basePath)}`);
+    }));
+    containerEl.scrollTop = scrollTop;
   }
 };
