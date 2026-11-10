@@ -6,9 +6,9 @@ const ts=require('typescript');
 function load(name){const file=path.resolve(__dirname,'..',name+'.ts'),mod=new Module(file,module);mod.filename=file;mod.paths=module.paths;mod.require=name=>name.startsWith('.')?load(name):require(name);mod._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,file);return mod.exports;}
 const {createPluginRequestHost,requestPluginExecution,requestPluginWorkflowEdit}=load('cli-plugin-requests');
 const {acquireExecutionLease}=load('execution-lease');
-function fixture(t,execute,edit,getConcurrency=()=>({maxConcurrentExecutions:2})){
+function fixture(t,execute,edit,getConcurrency=()=>({maxConcurrentExecutions:2}),capabilities={}){
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-mailbox-')),lease=acquireExecutionLease(runtime);
-  const host=createPluginRequestHost(lease,execute,edit,getConcurrency),directory=path.join(runtime,'cli-'+lease.token);
+  const host=createPluginRequestHost(lease,execute,edit,getConcurrency,capabilities),directory=path.join(runtime,'cli-'+lease.token);
   let released=false;const release=()=>{lease.release();released=true;};
   t.after(async()=>{host.close();await host.drain?.().catch(()=>{});if(!released)release();assert.equal(path.dirname(fs.realpathSync(runtime)),fs.realpathSync(os.tmpdir()));assert.ok(path.basename(runtime).startsWith('autooc-mailbox-'));fs.rmSync(runtime,{recursive:true,force:true});});
   const request=(changes={})=>{const id=randomUUID(),data={protocol:1,owner:lease.token,id,command:'run',workflowId:'w',expiresAt:Date.now()+30000,...changes};fs.writeFileSync(path.join(directory,id+'.request'),JSON.stringify(data));return id;};
@@ -17,6 +17,29 @@ function fixture(t,execute,edit,getConcurrency=()=>({maxConcurrentExecutions:2})
 }
 const state={runId:'aa11',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('page selection requires an advertised capability; old hosts still accept legacy commands',async t=>{
+  let effects=0;const f=fixture(t,async()=>{effects++;return state;});
+  await assert.rejects(requestPluginExecution(f.runtime,{command:'run',workflowId:'w',pageId:'a'}),/does not support page selection/);
+  assert.equal(fs.readdirSync(f.directory).some(n=>n.endsWith('.request')),false);assert.equal(effects,0);
+  const bypass=f.request({pageId:'a'});await f.host.poll();await f.host.drain();assert.equal(f.receipt(bypass).status,'rejected');assert.equal(effects,0);
+  const legacy=requestPluginExecution(f.runtime,{command:'run',workflowId:'w'});await f.host.poll();await f.host.drain();
+  assert.deepEqual(await legacy,state);assert.equal(effects,1);
+});
+
+test('page receipts must match the selected scope and invalid page selectors never reach the executor',async t=>{
+  let effects=0;const f=fixture(t,async()=>{effects++;return state;},undefined,()=>({}),{pageSelection:true});
+  assert.equal(JSON.parse(fs.readFileSync(path.join(f.directory,'host'))).pageSelection,1);
+  for(const fields of [{pageId:'general'},{pageId:'../a'},{pageId:null},{pageId:'main'},{pageId:'a',stepId:'s'}]){
+    const id=f.request(fields);await f.host.poll();await f.host.drain();assert.equal(f.receipt(id).status,'rejected');
+  }
+  const previous=new Set(fs.readdirSync(f.directory));
+  const request=requestPluginExecution(f.runtime,{command:'run',workflowId:'w',pageId:'a'});
+  const rejected=assert.rejects(request,/Invalid CLI receipt checkpoint/);
+  const name=fs.readdirSync(f.directory).find(n=>n.endsWith('.request')&&!previous.has(n)),id=name.slice(0,-8);
+  fs.writeFileSync(path.join(f.directory,id+'.receipt'),JSON.stringify({protocol:1,owner:f.lease.token,id,status:'completed',checkpoint:{...state,workflowId:'@page:b:workflow:w'}}));
+  await rejected;assert.equal(effects,0);
+});
 
 test('mailbox advertises and applies configured capacity, including Unlimited above two',async t=>{
   let finish;const gate=new Promise(resolve=>{finish=resolve;});

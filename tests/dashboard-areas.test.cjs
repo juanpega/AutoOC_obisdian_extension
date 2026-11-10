@@ -13,16 +13,64 @@ function harness(){
     all(){return [this,...this.children.flatMap(c=>c.all())];}
     querySelectorAll(selector){assert.equal(selector,'[data-area-item-key]');return this.all().filter(el=>el.attrs['data-area-item-key']);}
   }
-  class Stub{} const notices=[],module={exports:{}};
-  vm.runInNewContext(fs.readFileSync(require.resolve('../main.js'),'utf8')+'\nmodule.exports.areaTest={AreaDashboard,createAreaDashboardState,dashboardItems,dashboardVisibleItems,AutoOCView};',{
-    module,exports:module.exports,require:id=>id==='obsidian'?{Plugin:Stub,ItemView:Stub,PluginSettingTab:Stub,Modal:Stub,Setting:Stub,setIcon:(el,name)=>el.icon=name,Notice:class{constructor(s){notices.push(s)}}}:require(id),
+  class Stub{} const notices=[],opened=[],module={exports:{}};
+  class Modal {constructor(app){this.app=app;this.contentEl=new Element();this.modalEl=new Element();}open(){opened.push(this);this.onOpen?.();}close(){this.onClose?.();}}
+  vm.runInNewContext(fs.readFileSync(require.resolve('../main.js'),'utf8')+'\nmodule.exports.areaTest={AreaDashboard,createAreaDashboardState,dashboardItems,workPageDashboardItems,dashboardVisibleItems,AutoOCView,CliLauncherModal,ImportModal};',{
+    module,exports:module.exports,require:id=>id==='obsidian'?{Plugin:Stub,ItemView:Stub,PluginSettingTab:Stub,Modal,Setting:Stub,setIcon:(el,name)=>el.icon=name,Notice:class{constructor(s){notices.push(s)}}}:require(id),
     process,Buffer,console,setTimeout,clearTimeout,setInterval,clearInterval,AbortController,
   });
-  return {...module.exports.areaTest,Element,doc,notices};
+  return {...module.exports.areaTest,Element,doc,notices,opened};
 }
 const task=(id,extra={})=>({id,name:`Task ${id}`,area:'Engineering',status:'pending',...extra});
 const flow=(id,steps,extra={})=>({id,name:`Flow ${id}`,area:'Engineering',status:'completed',currentStep:0,steps,...extra});
 const code=(id,extra={})=>({id,stepKind:'code',name:`Code ${id}`,status:'pending',...extra});
+
+test('every page uses the real area Dashboard for the full catalog without linking or saving',()=>{
+  const h=harness(),root=new h.Element();
+  const page={id:'a',name:'Feature',kind:'folder',directory:'/repo/a',objective:'',taskIds:[],workflowIds:[]};
+  const plugin={settings:{tasks:[task('a'),task('b')],workflows:[flow('w',[code('s')])],workPages:[page]},
+    ownsExecution:()=>false,isLifecycleStopped:()=>false};
+  const before=JSON.stringify(plugin.settings),view=new h.AutoOCView({},plugin);
+  view.app={vault:{adapter:{basePath:'/repo'}}};view.selectedWorkPage='a';view.renderDashboard(root);
+  const items=()=>root.all().filter(e=>e.classes.has('auto-oc-area-node'));
+  assert.equal(items().length,3);assert.equal(root.all().filter(e=>e.classes.has('auto-oc-areas-dashboard')).length,1);
+  assert.equal(root.all().some(e=>e.textContent==='Link'),false);
+  assert.ok(root.all().some(e=>e.textContent==='Your areas'));assert.equal(JSON.stringify(plugin.settings),before);
+  plugin.settings.tasks.push(task('new'));
+  view.areaDashboard.update();assert.equal(items().length,4);
+  assert.equal(page.taskIds.length,0);assert.equal(page.workflowIds.length,0);
+});
+
+test('a panel whose page was deleted returns to Overview and Dashboard then opens Main',()=>{
+  const h=harness(),root=new h.Element(),rendered=[];
+  const plugin={settings:{tasks:[],workflows:[],workPages:[{id:'old'}]},hasPageTerminal:()=>false};
+  const view=new h.AutoOCView({},plugin);view.containerEl=root;view.renderHeader=()=>{};
+  view.renderDashboard=()=>rendered.push(view.selectedWorkPage);
+  view.currentTab='dashboard';view.selectedWorkPage='old';view.lastWorkPage='old';view.render();
+  assert.equal(view.selectedWorkPage,'old');
+  plugin.settings.workPages=[];view.render();
+  assert.equal(view.selectedWorkPage,'general');assert.equal(view.lastWorkPage,'main');
+  assert.equal(!!root.all().find(e=>e.textContent.endsWith('CLI')).disabled,false);
+  assert.equal(root.all().find(e=>e.attrs['aria-label']==='Overview').attrs['aria-pressed'],'true');
+  root.all().find(e=>e.textContent==='Dashboard').onclick();
+  assert.deepEqual(rendered,['old','general','main']);assert.equal(view.selectedWorkPage,'main');
+});
+
+test('page Dashboard isolates run and step states from Main and other pages without scanning outputs',()=>{
+  const h=harness(),tasks=[task('a',{status:'failed',lastRun:'main',runtimeExecution:{runId:'private-main'}})],
+    workflows=[flow('w',[code('s',{status:'failed',codeExecution:{status:'completed',lastRun:'main'}})])];
+  const run={pageId:'p',sourceId:'w',task:false,runId:'p-run',workflowId:'p:w',createdAt:'2026-11-10',phase:'in_flight',uncertain:true};
+  const runs=[{...run,pageId:'other',sourceId:'a',task:true,phase:'failed'},run],before=JSON.stringify([tasks,workflows,runs]);
+  const reads=[],model=h.workPageDashboardItems(tasks,workflows,'p',runs,(w,r)=>w==='p:w'&&r==='p-run',r=>{
+    reads.push(r.runId);return {steps:[{stepId:'s',status:'in_flight'}]};
+  });
+  assert.deepEqual(reads,['p-run']);assert.equal(model.find(i=>i.id==='a').status,'pending');
+  const projected=model.find(i=>i.id==='w');assert.equal(projected.status,'running');assert.equal(projected.attention,false);
+  assert.equal(projected.children[0].status,'running');assert.equal(projected.activeSteps,1);
+  assert.equal(JSON.stringify([tasks,workflows,runs]),before);
+  const lost=h.workPageDashboardItems(tasks,workflows,'p',runs,()=>false,()=>undefined).find(i=>i.id==='w');
+  assert.equal(lost.attention,true);assert.equal(lost.status,'pending');assert.match(lost.detail,/unavailable/);
+});
 
 test('owned runs are Running despite durable recovery flags; approvals, stops and lost ownership still need attention',()=>{
   const h=harness(),root=new h.Element(),state=h.createAreaDashboardState();
@@ -56,8 +104,8 @@ test('workflow and isolated Code use exact run ownership without changing histor
 test('real Dashboard adapter forwards the installed host ownership check for a running task',()=>{
   const h=harness(),root=new h.Element(),seen=[];
   const plugin={settings:{tasks:[task('a',{status:'running',runtimeExecution:{workflowId:'@task:a',runId:'live',phase:'in_flight',requiresReconciliation:true}})],workflows:[]},
-    ownsExecution:(w,r)=>{seen.push([w,r]);return true}};
-  new h.AutoOCView({},plugin).renderDashboard(root);
+    ownsExecution:(w,r)=>{seen.push([w,r]);return true},isLifecycleStopped:()=>false};
+  const view=new h.AutoOCView({},plugin);view.app={vault:{adapter:{basePath:''}}};view.renderDashboard(root);
   assert.deepEqual(seen,[['@task:a','live']]);
   assert.equal(root.all().find(el=>el.classes.has('auto-oc-area-node')).attrs['aria-label'],'Task a, task, Running');
 });
@@ -178,12 +226,39 @@ test('area Dashboard renders bounded Code detail, keeps toolbar, selection, focu
 });
 
 test('Dashboard integration opens exact Code controls and clears stale list filters without running anything',()=>{
-  const h=harness(),plugin={settings:{tasks:[task('a')],workflows:[flow('w',[code('s')])]}};
+  const h=harness(),plugin={settings:{tasks:[task('a')],workflows:[flow('w',[code('s')])]},isLifecycleStopped:()=>false};
   const view=new h.AutoOCView({},plugin),root=new h.Element();let opened;
+  view.app={vault:{adapter:{basePath:''}}};
   view.openWorkflowCodeEntry=(wf,step)=>opened=[wf,step];view.filterText='old';view.filterArea='missing';view.taskSource='catalog';
   view.renderDashboard(root);
   root.all().find(el=>el.classes.has('auto-oc-area-step')).onclick();
   root.all().find(el=>el.tag==='button'&&el.textContent==='Open controls').onclick();
   assert.deepEqual(opened,['w','s']);assert.equal(view.filterText,'');assert.equal(view.filterArea,'all');assert.equal(view.taskSource,'all');
   const previous=view.areaDashboard;view.refresh();assert.equal(view.areaDashboard,previous);
+});
+
+test('Overview enables global Import and requires a workspace selection before opening its CLI launcher',()=>{
+  const h=harness(),root=new h.Element(),page={id:'p',name:'Feature',objective:'',directory:'/repo/p',kind:'folder',taskIds:[],workflowIds:[]};
+  const plugin={settings:{tasks:[],workflows:[],workPages:[page],workingDirectory:'/repo'},isLifecycleStopped:()=>false};
+  const view=new h.AutoOCView({},plugin);view.app={vault:{adapter:{basePath:'/vault'}}};view.containerEl=root;view.renderHeader=()=>{};view.renderDashboard=()=>{};
+  view.currentTab='dashboard';view.selectedWorkPage='general';view.render();
+  h.ImportModal.prototype.onOpen=function(){};h.CliLauncherModal.prototype.onOpen=function(){};
+  const importButton=root.all().find(e=>e.textContent.endsWith('Import'));assert.equal(!!importButton.disabled,false);importButton.onclick();assert.ok(h.opened.at(-1) instanceof h.ImportModal);
+  const cli=root.all().find(e=>e.textContent.endsWith('CLI'));assert.equal(!!cli.disabled,false);cli.onclick();
+  const selector=h.opened.at(-1);assert.equal(h.opened.some(e=>e instanceof h.CliLauncherModal),false);
+  const row=selector.contentEl.all().find(e=>e.classes.has('auto-oc-page-row')&&e.children.some(c=>c.textContent==='Feature'));
+  row.all().find(e=>e.textContent==='Use workspace').onclick();
+  const launcher=h.opened.at(-1);assert.ok(launcher instanceof h.CliLauncherModal);assert.equal(launcher.page.id,'p');assert.equal(launcher.page.directory,'/repo/p');
+  assert.equal(view.selectedWorkPage,'general');assert.deepEqual(h.notices,[]);
+});
+
+test('Overview workspace selection reuses a live page terminal and Main retains its legacy launcher context',async()=>{
+  const h=harness(),effects=[],page={id:'p',name:'Feature',objective:'',directory:'/repo/p',kind:'folder',taskIds:[],workflowIds:[]};
+  const plugin={settings:{tasks:[],workflows:[],workPages:[page],workingDirectory:'/repo'},isLifecycleStopped:()=>false,hasPageTerminal:(id,live)=>id==='p'&&live,showPageTerminal:async id=>effects.push(id)};
+  const view=new h.AutoOCView({},plugin);view.app={vault:{adapter:{basePath:'/vault'}}};view.currentTab='dashboard';view.selectedWorkPage='general';
+  h.CliLauncherModal.prototype.onOpen=function(){};view.openCli();let selector=h.opened.at(-1);
+  selector.contentEl.all().filter(e=>e.textContent==='Use workspace')[1].onclick();await Promise.resolve();
+  assert.deepEqual(effects,['p']);assert.equal(h.opened.some(e=>e instanceof h.CliLauncherModal),false);
+  view.openCli();selector=h.opened.at(-1);selector.contentEl.all().find(e=>e.textContent==='Use workspace').onclick();
+  assert.ok(h.opened.at(-1) instanceof h.CliLauncherModal);assert.equal(h.opened.at(-1).page,undefined);assert.equal(view.selectedWorkPage,'general');
 });

@@ -24,7 +24,7 @@ export function createSettingsLayout(root: HTMLElement, expanded: Map<string, bo
   const general = top("general", "General", "Defaults for new work. Existing tasks keep their engine and overrides.");
   const harnesses = top("harnesses", "Harnesses", "Each CLI keeps its own executable, authentication and supported capabilities. Expand a harness to configure it.");
   const engines = {} as Record<InteractiveCliProvider, HTMLElement>;
-  for (const [id, label] of [["opencode", "OpenCode 1"], ["opencode2", "OpenCode 2"], ["codex", "Codex / ChatGPT"], ["copilot", "GitHub Copilot CLI"], ["claude", "Claude Code · interactive CLI"]] as const) {
+  for (const [id, label] of [["opencode", "OpenCode 1"], ["opencode2", "OpenCode 2"], ["codex", "Codex CLI"], ["copilot", "GitHub Copilot CLI"], ["claude", "Claude Code · interactive CLI"]] as const) {
     engines[id] = section(harnesses, id, label, "", id === selectedEngine).body;
   }
   const terminals = top("terminals", "Terminals", "Shared terminal destination and support for manual sessions and interactive CLI tasks.");

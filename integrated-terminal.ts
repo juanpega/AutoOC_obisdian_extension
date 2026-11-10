@@ -9,7 +9,7 @@ import { interactiveCliTaskArgs } from "./interactive-cli-profile";
 import { installTerminalSupport, verifyTerminalSupport, type IDisposable } from "./terminal-pty";
 import { createTerminalSession, type IndependentTerminal } from "./terminal-session";
 import { assertOpenCode2 } from "./opencode-version";
-import { InteractiveTerminalLaunchUncertainError, type InteractiveTaskTerminalRequest } from "./interactive-task-terminal";
+import { InteractiveTerminalLaunchUncertainError, type InteractiveTaskTerminalRequest, type TerminalPageContext } from "./interactive-task-terminal";
 import { createAuxiliaryDirectory, completeAuxiliaryDirectory } from "./execution-files";
 
 export const TERMINAL_VIEW_TYPE = "auto-oc-terminals";
@@ -17,6 +17,7 @@ export const TERMINAL_VIEW_TYPE = "auto-oc-terminals";
 interface TerminalHost extends Plugin {
   settings: InteractiveCliSettings;
   isLifecycleStopped(): boolean;
+  pageTerminalExited?(page: TerminalPageContext): Promise<void>;
 }
 
 interface Session {
@@ -34,9 +35,12 @@ interface Session {
   closing?: Promise<boolean>;
   cleanup?: () => void;
   detaching?: boolean;
+  page?: TerminalPageContext;
+  pageExitNotified?: boolean;
 }
 
 export function integratedCliCommand(bin: string, args: string[] = []): { file: string; args: string[] } {
+  if (process.platform !== "win32") return { file: bin, args: [...args] };
   if (/\.exe$/i.test(bin)) return { file: bin, args: [...args] };
   // npm shims and PowerShell scripts need a real shell, never interpolation in cmd.exe.
   const file = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
@@ -75,7 +79,7 @@ export class IntegratedTerminals {
   private pendingCleanupCallbacks = new Map<IndependentTerminal, () => void>();
   private listeners = new Set<(focus: boolean) => void>();
 
-  constructor(private host: TerminalHost, private newSession: () => void) {
+  constructor(private host: TerminalHost, private newSession: (pageId?: string) => void) {
     host.registerView(TERMINAL_VIEW_TYPE, leaf => new TerminalView(leaf, this));
     host.addCommand({ id: "show-cli-terminals", name: "Show integrated CLI terminals", callback: () => {
       void this.show().catch(error => new Notice(String(error)));
@@ -101,17 +105,17 @@ export class IntegratedTerminals {
     if (this.stoppingAll) throw new Error("Terminal sessions are stopping. Wait before launching another session.");
   }
 
-  async open(provider: InteractiveCliProvider, cwd: string): Promise<void> {
+  async open(provider: InteractiveCliProvider, cwd: string, label?: string, page?: TerminalPageContext): Promise<void> {
     this.assertOpen();
     if (this.opening || this.queuedTasks > 0) throw new Error("A terminal is already opening. Wait before launching another session.");
-    const operation = this.openSession(provider, cwd);
+    const operation = this.openSession(provider, cwd, undefined, label, page && {...page});
     this.openingQueue = operation.catch(() => {});
     return operation;
   }
 
   public async openTask(request: InteractiveTaskTerminalRequest): Promise<void> {
     this.assertOpen();
-    const snapshot = { ...request };
+    const snapshot = { ...request, page: request.page && {...request.page} };
     const generation = this.generation;
     this.queuedTasks++;
     const pending = this.openingQueue.then(() => {
@@ -124,9 +128,10 @@ export class IntegratedTerminals {
     return pending;
   }
 
-  private async openSession(provider: InteractiveCliProvider, cwd: string, request?: InteractiveTaskTerminalRequest): Promise<void> {
+  private async openSession(provider: InteractiveCliProvider, cwd: string, request?: InteractiveTaskTerminalRequest, label?: string, page = request?.page): Promise<void> {
     this.assertOpen();
     if (this.opening) throw new Error("A terminal is already opening. Wait before launching another session.");
+    if (page && this.sessions.some(s => s.page?.pageId === page.pageId && !s.exited)) throw new Error("This page already has a terminal. Open its existing session.");
     if (this.sessions.length >= 12) throw new Error("Close a terminal before opening another (12 sessions maximum).");
     this.opening = true;
     const openingAbort = this.openingAbort = new AbortController();
@@ -195,12 +200,13 @@ export class IntegratedTerminals {
       this.pendingCleanup.add(pty);
       if (request) this.pendingCleanupCallbacks.set(pty, cleanup);
       assertOpening();
-      session = { id: ++this.sequence, label: request?.label ?? cli.label, cwd, terminal, fit, element, pty, subscriptions: [], opened: false, exited: false, cleanup: request ? cleanup : undefined };
+      session = { id: ++this.sequence, label: request?.label ?? label ?? cli.label, cwd, terminal, fit, element, pty, subscriptions: [], opened: false, exited: false, cleanup: request ? cleanup : undefined, page };
       const current = session;
       current.subscriptions.push(pty.onData(data => current.terminal.write(data)));
       current.subscriptions.push(pty.onExit(({ exitCode }) => {
         current.exited = true; current.exitCode = exitCode;
         current.cleanup?.();
+        this.notifyPageExit(current);
         current.terminal.write(`\r\n\x1b[90m[Process exited: ${exitCode}]\x1b[0m\r\n`);
         this.changed();
       }));
@@ -253,10 +259,34 @@ export class IntegratedTerminals {
     await workspace.revealLeaf(leaf);
   }
 
-  add() { this.assertOpen(); this.newSession(); }
+  add() { this.assertOpen(); this.newSession(this.sessions.find(s=>s.id === this.activeId)?.page?.pageId); }
   subscribe(listener: (focus: boolean) => void) { this.listeners.add(listener); return () => this.listeners.delete(listener); }
   private changed(focus = false) { for (const listener of this.listeners) listener(focus); }
   select(id: number) { this.activeId = id; this.changed(true); }
+
+  pageSession(pageId: string) {
+    const matches = this.sessions.filter(s => s.page?.pageId === pageId);
+    return matches.find(s => !s.exited) || matches[matches.length - 1];
+  }
+
+  async focusPage(pageId: string, reveal = true): Promise<boolean> {
+    this.assertOpen();
+    const session = this.pageSession(pageId);
+    if (!session) return false;
+    this.activeId = session.id;
+    // Selecting a page must not steal keyboard focus from the dashboard.
+    this.changed(reveal);
+    if (reveal) await this.show();
+    return true;
+  }
+
+  private notifyPageExit(session: Session) {
+    if (!session.page || session.pageExitNotified) return;
+    session.pageExitNotified = true;
+    void this.host.pageTerminalExited?.({...session.page}).catch(() => {
+      new Notice("Terminal ended, but its folder reservation could not be saved. Review the page before starting new work.", 10000);
+    });
+  }
 
   async detach(id: number): Promise<void> {
     this.assertOpen();
@@ -286,6 +316,8 @@ export class IntegratedTerminals {
     session.closing = (async () => {
       try { await session.pty.kill(); }
       catch (error) { new Notice(`Terminal could not be stopped (PID ${session.pty.pid}); session kept for inspection. ${String(error)}`, 15000); return false; }
+      session.exited = true;
+      this.notifyPageExit(session);
       session.cleanup?.();
       session.pty.disconnect();
       for (const subscription of session.subscriptions) subscription.dispose();

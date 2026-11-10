@@ -5,6 +5,234 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Selección coherente de Codex (candidato de desarrollo)
+
+`codexPath` selecciona la misma instalación para App Server, terminales manuales,
+tareas CLI interactivas, workflows, consulta de modelos y creador IA. Una ruta
+explícita manda. Un nombre se busca primero en PATH; `codex` admite después
+ubicaciones conocidas y, al final, el ejecutable incluido con la aplicación.
+En Windows se resuelve el shim npm al binario nativo de esa misma instalación.
+No se cambia de instalación por incompatibilidad ni se editan catálogos al detectar.
+
+Settings > Harnesses > Codex CLI muestra la ruta efectiva compartida. Check version
+consulta explícitamente versión y ayuda de ese ejecutable; App Server anunciado
+no acredita login ni ejecución real. Abrir Settings no consulta el proveedor.
+Un shim Windows sin binario nativo no se lanza como proceso App Server.
+
+`taskKind: "codex"` sigue usando App Server: `interactiveTerminal: false` o ausente
+significa segundo plano sin aplicación gráfica; `true` abre además la conversación
+en la aplicación y conserva las aprobaciones y espera del resultado del turno.
+La terminal es otra modalidad: `taskKind: "cli"`, `cliProvider: "codex"`,
+`interactiveTerminal: true`; conserva su contrato de confirmar solo el lanzamiento.
+No convertir modos ni modelos de tareas existentes; no hay un modo Codex global.
+No generar rutas de ejecutable como campos de tarea/workflow. Cerrar Obsidian no
+traspasa una ejecución del plugin a la aplicación. Verificar candidato e instalación
+antes de atribuir este cambio a una entrega con el mismo número de versión.
+
+## Páginas de trabajo (candidato en desarrollo, feat/pages-worktrees)
+
+Dashboard incorpora Main workspace y páginas con carpeta propia. El botón O junto a
+Dashboard abre Overview; Dashboard vuelve a la última página de trabajo visitada.
+Overview no ocupa una pestaña en la fila de páginas. Tasks y
+WorkFlows siguen siendo el catálogo global. Todas las páginas muestran automáticamente
+el mismo Dashboard de áreas, tareas, workflows y pasos de Main workspace, sin seleccionar
+enlaces ni importar copias. Las definiciones nuevas también aparecen automáticamente.
+Cada página muestra únicamente sus resultados, logs e historial; editar una definición
+afecta al catálogo compartido. Open controls permite Run task here o Run workflow here;
+seleccionar un paso ejecuta su workflow completo, no el paso aislado. Los campos locales
+históricos taskIds/workflowIds se conservan por compatibilidad y ya no filtran el Dashboard.
+Overview permite consultar actividad/logs, navegar y eliminar una página archivada
+sin historial mediante Delete page; los controles de ejecución
+y confirmación de sesiones están en cada página. La creación de páginas se abre
+desde Main workspace u otra página mediante + New page; el usuario elige su nombre.
+Main workspace muestra la carpeta de trabajo predeterminada y su rama Git actual,
+consultada al abrir la vista o pulsar Refresh branch. Distingue Detached HEAD,
+carpeta sin repositorio y errores de consulta; no cambia de rama. Una tarea con
+carpeta propia conserva esa configuración. Los IDs internos main/general no cambian.
+Los worktrees se habilitan expresamente en Settings > Execution > Git worktrees
+(developers), apagado por defecto. Activarlo no prepara carpetas ni Git.
+Existing folder usa directamente esa carpeta, sin crear una rama ni aislar archivos.
+El formulario y la página lo explican; New Git worktree crea el entorno independiente.
+La creación pide repositorio, rama y base; avisa antes de añadir
+`/.autooc/worktrees/` a `.gitignore` y admite recordar la aceptación por proyecto.
+No hace staging, commit, instalación de dependencias ni copia de secretos.
+Al vincular un worktree existente, el repositorio se obtiene del registro de Git;
+se admiten también worktrees de un repositorio bare. La carpeta de metadatos Git
+no se interpreta como si siempre fuera una carpeta .git dentro del proyecto.
+
+Cada ejecución de página congela su definición, carpeta y objetivo; conserva su
+journal y resumen local sin proyectar resultados en la definición global.
+Las tareas sin workingDirectory heredan la carpeta. Se rechazan rutas fijas
+externas, cambios de rama de tarea y handoffBranch. Code conserva sus permisos
+explícitos: su API vault opera sobre archivos de la carpeta de página, no sobre
+app.vault de la bóveda anfitriona. No se reescriben rutas incluidas en scripts.
+Los archivos no versionados, dependencias, servicios y puertos se preparan aparte.
+
+CLI abierto desde una página mantiene su carpeta al cambiar de pestaña.
+Antes de abrir una nueva sesión comprueba la misma identidad de carpeta,
+repositorio y rama vinculada que una ejecución de workflow. Si se cambió de rama
+fuera de AutoOC, hay que revisar el entorno; no se abre una CLI sobre otra rama
+silenciosamente. Recuperar una terminal ya abierta solo muestra esa sesión.
+Las sesiones integradas se asocian a su página y a una reserva concreta. Volver
+a la página selecciona su terminal sin iniciarla de nuevo; CLI recupera la sesión
+viva y Open terminal permite consultar su salida. La carpeta de la sesión no cambia.
+La salida nativa y el cierre confirmado liberan automáticamente esa reserva, después
+de publicar cualquier ejecución en curso. Un fallo de guardado conserva la reserva.
+Perder la conexión, ocultar el panel o desacoplar la terminal no acredita el cierre.
+Las ventanas externas y las sesiones cuya observación se perdió al reiniciar requieren
+Confirm session ended, tras cerrar también sus procesos externos. La confirmación
+no mata procesos y no se admite mientras la sesión siga observada como abierta.
+No hay reconexión automática a una terminal de una instancia anterior de Obsidian.
+La evidencia nativa corresponde al proceso de la terminal y su cleanup; no descubre
+servicios que un agente haya lanzado por separado. Su gestión sigue siendo explícita.
+
+Dos escritores con contexto de página pueden usar Main workspace y un worktree
+interior si Git confirma raíces registradas distintas y la carpeta interior está
+ignorada. Carpetas normales anidadas, alias de la misma raíz y errores de inspección
+mantienen la exclusión. Las políticas exclusivas y las ejecuciones generales sin
+contexto de página conservan sus restricciones; este contrato no es un sandbox.
+Las tareas interactivas en páginas se admiten solas o en un workflow de un solo
+paso y crean la misma reserva antes de abrir la terminal. Una apertura no autoriza
+pasos posteriores que escriban mientras la sesión sigue viva. Los workflows
+mixtos con terminales interactivas se rechazan antes de comenzar.
+Default CLI task mode inicializa tareas nuevas: no convierte tareas antiguas en
+interactivas ni crea reservas de terminal para ejecuciones en segundo plano.
+Se respeta interactiveTerminal; taskKind cli siempre requiere modo interactivo.
+Un workflow antiguo con un único paso taskId y sin stepKind conserva su soporte.
+
+La CLI del candidato anuncia pageSelection:1. Los comandos existentes, sin --page,
+continúan en Main workspace con sus carpetas de tarea y comportamiento previo.
+--page main es un alias explícito de ese comportamiento. Las programaciones no cambian.
+La carpeta de la consola y la página visible en Obsidian no seleccionan un contexto.
+
+`pages --vault ROOT` lista los IDs y carpetas configuradas, incluyendo Main workspace.
+No crea páginas ni consulta Git; la rama mostrada es la registrada en la configuración.
+No publica objetivos, prompts ni resultados. `status --vault ROOT --page PAGE_ID`
+muestra los journals de esa página. ROOT siempre identifica la bóveda que contiene
+la instalación y el catálogo, no la carpeta del worktree.
+
+Para ejecutar fuera de los botones, añadir `--page PAGE_ID` a run/resume/reconcile/stop,
+manteniendo --workflow o --task y, donde corresponda, --run. Usar los IDs de `pages`,
+no sus nombres visibles. Ejemplos con los mismos marcadores CLI/ROOT de esta guía:
+
+```text
+node CLI run --vault ROOT --workflow WORKFLOW_ID
+node CLI run --vault ROOT --workflow WORKFLOW_ID --page PAGE_ID
+node CLI resume --vault ROOT --workflow WORKFLOW_ID --run RUN_ID --page PAGE_ID
+node CLI stop --vault ROOT --workflow WORKFLOW_ID --run RUN_ID --page PAGE_ID
+```
+
+Un ID desconocido, Overview, una página archivada al iniciar trabajo o un contexto
+incompatible producen rechazo, sin ejecución alternativa en Main workspace.
+--step sigue disponible en Main workspace; las páginas requieren workflow o tarea
+completos. La continuación conserva la definición congelada y la identidad de página.
+
+Con AutoOC activo, la petición lleva pageId al propietario y requiere que el host
+anuncie pageSelection:1; un plugin antiguo se rechaza antes de enviar la petición.
+Sin propietario, la CLI usa el mismo runtime de páginas autónomamente y conserva sus
+journals y resultados separados del catálogo global. Las tareas integradas necesitan
+Obsidian abierto y se mantienen las restricciones de secretos/capacidades del host.
+El paralelismo delegado respeta las políticas de ejecución y distingue el mismo
+workflow en páginas distintas. Sin Obsidian se mantiene un propietario autónomo
+por instalación; no se añade un daemon ni se permite competir entre procesos CLI.
+Cerrar Obsidian no transfiere automáticamente una ejecución ya iniciada por el plugin.
+
+Finish work revisa actividad y cambios antes de archivar la página. Por defecto
+conserva la carpeta y la rama; Archive page no hace merge ni descarta archivos.
+El diálogo mantiene Archive page, Refresh review y Cancel fuera del área desplazable.
+Indica junto a la confirmación si está listo o qué actividad impide archivar; un fallo de
+inspección ofrece Retry review. El diff es desplegable, con altas verdes, bajas rojas y
+rangos azules, renderizado como texto. Changes es solo una vista previa con Close preview:
+para archivar se usa Finish work. Un éxito confirma el archivo y cómo restaurarlo.
+El diff compara con el commit de creación del worktree o HEAD, incluyendo cambios staged
+y unstaged; no ejecuta external diff ni textconv. No incluye contenidos sin seguimiento.
+Las vistas grandes se acotan con aviso; el usuario revisa el diff completo en su herramienta Git.
+Al terminar vuelve a Main workspace. Las páginas archivadas salen de las pestañas
+habituales y siguen accesibles desde Overview para consultar su historial.
+La opción Remove worktree folder permite retirar un worktree Git vinculado limpio,
+con confirmación explícita de cierre de sesiones externas y servicios. Conserva
+siempre rama, commits e historial, aunque los commits no estén integrados. La revisión
+e integración se realizan con las herramientas Git del usuario; no hay merge,
+commit, descarte de cambios ni borrado de rama implícitos.
+
+La retirada exige inactividad de la instalación y comprueba de nuevo carpeta,
+repositorio, rama, HEAD y registro antes de ejecutar git worktree remove sin --force.
+Bloquea archivos modificados, sin seguimiento o ignorados (incluidos .env y
+dependencias locales), submódulos, flags que oculten cambios, worktrees bloqueados,
+enlaces/junctions, páginas anidadas y carpetas que contengan Main workspace o AutoOC.
+Los archivos locales se preservan o retiran expresamente antes de volver a revisar.
+Las carpetas normales solo se archivan. La inspección no hace staging ni cambia HEAD.
+
+Antes de retirar se guarda una marca local worktreeRemoval pendiente y se archiva
+la página. Un fallo de guardado previo impide iniciar Git; un resultado incierto o
+fallo posterior conserva la marca. Check removal comprueba la evidencia sin repetir
+la retirada. Si la carpeta sigue intacta y la operación terminó bajo el mismo
+propietario, puede conservarla como página archivada; tras cambio de propietario
+ese caso exige Keep worktree after review y confirmación explícita de haber revisado
+la carpeta y cerrado el proceso Git anterior y sus sesiones. No asumir esa confirmación
+ni usarla para saltar una reserva activa. Si carpeta y registro ya no existen y la rama
+conserva el commit revisado, puede registrar la retirada completada. Una página
+retirada conserva logs, pero no ofrece Restore page ni admite run/resume/reconcile.
+pages expone solo el estado pending/removed, nunca la evidencia interna completa.
+Estos campos son estado local; no deben generarse en JSON de tareas o workflows.
+Las comprobaciones no aíslan frente a procesos externos que sigan escribiendo;
+la confirmación de cierre de sesiones debe incluir esos procesos.
+
+La integración/merge automática y workflow coordinador paralelo
+pertenecen a entregas posteriores. Comprobar hashes y GUI antes de atribuir estas
+capacidades a una instalación publicada con el mismo número de versión.
+
+### Delete page: eliminar una página archivada vacía
+
+Overview y la página archivada ofrecen Delete page. Tras confirmar, elimina solo
+su configuración local: conserva carpeta, archivos, worktree/rama y el catálogo
+global de tareas/workflows. No crea un respaldo ni ofrece Restore page después;
+puede crearse una página nueva para la carpeta conservada.
+
+Solo se admite una página archivada sin pageRuns y sin worktreeRemoval, incluso
+si la retirada ya terminó: las páginas que guardan historial o evidencia se conservan.
+Main no se puede eliminar. Se vuelven a comprobar identidad de página, propietario,
+inactividad, sesiones y guardados; un fallo de persistencia no autoriza repetir ni
+editar data.json manualmente. El guardado participa en el drenaje del propietario.
+Esta operación no añade campos al esquema importable ni un comando CLI.
+
+Finish work, Discard work y Delete page mantienen nombre y ruta completa en un
+encabezado fijo, con ajuste de líneas; solo el cuerpo de revisión se desplaza.
+El pie conserva los botones. Existing folder explica que Discard work no existe
+para esa página porque no creó un worktree independiente, aunque no tenga cambios.
+
+### Discard work: eliminación explícita del entorno y la rama local
+
+Discard work es una operación diferente de Archive page y Remove worktree folder.
+Solo se ofrece para worktrees Git independientes. Revisa diff, archivos locales
+(incluidos ignorados y sin seguimiento), número de archivos y commits desde el
+commit de creación o HEAD del repositorio para worktrees vinculados. El listado
+de commits muestra hasta 50; no afirma que sean todos exclusivos de esa rama.
+El usuario escribe exactamente la rama y confirma que acepta perder archivos y
+la rama local y que ha cerrado sesiones, servicios y procesos Git anteriores.
+
+No se ofrece para Main ni carpetas ordinarias. Bloquea carpetas protegidas o
+compartidas, ramas principales, defaults remotos observados, ramas usadas por otro
+worktree, enlaces/junctions, repositorios anidados, submódulos, worktrees bloqueados y flags de
+índice que oculten cambios. Revisa el contenido completo, incluido el índice, con
+límite de 20 000 entradas y 512 MB: superar ese límite exige revisión manual, no
+una confirmación que omita controles. Cambios tras la revisión obligan a refrescar.
+
+Antes del efecto se guarda worktreeRemoval con mode discard y la prueba revisada.
+Git retira únicamente el worktree autorizado con una sola opción force; la rama
+local se elimina comparando su commit con el observado. No hay borrado recursivo
+alternativo, merge, pruning, borrado remoto ni ejecución de tareas. El historial
+permanece; la página queda archivada sin Restore page. AutoOC no guarda una copia
+recuperable de los archivos descartados. Los procesos externos deben haber terminado:
+estas comprobaciones no son aislamiento frente a escritores externos simultáneos.
+
+Si hay un fallo, Check discard solo verifica el resultado. Si todo desapareció,
+registra la terminación sin repetir el efecto. Si la carpeta permanece, conserva
+el flujo de revisión para mantenerla archivada. Si solo queda la rama, Discard work
+vuelve a revisar y exige una nueva confirmación para borrarla. Evidencia cambiada o
+incompleta bloquea la operación; no borrar reservas ni forzar una recuperación.
+Estos datos son locales y nunca se generan como campos JSON de tareas/workflows.
+
 ## Terminales CLI integradas y Settings (candidato 1.7.22)
 
 En el candidato de Settings ordenados, `Settings > AutoOC` se agrupa en General,
@@ -22,7 +250,18 @@ ni consultar proveedores automáticamente. Comprobar hashes/carga del candidato.
 terminal integrada o ventana externa para sesiones manuales y tareas CLI
 interactivas de todos los harness, tambien dentro de workflows. No cambia tareas en
 segundo plano, Code ni la apertura de la aplicacion Codex. Las integradas
-requieren Windows x64, soporte PTY instalado expresamente y AutoOC cargado.
+requieren Windows x64 o macOS Intel/Apple Silicon, Node.js 18+, soporte PTY
+instalado expresamente en ese ordenador y AutoOC cargado. Linux aun no dispone
+de PTY integrado. En Mac, Terminals > Download and install terminal support
+instala los prebuilds verificados de ambas arquitecturas y configura el permiso
+ejecutable de spawn-helper, sin npm scripts ni compilacion local. El host Node
+elige el binario de su propia arquitectura, aunque Obsidian use otra via Rosetta.
+El PATH de la sesion conserva prioridad y se completa con Homebrew, ubicaciones
+habituales del usuario y la carpeta de la CLI; no se ejecutan perfiles de shell
+ni se modifica el entorno global. La CLI se lanza directamente con argumentos
+literales, sin PowerShell. Stop solicita SIGHUP a su instancia y espera salida
+nativa y limpieza; un timeout conserva la observacion y no acredita fin del proceso.
+Actualizar el plugin no instala automaticamente el soporte opt-in.
 
 El editor ofrece `CLI task (interactive)` con un selector `Harness`: OpenCode 1,
 OpenCode 2, Codex CLI, GitHub Copilot CLI y Claude Code CLI. Se guarda/exporta como
@@ -363,3 +602,28 @@ recuperar otras reservas, aceptar efectos desconocidos ni promover temporales.
 tras un corte eléctrico pueden necesitar intervención. No atribuir esta
 protección al paquete publicado 1.6.9 ni a instalaciones anteriores: verificar
 los hashes del candidato, su entrega y la instalación antes de afirmarlo.
+
+
+## Merge review (candidato de desarrollo)
+
+En una página de worktree disponible, **Merge review** permite seleccionar como destino otra rama local ya abierta en un worktree del mismo repositorio. No cambia de rama. Muestra rama, commit y carpeta de origen y destino; distingue conflictos previstos de conflictos reales de un merge en curso.
+
+- **Ready to merge**: no se prevén conflictos con esos commits. **Copy merge command** copia un bloque para PowerShell en Windows o un shell POSIX en macOS/Linux. El desarrollador lo revisa y ejecuta; se detiene antes del commit incluso si sería fast-forward. No sobrescribe archivos ignorados ni hace autostash.
+- **Conflicts found**: muestra archivos y detalles de Git. **Open target in VS Code** abre la carpeta de destino (requiere VS Code); **Copy target path** permite usar otro editor. Los archivos previstos todavía no tienen marcadores. Durante un merge real, resolver en el destino, revisar y preparar los archivos resueltos y ejecutar las pruebas. Current corresponde al destino; Incoming, al origen.
+- **Recheck conflicts** vuelve a inspeccionar Git. Sin entradas sin resolver, **Copy complete command** copia el commit con el mensaje de merge predeterminado. **Copy abort command** copia la cancelación; puede perder las ediciones realizadas al resolver conflictos. Cerrar el diálogo no cancela Git.
+- **Integration verified** comprueba que el commit origen es ancestro del destino. Solo entonces esta revisión ofrece **Finish work**, que mantiene sus confirmaciones habituales. Squash/rebase no se acreditan automáticamente. Esta comprobación no certifica pruebas ni corrección del código.
+
+AutoOC no ejecuta merge, commit, abort ni resolución automática. Hay que pausar schedules y escritores externos y cerrar tareas/CLI/servicios en ambas carpetas durante la integración: los comandos externos no adquieren la reserva del plugin. La revisión bloquea la preparación de comandos con actividad conocida, cambios pendientes o una operación Git ajena; vuelve a revisar al copiar. Los bloques comprueban rama/commits y, al iniciar, limpieza de archivos. No garantizan exclusión frente a procesos externos concurrentes.
+
+La previsualización usa git merge-tree --write-tree y puede crear objetos Git sin referencia; no modifica ramas, índice ni archivos de trabajo. Requiere un Git compatible e historias relacionadas. Con drivers de merge personalizados o merge.renormalize se indica Preview unavailable para no ejecutar filtros/driver durante una consulta; se puede inspeccionar después un merge iniciado manualmente. Las listas se limitan a 150 archivos en pantalla y los detalles a 12 000 caracteres. La revisión es efímera, no modifica el esquema del catálogo ni añade campos al JSON de tareas/workflows.
+
+Referencias de implementación: https://git-scm.com/docs/git-merge-tree , https://git-scm.com/docs/git-merge y https://code.visualstudio.com/docs/configure/command-line .
+
+
+## Import y CLI desde Overview
+
+Import está disponible también en Overview: abre la importación habitual al catálogo compartido de tareas/workflows, con sus validaciones y guardado existentes. No crea copias por página ni requiere seleccionar un worktree.
+
+CLI abre Choose CLI workspace. Hay que pulsar Use workspace en Main workspace o una página activa; se muestran nombre, ruta y rama registrada cuando corresponde. Las páginas archivadas o con retirada pendiente/completada no se ofrecen. Abrir el selector o cancelar no inicia procesos ni guarda preferencias. Si la página o carpeta cambió mientras el selector estaba abierto, se pide cerrarlo y elegir de nuevo.
+
+La elección abre el lanzador CLI existente o recupera su terminal viva. Se conservan identidad de página, carpeta y reservas; Overview permanece como vista seleccionada. Main conserva su lanzador y su selección de carpeta habituales. Las comprobaciones del motor/propietario se siguen haciendo al lanzar la sesión. No cambia el esquema JSON ni los workflows programados.

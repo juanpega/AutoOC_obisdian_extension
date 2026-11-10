@@ -8,6 +8,7 @@ import type {RunCheckpoint} from "./execution-journal";
 import {validWorkflowEdit, type WorkflowEditCommand, type WorkflowEditResult} from "./workflow-edit";
 import {executionAdmissionDiagnostic} from "./execution-coordinator";
 import {concurrencySettings} from "./execution-concurrency-settings";
+import {pageExecutionId, normalizePageSelection} from "./work-pages";
 
 export interface PluginCommand {
   command: "run" | "resume" | "reconcile";
@@ -15,6 +16,7 @@ export interface PluginCommand {
   taskId?: string;
   stepId?: string;
   runId?: string;
+  pageId?: string;
 }
 export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"revision"|"nextStepId"> & Partial<ExecutionPresentation>;
 export function executionSummary(state: ExecutionSummary, presentation: Partial<ExecutionPresentation> = state): ExecutionSummary {
@@ -77,7 +79,9 @@ async function replace(file:string,value:unknown,check:()=>void,asyncFlush=true)
   }
 }
 function validCommand(value:any):boolean {
-  if(value?.command==="edit-workflow")return validWorkflowEdit(value);
+  if(value?.command==="edit-workflow")return value.pageId === undefined && validWorkflowEdit(value);
+  try { if (value?.pageId !== undefined && (normalizePageSelection(value.pageId) !== value.pageId || value.stepId !== undefined)) return false; }
+  catch { return false; }
   const id=(v:any)=>typeof v==="string" && v.length>0 && v.length<=256 && !/[\0\r\n]/.test(v);
   return value && ["run","resume","reconcile"].includes(value.command) &&
     (id(value.workflowId) && value.taskId===undefined || id(value.taskId) && value.workflowId===undefined) &&
@@ -87,14 +91,14 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // The files carry only IDs/progress, never executable payloads or configuration.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({})) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {pageSelection?: boolean} = {}) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
   let publishedLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {})});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined;
@@ -151,12 +155,14 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
         await receipt(id,{status:"rejected",error:"Expired, cancelled or invalid CLI request"});continue;
       }
       if(closed)return;
-      const duplicate=[...active.values()].some(e=>e.definition===`${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`);
+      if (request.pageId && !capabilities.pageSelection) {await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page selection; reload the updated plugin."});continue;}
+      const definition=JSON.stringify([request.pageId || "main",request.taskId ? "task" : "workflow",request.taskId || request.workflowId]);
+      const duplicate=[...active.values()].some(e=>e.definition===definition);
       const limit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
       const busy=duplicate ? "AutoOC is already executing this CLI definition" : limit>0 && active.size>=limit ? `Concurrent execution limit reached (${limit})` :
         [...active.values()].some(e=>e.editing) || request.command==="edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : undefined;
       if(busy){await receipt(id,{status:"rejected",error:busy});continue;}
-      const execution={id,controller:new AbortController(),editing:request.command==="edit-workflow",definition:`${request.taskId ? "task" : "workflow"}:${request.taskId || request.workflowId}`,done:undefined as Promise<void>|undefined};active.set(id,execution);
+      const execution={id,controller:new AbortController(),editing:request.command==="edit-workflow",definition,done:undefined as Promise<void>|undefined};active.set(id,execution);
       let checkpoint:ExecutionSummary|undefined;
       const accepted=receipt(id,{status:"accepted"});
       execution.done=(async()=>{
@@ -235,6 +241,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
     if(host.protocol!==1 || host.owner!==owner.token || host.pid!==owner.pid)throw new Error("Invalid CLI request host");
     if(command.command==="edit-workflow" && host.workflowEditing!==true)throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");
     if('stepId' in command && command.stepId!==undefined && host.codeStepSelection!==true)throw new Error("Loaded AutoOC does not support code step selection; reload the updated plugin before running this step");
+    if('pageId' in command && command.pageId!==undefined && host.pageSelection!==1)throw new Error("Loaded AutoOC does not support page selection; reload the updated plugin before running this page");
     if(host.heartbeatAt!==undefined) {
       if(!Number.isFinite(host.heartbeatAt) || host.heartbeatAt>Date.now()+60000 || Date.now()-host.heartbeatAt>30000)
         throw new Error("CLI host heartbeat expired; terminal publication is uncertain");
@@ -264,8 +271,9 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
           }
           if(result.status==="rejected" || result.status==="failed")throw new Error(result.error);
         }
+        const expectedWorkflowId = 'pageId' in command && command.pageId ? pageExecutionId(command.pageId,command.taskId || command.workflowId!,!!command.taskId) : command.taskId ? "@task:"+command.taskId : command.workflowId;
         if(checkpoint && (typeof checkpoint.runId!=="string" || !/^[a-zA-Z0-9-]+$/.test(checkpoint.runId) ||
-            checkpoint.workflowId!==(command.taskId ? "@task:"+command.taskId : command.workflowId) ||
+            checkpoint.workflowId!==expectedWorkflowId ||
             "runId" in command && command.runId && checkpoint.runId!==command.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision<0 ||
             !["ready","in_flight","completed","failed","abandoned"].includes(checkpoint.phase) ||
             !(checkpoint.nextStepId===null || typeof checkpoint.nextStepId==="string")))throw new Error("Invalid CLI receipt checkpoint");

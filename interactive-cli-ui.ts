@@ -1,6 +1,7 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { INTERACTIVE_CLIS, configuredInteractiveClis, launchInteractiveCli, resolveInteractiveCli, type InteractiveCliProvider, type InteractiveCliSettings } from "./interactive-cli";
 import { detectOpenCodeVersion, readCliVersion } from "./opencode-version";
+import { inspectCodexCli } from "./codex-diagnostics";
 
 interface CliSettingsHost {
   manifest?: { id: string };
@@ -8,18 +9,26 @@ interface CliSettingsHost {
   saveSettings(refreshView?: boolean): Promise<void>;
   isLifecycleStopped(): boolean;
   openIntegratedCli?(provider: InteractiveCliProvider, cwd: string): Promise<void>;
+  launchManualCli?(provider: InteractiveCliProvider, cwd: string, pageId?: string): Promise<void>;
   installCliTerminalSupport?(): Promise<void>;
   showCliTerminals?(): Promise<void>;
+  hasPageTerminal?(pageId: string, liveOnly?: boolean): boolean;
+  showPageTerminal?(pageId: string): Promise<void>;
 }
 
-export function openCliLauncher(app: App, host: CliSettingsHost, selected?: InteractiveCliProvider) {
+export function openCliLauncher(app: App, host: CliSettingsHost, selected?: InteractiveCliProvider, page?: {id:string;name:string;directory:string}) {
+  const pageId = page?.id || "main";
+  if (host.hasPageTerminal?.(pageId,true) && host.showPageTerminal) {
+    void host.showPageTerminal(pageId).catch(error=>new Notice(String(error)));
+    return;
+  }
   new CliLauncherModal(app, host, () => {
     const settings = (app as any).setting;
     if (!settings?.open || !settings?.openTabById || !host.manifest?.id) {
       new Notice("Open Settings → AutoOC → Harnesses to configure your CLIs."); return;
     }
     settings.open(); settings.openTabById(host.manifest.id);
-  }, selected).open();
+  }, selected, page).open();
 }
 
 export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHost,
@@ -50,7 +59,7 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
     });
   if (host.installCliTerminalSupport) {
     const support = new Setting(root).setName("Integrated terminal support")
-      .setDesc("Windows x64 only; Node.js 18+ in PATH. Sessions run with your user permissions. Sessions confirmed outside Obsidian via ↗ survive plugin unload; other integrated sessions stop. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run.");
+      .setDesc("Windows x64 and macOS (Intel / Apple Silicon); Node.js 18+ required. On Mac, Homebrew and the configured CLI folder are also searched for Node. Sessions run with your user permissions. Sessions confirmed outside Obsidian via ↗ survive plugin unload; other integrated sessions stop. Explicit download from registry.npmjs.org: node-pty 1.1.0 (MIT), verified against a pinned SHA-512. No npm scripts are run. Linux integrated PTY is not available in this version.");
     let installing = false;
     support.addButton(button => button.setButtonText("Download and install terminal support").onClick(async () => {
       if (installing || host.isLifecycleStopped()) return;
@@ -68,6 +77,10 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
   for (const cli of INTERACTIVE_CLIS) {
     const providerRoot = options.providers?.[cli.id] || root;
     const defaultCommand = cli.id === "opencode2" ? "opencode" : cli.id;
+    if (cli.id === "codex") providerRoot.createEl("p", {
+      text: "One Codex CLI installation is shared by background tasks (App Server), interactive terminals and AI creation. Background tasks do not need the Codex desktop app open. App conversation tasks also open the desktop app and retain their approval flow. Choose the mode per task; existing tasks keep their mode, model and permissions.",
+      cls: "setting-item-description",
+    });
     new Setting(providerRoot).setName(`Show ${cli.label}`).setDesc("Include this CLI in the selector when its executable is available. This does not disable existing scheduled tasks.")
       .addToggle(toggle => toggle.setValue(host.settings.cliLauncherEnabled?.[cli.id] !== false).onChange(async enabled => {
         const previous = host.settings.cliLauncherEnabled;
@@ -77,13 +90,16 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
         catch { if (host.settings.cliLauncherEnabled === updated) host.settings.cliLauncherEnabled = previous; toggle.setValue(previous?.[cli.id] !== false); new Notice("CLI preference could not be saved. Try again."); }
       }));
     const row = new Setting(providerRoot).setName(`${cli.label} executable`);
+    let pathRevision = 0;
     const describe = () => {
       const detected = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
-      row.setDesc(detected ? `Detected: ${detected}`
+      row.setDesc(detected ? (cli.id === "codex"
+        ? `Effective executable for background and terminal: ${detected}. Version and App Server support not checked. Use Check version.` : `Detected: ${detected}`)
         : `Not found. Install ${cli.label} separately or enter its executable path. Use a path or command name without arguments.`);
     };
     let input: HTMLInputElement;
     const savePath = async (value: string) => {
+      pathRevision++;
       const previous = host.settings[cli.pathKey];
       const updated = value.trim() || defaultCommand;
       host.settings[cli.pathKey] = updated;
@@ -100,18 +116,30 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
     row.addButton(button => button.setButtonText("Check version").onClick(async () => {
       if (host.isLifecycleStopped()) return;
       button.setDisabled(true);
+      const revision = pathRevision;
+      const configured = host.settings[cli.pathKey];
+      const bin = resolveInteractiveCli(cli.id, configured);
+      const isCurrent = () => !host.isLifecycleStopped() && revision === pathRevision &&
+        configured === host.settings[cli.pathKey] && bin === resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
       try {
-        const bin = resolveInteractiveCli(cli.id, host.settings[cli.pathKey]);
         if (!bin) throw new Error("Executable not found. Set its full path first.");
         if (cli.id === "opencode" || cli.id === "opencode2") {
           const detected = await detectOpenCodeVersion(bin);
+          if (!isCurrent()) return;
           const expected = cli.id === "opencode2" ? 2 : 1;
           row.setDesc(detected.major === expected ? `Detected ${detected.version} — compatible with ${cli.label}.`
             : `Detected ${detected.version}. Choose the matching OpenCode CLI and task type, or set a different executable. Existing tasks have not been changed.`);
+        } else if (cli.id === "codex") {
+          const detected = await inspectCodexCli(bin);
+          if (!isCurrent()) return;
+          row.setDesc(`Effective executable for background and terminal: ${bin}. Version: ${detected.version}. ${detected.appServer
+            ? "Background: App Server advertised by this CLI. Desktop app not required."
+            : "Background unavailable: this selection needs a native executable with App Server support. Update this installation or select another path; no fallback was used."} Authentication and task execution have not been tested.`);
         } else {
-          row.setDesc(`${cli.label}: ${await readCliVersion(bin)}. Version detected; authentication is checked by the CLI, not by this test.`);
+          const version = await readCliVersion(bin);
+          if (isCurrent()) row.setDesc(`${cli.label}: ${version}. Version detected; authentication is checked by the CLI, not by this test.`);
         }
-      } catch (error) { row.setDesc((error as Error).message); }
+      } catch (error) { if (isCurrent()) row.setDesc(`${bin ? `Executable: ${bin}. ` : ""}${(error as Error).message}`); }
       finally { button.setDisabled(false); }
     }));
     describe();
@@ -122,7 +150,7 @@ export class CliLauncherModal extends Modal {
   private selected?: InteractiveCliProvider;
   private closed = false;
   private launching = false;
-  constructor(app: App, private host: CliSettingsHost, private configure: () => void, selected?: InteractiveCliProvider) {
+  constructor(app: App, private host: CliSettingsHost, private configure: () => void, selected?: InteractiveCliProvider, private page?: {id:string;name:string;directory:string}) {
     super(app); this.selected = selected;
   }
 
@@ -153,11 +181,13 @@ export class CliLauncherModal extends Modal {
     const missing = configured.filter(cli => !cli.executable);
     if (missing.length) root.createEl("p", { text: `Not found: ${missing.map(cli => cli.label).join(", ")}. Configure their paths in Settings.`, cls: "setting-item-description" });
     const feedback = root.createDiv(); feedback.setAttr("role", "alert");
-    const defaultCwd = this.host.settings.workingDirectory?.trim() || (this.app.vault.adapter as any).basePath || "";
+    const defaultCwd = this.page?.directory || this.host.settings.workingDirectory?.trim() || (this.app.vault.adapter as any).basePath || "";
+    if (this.page) root.createEl("p", {text: "Page: " + this.page.name + ". This session keeps this folder when you switch pages."});
     root.createEl("p", { text: defaultCwd || "Choose a project folder below.", cls: "setting-item-description auto-oc-cli-path" });
     const buttons = root.createDiv("auto-oc-cli-modal-buttons");
     const open = buttons.createEl("button", { text: "📂 Open in project / vault", cls: "auto-oc-btn-primary" });
     const choose = buttons.createEl("button", { text: "🗀 Choose folder…" });
+    if (this.page) choose.style.display = "none";
     updateButtons = () => {
       open.disabled = this.launching || !this.selected || !defaultCwd;
       choose.disabled = this.launching || !this.selected;
@@ -168,7 +198,8 @@ export class CliLauncherModal extends Modal {
       if (this.host.isLifecycleStopped()) { feedback.setText("AutoOC has closed. Reopen the plugin before launching a CLI."); return; }
       this.launching = true; open.disabled = choose.disabled = true; feedback.setText("Opening terminal…");
       try {
-        if (integrated) {
+        if (this.host.launchManualCli) await this.host.launchManualCli(this.selected, cwd, this.page?.id);
+        else if (integrated) {
           if (!this.host.openIntegratedCli) throw new Error("Integrated terminals are unavailable. Check AutoOC Settings; no external session was started.");
           await this.host.openIntegratedCli(this.selected, cwd);
         } else await launchInteractiveCli(this.selected, cwd, this.host.settings);

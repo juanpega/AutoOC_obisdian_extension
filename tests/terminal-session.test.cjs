@@ -37,7 +37,8 @@ async function harness(t) {
     compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020},
   }).outputText;
   vm.runInNewContext(code,{module,exports:module.exports,process,Buffer,console,setTimeout,clearTimeout,setInterval,clearInterval,
-    require(id){if(id==='child_process')return{spawn(...args){launches.push(args);return child;}};return require(id);},
+    require(id){if(id==='child_process')return{spawn(...args){launches.push(args);return child;}};
+      if(id==='./terminal-environment')return{terminalEnvironment:(_file,env)=>({...env})};return require(id);},
   });
   const session=await module.exports.createTerminalSession({pluginDirectory:process.cwd(),file:'synthetic.exe',args:['literal prompt pointer'],options:{cwd:process.cwd()}});
   t.after(async()=>{session.disconnect();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});

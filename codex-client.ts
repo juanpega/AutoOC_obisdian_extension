@@ -146,33 +146,47 @@ function resolveCodexNativeBin(bin: string): string {
 }
 
 export function resolveCodexBin(configured = "codex"): string {
-  if (configured.trim() && configured.trim() !== "codex") return resolveCodexNativeBin(configured.trim());
+  const requested = (configured.trim() || "codex").replace(/^~(?=[/\\])/, os.homedir());
+  if (path.isAbsolute(requested)) return resolveCodexNativeBin(requested);
+  // One selection for App Server and interactive CLI; never parse shell arguments.
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(requested)) return "";
+  const windows = os.platform() === "win32";
+  const extensions = windows && !path.extname(requested) ? [".exe", ".cmd", ".bat", ".ps1"] : [""];
+  const directories = (process.env.PATH || process.env.Path || "").split(path.delimiter)
+    .map(value => value.trim().replace(/^"|"$/g, "")).filter(directory => path.isAbsolute(directory));
   const candidates: string[] = [];
-  if (os.platform() === "win32") {
+  const addDirectory = (directory: string) => {
+    if (path.isAbsolute(directory)) for (const extension of extensions) candidates.push(path.join(directory, requested + extension));
+  };
+  directories.forEach(addDirectory);
+  if (requested === "codex") {
+    const home = os.homedir();
+    [path.join(home, ".local", "bin"), path.join(home, ".npm-global", "bin"),
+      path.join(home, ".bun", "bin"), path.join(home, "bin")].forEach(addDirectory);
+    if (windows && process.env.APPDATA) addDirectory(path.join(process.env.APPDATA, "npm"));
+    if (!windows) ["/opt/homebrew/bin", "/usr/local/bin"].forEach(addDirectory);
+  }
+  if (windows && requested === "codex") {
     const localAppData = process.env.LOCALAPPDATA || "";
     const desktopBinRoot = path.join(localAppData, "OpenAI", "Codex", "bin");
     try {
-      const versionDirs = fs.readdirSync(desktopBinRoot, { withFileTypes: true })
+      const versionDirs = (path.isAbsolute(desktopBinRoot) ? fs.readdirSync(desktopBinRoot, { withFileTypes: true }) : [])
         .filter((entry) => entry.isDirectory())
         .map((entry) => path.join(desktopBinRoot, entry.name, "codex.exe"))
         .filter((candidate) => fs.existsSync(candidate))
         .sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
       candidates.push(...versionDirs);
     } catch { /* installation is optional */ }
-    candidates.push(
-      path.join(localAppData, "OpenAI", "Codex", "codex.exe"),
-      path.join(process.env.APPDATA || "", "npm", "codex.cmd"),
-    );
-  } else {
-    const userHome = process.env.HOME || "";
-    candidates.push(
-      path.join(userHome, ".local", "bin", "codex"),
-      path.join(userHome, ".npm-global", "bin", "codex"),
-      "/opt/homebrew/bin/codex",
-      "/usr/local/bin/codex",
-    );
+    if (path.isAbsolute(localAppData)) candidates.push(path.join(localAppData, "OpenAI", "Codex", "codex.exe"));
   }
-  return resolveCodexNativeBin(candidates.find((candidate) => candidate && fs.existsSync(candidate)) || configured || "codex");
+  const selected = candidates.find(candidate => {
+    try {
+      if (!fs.statSync(candidate).isFile()) return false;
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return true;
+    } catch { return false; }
+  });
+  return selected ? resolveCodexNativeBin(selected) : "";
 }
 
 export function openCodexApp(bin: string, cwd: string, onError?: (error: Error) => void): void {
@@ -277,6 +291,10 @@ export class CodexAppServerClient {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    if (!this.bin) throw new Error("Codex CLI was not found. Set its executable in AutoOC Settings > Harnesses > Codex CLI.");
+    if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
+      throw new Error(`Codex background execution requires a native App Server executable. No native binary was found for ${this.bin}. Update this Codex CLI installation or select its codex.exe in Settings; no alternative installation was started.`);
+    }
     this.child = spawn(this.bin, ["app-server"], {
       cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],

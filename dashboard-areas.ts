@@ -2,6 +2,11 @@ import { setIcon } from "obsidian";
 import { workflowDisabledReason } from "./catalog-availability";
 import { codeStepDisplay } from "./workflow-code-step";
 import { executionStatusHelp } from "./execution-status-help";
+import type { PageRun } from "./work-pages";
+
+export interface PageRunProgress {
+  steps: {stepId:string;status:string;startedAt?:string;finishedAt?:string}[];
+}
 
 interface Source {
   id: string; name?: string; area?: string; status?: string; disabled?: boolean;
@@ -99,6 +104,36 @@ export function dashboardVisibleItems(items: DashboardItem[], state: AreaDashboa
     (state.showDisabled || !item.disabled) && (!state.attentionOnly || item.attention) &&
     (!query || [item.name, item.area, item.detail, ...(item.children || []).map(child => `${child.name} ${child.area}`)]
       .some(text => text.toLowerCase().includes(query))));
+}
+
+/** Same catalog and areas as Main; execution state belongs only to the selected page. */
+export function workPageDashboardItems(tasks: Source[], workflows: Flow[], pageId: string, runs: PageRun[],
+  owns: (workflowId:string,runId:string)=>boolean, progress: (run:PageRun)=>PageRunProgress | undefined): DashboardItem[] {
+  const clean = (item:Source):Source => ({id:item.id,name:item.name,area:item.area,disabled:item.disabled,
+    taskKind:item.taskKind,taskId:item.taskId,workflowId:item.workflowId,stepKind:item.stepKind,status:"pending"});
+  const items = dashboardItems(tasks.map(clean),workflows.map(w=>({...clean(w),steps:w.steps.map(clean)})));
+  const latest = new Map<string,PageRun>();
+  for (const run of runs) if (run.pageId === pageId) latest.set(JSON.stringify([run.task,run.sourceId]),run);
+  for (const item of items) {
+    const run = latest.get(JSON.stringify([item.kind !== "workflow",item.id]));
+    if (!run) continue;
+    const owned = owns(run.workflowId,run.runId), terminal = ["completed","failed","abandoned"].includes(run.phase);
+    item.status = terminal ? run.phase : owned ? "running" : "pending";
+    item.lastRun = run.createdAt;
+    item.attention ||= run.phase === "failed" || run.phase === "abandoned" || (!terminal || run.uncertain) && !owned;
+    item.detail += " · Page run: " + run.phase;
+    const state = progress(run);
+    if (!state) { item.attention = true; item.detail += " · Execution details unavailable; review page history."; continue; }
+    for (const step of state.steps) {
+      const child = item.children?.find(child=>child.id === step.stepId);
+      if (!child) continue;
+      child.status = step.status === "in_flight" ? owned && !terminal ? "running" : "pending" : step.status;
+      child.attention ||= step.status === "failed" || step.status === "in_flight" && (!owned || terminal);
+      child.lastRun = step.finishedAt || step.startedAt;
+    }
+    item.activeSteps = item.children?.filter(child=>child.status === "running").length || 0;
+  }
+  return items;
 }
 const stateLabel = (item: DashboardItem) => item.disabled ? "Disabled" : item.attention ? "Needs attention" :
   ({ pending: "Ready", running: "Running", completed: "Completed", failed: "Failed", abandoned: "Abandoned" }[item.status] || item.status);

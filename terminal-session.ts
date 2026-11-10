@@ -4,6 +4,7 @@ import * as path from "path";
 import { randomBytes } from "crypto";
 import type { Pty, IDisposable } from "./terminal-pty";
 import type { TerminalSessionConfig } from "./terminal-session-host";
+import { terminalEnvironment } from "./terminal-environment";
 
 export interface IndependentTerminal extends Pty {
   readonly detached: boolean;
@@ -14,8 +15,10 @@ export interface IndependentTerminal extends Pty {
 /** A private, authenticated loopback client. The child owns the native PTY. */
 export async function createTerminalSession(config: Omit<TerminalSessionConfig, "token">, signal?: AbortSignal): Promise<IndependentTerminal> {
   if (signal?.aborted) throw new Error("Terminal opening was cancelled.");
+  config = { ...config, options: { ...config.options, env: terminalEnvironment(config.file, config.options.env) } };
   const token = randomBytes(32).toString("hex");
   const env = { ...process.env };
+  if (process.platform === "darwin") env.PATH = config.options.env.PATH;
   // A real Node executable is required; never run Obsidian.exe as a Node host.
   delete env.ELECTRON_RUN_AS_NODE;
   const child = spawn("node", [path.join(config.pluginDirectory, "autooc-runtime.cjs"), "--autooc-terminal-host"], {

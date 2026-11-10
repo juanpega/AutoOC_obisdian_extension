@@ -1,8 +1,13 @@
-import { AreaDashboard, createAreaDashboardState, dashboardItems, type DashboardItem } from "./dashboard-areas";
+import { AreaDashboard, createAreaDashboardState, dashboardItems, workPageDashboardItems, type PageRunProgress, type DashboardItem } from "./dashboard-areas";
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
-import { INTERACTIVE_CLIS, type InteractiveCliProvider } from "./interactive-cli";
+import { INTERACTIVE_CLIS, launchInteractiveCli, type InteractiveCliProvider } from "./interactive-cli";
+import { addWorkPageSettings, renderWorkPages, openPageItemControls, showPageItemHistory, openCliWorkspaceSelector } from "./work-pages-ui";
+import { reviewPageMerge, type MergeReview } from "./merge-review";
+import { assertNoPageTerminal, selectWorkPage, pageExecutionId, validateWorkPages, verifyWorkPageEnvironment, type WorkPageSettings, type PageRun, type WorkPage } from "./work-pages";
+import { reviewWorkPage, workPageRevision, removeReviewedWorktree, inspectRemovalOutcome, assertRemovalScope, type FinishWorkReview } from "./finish-work";
+import {reviewWorkPageDiscard, removeDiscardedWorktree, deleteDiscardedBranch, inspectDiscardOutcome, type DiscardWorkReview} from "./discard-work";
 import { prepareCliTask, launchExternalCliTask, getCliTaskValidationError as getInteractiveCliTaskValidationError } from "./interactive-cli-task";
 import { IntegratedTerminals } from "./integrated-terminal";
 import type {ExecutionPresentation} from "./execution-presentation";
@@ -16,7 +21,7 @@ import { executionStatusHelp, ExecutionStatusHelpModal, HistoricalAttemptsModal,
 import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { inspectBlockedExecutions, assertBlockedInspection, resetBlockedAttempt, type BlockedExecutionInspection, type BlockedAttempt } from "./blocked-execution-recovery";
 import { BlockedExecutionModal } from "./blocked-execution-modal";
-import { validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
+import { executionCoordinator, validateConcurrency, type ConcurrencyPolicy } from "./execution-coordinator";
 import { assertNoRetiredDependency, assertWorkflowDependencies, autoOCDependencyError } from "./retired-dependency";
 import { LegacyOutputRedaction } from "./legacy-output-redaction";
 import { LegacyCredentialNoticeModal } from "./legacy-credential-notice";
@@ -106,6 +111,14 @@ const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
+Work pages are local execution environments, not exported task/workflow fields. Tasks and workflows remain global definitions. Do not generate page IDs, pageRuns, terminal reservations or worktree settings in JSON. Every page automatically shows all global tasks, workflows and steps in the same area Dashboard as Main workspace, including newly created definitions. There is no linking or copy/import step. Page run state, logs and history remain separate from Main and other pages. Open controls runs a task or the complete owning workflow in the selected page; single-step runs remain Main-only. Editing a definition changes the shared catalog. Existing folder creates only a page pointing to that folder, never a new branch or isolated worktree. For reusable page tasks, leave workingDirectory unset so it inherits the selected page; a fixed folder outside that page is rejected before execution. In page runs, Code vault/files capabilities are rooted in the page folder, with the same explicit permissions. Page objectives are added to AI task prompts; do not hardcode host-vault paths or perform Git branch switching/handoff in a page workflow. Worktree creation requires the developer setting and the project's preparation flow; generating or importing a workflow never creates a worktree. Overview opens from the small O button next to Dashboard; Dashboard returns to the last work page. Overview is for viewing activity/logs and navigating to a workspace; it also offers Delete page for archived pages with no run history or worktree removal evidence. Import stays available in Overview because it updates the shared task/workflow catalog. CLI in Overview requires an explicit workspace selection (Main workspace or an active page); it never silently selects a folder. Archived/removed pages are excluded and the selected context is rechecked before opening the existing CLI launcher or reusing its live terminal. Delete page removes only page configuration and keeps folders, branches and shared definitions. It requires confirmation and checks ownership, inactivity and unchanged page identity. Execution controls remain in Main workspace or the selected page. Main workspace displays the current Git branch of its default folder; this does not override task-specific folders. Schedules and CLI requests without page selection still target Main workspace. Finish work reviews activity and changes, then archives the page; keeping its folder is the default. Archive page, Refresh review and Cancel remain visible beside the readiness or blocking reason. The workspace name and full folder path stay in the fixed header of Finish work, Discard work and Delete page. Existing folder pages explain why Discard work is unavailable even with no changes. Changes is a read-only preview with Close preview, not a close-workflow confirmation. Diff previews use text-only colored added/removed/hunk lines, include staged and unstaged changes and explicitly indicate truncation; untracked file contents are not included. Optional removal of a clean linked worktree requires explicit confirmation and keeps the branch, commits and history. Modified, untracked or ignored files, submodules, hidden index changes, active or uncertain sessions and changed identities block removal. A pending removal stays blocked until Check removal verifies its outcome; removed pages cannot be restored or executed. Never generate worktreeRemoval in task/workflow JSON. Discard work is a separate explicit operation for independent worktrees: it reviews all local files (including ignored/untracked files) and commits, requires the exact branch name plus confirmation of data loss and closed sessions/processes, then removes the worktree and local branch. It keeps page history but cannot restore discarded files. Main/shared folders, protected branches, branches used elsewhere and unsafe or oversized reviews are blocked. Check discard only inspects an interrupted outcome; if only the branch remains, deleting it requires a new review and confirmation. No remote branch is deleted. Never generate discard evidence or cleanup commands in task/workflow JSON. Merge review previews conflicts between committed source and checked-out target branches, inspects actual unresolved files during a merge, opens the target in VS Code and copies guarded commands for the developer; it never executes merge, commit or abort. Pause schedules and all writers for external Git work. Finish work is offered from this review only after source ancestry is verified in the target; squash/rebase integration is not automatically verified. This does not change the independent archive/discard contracts. Never generate merge review state or cleanup commands in task/workflow JSON. Integration queues and parallel parent orchestration are not available in this candidate.
+
+Integrated page terminals reuse their live session. Their reservation is released only after confirmed native exit/stop and a successful save; external or unobserved sessions require manual confirmation. Interactive page tasks must be standalone or the only step of a workflow; terminal launch is not evidence that the requested work finished. Parallel page work still obeys exclusive policies and verified workspace boundaries. Do not generate cleanup scripts that remove terminal claims or execution locks.
+
+New manual page CLI sessions and workflow runs verify the linked worktree folder, repository and attached branch before starting. A branch changed outside AutoOC must be reviewed first. The terminal default initializes new tasks only; existing background tasks keep their mode. Use interactiveTerminal: true explicitly for an interactive task, and false for background OpenCode work in a multi-step page workflow. A legacy one-task workflow with taskId and no stepKind remains compatible, although new examples should use stepKind: "task".
+
+External AutoOC CLI commands retain Main workspace behavior when --page is omitted or set to main. An explicit --page ID selects an existing work page for run/resume/reconcile/stop; pages --vault ROOT lists IDs and status --vault ROOT --page ID reads that page's runs. These are command options, never task/workflow JSON fields. The shell directory does not select a page. Page execution is supported by a compatible loaded plugin or the standalone runtime; standalone execution retains one owner per installation. --step is only available in Main workspace. Never fall back to Main workspace if page selection fails.
+
 Canonical complete export format:
 {
   "autoOCExport": {
@@ -134,7 +147,8 @@ Concurrency for tasks and workflows is optional: omit it to inherit the vault se
 
 Task fields:
 - exportId: unique within the JSON, for example "task-0".
-- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex in ChatGPT, "copilot" for background GitHub Copilot CLI, "code" for a reusable JavaScript task, or "cli" for a generic interactive CLI task.
+- taskKind: "opencode" for OpenCode 1 by default, "opencode2" for OpenCode 2 CLI, "codex" for Codex CLI via App Server, "copilot" for background GitHub Copilot CLI, "code" for a reusable JavaScript task, or "cli" for a generic interactive CLI task.
+- Codex uses one configured executable for background, App conversation, model discovery and interactive CLI. taskKind "codex" with interactiveTerminal false/omitted runs in the background through app-server without the desktop app; true also opens the conversation in the desktop app and preserves the approval flow and turn completion tracking. A terminal task instead uses taskKind "cli", cliProvider "codex", interactiveTerminal true. Keep existing task modes and permissions; do not generate executable paths or a global Codex mode. An installed CLI must support App Server for taskKind "codex". Closing Obsidian never transfers a plugin-owned run to the desktop app.
 - taskKind "cli" requires cliProvider: "opencode", "opencode2", "codex", "copilot", or "claude", and interactiveTerminal: true. cliProvider is forbidden on other task kinds. This is separate from the legacy OpenCode interactive kinds and from Codex App. The in-app AI draft creators do NOT support generating taskKind "cli" yet; use this type only for direct JSON imports/manual editing, not in creator responses.
 - Generic interactive CLI tasks require a prompt; model is optional and empty/omitted uses the provider's native default, never an AutoOC background default. agent is optional only for OpenCode providers (otherwise omit or use ""); empty uses the native agent. forceModel can omit the agent override. reasoningEffort is optional only for cliProvider "codex". Do not enable Code permissions, copilotAllowAllTools, useRalphLoop, branch or createBranch on generic interactive CLI tasks. Use native CLI authentication and permission prompts; never add automatic approval or permission-bypass flags.
 - For OpenCode 2 tasks, the editor can refresh models and selectable agents for the task's project. Use an agent ID when specifying an agent in a portable task.
@@ -144,6 +158,7 @@ Task fields:
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
 - interactiveTerminal: true is required for taskKind "cli"; for legacy AI tasks it opens OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
 - Interactive OpenCode tasks and all generic taskKind "cli" providers, including workflow steps, use the vault's CLI terminal destination setting (integrated in Obsidian or external window). Do not export cliTerminalDestination as a task/workflow field. Integrated tasks require a loaded Obsidian plugin; autonomous execution without that host rejects before starting workflow steps. Interactive CLI completion only confirms terminal launch, not the human task result. Background tasks, Code, background Copilot and the Codex app are unchanged.
+- Integrated PTY requires explicitly installed terminal support and Node.js 18+ on Windows x64 or macOS Intel/Apple Silicon. Linux integrated PTY is not available. Terminal support is installed separately on each computer; updating the plugin does not install it automatically. CLI executables and authentication must already be configured locally.
 - reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested. Also optional for taskKind "cli" with cliProvider "codex", where the value must be supported by the selected native CLI/model.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
 - scheduleType: "manual" | "once" | "daily" | "weekly" | "monthly" | "interval".
@@ -613,7 +628,7 @@ interface Workflow {
   scheduleIntervalUnit: IntervalUnit;
 }
 
-interface AutoOCSettings {
+interface AutoOCSettings extends WorkPageSettings {
   tasks: ScheduledTask[];
   workflows: Workflow[];
   opencodePath: string;
@@ -1598,11 +1613,288 @@ function isWorkflowDue(wf: Workflow): boolean {
 
 export default class AutoOCPlugin extends Plugin {
   private cliTerminals?: IntegratedTerminals;
+  private pageTerminalOpening = new Set<string>();
+
+  hasPageTerminal(pageId: string, liveOnly = false): boolean {
+    const session = this.cliTerminals?.pageSession?.(pageId);
+    return !!session && (!liveOnly || !session.exited);
+  }
+  async showPageTerminal(pageId: string, reveal = true): Promise<void> {
+    if (!await this.cliTerminals?.focusPage(pageId,reveal)) throw new Error("This page has no tracked terminal in this Obsidian session.");
+  }
+  pageTerminalState(claimId: string): "tracked" | "exited" | "unknown" {
+    if (this.pageTerminalOpening.has(claimId)) return "tracked";
+    const session = this.cliTerminals?.sessions?.find(s=>s.page?.claimId === claimId);
+    return session ? session.exited ? "exited" : "tracked" : "unknown";
+  }
+  async pageTerminalExited(page: {pageId:string;claimId:string}): Promise<void> {
+    // A launch checkpoint can still be publishing its claim. Drain accepted
+    // workflow publications before removing it, without blocking the terminal.
+    while (this.sharedCompletions.size) await Promise.allSettled([...this.sharedCompletions]);
+    if (this.lifecycleStopped) return; // the next owner must review retained evidence
+    const claim = this.settings.pageTerminalClaims?.find(c=>c.id === page.claimId && c.pageId === page.pageId);
+    if (claim) await this.releasePageTerminal(claim.id);
+  }
+  private pagePreparation = false;
   private terminalCloseDrain?: Promise<void>;
 
   async openIntegratedCli(provider: InteractiveCliProvider, cwd: string): Promise<void> {
     if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Reopen AutoOC.");
     await this.cliTerminals.open(provider, cwd);
+  }
+
+  assertPagesEditable(): void {
+    this.assertLifecycleOpen();
+    this.beginExecutionEffects();
+    if (!this.pluginExecutionLease) throw new Error("This AutoOC instance must own execution before preparing pages.");
+    this.pluginExecutionLease.assertOwned();
+    if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecutions.size || this.definitionStarts?.size ||
+        this.runningProcesses.size || this.runningCodexClients.size || this.legacyAttempts.size) throw new Error("Wait for active work before changing page configuration.");
+    assertIdleCatalog(this.settings, assertIdleJournals(this.selectedExecutionLocation().runtimeDirectory));
+  }
+  reservePagePreparation():()=>void {
+    this.assertPagesEditable();
+    if (this.settings.pageTerminalClaims?.length) throw new Error("Confirm existing terminals have ended before preparing a worktree.");
+    this.pagePreparation = true;
+    return () => {this.pagePreparation = false;};
+  }
+
+  private pageFinishBlockers(pageId:string): string[] {
+    const blockers: string[] = [];
+    try {
+      this.assertLifecycleOpen();
+      if (!this.pluginExecutionLease) throw new Error("This AutoOC instance must own execution before finishing work.");
+      this.pluginExecutionLease.assertOwned();
+      if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.workflowEditPending || this.sharedWorkflowExecutions.size ||
+          this.definitionStarts?.size || this.runningProcesses.size || this.runningCodexClients.size || this.legacyAttempts.size || this.workflowDelayControllers.size) throw new Error("Wait for active work and catalog changes before finishing.");
+      if (this.settings.pageTerminalClaims?.length || this.cliTerminals?.sessions?.some(session=>!session.exited)) throw new Error("Close active terminals and confirm unobserved sessions on their pages before finishing.");
+      const checkpoints = assertIdleJournals(this.selectedExecutionLocation().runtimeDirectory);
+      assertIdleCatalog(this.settings,checkpoints);
+      for (const run of (this.settings.pageRuns || []).filter(run=>run.pageId === pageId)) {
+        const checkpoint = checkpoints.get(run.runId);
+        if (!checkpoint || checkpoint.workflowId !== run.workflowId) throw new Error("Page execution evidence is missing or changed; review it before finishing.");
+      }
+    } catch (error) { blockers.push(this.redactSecrets(String((error as Error).message || error))); }
+    return blockers;
+  }
+  private pageProtectedDirectories(): string[] {
+    const location = this.selectedExecutionLocation();
+    return [location.vault,location.installationDirectory,this.settings.workingDirectory?.trim() || location.vault];
+  }
+  async reviewPageFinish(pageId:string): Promise<FinishWorkReview> {
+    const page: WorkPage = JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
+    return reviewWorkPage(page,this.pageProtectedDirectories(),this.settings.workPages || [],this.pageFinishBlockers(pageId));
+  }
+  async reviewPageMerge(pageId:string,targetDirectory?:string):Promise<MergeReview> {
+    this.assertLifecycleOpen();
+    const page:WorkPage=JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
+    const review=await reviewPageMerge(page,targetDirectory,this.pageFinishBlockers(pageId));
+    this.assertLifecycleOpen();
+    if(workPageRevision(page)!==workPageRevision(selectWorkPage(this.settings,pageId)))throw new Error("Page changed during merge review. Reopen the review.");
+    // Readiness is advisory; external Git commands do not acquire AutoOC's execution lease.
+    const blockers=this.pageFinishBlockers(pageId);
+    if(blockers.length){review.blockers=[...new Set([...review.blockers,...blockers])];review.state="blocked";}
+    return review;
+  }
+  async deleteWorkPage(page:WorkPage):Promise<void> {
+    const operation=this.performPageDeletion(JSON.parse(JSON.stringify(page)));
+    this.sharedCompletions.add(operation);
+    try{await operation;}finally{this.sharedCompletions.delete(operation);}
+  }
+  private async performPageDeletion(expected:WorkPage):Promise<void> {
+    const release=this.reservePagePreparation();
+    try{
+      const current=selectWorkPage(this.settings,expected.id);
+      if(workPageRevision(current)!==workPageRevision(expected))throw new Error("Page changed after confirmation was opened. Review it again.");
+      if(!current.archived)throw new Error("Archive this page before deleting it.");
+      if(current.worktreeRemoval)throw new Error("This page keeps worktree removal evidence and cannot be deleted.");
+      if(this.settings.pageRuns?.some(run=>run.pageId===current.id))throw new Error("This page has run history. Keep it archived to retain access to its logs.");
+      const blockers=this.pageFinishBlockers(current.id);if(blockers.length)throw new Error(blockers.join("\n"));
+      const previous=this.settings.workPages!,updated=previous.filter(page=>page.id!==current.id);
+      this.settings.workPages=updated;
+      try{await this.saveSettings();}
+      catch(error){if(this.settings.workPages===updated)this.settings.workPages=previous;throw error;}
+    }finally{release();}
+  }
+  async finishWorkPage(pageId:string, reviewHash:string, removeWorktree:boolean, sessionsClosed:boolean): Promise<void> {
+    const operation = this.performPageFinish(pageId,reviewHash,removeWorktree,sessionsClosed);
+    this.sharedCompletions.add(operation);
+    try { await operation; } finally { this.sharedCompletions.delete(operation); }
+  }
+  async reviewPageDiscard(pageId:string):Promise<DiscardWorkReview> {
+    const page:WorkPage=JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
+    return reviewWorkPageDiscard(page,this.pageProtectedDirectories(),this.settings.workPages || [],this.pageFinishBlockers(pageId));
+  }
+  async discardWorkPage(pageId:string,reviewHash:string,branchName:string,confirmed:boolean):Promise<void> {
+    const operation=this.performPageDiscard(pageId,reviewHash,branchName,confirmed);
+    this.sharedCompletions.add(operation);
+    try{await operation;}finally{this.sharedCompletions.delete(operation);}
+  }
+  private async performPageDiscard(pageId:string,reviewHash:string,branchName:string,confirmed:boolean):Promise<void> {
+    let current:WorkPage=JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
+    if(current.kind!=="worktree" || branchName!==current.branch || !confirmed)throw new Error("Type the exact branch name and confirm data loss and closed processes before discarding.");
+    const release=this.reservePagePreparation();
+    const assertCurrent=()=>{
+      this.assertLifecycleOpen();this.pluginExecutionLease!.assertOwned();
+      if(workPageRevision(selectWorkPage(this.settings,pageId))!==workPageRevision(current))throw new Error("Page changed during discard. Review it again.");
+      const blockers=this.pageFinishBlockers(pageId);if(blockers.length)throw new Error(blockers.join("\n"));
+      assertRemovalScope(current,this.pageProtectedDirectories(),this.settings.workPages || []);
+    };
+    const save=async(next:WorkPage)=>{
+      assertCurrent();const previous=this.settings.workPages!,updated=previous.map(page=>page.id===pageId?next:page);
+      this.settings.workPages=updated;
+      try{await this.saveSettings();current=next;}catch(e){if(this.settings.workPages===updated)this.settings.workPages=previous;throw e;}
+    };
+    try{
+      assertCurrent();const review=await this.reviewPageDiscard(pageId);assertCurrent();
+      if(review.hash!==reviewHash)throw new Error("Files, branch or page changed after review. Refresh before discarding.");
+      if(review.blockers.length || !review.proof)throw new Error(review.blockers.join("\n") || "Discard is unavailable.");
+      const proof=review.proof;
+      await save({...current,archived:true,worktreeRemoval:{status:"pending",mode:"discard",token:crypto.randomUUID(),ownerToken:this.pluginExecutionLease!.token,requestedAt:new Date().toISOString(),proof}});
+      if(review.stage==="worktree")await removeDiscardedWorktree(current,proof,this.pageProtectedDirectories(),this.settings.workPages || [],assertCurrent);
+      assertCurrent();await deleteDiscardedBranch(proof,assertCurrent);
+      await save({...current,worktreeRemoval:{...current.worktreeRemoval!,status:"removed",completedAt:new Date().toISOString()}});
+    }finally{release();}
+  }
+  private async performPageFinish(pageId:string, reviewHash:string, removeWorktree:boolean, sessionsClosed:boolean): Promise<void> {
+    let current: WorkPage = JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
+    const release = this.reservePagePreparation();
+    const assertCurrent = () => {
+      this.assertLifecycleOpen(); this.pluginExecutionLease!.assertOwned();
+      if (workPageRevision(selectWorkPage(this.settings,pageId)) !== workPageRevision(current)) throw new Error("Page changed while finishing; review it again.");
+      const blockers = this.pageFinishBlockers(pageId);
+      if (blockers.length) throw new Error(blockers.join("\n"));
+    };
+    const save = async (next:WorkPage) => {
+      assertCurrent();
+      const previous = this.settings.workPages!, updated = previous.map(page=>page.id === pageId ? next : page);
+      this.settings.workPages = updated;
+      try { await this.saveSettings(); current = next; }
+      catch (error) { if (this.settings.workPages === updated) this.settings.workPages = previous; throw error; }
+    };
+    try {
+      assertCurrent();
+      if (reviewHash === "check-removal") {
+        if (current.worktreeRemoval?.status !== "pending") throw new Error("There is no pending removal to check.");
+        const discarded=current.worktreeRemoval.mode === "discard";
+        const outcome = discarded ? await inspectDiscardOutcome(current.worktreeRemoval.proof) : await inspectRemovalOutcome(current.worktreeRemoval.proof);
+        if(outcome === "branch-only")throw new Error("The folder was removed but its branch remains. Use Discard work to review and explicitly confirm the remaining branch deletion.");
+        if (outcome === "retained" && current.worktreeRemoval.ownerToken !== this.pluginExecutionLease!.token && !sessionsClosed) throw new Error("The previous owner stopped during removal. Review its Git process, then use Keep worktree after review. No automatic retry or restore was performed.");
+        await save({...current,worktreeRemoval:outcome === "removed" || outcome === "discarded" ? {...current.worktreeRemoval,status:"removed",completedAt:new Date().toISOString()} : undefined});
+        return;
+      }
+      const review = await this.reviewPageFinish(pageId);
+      assertCurrent();
+      if (review.hash !== reviewHash) throw new Error("The reviewed page or Git state changed. Refresh the review before finishing.");
+      if (review.archiveBlockers.length) throw new Error(review.archiveBlockers.join("\n"));
+      if (!removeWorktree) { await save({...current,archived:true}); return; }
+      if (!sessionsClosed) throw new Error("Confirm that external sessions and services have ended before removal.");
+      if (review.removalBlockers.length || !review.proof) throw new Error(review.removalBlockers.join("\n") || "Worktree removal is unavailable.");
+      const proof = review.proof;
+      await save({...current,archived:true,worktreeRemoval:{status:"pending",token:crypto.randomUUID(),ownerToken:this.pluginExecutionLease!.token,requestedAt:new Date().toISOString(),proof}});
+      await removeReviewedWorktree(current,proof,this.pageProtectedDirectories(),this.settings.workPages || [],()=>{
+        assertCurrent(); assertRemovalScope(current,this.pageProtectedDirectories(),this.settings.workPages || []);
+      });
+      await save({...current,worktreeRemoval:{...current.worktreeRemoval!,status:"removed",completedAt:new Date().toISOString()}});
+    } finally { release(); }
+  }
+
+  async launchManualCli(provider: InteractiveCliProvider, cwd: string, pageId?: string): Promise<void> {
+    this.assertLifecycleOpen();
+    // Preserve the historical launcher when this installation has no pages.
+    if (!pageId && !this.settings.workPages?.length && !this.settings.pageTerminalClaims?.length) {
+      if (this.settings.cliTerminalDestination === "integrated") return this.openIntegratedCli(provider,cwd);
+      return launchInteractiveCli(provider,cwd,this.settings);
+    }
+    this.beginExecutionEffects();
+    if (!this.pluginExecutionLease) throw new Error("This AutoOC instance must own execution before opening a page terminal.");
+    this.pluginExecutionLease.assertOwned();
+    if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.definitionStarts?.size || this.runningProcesses.size ||
+        this.runningCodexClients.size || this.legacyAttempts.size) throw new Error("Wait for work currently starting or using legacy execution.");
+    const page = pageId ? selectWorkPage(this.settings,pageId) : undefined;
+    if (page && (page.archived || !samePhysicalPath(page.directory,cwd))) throw new Error("Page context changed. Reopen its CLI launcher.");
+    const existing = this.cliTerminals?.pageSession?.(pageId || "main");
+    if (existing && !existing.exited && samePhysicalPath(existing.cwd,cwd)) {
+      await this.cliTerminals!.focusPage(pageId || "main"); return;
+    }
+    if (page) {
+      const revision = workPageRevision(page);
+      await verifyWorkPageEnvironment({...page});
+      this.beginExecutionEffects(); this.pluginExecutionLease!.assertOwned();
+      if (workPageRevision(selectWorkPage(this.settings,pageId!)) !== revision) throw new Error("Page context changed. Reopen its CLI launcher.");
+      if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.definitionStarts?.size || this.runningProcesses.size ||
+          this.runningCodexClients.size || this.legacyAttempts.size) throw new Error("Wait for work currently starting or using legacy execution.");
+    }
+    assertNoPageTerminal(this.settings,cwd,true);
+    const claim = {id:crypto.randomUUID(),pageId:pageId || "main",directory:cwd,createdAt:new Date().toISOString()};
+    const runtime = this.selectedExecutionLocation().runtimeDirectory, coordinator = executionCoordinator(this.pluginExecutionLease);
+    for (const file of fs.readdirSync(runtime)) {
+      if (!/^[a-f0-9-]+\.json$/.test(file)) continue;
+      const checkpoint = readExecutionCheckpoint(runtime,file.slice(0,-5));
+      if (!coordinator.knows(checkpoint.runId) && !checkpoint.disposition && checkpoint.phase !== "abandoned" &&
+          (!["completed","failed"].includes(checkpoint.phase) || checkpointUncertainties(checkpoint).length)) {
+        throw new Error("Resolve pending executions before opening a new page terminal.");
+      }
+    }
+    const definition = prepareWorkflowDefinition({id:"@terminal:"+claim.id,concurrency:"independent",
+      steps:[{id:"session",stepKind:"code",code:"output = '';"}]} as any,[],this.settings);
+    const admission = coordinator.admit(definition,cwd,undefined,{directory:cwd,worktree:page?.kind === "worktree"});
+    const previous = this.settings.pageTerminalClaims;
+    const claims = [...(previous || []),claim];
+    this.pageTerminalOpening.add(claim.id);
+    this.settings.pageTerminalClaims = claims;
+    try { await this.saveSettings(); }
+    catch (error) { this.pageTerminalOpening.delete(claim.id); if(this.settings.pageTerminalClaims === claims)this.settings.pageTerminalClaims = previous; throw error; }
+    finally { admission.finish(); }
+    // Retain the claim even if launch throws: an OS window may already exist.
+    try {
+      if (this.settings.cliTerminalDestination === "integrated") {
+        if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Review the terminal reservation in the page.");
+        await this.cliTerminals.open(provider,cwd,(page?.name || "Main workspace") + " · " + provider,{pageId:claim.pageId,claimId:claim.id});
+      } else await launchInteractiveCli(provider,cwd,this.settings);
+    } finally { this.pageTerminalOpening.delete(claim.id); }
+  }
+
+  async confirmPageTerminal(id:string):Promise<void> {
+    this.assertLifecycleOpen();
+    if (this.pageTerminalState(id) === "tracked") throw new Error("This terminal is still tracked. Stop and close it in the terminal panel first.");
+    if (this.sharedWorkflowExecutions.size) throw new Error("Wait for workflow publication before releasing this terminal reservation.");
+    await this.releasePageTerminal(id);
+  }
+
+  private async releasePageTerminal(id: string): Promise<void> {
+    this.assertLifecycleOpen();
+    await catalogTransaction(this.selectedExecutionLocation().configurationFile,async transaction=>{
+      this.assertLifecycleOpen();
+      if (!this.pluginExecutionLease) throw new Error("This AutoOC instance must own execution before releasing a page terminal.");
+      this.pluginExecutionLease.assertOwned();
+      const previous = this.settings.pageTerminalClaims;
+      if (!previous?.some(claim=>claim.id===id)) return;
+      const claims = previous.filter(claim=>claim.id!==id);
+      this.settings.pageTerminalClaims = claims;
+      try {await this.saveSettings(false,undefined,transaction);}
+      catch(error){if(this.settings.pageTerminalClaims === claims)this.settings.pageTerminalClaims=previous;throw error;}
+    });
+    this.refreshOpenViews();
+  }
+
+  runWorkPage(pageId:string,sourceId:string,task:boolean,runId?:string,reconcile=false) {
+    return this.runSharedWorkflow(task ? standaloneTaskWorkflow(sourceId).id : sourceId,runId,reconcile,!runId,task?sourceId:undefined,undefined,undefined,pageId);
+  }
+  stopWorkPage(run:PageRun) { return this.killWorkflow(run.workflowId,run.runId); }
+  pageRunProgress(run:PageRun):PageRunProgress {
+    const saved = this.settings.pageRuns?.find(item=>item.runId === run.runId && item.pageId === run.pageId && item.workflowId === run.workflowId);
+    if (!saved) throw new Error("Page run identity changed.");
+    const checkpoint = readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory,run.runId);
+    if (checkpoint.workflowId !== run.workflowId) throw new Error("Page journal identity mismatch.");
+    return {steps:checkpoint.steps.map(({stepId,status,startedAt,finishedAt})=>({stepId,status,startedAt,finishedAt}))};
+  }
+  pageRunOutput(run:PageRun):string {
+    const saved=this.settings.pageRuns?.find(item=>item.runId===run.runId);
+    if (!saved || saved.pageId!==run.pageId || saved.workflowId!==run.workflowId) throw new Error("Page run identity changed.");
+    const checkpoint=readExecutionCheckpoint(this.selectedExecutionLocation().runtimeDirectory,run.runId);
+    if(checkpoint.workflowId!==run.workflowId)throw new Error("Page journal identity mismatch.");
+    return this.redactSecrets(JSON.stringify(checkpoint,null,2));
   }
 
   async installCliTerminalSupport(): Promise<void> {
@@ -1783,7 +2075,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private assertExecutionIdle(): void {
-    if (this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size ||
+    if (this.pagePreparation || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size ||
         this.workflowDelayControllers.size || this.legacyAttempts.size || this.settingsWriter.hasPendingWrites || this.cliRequestHost?.hasPendingWork) {
       throw new Error("Active execution or pending write requires reconciliation");
     }
@@ -1880,6 +2172,7 @@ export default class AutoOCPlugin extends Plugin {
 
   private beginExecutionEffects(): void {
     this.assertLifecycleOpen();
+    if (this.pagePreparation) throw new Error("Work page preparation is in progress. Finish or cancel it before starting work.");
     if(this.workflowEditPending)throw new Error("Workflow edit is being saved; wait briefly before starting execution");
     if (this.observationProof) {
       this.pluginExecutionLease!.assertOwned();
@@ -2010,7 +2303,10 @@ export default class AutoOCPlugin extends Plugin {
         this.view = new AutoOCView(leaf, this);
         return this.view;
       });
-      this.cliTerminals = new IntegratedTerminals(this, () => openCliLauncher(this.app, this));
+      this.cliTerminals = new IntegratedTerminals(this, pageId => {
+        try { openCliLauncher(this.app,this,undefined,pageId && pageId !== "main" ? {...selectWorkPage(this.settings,pageId)} : undefined); }
+        catch (error) { new Notice(this.redactSecrets(String(error))); }
+      });
 
       this.addRibbonIcon("workflow", "AutoOC — Task Scheduler", () => {
         this.toggleView();
@@ -2461,7 +2757,7 @@ export default class AutoOCPlugin extends Plugin {
       this.assertLifecycleOpen();
       try {
         return await this.runSharedWorkflow(request.taskId ? standaloneTaskWorkflow(request.taskId).id : request.workflowId!,
-          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress}, request.stepId);
+          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress}, request.stepId, request.pageId);
       } catch (error) {
         if (!this.lifecycleStopped) new Notice(`AutoOC: CLI request failed — ${this.redactSecrets(String(error))}`);
         throw error;
@@ -2477,22 +2773,23 @@ export default class AutoOCPlugin extends Plugin {
         const result=await applyWorkflowEdit({settings:this.settings,assertIdle,save:validate=>this.saveSettings(false,validate)},request);
         this.refreshOpenViews();return result;
       } finally {this.workflowEditPending=false;}
-    },()=>this.settings);
+    },()=>this.settings,{pageSelection:true});
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, stepId?:string) {
-    const kind = taskId ? "task" : "workflow", id = taskId || workflowId;
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, stepId?:string, pageId?:string) {
+    if(pageId === "main")pageId = undefined;
+    const kind = taskId ? "task" : "workflow", id = pageId ? pageExecutionId(pageId,taskId || workflowId,!!taskId) : taskId || workflowId;
     if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
     const pending = this.withDefinitionStart(kind, id,
-      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release, stepId));
+      release => this.executeSharedWorkflow(workflowId, resumeRunId, reconcile, newExecution, taskId, external, release, stepId, pageId));
     this.sharedCompletions.add(pending);
     try { return (await pending)!; }
     finally { this.sharedCompletions.delete(pending); }
   }
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void, stepId?:string) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void, stepId?:string, pageId?:string) {
     if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
     let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
     if (stepId && selected) selected = selectCodeStep(selected, stepId);
@@ -2500,6 +2797,8 @@ export default class AutoOCPlugin extends Plugin {
       assertWorkflowDependencies(selected, this.settings.tasks, this.settings.workflows);
       if (!reconcile) assertWorkflowEnabled(selected, this.settings.tasks, this.settings.workflows);
     }
+    const sourceWorkflowId = workflowId;
+    if (pageId) workflowId = pageExecutionId(pageId,taskId || workflowId,!!taskId);
     this.beginExecutionEffects();
     this.assertLifecycleOpen();
     if (this.updateInProgress) throw new Error("Plugin update is in progress");
@@ -2523,7 +2822,7 @@ export default class AutoOCPlugin extends Plugin {
       expectedSettings = captureJsonStructure(this.settings);
       this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
-        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : workflowId,taskId,stepId,resumeRunId,reconcile,newExecution,
+        vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : sourceWorkflowId,taskId,stepId,resumeRunId,reconcile,newExecution,pageId,
         lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
@@ -3246,6 +3545,7 @@ export default class AutoOCPlugin extends Plugin {
     this.assertLifecycleOpen();
     if (revision !== this.settingsLoadRevision) throw new Error("AutoOC settings changed while loading; reload before saving");
     const nextSettings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+    validateWorkPages(nextSettings);
     let validateRecovery = () => {};
     const publish = async () => {
       if (localFile) await this.settingsWriter.assertUnchanged(localFile);
@@ -5909,6 +6209,8 @@ export default class AutoOCPlugin extends Plugin {
 // ─── Sidebar View ─────────────────────────────────────────────────────────────
 
 class AutoOCView extends ItemView {
+  private selectedWorkPage = "main";
+  private lastWorkPage = "main";
   private selectionMode = false;
   private selectedTaskIds = new Set<string>();
   private selectedWorkflowIds = new Set<string>();
@@ -6006,6 +6308,7 @@ class AutoOCView extends ItemView {
   private taskSource: "all" | "catalog" | "workflow-code" = "all";
   private areaDashboard?: AreaDashboard;
   private areaDashboardState = createAreaDashboardState();
+  private pageDashboardStates = new Map<string, ReturnType<typeof createAreaDashboardState>>();
   private currentTab: "dashboard" | "tasks" | "workflows" = "dashboard";
   private expandedTasks: Set<string> = new Set();
   private expandedCodeSteps: Set<string> = new Set();
@@ -6462,7 +6765,12 @@ class AutoOCView extends ItemView {
   }
 
   private openCli() {
-    openCliLauncher(this.app, this.plugin);
+    if (this.currentTab === "dashboard" && this.selectedWorkPage === "general") {
+      openCliWorkspaceSelector(this.app,this.plugin,page=>openCliLauncher(this.app,this.plugin,undefined,page));
+      return;
+    }
+    const page = this.plugin.settings.workPages?.find(page=>page.id===this.selectedWorkPage);
+    openCliLauncher(this.app, this.plugin, undefined, page ? {...page} : undefined);
   }
 
   private openTaskInList(task: ScheduledTask) {
@@ -6487,6 +6795,9 @@ class AutoOCView extends ItemView {
 
   render() {
     this.areaDashboard = undefined;
+    const pageExists=(id:string)=>id === "main" || this.plugin.settings.workPages?.some(page=>page.id === id);
+    if(this.selectedWorkPage !== "general" && !pageExists(this.selectedWorkPage))this.selectedWorkPage="general";
+    if(!pageExists(this.lastWorkPage))this.lastWorkPage="main";
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("auto-oc-view");
@@ -6505,11 +6816,21 @@ class AutoOCView extends ItemView {
 
     // Row 1: navigation tabs
     const navRow = tabBar.createDiv("auto-oc-tab-row auto-oc-tab-row-nav");
-    const btnDashboard = navRow.createEl("button", {
+    const dashboardNav = navRow.createDiv("auto-oc-dashboard-nav");
+    const overview = this.currentTab === "dashboard" && this.selectedWorkPage === "general";
+    const btnDashboard = dashboardNav.createEl("button", {
       text: "Dashboard",
       cls: "auto-oc-tab-btn",
     });
-    btnDashboard.onclick = () => { this.currentTab = "dashboard"; this.render(); };
+    btnDashboard.onclick = () => {
+      const target = this.selectedWorkPage === "general" ? this.lastWorkPage : this.selectedWorkPage;
+      this.showWorkPage(target === "main" || this.plugin.settings.workPages?.some(page=>page.id === target) ? target : "main");
+    };
+    const btnOverview = dashboardNav.createEl("button", {text:"O",cls:"auto-oc-overview-btn"});
+    btnOverview.title = "Overview";
+    btnOverview.setAttr("aria-label","Overview");
+    btnOverview.setAttr("aria-pressed",String(overview));
+    btnOverview.onclick = () => this.showWorkPage("general");
 
     const btnTasks = navRow.createEl("button", {
       text: "📋 Tasks",
@@ -6528,6 +6849,7 @@ class AutoOCView extends ItemView {
       cls: "auto-oc-tab-btn",
     });
     btnCli.onclick = () => this.openCli();
+    if (overview) btnCli.title = "Choose a workspace before opening a CLI.";
 
     // Row 2: creation button (left) + spacer + import/export (right).
     // The creation button is contextual to the active tab.
@@ -6562,7 +6884,7 @@ class AutoOCView extends ItemView {
     btnImport.onclick = () => new ImportModal(this.app, this.plugin).open();
 
     // Highlight active tab
-    if (this.currentTab === "dashboard") btnDashboard.addClass("active");
+    if (this.currentTab === "dashboard" && !overview) btnDashboard.addClass("active");
     else if (this.currentTab === "tasks") btnTasks.addClass("active");
     else if (this.currentTab === "workflows") btnWorkflows.addClass("active");
 
@@ -6656,7 +6978,21 @@ class AutoOCView extends ItemView {
     }
   }
 
+  private showWorkPage(id:string): void {
+    this.currentTab = "dashboard";
+    this.selectedWorkPage = id;
+    if (id !== "general") this.lastWorkPage = id;
+    this.render();
+    if (id !== "general" && this.plugin.hasPageTerminal(id)) void this.plugin.showPageTerminal(id,false).catch(error=>new Notice(String(error)));
+  }
+
   private renderDashboard(containerEl: HTMLElement) {
+    if (renderWorkPages(containerEl,this.app,this.plugin,this.selectedWorkPage,id=>this.showWorkPage(id),
+        page=>openCliLauncher(this.app,this.plugin,undefined,page),(root,page)=>this.renderAreaDashboard(root,page))) return;
+    this.renderAreaDashboard(containerEl);
+  }
+
+  private renderAreaDashboard(containerEl:HTMLElement, page?:WorkPage) {
     const locate = (item: DashboardItem) => {
       const workflow = this.plugin.settings.workflows.find(wf => wf.id === (item.workflowId || (item.kind === "workflow" ? item.id : "")));
       const step = workflow?.steps.find(entry => entry.id === item.id);
@@ -6685,11 +7021,25 @@ class AutoOCView extends ItemView {
         else new LiveLogModal(this.app, task, this.plugin).open();
       } else new Notice("No task or Code step log is available for this selection. Open its workflow controls for details.");
     };
-    this.areaDashboard = new AreaDashboard(containerEl, this.areaDashboardState, {
-      items: () => dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows,
-        (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)),
-      open,
-      log: item => showLog(item, false), history: item => showLog(item, true),
+    let state = this.areaDashboardState;
+    if (page) {
+      if (!this.pageDashboardStates.has(page.id)) this.pageDashboardStates.set(page.id,createAreaDashboardState());
+      state = this.pageDashboardStates.get(page.id)!;
+    }
+    const progress = new Map<string,{revision:number;value:PageRunProgress|undefined}>();
+    this.areaDashboard = new AreaDashboard(containerEl, state, {
+      items: () => page ? workPageDashboardItems(this.plugin.settings.tasks,this.plugin.settings.workflows,page.id,this.plugin.settings.pageRuns || [],
+        (workflowId,runId)=>this.plugin.ownsExecution(workflowId,runId),run=>{
+          const cached = progress.get(run.runId);
+          if (cached?.revision === run.revision) return cached.value;
+          let value:PageRunProgress|undefined;
+          try { value = this.plugin.pageRunProgress(run); } catch { /* History exposes the exact read failure. */ }
+          progress.set(run.runId,{revision:run.revision,value}); return value;
+        }) : dashboardItems(this.plugin.settings.tasks, this.plugin.settings.workflows,
+          (workflowId, runId) => this.plugin.ownsExecution(workflowId, runId)),
+      open: item => page ? openPageItemControls(this.app,this.plugin,page.id,item,()=>open(item)) : open(item),
+      log: item => page ? showPageItemHistory(this.app,this.plugin,page.id,item,false) : showLog(item, false),
+      history: item => page ? showPageItemHistory(this.app,this.plugin,page.id,item,true) : showLog(item, true),
     });
   }
 
@@ -7073,7 +7423,7 @@ class AutoOCView extends ItemView {
         ? "Code"
         : task.taskKind === "cli" ? INTERACTIVE_CLIS.find(cli => cli.id === task.cliProvider)?.label || "Invalid CLI provider"
         : task.taskKind === "codex"
-          ? (task.interactiveTerminal ? "ChatGPT / Codex" : "Codex")
+          ? (task.interactiveTerminal ? "Codex CLI · App conversation" : "Codex CLI · background")
           : task.taskKind === "copilot" ? "GitHub Copilot CLI" : task.taskKind === "opencode2" ? "OpenCode 2 CLI" : task.interactiveTerminal ? "OpenCode 1 CLI" : "OpenCode 1",
       cls: `auto-oc-task-engine auto-oc-task-engine-${task.taskKind || "opencode"}`,
     });
@@ -8052,8 +8402,8 @@ class CreateTaskModal extends Modal {
       .addDropdown((dd) => {
         dd.addOption("opencode", "OpenCode 1 task");
         dd.addOption("opencode2", "OpenCode 2 task");
-        dd.addOption("codex", "Codex task");
-        dd.addOption("codex-app", "ChatGPT / Codex task");
+        dd.addOption("codex", "Codex CLI · background (App Server)");
+        dd.addOption("codex-app", "Codex CLI · App conversation (approvals)");
         dd.addOption("copilot", "GitHub Copilot CLI task");
         dd.addOption("code", "Code task");
         dd.addOption("cli", "OpenCode 1 CLI task (interactive)");
@@ -8398,9 +8748,12 @@ class CreateTaskModal extends Modal {
         ? "Opens OpenCode 2 mini with your model, agent and prompt. AutoOC confirms startup; the terminal session remains under your control."
         : "Runs OpenCode 2 with a private server. AutoOC captures the result and waits for completion. Explicitly denied permissions remain denied.", cls: "setting-item-description" });
     } else if (taskKind === "codex") {
+      contentEl.createEl("p", { text: this.draft.interactiveTerminal
+        ? "Uses the same Codex CLI App Server as background tasks, opens the conversation in the desktop app and retains approvals. AutoOC waits for the turn result. For a terminal session, choose CLI task (interactive) and the Codex CLI harness."
+        : "Runs through Codex CLI App Server in the background. The Codex desktop app does not need to be open. Uses the same executable configured for Codex CLI terminals; the task keeps its own model and reasoning.", cls: "setting-item-description" });
       new Setting(contentEl)
         .setName("Codex model")
-        .setDesc("Model used by Codex. Automatic uses the current ChatGPT/Codex default.")
+        .setDesc("Model used by Codex CLI App Server. Automatic uses the configured Codex default.")
         .addDropdown((dd) => {
           dd.addOption("", "Automatic");
           this.plugin.availableCodexModels.forEach((entry) => dd.addOption(entry.value, entry.label));
@@ -11193,6 +11546,7 @@ class AutoOCSettingTab extends PluginSettingTab {
     const { general, engines, terminals, execution, logging, library, maintenance } =
       createSettingsLayout(containerEl, this.expandedSections, this.plugin.settings.defaultAiEngine);
     addInteractiveCliSettings(terminals, this.plugin, { providers: engines });
+    addWorkPageSettings(execution, this.plugin);
 
     const credentialIssue = this.plugin.legacyCredentialNoticeStatus();
     if (credentialIssue) new Setting(maintenance).setName("Legacy credential notice")
@@ -11249,7 +11603,7 @@ class AutoOCSettingTab extends PluginSettingTab {
       .addDropdown((dropdown) => dropdown
         .addOption("opencode", "OpenCode 1")
         .addOption("opencode2", "OpenCode 2")
-        .addOption("codex", "Codex / ChatGPT")
+        .addOption("codex", "Codex CLI (App Server)")
         .addOption("copilot", "GitHub Copilot CLI")
         .setValue(this.plugin.settings.defaultAiEngine)
         .onChange(async (value) => {
@@ -11275,10 +11629,11 @@ class AutoOCSettingTab extends PluginSettingTab {
     addOpenCode2CatalogList(engines.opencode2, "agents", this.plugin.openCode2Catalog, location, () => this.display());
     addCopilotGlobalSettings(engines.copilot, this.plugin);
 
-    engines.codex.createEl("h3", { text: "Codex task defaults" });
+    engines.codex.createEl("h3", { text: "Codex App Server task defaults" });
+    engines.codex.createEl("p", { text: "These defaults apply to Codex background and App conversation tasks. Interactive CLI terminal tasks use their own overrides or the CLI's native defaults.", cls: "setting-item-description" });
     new Setting(engines.codex)
       .setName("Default Codex model")
-      .setDesc(`${this.plugin.availableCodexModels.length} models loaded from ChatGPT/Codex.`)
+      .setDesc(`${this.plugin.availableCodexModels.length} models loaded from Codex CLI App Server.`)
       .addDropdown((dropdown) => {
         dropdown.addOption("", "Automatic");
         this.plugin.availableCodexModels.forEach((model) => dropdown.addOption(model.value, model.label));
