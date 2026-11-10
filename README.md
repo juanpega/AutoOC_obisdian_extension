@@ -12,7 +12,7 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Candidato 1.7.22:** [terminales independientes, Settings ordenados y límites de validación](docs/autoOC/04_Desarrollo/settings-ordenados/Notas_version-1.7.22.md).
 
-**Páginas y worktrees (candidato):** [recorrido para desarrollar, usar la CLI y cerrar el trabajo](Docs/work-pages.md).
+**Páginas y worktrees (candidato):** [recorrido para desarrollar, usar la CLI y cerrar el trabajo](docs/work-pages.md).
 
 ## Area dashboard
 
