@@ -121,6 +121,8 @@ function archive(){
 for(const arch of ['arm64','x64'])test(`macOS ${arch} installs verified dual-architecture support, executable helpers and loads offline`,async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-mac-pty-test-'));
   t.after(()=>{assert.equal(path.dirname(fs.realpathSync(directory)),fs.realpathSync(os.tmpdir()));fs.rmSync(directory,{recursive:true,force:true});});
+  // Exercise a non-canonical input even on hosts whose temp directory has no alias.
+  const pluginDirectory=directory+path.sep+'.';
   const body=archive(),digest='sha512-'+crypto.createHash('sha512').update(body).digest('base64');
   const modes=new Map(),requires=[];let requests=0;
   const disk={...fs.promises,async chmod(file,mode){modes.set(file,mode);},async lstat(file){const st=await fs.promises.lstat(file);if(modes.has(file))st.mode=(st.mode&~0o777)|modes.get(file);return st;}};
@@ -133,18 +135,20 @@ for(const arch of ['arm64','x64'])test(`macOS ${arch} installs verified dual-arc
       queueMicrotask(()=>{callback(res);res.emit('data',body);res.emit('end');req.emit('close');});return req;
     }},
   },{process:{platform:'darwin',arch,versions:{napi:'8',node:'22.0.0'}}},source=>source.replace(/sha512-[A-Za-z0-9+/=]+/,digest));
-  await api.installTerminalSupport(directory);
-  const installed=path.join(directory,'terminal-support','node-pty-1.1.0-darwin');
+  await api.installTerminalSupport(pluginDirectory);
+  // supportRoot anchors to realpath (e.g. /var -> /private/var on macOS).
+  const installed=path.join(fs.realpathSync(pluginDirectory),'terminal-support','node-pty-1.1.0-darwin');
   // rename moves the helpers; reflect that in our cross-platform permission model.
   for(const a of ['arm64','x64']){
     const helper=path.join(installed,'prebuilds','darwin-'+a,'spawn-helper');
-    assert.ok([...modes.keys()].some(p=>p.endsWith(path.join('darwin-'+a,'spawn-helper'))));modes.set(helper,0o755);
+    const staged=[...modes.keys()].find(p=>p.endsWith(path.join('darwin-'+a,'spawn-helper')));
+    assert.ok(staged);assert.equal(modes.get(staged),0o755);modes.set(helper,modes.get(staged));
   }
   assert.ok(!fs.existsSync(path.join(installed,'prebuilds','win32-x64')));
-  assert.equal(await api.loadTerminalPty(directory),backend);assert.equal(requests,1);
+  assert.equal(await api.loadTerminalPty(pluginDirectory),backend);assert.equal(requests,1);
   assert.ok(requires[0].endsWith(path.join(`darwin-${arch}`,'pty.node')));
-  await api.installTerminalSupport(directory);assert.equal(requests,1,'existing support is verified offline');
+  await api.installTerminalSupport(pluginDirectory);assert.equal(requests,1,'existing support is verified offline');
   const helper=path.join(installed,'prebuilds',`darwin-${arch}`,'spawn-helper');modes.set(helper,0o644);
-  await assert.rejects(api.verifyTerminalSupport(directory),/permiso de ejecucion/);modes.set(helper,0o755);
-  fs.writeFileSync(helper,Buffer.alloc(fs.statSync(helper).size,88));await assert.rejects(api.loadTerminalPty(directory),/alterado/);assert.equal(requests,1);
+  await assert.rejects(api.verifyTerminalSupport(pluginDirectory),/permiso de ejecucion/);modes.set(helper,0o755);
+  fs.writeFileSync(helper,Buffer.alloc(fs.statSync(helper).size,88));await assert.rejects(api.loadTerminalPty(pluginDirectory),/alterado/);assert.equal(requests,1);
 });
