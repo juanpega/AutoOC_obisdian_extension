@@ -4,7 +4,7 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),Modu
 const {randomUUID}=require('node:crypto');
 const ts=require('typescript');
 function load(name){const file=path.resolve(__dirname,'..',name+'.ts'),mod=new Module(file,module);mod.filename=file;mod.paths=module.paths;mod.require=name=>name.startsWith('.')?load(name):require(name);mod._compile(ts.transpileModule(fs.readFileSync(file,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,file);return mod.exports;}
-const {createPluginRequestHost,requestPluginExecution,requestPluginWorkflowEdit}=load('cli-plugin-requests');
+const {createPluginRequestHost,requestPluginExecution,requestPluginWorkflowEdit,requestPluginPageCreation}=load('cli-plugin-requests');
 const {acquireExecutionLease}=load('execution-lease');
 function fixture(t,execute,edit,getConcurrency=()=>({maxConcurrentExecutions:2}),capabilities={}){
   const runtime=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-mailbox-')),lease=acquireExecutionLease(runtime);
@@ -17,6 +17,15 @@ function fixture(t,execute,edit,getConcurrency=()=>({maxConcurrentExecutions:2})
 }
 const state={runId:'aa11',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
 const settle=()=>new Promise(resolve=>setImmediate(resolve));
+
+test('page creation requires its own capability and never falls back to a legacy owner',async t=>{
+  let effects=0;const f=fixture(t,async()=>{effects++;return state;});
+  const request={requestId:'new-page',name:'Page',mode:'folder',directory:path.resolve(os.tmpdir())};
+  await assert.rejects(requestPluginPageCreation(f.runtime,request),/does not support page creation/);
+  assert.equal(fs.readdirSync(f.directory).some(n=>n.endsWith('.request')),false);
+  const id=f.request({command:'create-page',workflowId:undefined,request});await f.host.poll();await f.host.drain();
+  assert.equal(f.receipt(id).status,'rejected');assert.equal(effects,0);
+});
 
 test('page selection requires an advertised capability; old hosts still accept legacy commands',async t=>{
   let effects=0;const f=fixture(t,async()=>{effects++;return state;});

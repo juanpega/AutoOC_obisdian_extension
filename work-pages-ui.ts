@@ -4,7 +4,7 @@ import type { FinishWorkReview } from "./finish-work";
 import type { DiscardWorkReview } from "./discard-work";
 import type { DashboardItem } from "./dashboard-areas";
 import { mergeReviewCommand, mergeEditorUri, type MergeReview, type MergeCommand } from "./merge-review";
-import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState,
+import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage,
   type WorkPage, type WorkPageSettings, type WorktreePreparation, type PageRun } from "./work-pages";
 
 export interface WorkPagesHost {
@@ -177,7 +177,7 @@ class NewPageModal extends Modal {
         } else environment = await describePageFolder(directory,mode === "link");
         if (host.isLifecycleStopped()) throw new Error("AutoOC closed during preparation.");
         const page: WorkPage = {id,name:name.trim(),objective,...environment,workflowIds:[],taskIds:[]};
-        await saveField(host,"workPages",[...(host.settings.workPages || []),page]);
+        await registerWorkPage(host.settings,page,()=>host.saveSettings());
         this.select(page.id); this.close();
       } catch (error) {
         feedback.setText(errorText(host,error) + (createdDirectory ? " Worktree retained at " + createdDirectory + ". Link this existing worktree after resolving the error." : preparedIgnore ? " The confirmed .gitignore preparation is retained." : ""));

@@ -266,6 +266,9 @@ test('the actual shipped creator prompt contains a valid example for each engine
   for(const kind of ['task','workflow']) for(const engine of ['opencode','opencode2','codex','copilot']) {
     const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,version);
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
+    assert.match(prompt,/compatible hosts advertise pageCreation:1/);
+    assert.match(prompt,/queued with created:false/);
+    assert.match(prompt,/CLI request fields, not new task\/workflow schema fields/);
     assert.match(prompt,/macOS Intel\/Apple Silicon/);assert.match(prompt,/Linux integrated PTY is not available/);
     assert.match(prompt,/Do not include model IDs in the JSON/);
     assert.match(prompt,/workflow-local alias, not its identity or a cached task name/);

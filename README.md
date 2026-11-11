@@ -264,6 +264,42 @@ Requires Node.js 18 or later. In the table, `CLI` is the absolute path to that f
 
 ### All available commands
 
+#### Crear páginas desde tareas y workflows (candidato 1.7.25)
+
+La capacidad `pageCreation:1` añade `create-page --vault VAULT --request JSON_FILE`
+e `inspect-page-request --vault VAULT --request-id ID`. El archivo de petición
+incluye `requestId`, `name` y `mode`: `create` pide `repository`, `branch` y `base`;
+`folder` y `link` piden `directory`. Las rutas son absolutas. `create` y `link`
+requieren worktrees habilitados; `allowGitignoreUpdate:true` autoriza únicamente el ajuste de
+exclusión de ese proyecto, sin staging ni commit.
+
+Una tarea puede incluir `launch:{"workflowId":"ID"}` o `launch:{"taskId":"ID"}`
+para lanzar trabajo después del alta. Con un propietario activo, la CLI devuelve
+`status:"queued"`, `created:false` y el `pageId` reservado: el padre puede continuar.
+El propietario espera a que las ejecuciones actuales terminen correctamente y a
+que se liberen los recursos antes de crear y lanzar. No esperar al hijo dentro
+del padre ni llamar a `run --page` mientras el alta siga pendiente.
+
+Sin propietario, la CLI atiende la petición en primer plano. Un workflow autónomo
+también admite peticiones de sus tareas y procesa la cola al terminar. Un reinicio
+no relanza solicitudes pendientes: consultar el recibo y reenviar la misma petición
+solo para completar estados recuperables (`queued`, `environment` o `created`).
+`preparing`, `launching` o `needs-review` requieren revisar los efectos conservados;
+no usar un ID nuevo como reintento. El `launchRunId` permite consultar la ejecución
+exacta con los comandos existentes.
+
+`requirementId` y `requirementText` permiten entregar un requisito aún no incluido
+en el commit base. Su snapshot queda en `.autooc/requirement.md` de la página, con
+hash comprobado antes de ejecutar; Code lo lee con su permiso de bóveda explícito.
+El archivo queda local y puede aparecer como no versionado: no se confirma ni se
+elimina automáticamente. La petición no copia archivos, secretos o dependencias
+del proyecto original. Los errores y recibos no exponen el texto del requisito.
+
+Comprobar `version` y `help` del paquete instalado; compilar este candidato no
+actualiza por sí solo una instalación existente.
+
+Contrato completo, ejemplo y límites de verificación: [Creación de páginas por CLI](Docs/cli-page-creation.md).
+
 | Command and parameters | Purpose and requirements |
 | --- | --- |
 | `version` | Reports version, capabilities, and compatibility. No parameters. |
