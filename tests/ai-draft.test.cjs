@@ -17,6 +17,10 @@ function harness(overrides = {}) {
     setAttr(key, value) { this.attrs[key] = value; }
     setAttribute(key, value) { this.attrs[key] = value; }
     all() { return [this, ...this.children.flatMap(child => child.all())]; }
+    querySelectorAll(selector) {
+      assert.equal(selector, '[data-auto-oc-workflow-label]');
+      return this.all().slice(1).filter(el => Object.hasOwn(el.attrs, 'data-auto-oc-workflow-label'));
+    }
   }
   class Control {
     constructor(el) { this.inputEl = this.selectEl = this.buttonEl = el; }
@@ -264,6 +268,8 @@ test('the actual shipped creator prompt contains a valid example for each engine
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
     assert.match(prompt,/macOS Intel\/Apple Silicon/);assert.match(prompt,/Linux integrated PTY is not available/);
     assert.match(prompt,/Do not include model IDs in the JSON/);
+    assert.match(prompt,/workflow-local alias, not its identity or a cached task name/);
+    assert.match(prompt,/Omit the step name unless a distinct alias is useful/);
     assert.match(prompt,/OpenCode 2 drafts use the configured default agent/);
     assert.match(prompt,/add existing workflows as steps in the editor|add existing workflows manually/);
     const example=prompt.split('CREATOR EXAMPLE (replace its content with the requested objective):\n')[1].split('\n\nThe following JSON string')[0];

@@ -7155,7 +7155,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.23",
+      version: "1.7.24",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -7200,6 +7200,32 @@ module.exports = __toCommonJS(main_exports);
 
 // dashboard-areas.ts
 var import_obsidian2 = require("obsidian");
+
+// workflow-labels.ts
+function workflowStepDisplayName(step, tasks, workflows) {
+  var _a, _b, _c, _d, _e;
+  const alias = (_a = step.name) == null ? void 0 : _a.trim();
+  if (step.stepKind === "code") return alias || "{ } Code";
+  if (step.stepKind === "delay") return alias || `\u23F1 ${(_b = step.delayValue) != null ? _b : 5} ${(_c = step.delayUnit) != null ? _c : "minutes"}`;
+  const child = step.stepKind === "workflow";
+  const name = child ? (_d = workflows.find((item) => item.id === step.workflowId)) == null ? void 0 : _d.name : (_e = tasks.find((item) => item.id === step.taskId)) == null ? void 0 : _e.name;
+  const current = name || (child ? "Missing workflow" : "(deleted task)");
+  if (alias && alias !== (name == null ? void 0 : name.trim())) return `${alias} \xB7 ${child ? "Workflow" : "Task"}: ${current}`;
+  return child ? `Workflow: ${current}` : current;
+}
+var bindings = /* @__PURE__ */ new WeakMap();
+function bindWorkflowLabel(element, steps, update) {
+  element.setAttribute("data-auto-oc-workflow-label", "");
+  bindings.set(element, { steps, update });
+  update();
+}
+function refreshWorkflowLabels(root, change) {
+  root.querySelectorAll("[data-auto-oc-workflow-label]").forEach((element) => {
+    const binding = bindings.get(element);
+    if (!binding) return;
+    if (!change || binding.steps.some((step) => "taskId" in change ? (step.stepKind || "task") === "task" && step.taskId === change.taskId : step.stepKind === "workflow" && step.workflowId === change.workflowId)) binding.update();
+  });
+}
 
 // workflow-routing.ts
 var vm = __toESM(require("vm"));
@@ -9049,7 +9075,7 @@ function dashboardItems(tasks, workflows, ownsExecution = () => false) {
         workflowId: workflow.id,
         taskId: code || step.stepKind === "delay" ? void 0 : step.taskId,
         kind: nested ? "workflow" : code || (task == null ? void 0 : task.taskKind) === "code" ? "code" : step.stepKind === "delay" ? "delay" : "task",
-        name: ((_a = step.name) == null ? void 0 : _a.trim()) || (child == null ? void 0 : child.name) || (task == null ? void 0 : task.name) || (nested ? "Missing workflow" : code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
+        name: code || step.stepKind === "delay" ? ((_a = step.name) == null ? void 0 : _a.trim()) || (code ? `Code step ${index + 1}` : "Delay") : workflowStepDisplayName(step, task ? [task] : [], child ? [child] : []),
         area: areaName(step.area || workflow.area),
         status: status2,
         disabled: !!(workflow.disabled || step.disabled || (task == null ? void 0 : task.disabled) || (child == null ? void 0 : child.disabled)),
@@ -19114,6 +19140,7 @@ Task step example:
 }
 
 taskExportId must match an existing task exportId.
+The task name belongs to the referenced task. A task step's optional name is a workflow-local alias, not its identity or a cached task name. Omit the step name unless a distinct alias is useful. WorkFlows shows a distinct alias alongside the current task name; renaming the task keeps IDs, transitions and aliases unchanged. Code and delay steps keep their own names. Workflow steps likewise show a distinct alias alongside the referenced workflow's current name.
 
 Transitions:
 The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The importer validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
@@ -24942,6 +24969,7 @@ var AutoOCView = class extends import_obsidian12.ItemView {
   }
   updateTaskNameDom(task) {
     var _a;
+    refreshWorkflowLabels(this.containerEl, { taskId: task.id });
     (_a = this.areaDashboard) == null ? void 0 : _a.update();
     const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
       return count + workflow.steps.filter((step) => step.taskId === task.id).length;
@@ -24958,6 +24986,7 @@ var AutoOCView = class extends import_obsidian12.ItemView {
   }
   updateWorkflowNameDom(workflow) {
     var _a, _b;
+    refreshWorkflowLabels(this.containerEl, { workflowId: workflow.id });
     (_a = this.areaDashboard) == null ? void 0 : _a.update();
     const area = ((_b = workflow.area) == null ? void 0 : _b.trim()) || "No area";
     this.containerEl.querySelectorAll(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
@@ -26398,15 +26427,7 @@ var AutoOCView = class extends import_obsidian12.ItemView {
       desc.createEl("span", { text: workflow.description.slice(0, 200) });
     }
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
-    const stepLabel = (step) => {
-      var _a2, _b2, _c2, _d2;
-      if ((_a2 = step.name) == null ? void 0 : _a2.trim()) return step.name.trim();
-      if (step.stepKind === "workflow") return `Workflow: ${((_b2 = this.plugin.settings.workflows.find((w) => w.id === step.workflowId)) == null ? void 0 : _b2.name) || "Missing workflow"}`;
-      if (step.stepKind === "code") return "{ } Code";
-      if (step.stepKind === "delay") return `\u23F1 ${(_c2 = step.delayValue) != null ? _c2 : 5} ${(_d2 = step.delayUnit) != null ? _d2 : "minutes"}`;
-      const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
-      return t ? t.name : "(deleted task)";
-    };
+    const stepLabel = (step) => workflowStepDisplayName(step, this.plugin.settings.tasks, this.plugin.settings.workflows);
     const transitionModeLabel = (mode) => {
       if (mode === "force") return "force";
       if (mode === "eval") return "AI";
@@ -26428,10 +26449,11 @@ var AutoOCView = class extends import_obsidian12.ItemView {
       const isDone = workflow.currentStep > i || workflow.status === "completed" && workflow.currentStep >= i;
       const icon = isDone ? "\u2705" : isCurrent ? "\u23F3" : "\u2B1C";
       const stepHeader = stepItem.createDiv("auto-oc-workflow-task-header");
-      stepHeader.createSpan({
+      const stepTitle = stepHeader.createSpan({
         text: `${icon} Step ${i + 1}: ${stepName}`,
         cls: "auto-oc-workflow-task-title"
       });
+      bindWorkflowLabel(stepTitle, [step], () => stepTitle.setText(`${icon} Step ${i + 1}: ${stepLabel(step)}`));
       if (step.stepKind !== "task" && step.status) {
         stepHeader.createSpan({
           text: step.status,
@@ -26453,14 +26475,15 @@ var AutoOCView = class extends import_obsidian12.ItemView {
       }
       const transitions = step.transitions && step.transitions.length > 0 ? step.transitions : workflow.steps[i + 1] ? [{ toStepId: workflow.steps[i + 1].id, mode: step.transitionMode || "default" }] : [];
       if (transitions.length > 0) {
-        const transitionSummary = transitions.map((transition) => {
+        const transitionSummary = () => transitions.map((transition) => {
           const target = workflow.steps.find((candidate) => candidate.id === transition.toStepId);
           return `\u2192 ${target ? stepLabel(target) : "missing step"} [${transitionModeLabel(transition.mode)}]`;
         }).join(" \xB7 ");
-        stepHeader.createSpan({
-          text: ` ${transitionSummary}`,
+        const transitionLabel = stepHeader.createSpan({
           cls: "auto-oc-workflow-transition-label"
         });
+        const targets = transitions.map((transition) => workflow.steps.find((candidate) => candidate.id === transition.toStepId)).filter((target) => !!target);
+        bindWorkflowLabel(transitionLabel, targets, () => transitionLabel.setText(` ${transitionSummary()}`));
       }
       if (!task) {
         if (step.stepKind === "workflow") {
@@ -26878,6 +26901,7 @@ var CreateTaskModal = class extends import_obsidian12.Modal {
     this.generatedDraft = false;
     this.savingGeneratedDraft = false;
     this.plugin = plugin;
+    if (editTask && !saveDraft) editTask = plugin.settings.tasks.find((task) => task.id === editTask.id) || editTask;
     this.editTask = editTask;
     this.draft = editTask ? saveDraft ? JSON.parse(JSON.stringify(editTask)) : { ...editTask } : {
       name: "",
@@ -27632,6 +27656,13 @@ var CreateWorkflowModal = class extends import_obsidian12.Modal {
   availableTasks() {
     return [...this.plugin.settings.tasks, ...this.draftTasks];
   }
+  subscribeNameUpdates() {
+    var _a, _b;
+    (_a = this.unsubscribeTaskUpdated) == null ? void 0 : _a.call(this);
+    (_b = this.unsubscribeWorkflowUpdated) == null ? void 0 : _b.call(this);
+    this.unsubscribeTaskUpdated = this.plugin.onTaskUpdated((task) => refreshWorkflowLabels(this.contentEl, { taskId: task.id }));
+    this.unsubscribeWorkflowUpdated = this.plugin.onWorkflowUpdated((workflow) => refreshWorkflowLabels(this.contentEl, { workflowId: workflow.id }));
+  }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
@@ -27639,6 +27670,7 @@ var CreateWorkflowModal = class extends import_obsidian12.Modal {
     if (dependencyError) contentEl.createEl("p", { text: dependencyError, cls: "mod-warning" });
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 1100);
+    this.subscribeNameUpdates();
     preventBackdropClose(this);
     const headerBar = contentEl.createDiv("auto-oc-modal-header");
     headerBar.createEl("h3", {
@@ -27957,9 +27989,7 @@ var CreateWorkflowModal = class extends import_obsidian12.Modal {
     );
   }
   workflowStepLabel(step) {
-    var _a;
-    if ((_a = step.name) == null ? void 0 : _a.trim()) return step.name.trim();
-    return this.defaultWorkflowStepName(step);
+    return workflowStepDisplayName(step, this.availableTasks(), this.plugin.settings.workflows);
   }
   defaultWorkflowStepName(step, index) {
     var _a, _b, _c;
@@ -28002,17 +28032,18 @@ var CreateWorkflowModal = class extends import_obsidian12.Modal {
         text: `Step ${i + 1}`,
         cls: "auto-oc-workflow-step-num"
       });
-      header.createEl("span", {
-        text: this.workflowStepLabel(step),
+      const stepTitle = header.createEl("span", {
         cls: step.stepKind === "task" && !task ? "auto-oc-workflow-step-err" : ""
       });
+      bindWorkflowLabel(stepTitle, [step], () => stepTitle.setText(this.workflowStepLabel(step)));
       if (!isLast) {
         header.createEl("span", { text: "\u2192", cls: "auto-oc-workflow-step-arrow" });
         header.createEl("span", {
           text: `Step ${i + 2}`,
           cls: "auto-oc-workflow-step-num"
         });
-        header.createEl("span", { text: this.workflowStepLabel(this.selectedSteps[i + 1]) });
+        const nextStep = this.selectedSteps[i + 1], nextTitle = header.createEl("span");
+        bindWorkflowLabel(nextTitle, [nextStep], () => nextTitle.setText(this.workflowStepLabel(nextStep)));
       }
       const btnRemove = header.createEl("button", {
         text: "\u2716",
@@ -28024,10 +28055,14 @@ var CreateWorkflowModal = class extends import_obsidian12.Modal {
         delete this.stepConfigs[step.id];
         this.renderStepsList(container);
       };
-      new import_obsidian12.Setting(stepEl).setName("Step name").setDesc("Optional label used in this workflow").addText((text) => {
+      new import_obsidian12.Setting(stepEl).setName("Step name").setDesc(step.stepKind === "task" || step.stepKind === "workflow" ? "Optional alias for this step. The current referenced name is also shown; leave blank to follow it." : "Optional label used in this workflow").addText((text) => {
         text.inputEl.addClass("auto-oc-modal-input");
+        bindWorkflowLabel(text.inputEl, [step], () => {
+          text.inputEl.placeholder = this.defaultWorkflowStepName(step, i);
+        });
         text.setPlaceholder(this.defaultWorkflowStepName(step, i)).setValue(step.name || "").onChange((v) => {
           step.name = v.trim();
+          refreshWorkflowLabels(this.contentEl);
         });
       });
       new import_obsidian12.Setting(stepEl).setName("Area").setDesc("Defaults to the workflow area").addText((text) => {
@@ -28103,10 +28138,12 @@ var CreateWorkflowModal = class extends import_obsidian12.Modal {
           text: `Transition: Step ${i + 1} \u2192 Step ${i + 2}`,
           cls: "auto-oc-workflow-transition-title"
         });
-        transitionHeader.createSpan({
-          text: `After \xAB${this.workflowStepLabel(step)}\xBB finishes, decide whether \xAB${this.workflowStepLabel(nextStep)}\xBB starts.`,
+        const transitionHelp = transitionHeader.createSpan({
           cls: "auto-oc-workflow-transition-help"
         });
+        bindWorkflowLabel(transitionHelp, [step, nextStep], () => transitionHelp.setText(
+          `After \xAB${this.workflowStepLabel(step)}\xBB finishes, decide whether \xAB${this.workflowStepLabel(nextStep)}\xBB starts.`
+        ));
         const modeDiv = transConfig.createDiv("auto-oc-workflow-mode");
         modeDiv.createSpan({
           text: "Decision mode:",
@@ -28368,10 +28405,14 @@ Reply ONLY with YES or NO.`;
     };
   }
   onClose() {
-    var _a, _b;
+    var _a, _b, _c, _d;
     this.editorClosed = true;
     (_a = this.aiDraftModal) == null ? void 0 : _a.close();
     (_b = this.draftTaskModal) == null ? void 0 : _b.close();
+    (_c = this.unsubscribeTaskUpdated) == null ? void 0 : _c.call(this);
+    (_d = this.unsubscribeWorkflowUpdated) == null ? void 0 : _d.call(this);
+    this.unsubscribeTaskUpdated = void 0;
+    this.unsubscribeWorkflowUpdated = void 0;
     this.contentEl.empty();
   }
 };
