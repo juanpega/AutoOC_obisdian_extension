@@ -3,7 +3,8 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),vm=r
 const {spawn,spawnSync,execFileSync}=require('node:child_process');
 const runtime=require('../autooc-runtime.cjs'),cli=path.resolve(__dirname,'../autooc-cli.cjs');
 function fixture(t){
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-pages-'));
+  // Match the canonical paths stored by the page creator, including aliased temp roots.
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-pages-')));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),file=path.join(directory,'data.json');
   fs.mkdirSync(directory,{recursive:true});
   const a=path.join(vault,'a'),b=path.join(vault,'b');fs.mkdirSync(a);fs.mkdirSync(b);
@@ -12,7 +13,7 @@ function fixture(t){
       {id:'two',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","2"); output="done";'}]}],
     workPages:[a,b].map((directory,i)=>({id:i?'b':'a',name:'Same label',objective:'PRIVATE_OBJECTIVE',directory,kind:'folder',workflowIds:['w'],taskIds:['t']}))};
   fs.writeFileSync(file,JSON.stringify(config));
-  t.after(()=>{assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.match(path.basename(vault),/^autooc-cli-pages-/);fs.rmSync(vault,{recursive:true,force:true});});
+  t.after(()=>{assert.equal(path.dirname(fs.realpathSync.native(vault)),fs.realpathSync.native(os.tmpdir()));assert.match(path.basename(vault),/^autooc-cli-pages-/);fs.rmSync(vault,{recursive:true,force:true});});
   return {vault,directory,file,a,b,config,write(){fs.writeFileSync(file,JSON.stringify(config));},
     call(command,...args){return spawnSync(process.execPath,[cli,command,'--vault',vault,...args],{cwd:b,encoding:'utf8',windowsHide:true,timeout:30000});}};
 }

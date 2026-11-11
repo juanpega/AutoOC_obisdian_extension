@@ -7,7 +7,8 @@ const build=require('esbuild').buildSync({entryPoints:[path.join(__dirname,'../w
 const helper={exports:{}};new Function('require','module','exports',build.outputFiles[0].text)(require,helper,helper.exports);
 const pages=helper.exports;
 function fixture(t) {
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-pages-'));
+  // Persist canonical folders, just as the page creator does (macOS /var aliases, Windows casing).
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-pages-')));
   const directory=path.join(vault,'.obsidian/plugins/auto-oc'),file=path.join(directory,'data.json');
   fs.mkdirSync(path.join(directory,'runtime'),{recursive:true});
   const a=path.join(vault,'a'),b=path.join(vault,'b');fs.mkdirSync(a);fs.mkdirSync(b);
@@ -15,7 +16,7 @@ function fixture(t) {
   const workflow={id:'w',name:'Shared',steps:[{id:'write',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","once"); output="done";'}]};
   let settings={tasks:[],workflows:[workflow],workPages,custom:{preserved:1},defaultConcurrency:'parallel',maxConcurrentExecutions:3};
   fs.writeFileSync(file,JSON.stringify(settings));
-  t.after(()=>{assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.match(path.basename(vault),/^autooc-pages-/);fs.rmSync(vault,{force:true,recursive:true});});
+  t.after(()=>{assert.equal(path.dirname(fs.realpathSync.native(vault)),fs.realpathSync.native(os.tmpdir()));assert.match(path.basename(vault),/^autooc-pages-/);fs.rmSync(vault,{force:true,recursive:true});});
   return {vault,directory,file,a,b,workPages,settings,write(){fs.writeFileSync(file,JSON.stringify(settings));},run(pageId,extra={}){return runtime.runInstalledWorkflow({vault,workflowId:'w',pageId,redact:s=>s,...extra});}};
 }
 const git=(cwd,...args)=>execFileSync('git',['-c','safe.directory='+cwd.replace(/\\/g,'/'),...args],{cwd,encoding:'utf8',windowsHide:true}).trim();

@@ -121,8 +121,9 @@ function archive(){
 for(const arch of ['arm64','x64'])test(`macOS ${arch} installs verified dual-architecture support, executable helpers and loads offline`,async t=>{
   const directory=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-mac-pty-test-'));
   t.after(()=>{assert.equal(path.dirname(fs.realpathSync(directory)),fs.realpathSync(os.tmpdir()));fs.rmSync(directory,{recursive:true,force:true});});
-  // Exercise a non-canonical input even on hosts whose temp directory has no alias.
-  const pluginDirectory=directory+path.sep+'.';
+  // Windows realpathSync can preserve input casing unlike the native/async API.
+  // Exercise that difference even when the host temp directory has no alias.
+  const pluginDirectory=(process.platform==='win32'?directory.toUpperCase():directory)+path.sep+'.';
   const body=archive(),digest='sha512-'+crypto.createHash('sha512').update(body).digest('base64');
   const modes=new Map(),requires=[];let requests=0;
   const disk={...fs.promises,async chmod(file,mode){modes.set(file,mode);},async lstat(file){const st=await fs.promises.lstat(file);if(modes.has(file))st.mode=(st.mode&~0o777)|modes.get(file);return st;}};
@@ -137,7 +138,7 @@ for(const arch of ['arm64','x64'])test(`macOS ${arch} installs verified dual-arc
   },{process:{platform:'darwin',arch,versions:{napi:'8',node:'22.0.0'}}},source=>source.replace(/sha512-[A-Za-z0-9+/=]+/,digest));
   await api.installTerminalSupport(pluginDirectory);
   // supportRoot anchors to realpath (e.g. /var -> /private/var on macOS).
-  const installed=path.join(fs.realpathSync(pluginDirectory),'terminal-support','node-pty-1.1.0-darwin');
+  const installed=path.join(await fs.promises.realpath(pluginDirectory),'terminal-support','node-pty-1.1.0-darwin');
   // rename moves the helpers; reflect that in our cross-platform permission model.
   for(const a of ['arm64','x64']){
     const helper=path.join(installed,'prebuilds','darwin-'+a,'spawn-helper');

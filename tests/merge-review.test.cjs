@@ -6,7 +6,7 @@ const loaded={exports:{}};new Function('require','module','exports',build.output
 const {reviewPageMerge,parseMergePreview,mergeReviewCommand,mergeEditorUri}=loaded.exports;
 const git=(cwd,...args)=>execFileSync('git',args,{cwd,encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']}).trim();
 function fixture(t) {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-merge-'));
+  const root=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-merge-')));
   const original={global:process.env.GIT_CONFIG_GLOBAL,system:process.env.GIT_CONFIG_NOSYSTEM};
   process.env.GIT_CONFIG_GLOBAL=path.join(root,'empty-config');process.env.GIT_CONFIG_NOSYSTEM='1';fs.writeFileSync(process.env.GIT_CONFIG_GLOBAL,'');
   const repo=path.join(root,"target ' space $(echo nope)"),source=path.join(root,'source');fs.mkdirSync(repo);
@@ -15,7 +15,7 @@ function fixture(t) {
   const page={id:'page',name:'Test',objective:'',kind:'worktree',directory:fs.realpathSync(source),repository:fs.realpathSync(repo),branch:'feat/test',taskIds:[],workflowIds:[]};
   t.after(()=>{
     for(const [key,value] of [['GIT_CONFIG_GLOBAL',original.global],['GIT_CONFIG_NOSYSTEM',original.system]]){if(value===undefined)delete process.env[key];else process.env[key]=value;}
-    assert.equal(path.dirname(fs.realpathSync(root)),fs.realpathSync(os.tmpdir()));assert.match(path.basename(root),/^autooc-merge-/);fs.rmSync(root,{recursive:true,force:true});
+    assert.equal(path.dirname(fs.realpathSync.native(root)),fs.realpathSync.native(os.tmpdir()));assert.match(path.basename(root),/^autooc-merge-/);fs.rmSync(root,{recursive:true,force:true});
   });
   function commit(cwd,file,text){fs.writeFileSync(path.join(cwd,file),text);git(cwd,'add','--',file);git(cwd,'commit','-m','change '+file);}
   function script(command){const file=path.join(root,process.platform==='win32'?'review.ps1':'review.sh');fs.writeFileSync(file,(process.platform==='win32'?'\uFEFF':'')+command);return execFileSync(process.platform==='win32'?'powershell.exe':'sh',process.platform==='win32'?['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',file]:[file],{encoding:'utf8',windowsHide:true,stdio:['ignore','pipe','pipe']});}

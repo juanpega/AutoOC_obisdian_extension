@@ -14,7 +14,7 @@ function plugin(vault){
   p.refreshOpenViews=()=>{};return p;
 }
 async function fixture(t){
-  const vault=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-finish-')),repo=path.join(vault,'repo');fs.mkdirSync(repo);
+  const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-finish-'))),repo=path.join(vault,'repo');fs.mkdirSync(repo);
   git(repo,'init','-b','fixture-main');git(repo,'config','user.name','AutoOC test');git(repo,'config','user.email','test@example.invalid');
   fs.writeFileSync(path.join(repo,'tracked.txt'),'base');fs.writeFileSync(path.join(repo,'.gitignore'),'.autooc/worktrees/\n.env\nnode_modules/\n');git(repo,'add','.');git(repo,'commit','-m','base');
   const base=git(repo,'rev-parse','HEAD'),worktree=path.join(repo,'.autooc/worktrees/page');fs.mkdirSync(path.dirname(worktree),{recursive:true});
@@ -24,7 +24,7 @@ async function fixture(t){
   fs.writeFileSync(file,JSON.stringify({workingDirectory:repo,tasks:[],workflows:[{id:'w',name:'Write',steps:[{id:'write',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","once");'}]}],workPages:[page]}));
   const instances=[];
   const open=async()=>{const p=plugin(vault);instances.push(p);p.reservePluginExecution();await p.loadSettings();return p;};
-  t.after(async()=>{for(const p of instances){await p.settingsWriter.drain().catch(()=>{});p.releasePluginExecution(false);}assert.equal(path.dirname(fs.realpathSync(vault)),fs.realpathSync(os.tmpdir()));assert.match(path.basename(vault),/^autooc-finish-/);fs.rmSync(vault,{recursive:true,force:true});});
+  t.after(async()=>{for(const p of instances){await p.settingsWriter.drain().catch(()=>{});p.releasePluginExecution(false);}assert.equal(path.dirname(fs.realpathSync.native(vault)),fs.realpathSync.native(os.tmpdir()));assert.match(path.basename(vault),/^autooc-finish-/);fs.rmSync(vault,{recursive:true,force:true});});
   const p=await open();
   return {vault,repo,worktree,dir,file,page,p,open,read:()=>JSON.parse(fs.readFileSync(file,'utf8')),review:()=>p.reviewPageFinish('page')};
 }
@@ -84,7 +84,8 @@ test('discard blocks ordinary/protected folders, protected branches, shared bran
 
 test('discard never skips differently cased Git metadata names during its full-file review',async t=>{
   const f=await fixture(t);
-  if(process.platform==='win32')fs.renameSync(path.join(f.worktree,'.git'),path.join(f.worktree,'.GIT'));
+  // Probe this filesystem: macOS volumes can be case-sensitive or case-insensitive.
+  if(fs.existsSync(path.join(f.worktree,'.GIT')))fs.renameSync(path.join(f.worktree,'.git'),path.join(f.worktree,'.GIT'));
   else {fs.mkdirSync(path.join(f.worktree,'.GIT'));fs.writeFileSync(path.join(f.worktree,'.GIT','local.txt'),'preserve');}
   const review=await f.p.reviewPageDiscard('page');
   assert.ok(review.blockers.some(s=>/nested Git repository|unexpected metadata name/.test(s)));
