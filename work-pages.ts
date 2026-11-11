@@ -12,6 +12,8 @@ export interface WorkPage {
   id: string; name: string; objective: string; directory: string;
   kind: "folder" | "worktree"; repository?: string; branch?: string; baseCommit?: string;
   workflowIds: string[]; taskIds: string[]; archived?: boolean;
+  requirementId?: string;
+  requirementFile?: {path:string;sha256:string};
   worktreeRemoval?: {
     status: "pending" | "removed"; token: string; ownerToken: string; requestedAt: string; completedAt?: string;
     proof: WorktreeRemovalProof; mode?: "discard";
@@ -44,6 +46,8 @@ export function validateWorkPages(settings: WorkPageSettings): void {
       throw new Error("Invalid work page; existing data has been preserved");
     }
     ids.add(page.id);
+    if(page.requirementId!==undefined && (typeof page.requirementId!=="string" || !page.requirementId.trim() || page.requirementId.length>200) ||
+        page.requirementFile!==undefined && (!page.requirementId || page.requirementFile?.path!==".autooc/requirement.md" || !/^[a-f0-9]{64}$/.test(page.requirementFile?.sha256))) throw new Error("Invalid page requirement metadata");
     const removal = page.worktreeRemoval;
     if (removal && (removal.mode !== undefined && removal.mode !== "discard" ||
         removal.mode === "discard" && (!removal.proof?.discard || !/^[a-f0-9]{64}$/.test(removal.proof.discard.treeHash) || !/^[a-f0-9]{40,64}$/.test(removal.proof.discard.comparisonBase)) ||
@@ -77,6 +81,16 @@ export function selectWorkPage(settings: WorkPageSettings, id: string): WorkPage
   if (matches.length !== 1) throw new Error("Work page is missing or ambiguous");
   return matches[0];
 }
+
+/** Shared registration boundary for the UI and CLI. A retry never replaces an existing page. */
+export async function registerWorkPage(settings:WorkPageSettings,page:WorkPage,save:()=>Promise<void>):Promise<void> {
+  validateWorkPages(settings);validateWorkPages({workPages:[page]});
+  const previous=settings.workPages,existing=previous?.find(item=>item.id===page.id);
+  if(existing){if(JSON.stringify(existing)!==JSON.stringify(page))throw new Error("Page ID already exists with different settings");return;}
+  if(previous?.some(item=>physicalPath(item.directory)===physicalPath(page.directory)))throw new Error("Another page already uses this folder");
+  const next=[...(previous || []),page];settings.workPages=next;
+  try{await save();}catch(error){if(settings.workPages===next)settings.workPages=previous;throw error;}
+}
 export function pageExecutionId(pageId: string, sourceId: string, task = false): string {
   return "@page:" + pageId + ":" + (task ? "task:" : "workflow:") + sourceId;
 }
@@ -91,7 +105,7 @@ export function normalizePageSelection(id?: string): string | undefined {
 export function summarizeWorkPages(settings: WorkPageSettings & {workingDirectory?: string}, vault: string) {
   validateWorkPages(settings);
   return [{id:"main",name:"Main workspace",directory:settings.workingDirectory?.trim() || vault,kind:"main",archived:false},
-    ...(settings.workPages || []).map(({id,name,directory,kind,branch,archived,worktreeRemoval})=>({id,name,directory,kind,branch,archived:!!archived,...(worktreeRemoval ? {worktreeRemoval:worktreeRemoval.status} : {})}))];
+    ...(settings.workPages || []).map(({id,name,directory,kind,branch,archived,worktreeRemoval,requirementId,requirementFile})=>({id,name,directory,kind,branch,archived:!!archived,...(worktreeRemoval ? {worktreeRemoval:worktreeRemoval.status} : {}),...(requirementId ? {requirementId,requirementFile:requirementFile?.path} : {})}))];
 }
 export function directoriesOverlap(a: string, b: string): boolean {
   return isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a);
@@ -203,6 +217,11 @@ export async function describePageFolder(directory: string, worktree: boolean): 
 /** Shared by workflow execution and new manual CLI sessions; never changes Git state. */
 export async function verifyWorkPageEnvironment(page: WorkPage): Promise<void> {
   if (physicalPath(page.directory) !== page.directory || !fs.statSync(page.directory).isDirectory()) throw new Error("Page folder is unavailable or changed");
+  if(page.requirementFile){
+    validateWorkPages({workPages:[page]});regularPath(page.directory,".autooc/requirement.md");
+    const file=path.join(page.directory,page.requirementFile.path),stat=fs.lstatSync(file);
+    if(!stat.isFile() || stat.nlink!==1 || stat.size>160000 || createHash("sha256").update(fs.readFileSync(file)).digest("hex")!==page.requirementFile.sha256)throw new Error("Page requirement snapshot changed; preserve its original contents before running");
+  }
   if (page.kind !== "worktree") return;
   if (!page.repository || !page.branch) throw new Error("Worktree identity is incomplete");
   const top = physicalPath(await gitIn(page.directory,["rev-parse","--show-toplevel"]));
@@ -230,5 +249,7 @@ export async function pageChanges(page: WorkPage): Promise<string> {
     "\n" + (summary || "No file differences.") + "\n\n" + patch;
 }
 export function pageIdentityHash(page: WorkPage): string {
-  return createHash("sha256").update(JSON.stringify([page.id, physicalPath(page.directory), page.kind, page.repository, page.branch])).digest("hex");
+  const identity:unknown[]=[page.id, physicalPath(page.directory), page.kind, page.repository, page.branch];
+  if(page.requirementId!==undefined || page.requirementFile!==undefined)identity.push({requirementId:page.requirementId,requirementFile:page.requirementFile});
+  return createHash("sha256").update(JSON.stringify(identity)).digest("hex");
 }

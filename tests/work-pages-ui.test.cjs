@@ -25,6 +25,7 @@ function harness(failPrepare=false) {
     open(){opened.push(this);this.onOpen?.();} close(){this.onClose?.();}
   }
   const helper={
+    registerWorkPage:async(settings,page,save)=>{settings.workPages=[...(settings.workPages||[]),page];await save();},
     readWorkspaceGitState:async()=>({kind:'branch',branch:'feat/current'}),
     inspectWorktreePreparation:async()=>{effects.push('inspect');return {directory:'/repo/.autooc/worktrees',ignoreFile:'/repo/.gitignore',preferenceKey:'repo-key',excluded:false};},
     prepareWorktreeIgnore:async prep=>{effects.push('prepare');if(failPrepare)throw Error('write failed');return prep;},

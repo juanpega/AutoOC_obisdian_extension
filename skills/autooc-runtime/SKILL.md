@@ -5,6 +5,61 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Alta de páginas por CLI (candidato de desarrollo)
+
+Requiere `pageCreation:1` en CLI y propietario. Consultar primero `version` y `help`
+de la instalación seleccionada. `create-page --vault ROOT --request REQUEST_JSON`
+acepta un JSON regular de hasta 60 KB; las tres rutas son absolutas al invocar
+`node CLI`. `inspect-page-request --vault ROOT --request-id ID` consulta el recibo.
+
+Campos: `requestId` estable, `name`, `objective` opcional y `mode` (`create`, `link`
+o `folder`). `create` exige `repository`, `branch` nueva y `base`; los otros modos
+exigen `directory` existente. Git conserva el checkout principal y staging.
+`allowGitignoreUpdate` vale false por defecto; true autoriza la exclusión necesaria
+en ese repositorio. También se respeta su aceptación previa guardada. No activa
+worktrees: esa preferencia debe estar habilitada previamente en Settings para
+`create` y `link`; `folder` no requiere Git ni dicha preferencia.
+
+Para preparar un requisito y lanzar trabajo desde una tarea/workflow, añadir
+`launch: {"workflowId":"ID"}` o `launch: {"taskId":"ID"}` a la petición. Usar el ID
+del catálogo compartido. La recepción durante una ejecución devuelve `queued`,
+`created:false` y una identidad reservada de página, no una ejecución terminada.
+El padre continúa; el propietario crea y lanza una sola vez cuando los runs de
+los que depende hayan terminado correctamente y la instalación esté inactiva.
+Fallo, cancelación o incertidumbre del padre bloquean la petición. No esperar al
+hijo dentro del padre ni sustituir este recorrido por un `run` recursivo.
+
+Con propietario Obsidian, la cola se atiende mientras ese plugin sigue abierto.
+Un propietario CLI autónomo atiende estas peticiones durante sus tareas y procesa
+la cola después de completar su ejecución principal, en el mismo proceso. No hay
+daemon ni transferencia automática a otro host. Sin propietario, `create-page`
+procesa su petición en primer plano. Se conservan los límites y la exclusión.
+
+La respuesta incluye `requestId`, `pageId`, `status`, `created`, carpeta/datos Git
+observados, runs de los que depende y `launchRunId`/`launchPhase` cuando existen.
+Exit 0 puede significar recepción en cola: mirar `status` y `created`. Exit 1 indica
+rechazo/resultado pendiente de revisión o hijo fallido. La inspección es de lectura
+y no modifica el estado. Nunca inferir que el requisito terminó por tener página.
+
+Reintentar con el mismo `requestId` y los mismos parámetros conserva la identidad;
+otro contenido con ese ID se rechaza. Tras perder una respuesta, consultar antes.
+Después de reiniciar no se procesan peticiones antiguas automáticamente. Un reenvío
+explícito permite continuar `queued`, `environment` (Git terminó, falta registro)
+o `created` (falta el lanzamiento), tras validar nuevamente el entorno. Un estado
+`preparing`, `launching` o `needs-review` conserva efectos inciertos; no reenviarlo
+con otra identidad ni borrar reservas o entornos. Si existe `launchRunId`, usar
+status y las operaciones oficiales de esa ejecución antes de decidir cómo seguir.
+Un bloqueo previo a efectos por consentimiento/configuración requiere corregir la
+causa y una nueva petición revisada; no es un reintento de una operación incierta.
+
+`requirementId` y `requirementText` opcionales transportan una versión explícita del
+requisito. El texto queda en `.autooc/requirement.md` dentro de la página, con hash;
+los prompts AI reciben la referencia y Code puede leerla con `codeAllowVault:true`.
+Si el archivo cambia, la ejecución se rechaza. El archivo puede quedar sin seguimiento;
+no se hace commit, copia de secretos ni preparación de dependencias. La salida CLI
+no vuelca el objetivo ni el requisito. Estos campos son de petición/estado local,
+no campos nuevos del JSON importable de tareas o workflows. No ampliar permisos.
+
 ## Selección coherente de Codex (candidato de desarrollo)
 
 `codexPath` selecciona la misma instalación para App Server, terminales manuales,
