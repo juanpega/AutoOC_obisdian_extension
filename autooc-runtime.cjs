@@ -186,7 +186,7 @@ async function run(work) {
     const next = work.next();
     if (next.done) return next.value;
     if (import_perf_hooks.performance.now() >= deadline) {
-      await new Promise((resolve8) => (0, import_timers.setImmediate)(resolve8));
+      await new Promise((resolve10) => (0, import_timers.setImmediate)(resolve10));
       deadline = import_perf_hooks.performance.now() + 4;
     }
   }
@@ -516,12 +516,12 @@ function workflowExecutionPlan(definition) {
     used.add(id);
     return id;
   };
-  const expand = (workflow, path26, returnId, enterId, inheritedBranch = false) => {
-    const ids = new Map(workflow.steps.map((step) => [step.id, path26.length ? internal([...path26, step.id]) : step.id]));
-    const entries = new Map(workflow.steps.map((step) => [step.id, step.stepKind === "workflow" ? internal([...path26, step.id, "enter"]) : ids.get(step.id)]));
+  const expand = (workflow, path30, returnId, enterId, inheritedBranch = false) => {
+    const ids = new Map(workflow.steps.map((step) => [step.id, path30.length ? internal([...path30, step.id]) : step.id]));
+    const entries = new Map(workflow.steps.map((step) => [step.id, step.stepKind === "workflow" ? internal([...path30, step.id, "enter"]) : ids.get(step.id)]));
     for (const [index, source] of workflow.steps.entries()) {
       const id = ids.get(source.id);
-      const scope = { workflow, path: path26, localId: source.id, rootStepId: path26[0] || source.id, returnId, enterId, handoffBranch: inheritedBranch || !!workflow.handoffBranch };
+      const scope = { workflow, path: path30, localId: source.id, rootStepId: path30[0] || source.id, returnId, enterId, handoffBranch: inheritedBranch || !!workflow.handoffBranch };
       const transitions = workflowStepTransitions(workflow.steps, index).map((edge) => {
         if (!entries.has(edge.toStepId)) throw new Error("Workflow transition references a missing step");
         return { ...edge, toStepId: entries.get(edge.toStepId) };
@@ -533,7 +533,7 @@ function workflowExecutionPlan(definition) {
         scopes.set(entryId, { ...scope, boundary: "enter" });
         const entryStep = { id: entryId, stepKind: "workflow", transitions: [] };
         steps.push(entryStep);
-        const childEntry = expand(child, [...path26, source.id], id, entryId, scope.handoffBranch);
+        const childEntry = expand(child, [...path30, source.id], id, entryId, scope.handoffBranch);
         entryStep.transitions = [{ toStepId: childEntry, mode: "default" }];
         scopes.set(id, { ...scope, boundary: "return" });
       } else scopes.set(id, scope);
@@ -598,8 +598,8 @@ function definitionPayload(workflow, tasks, settings) {
   const usesOpenCode2 = selected.some((task) => task.taskKind === "opencode2" || task.taskKind === "cli" && task.cliProvider === "opencode2") || settings.defaultAiEngine === "opencode2";
   const effectiveSettings = effectiveExecutionSettings(settings, usesOpenCode2);
   if (selected.some((task) => task.taskKind === "cli" && task.cliProvider === "claude")) effectiveSettings.claudePath = settings.claudePath || "claude";
-  const clean = (w) => ({ ...withoutRuntime(w), steps: w.steps.map((s) => withoutRuntime(s)) });
-  return canonical({ workflow: clean(workflow), ...children.length ? { workflows: children.map(clean) } : {}, tasks: selected, settings: effectiveSettings });
+  const clean2 = (w) => ({ ...withoutRuntime(w), steps: w.steps.map((s) => withoutRuntime(s)) });
+  return canonical({ workflow: clean2(workflow), ...children.length ? { workflows: children.map(clean2) } : {}, tasks: selected, settings: effectiveSettings });
 }
 function withAvailability(payload, workflow, tasks, catalog = []) {
   return {
@@ -665,8 +665,8 @@ function samePhysicalPath(left, right) {
   return path.relative(physicalPath(left), physicalPath(right)) === "";
 }
 function isWithinPhysicalPath(root, location) {
-  const relative6 = path.relative(physicalPath(root), physicalPath(location));
-  return relative6 !== ".." && !relative6.startsWith(".." + path.sep) && !path.isAbsolute(relative6);
+  const relative7 = path.relative(physicalPath(root), physicalPath(location));
+  return relative7 !== ".." && !relative7.startsWith(".." + path.sep) && !path.isAbsolute(relative7);
 }
 
 // catalog-transaction.ts
@@ -702,8 +702,8 @@ function catalogTransaction(file, operation, transaction) {
 
 // execution-coordinator.ts
 var fs4 = __toESM(require("fs"));
-var path5 = __toESM(require("path"));
-var import_child_process2 = require("child_process");
+var path6 = __toESM(require("path"));
+var import_child_process3 = require("child_process");
 
 // execution-journal.ts
 var fs3 = __toESM(require("fs"));
@@ -734,11 +734,11 @@ async function settingsProcessStart(pid) {
     const executable2 = process.platform === "win32" ? path3.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe") : "/bin/ps";
     const args = process.platform === "win32" ? ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().Ticks.ToString()`] : ["-p", String(pid), "-o", "lstart="];
     if (process.platform !== "win32" && process.platform !== "darwin") return null;
-    const value = await new Promise((resolve8, reject) => (0, import_child_process.execFile)(
+    const value = await new Promise((resolve10, reject) => (0, import_child_process.execFile)(
       executable2,
       args,
       { windowsHide: true, timeout: 5e3, maxBuffer: 4096 },
-      (error, stdout) => error ? reject(error) : resolve8(stdout.trim())
+      (error, stdout) => error ? reject(error) : resolve10(stdout.trim())
     ));
     if (process.platform === "win32") return /^\d{15,20}$/.test(value) ? `windows:${value}` : null;
     return /^[A-Za-z]{3} [A-Za-z]{3}\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/.test(value) ? `darwin:${value}` : null;
@@ -826,7 +826,7 @@ async function beginSettingsWriteIntent(file, token, originalHash) {
         return;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY", "EACCES"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve8) => setTimeout(resolve8, 50 * (attempt + 1)));
+        await new Promise((resolve10) => setTimeout(resolve10, 50 * (attempt + 1)));
       }
     }
   };
@@ -1004,7 +1004,7 @@ var SettingsWriter = class _SettingsWriter {
       try {
         lockStat = fs2.fstatSync(descriptor);
         fs2.writeFileSync(descriptor, lockText);
-        await new Promise((resolve8, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve8()));
+        await new Promise((resolve10, reject) => fs2.fsync(descriptor, (error) => error ? reject(error) : resolve10()));
       } finally {
         fs2.closeSync(descriptor);
       }
@@ -1065,9 +1065,9 @@ function ioBudget() {
   let started = import_perf_hooks2.performance.now();
   return () => {
     if (import_perf_hooks2.performance.now() - started < 4) return;
-    return new Promise((resolve8) => (0, import_timers2.setImmediate)(() => {
+    return new Promise((resolve10) => (0, import_timers2.setImmediate)(() => {
       started = import_perf_hooks2.performance.now();
-      resolve8();
+      resolve10();
     }));
   };
 }
@@ -1141,7 +1141,7 @@ async function readSettingsTextAsync(file) {
           ascii = false;
           break;
         }
-        await new Promise((resolve8) => (0, import_timers2.setImmediate)(resolve8));
+        await new Promise((resolve10) => (0, import_timers2.setImmediate)(resolve10));
       }
       if (ascii) {
         const final2 = await handle.stat();
@@ -1152,7 +1152,7 @@ async function readSettingsTextAsync(file) {
       const decoder = new import_string_decoder.StringDecoder("utf8"), parts = [];
       for (let offset = 0; offset < bytes.length; offset += 256 * 1024) {
         parts.push(decoder.write(bytes.subarray(offset, offset + 256 * 1024)));
-        await new Promise((resolve8) => (0, import_timers2.setImmediate)(resolve8));
+        await new Promise((resolve10) => (0, import_timers2.setImmediate)(resolve10));
       }
       parts.push(decoder.end());
       bytes = void 0;
@@ -1240,7 +1240,7 @@ async function atomicSettingsTextWrite(file, text, io = fs2.promises, beforeRepl
         break;
       } catch (error) {
         if (process.platform !== "win32" || !["EPERM", "EBUSY"].includes(error.code || "") || attempt >= 4) throw error;
-        await new Promise((resolve8) => setTimeout(resolve8, 50 * (attempt + 1)));
+        await new Promise((resolve10) => setTimeout(resolve10, 50 * (attempt + 1)));
         if (beforeReplace) continue;
         const current = await io.readFile(file).catch((readError) => {
           if (readError.code === "ENOENT") return null;
@@ -1563,39 +1563,81 @@ var ExecutionJournal = class _ExecutionJournal {
   }
 };
 
+// workspace-conflicts.ts
+var path5 = __toESM(require("path"));
+var import_child_process2 = require("child_process");
+function independentGitWorkspaces(a, b) {
+  try {
+    a = physicalPath(a);
+    b = physicalPath(b);
+    if (samePhysicalPath(a, b)) return false;
+    const git2 = (cwd, ...args) => (0, import_child_process2.execFileSync)(
+      "git",
+      ["-c", "safe.directory=" + cwd.replace(/\\/g, "/"), ...args],
+      { cwd, encoding: "utf8", windowsHide: true, timeout: 5e3, stdio: ["ignore", "pipe", "pipe"] }
+    ).trim();
+    const identity = (cwd) => ({
+      root: physicalPath(git2(cwd, "rev-parse", "--show-toplevel")),
+      common: physicalPath(path5.resolve(cwd, git2(cwd, "rev-parse", "--git-common-dir"))),
+      gitDir: physicalPath(path5.resolve(cwd, git2(cwd, "rev-parse", "--git-dir")))
+    });
+    const left = identity(a), right = identity(b);
+    if (!samePhysicalPath(a, left.root) || !samePhysicalPath(b, right.root) || !samePhysicalPath(left.common, right.common) || samePhysicalPath(left.gitDir, right.gitDir)) return false;
+    const roots = git2(a, "worktree", "list", "--porcelain", "-z").split("\0").filter((field) => field.startsWith("worktree ")).map((field) => field.slice(9));
+    if (![a, b].every((root) => roots.some((entry) => samePhysicalPath(entry, root)))) return false;
+    const parent = isWithinPhysicalPath(a, b) ? a : isWithinPhysicalPath(b, a) ? b : void 0;
+    if (parent) {
+      const child = parent === a ? b : a;
+      git2(parent, "check-ignore", "--quiet", "--", path5.relative(parent, child).replace(/\\/g, "/") + "/");
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // execution-coordinator.ts
-function resources(definition, vault) {
+function resources(definition, vault, workspace) {
   const { workflow, tasks, settings } = definition;
   const workflows = [workflow, ...definition.workflows || []];
   for (const item of [...workflows, ...tasks]) validateConcurrency(item);
   const standalone = workflow.id.startsWith("@task:");
   const policy = (standalone ? tasks[0]?.concurrency : workflow.concurrency) ?? concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
   const result = { exclusive: policy === "exclusive" || workflows.some((w) => !!w.handoffBranch || w.concurrency === "exclusive"), sharedWorkspace: policy === "parallel" && !workflows.some((w) => w.concurrency === "independent"), tasks: new Set(tasks.map((t) => t.id)), workflows: new Set(workflows.map((w) => w.id)), directories: [], repositories: /* @__PURE__ */ new Set() };
+  if (workspace) {
+    result.workspace = workspace;
+    result.sharedWorkspace = false;
+    result.directories.push(physicalPath(workspace.directory));
+  }
   for (const item of [...workflows.flatMap((w) => w.steps).filter((s) => s.stepKind === "code"), ...tasks]) {
     if (item.branch || workflow.handoffBranch) result.exclusive = true;
     if (item.interactiveTerminal || item.taskKind === void 0 && item.stepKind !== "code" && settings.defaultInteractiveTerminal) result.exclusive = true;
     if (item.stepKind === "code" || item.taskKind === "code") {
-      if (!result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal)) result.exclusive = true;
+      if (!workspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal)) result.directories.push(physicalPath(vault));
+      if (!workspace && !result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal)) result.exclusive = true;
       continue;
     }
     const directory = physicalPath(item.workingDirectory || settings.workingDirectory || vault);
     result.directories.push(directory);
     let parent = directory, gitRoot;
     for (; ; ) {
-      if (fs4.existsSync(path5.join(parent, ".git"))) {
+      if (fs4.existsSync(path6.join(parent, ".git"))) {
         gitRoot = parent;
         break;
       }
-      const next = path5.dirname(parent);
+      const next = path6.dirname(parent);
       if (next === parent) break;
       parent = next;
     }
     if (gitRoot) {
-      const common = (0, import_child_process2.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
-      result.repositories.add(physicalPath(path5.resolve(gitRoot, common)));
+      const common = (0, import_child_process3.execFileSync)("git", ["-c", `safe.directory=${gitRoot.replace(/\\/g, "/")}`, "rev-parse", "--git-common-dir"], { cwd: gitRoot, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true }).trim();
+      result.repositories.add(physicalPath(path6.resolve(gitRoot, common)));
     }
   }
-  if (!result.sharedWorkspace && workflows.some((w) => w.steps.some((s) => s.transitionMode === "eval" || s.transitions?.some((t) => t.mode === "eval")))) result.exclusive = true;
+  if (!workspace && workflows.some((w) => w.steps.some((s) => s.transitionMode === "eval" || s.transitions?.some((t) => t.mode === "eval")))) {
+    result.directories.push(physicalPath(vault));
+    if (!result.sharedWorkspace) result.exclusive = true;
+  }
   return result;
 }
 function canShareWorkspace(a, b) {
@@ -1622,7 +1664,7 @@ var ExecutionAdmission = class {
   assertOwned(lease, definition) {
     this.coordinator.assertOwned(this, lease);
     if (this.definition.hash !== definition.hash) throw new Error("Admission definition changed");
-    const current = resources(definition, this.vault);
+    const current = resources(definition, this.vault, this.resources.workspace);
     if (JSON.stringify(current.directories) !== JSON.stringify(this.resources.directories) || JSON.stringify([...current.repositories]) !== JSON.stringify([...this.resources.repositories])) throw new Error("Execution resource identity changed; reservation retained");
   }
   bind(checkpoint) {
@@ -1663,9 +1705,9 @@ var ExecutionCoordinator = class {
     if (known.advancing) return true;
     return canShareWorkspace(admission.resources, known.resources) && ![...admission.resources.workflows].some((id) => known.resources.workflows.has(id)) && ![...admission.resources.tasks].some((id) => known.resources.tasks.has(id));
   }
-  admit(definition, vault, resumeRunId) {
+  admit(definition, vault, resumeRunId, workspace) {
     this.lease.assertOwned();
-    const requested = resources(definition, vault);
+    const requested = resources(definition, vault, workspace);
     for (const session2 of this.sessions) {
       if (session2.advancing || !session2.runId) continue;
       try {
@@ -1684,7 +1726,10 @@ var ExecutionCoordinator = class {
       if ([...requested.workflows].some((id) => current.resources.workflows.has(id)) || [...requested.tasks].some((id) => current.resources.tasks.has(id))) throw new Error("A shared workflow is already executing; definition or referenced task is reserved");
       if (!current.advancing && !canShareWorkspace(requested, current.resources)) throw new Error("Execution outcome requires continuation or reconciliation; reservation retained");
       if (requested.exclusive || current.resources.exclusive) throw new Error("Exclusive execution must finish before shared execution");
-      if (!canShareWorkspace(requested, current.resources) && (requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a))) || [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b))))) throw new Error("Execution resource is occupied (workspace or Git repository)");
+      const overlaps = requested.directories.some((a) => current.resources.directories.some((b) => isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a)));
+      const sharesRepository = [...requested.repositories].some((a) => [...current.resources.repositories].some((b) => samePhysicalPath(a, b)));
+      const separateWorktrees = (overlaps || sharesRepository) && requested.workspace && current.resources.workspace && independentGitWorkspaces(requested.workspace.directory, current.resources.workspace.directory);
+      if (!canShareWorkspace(requested, current.resources) && !separateWorktrees && (overlaps || sharesRepository)) throw new Error("Execution resource is occupied (workspace or Git repository)");
     }
     const limit = concurrencySettings(definition.admissionSettings || {}).maxConcurrentExecutions;
     if (limit > 0 && this.sessions.size >= limit) throw new Error(`Concurrent execution limit reached (${limit})`);
@@ -1727,15 +1772,15 @@ var fs7 = __toESM(require("fs"));
 
 // execution-lease.ts
 var fs5 = __toESM(require("fs"));
-var path6 = __toESM(require("path"));
+var path7 = __toESM(require("path"));
 var import_crypto5 = require("crypto");
 function acquireExecutionLease(runtimeDirectory) {
   const root = fs5.realpathSync(runtimeDirectory);
-  if (fs5.existsSync(path6.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
-  const recovery = path6.join(root, "lease-recovery.lock");
+  if (fs5.existsSync(path7.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
+  const recovery = path7.join(root, "lease-recovery.lock");
   if (fs5.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
-  const lock = path6.join(root, "execution.lock");
-  const ownerPath = path6.join(lock, "owner.json");
+  const lock = path7.join(root, "execution.lock");
+  const ownerPath = path7.join(lock, "owner.json");
   const token = (0, import_crypto5.randomUUID)();
   fs5.mkdirSync(lock);
   if (fs5.existsSync(recovery)) {
@@ -1774,7 +1819,7 @@ function acquireExecutionLease(runtimeDirectory) {
   };
 }
 function readExecutionLeaseOwner(runtimeDirectory) {
-  const root = fs5.realpathSync(runtimeDirectory), lock = path6.join(root, "execution.lock"), file = path6.join(lock, "owner.json");
+  const root = fs5.realpathSync(runtimeDirectory), lock = path7.join(root, "execution.lock"), file = path7.join(lock, "owner.json");
   if (fs5.lstatSync(lock).isSymbolicLink() || fs5.realpathSync(lock) !== lock || fs5.lstatSync(file).isSymbolicLink()) throw new Error("Invalid execution lease paths");
   let owner;
   try {
@@ -1786,7 +1831,7 @@ function readExecutionLeaseOwner(runtimeDirectory) {
   return { schemaVersion: 1, token: owner.token, pid: owner.pid, createdAt: owner.createdAt };
 }
 function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
-  const root = fs5.realpathSync(runtimeDirectory), guard = path6.join(root, "lease-recovery.lock");
+  const root = fs5.realpathSync(runtimeDirectory), guard = path7.join(root, "lease-recovery.lock");
   fs5.mkdirSync(guard);
   try {
     const owner = readExecutionLeaseOwner(root);
@@ -1801,8 +1846,8 @@ function recoverExecutionLease(runtimeDirectory, expectedToken, assertSafe) {
     assertSafe?.();
     if (JSON.stringify(readExecutionLeaseOwner(root)) !== JSON.stringify(owner)) throw new Error("Execution lease changed during recovery");
     const archived = `abandoned-lease-${owner.token}`;
-    if (fs5.existsSync(path6.join(root, archived))) throw new Error("Recovery archive already exists");
-    fs5.renameSync(path6.join(root, "execution.lock"), path6.join(root, archived));
+    if (fs5.existsSync(path7.join(root, archived))) throw new Error("Recovery archive already exists");
+    fs5.renameSync(path7.join(root, "execution.lock"), path7.join(root, archived));
     return { recovered: true, archived, executionsResumed: false };
   } finally {
     fs5.rmdirSync(guard);
@@ -1888,22 +1933,22 @@ async function advanceWorkflowSession(journal, definition, host, options = {}) {
 
 // code-runtime.ts
 function executeCode(options) {
-  const fs26 = require("fs");
-  const path26 = require("path");
+  const fs28 = require("fs");
+  const path30 = require("path");
   const vm2 = require("vm");
   const vaultBase = options.vaultBase;
   const defaultCwd = options.cwd;
   const resolveInVault = (p) => {
-    const root = fs26.realpathSync(vaultBase);
-    const resolved = path26.resolve(root, p || ".");
-    if (resolved !== root && !resolved.startsWith(root + path26.sep)) {
+    const root = fs28.realpathSync(vaultBase);
+    const resolved = path30.resolve(root, p || ".");
+    if (resolved !== root && !resolved.startsWith(root + path30.sep)) {
       throw new Error(`Path escapes vault: ${p}`);
     }
     let current = root;
-    for (const component of path26.relative(root, resolved).split(path26.sep).filter(Boolean)) {
-      current = path26.join(current, component);
+    for (const component of path30.relative(root, resolved).split(path30.sep).filter(Boolean)) {
+      current = path30.join(current, component);
       try {
-        if (fs26.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
+        if (fs28.lstatSync(current).isSymbolicLink()) throw new Error("Linked vault paths are unsupported");
       } catch (error) {
         if (error.code === "ENOENT") break;
         throw error;
@@ -1911,10 +1956,10 @@ function executeCode(options) {
     }
     return resolved;
   };
-  const readText = (p) => fs26.readFileSync(p, "utf8");
+  const readText = (p) => fs28.readFileSync(p, "utf8");
   const writeText = (p, content) => {
-    fs26.mkdirSync(path26.dirname(p), { recursive: true });
-    fs26.writeFileSync(p, String(content), "utf8");
+    fs28.mkdirSync(path30.dirname(p), { recursive: true });
+    fs28.writeFileSync(p, String(content), "utf8");
     return p;
   };
   const sandbox = {
@@ -1944,36 +1989,36 @@ function executeCode(options) {
       },
       append: (p, content) => {
         const full = resolveInVault(p);
-        fs26.mkdirSync(path26.dirname(full), { recursive: true });
-        fs26.appendFileSync(full, String(content), "utf8");
+        fs28.mkdirSync(path30.dirname(full), { recursive: true });
+        fs28.appendFileSync(full, String(content), "utf8");
         options.onVaultMutation?.({ path: full, operation: "append" });
         return full;
       },
-      exists: (p) => fs26.existsSync(resolveInVault(p)),
-      list: (p = ".") => fs26.readdirSync(resolveInVault(p))
+      exists: (p) => fs28.existsSync(resolveInVault(p)),
+      list: (p = ".") => fs28.readdirSync(resolveInVault(p))
     };
   }
   if (options.codeAllowFiles) {
     sandbox.files = {
       cwd: defaultCwd,
-      resolve: (p) => path26.isAbsolute(p) ? path26.resolve(p) : path26.resolve(defaultCwd, p || "."),
-      read: (p) => readText(path26.isAbsolute(p) ? path26.resolve(p) : path26.resolve(defaultCwd, p)),
-      write: (p, content) => writeText(path26.isAbsolute(p) ? path26.resolve(p) : path26.resolve(defaultCwd, p), content),
+      resolve: (p) => path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p || "."),
+      read: (p) => readText(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p)),
+      write: (p, content) => writeText(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p), content),
       append: (p, content) => {
-        const full = path26.isAbsolute(p) ? path26.resolve(p) : path26.resolve(defaultCwd, p);
-        fs26.mkdirSync(path26.dirname(full), { recursive: true });
-        fs26.appendFileSync(full, String(content), "utf8");
+        const full = path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p);
+        fs28.mkdirSync(path30.dirname(full), { recursive: true });
+        fs28.appendFileSync(full, String(content), "utf8");
         return full;
       },
-      exists: (p) => fs26.existsSync(path26.isAbsolute(p) ? path26.resolve(p) : path26.resolve(defaultCwd, p)),
-      list: (p = ".") => fs26.readdirSync(path26.isAbsolute(p) ? path26.resolve(p) : path26.resolve(defaultCwd, p))
+      exists: (p) => fs28.existsSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p)),
+      list: (p = ".") => fs28.readdirSync(path30.isAbsolute(p) ? path30.resolve(p) : path30.resolve(defaultCwd, p))
     };
   }
   if (options.codeAllowTerminal) {
     const { execSync } = require("child_process");
     sandbox.terminal = {
       run: (command, options2 = {}) => execSync(String(command), {
-        cwd: options2.cwd ? path26.isAbsolute(options2.cwd) ? options2.cwd : path26.resolve(defaultCwd, options2.cwd) : defaultCwd,
+        cwd: options2.cwd ? path30.isAbsolute(options2.cwd) ? options2.cwd : path30.resolve(defaultCwd, options2.cwd) : defaultCwd,
         timeout: Math.min(Math.max(options2.timeoutMs || 3e4, 1e3), 6e5),
         encoding: "utf8",
         windowsHide: true
@@ -1998,19 +2043,19 @@ function executeCode(options) {
 }
 function codeNodeExecutable() {
   if (!process.versions.electron) return process.execPath;
-  const fs26 = require("fs");
-  const path26 = require("path");
-  const directories = (process.env.PATH || process.env.Path || "").split(path26.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path26.isAbsolute(directory));
+  const fs28 = require("fs");
+  const path30 = require("path");
+  const directories = (process.env.PATH || process.env.Path || "").split(path30.delimiter).map((directory) => directory.trim().replace(/^"|"$/g, "")).filter((directory) => path30.isAbsolute(directory));
   if (process.platform === "win32") {
     for (const base of [process.env.ProgramFiles, process.env["ProgramFiles(x86)"]]) {
-      if (base && path26.isAbsolute(base)) directories.push(path26.join(base, "nodejs"));
+      if (base && path30.isAbsolute(base)) directories.push(path30.join(base, "nodejs"));
     }
   } else directories.push("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin");
   for (const directory of directories) {
-    const file = path26.join(directory, process.platform === "win32" ? "node.exe" : "node");
+    const file = path30.join(directory, process.platform === "win32" ? "node.exe" : "node");
     try {
-      if (fs26.statSync(file).isFile()) {
-        fs26.accessSync(file, fs26.constants.X_OK);
+      if (fs28.statSync(file).isFile()) {
+        fs28.accessSync(file, fs28.constants.X_OK);
         return file;
       }
     } catch {
@@ -2074,9 +2119,9 @@ async function executeCodeAsync(options, signal) {
     serialization: "json"
   });
   let closed = false, diagnostic = "", startupTimer;
-  const closedPromise = new Promise((resolve8) => child.once("close", () => {
+  const closedPromise = new Promise((resolve10) => child.once("close", () => {
     closed = true;
-    resolve8();
+    resolve10();
   }));
   child.stderr?.on("data", (chunk) => {
     diagnostic = (diagnostic + String(chunk)).slice(-2e3);
@@ -2084,9 +2129,9 @@ async function executeCodeAsync(options, signal) {
   const stop = () => {
     if (!child.pid || closed || child.exitCode !== null || child.signalCode !== null) return;
     if (signal?.aborted && process.platform === "win32") {
-      const path26 = require("path");
+      const path30 = require("path");
       const system = process.env.SystemRoot || "C:\\Windows";
-      const killer = spawn4(path26.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = spawn4(path30.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       const fallback = () => {
         if (!closed) child.kill("SIGKILL");
       };
@@ -2109,7 +2154,7 @@ async function executeCodeAsync(options, signal) {
   };
   let abort;
   try {
-    return await new Promise((resolve8, reject) => {
+    return await new Promise((resolve10, reject) => {
       abort = () => reject(new Error("Code execution stopped; commands already started may still have effects"));
       signal?.addEventListener("abort", abort, { once: true });
       child.once("error", reject);
@@ -2124,7 +2169,7 @@ async function executeCodeAsync(options, signal) {
             });
           } else if (message.type === "log") log?.(message.text);
           else if (message.type === "mutation") onVaultMutation?.(message.mutation);
-          else if (message.type === "result") resolve8(message.output);
+          else if (message.type === "result") resolve10(message.output);
           else if (message.type === "error") {
             const error = new Error(message.message);
             error.name = message.name;
@@ -2179,7 +2224,7 @@ function workflowDelay(value = 0, unit = "seconds") {
 }
 function waitForWorkflowDelay(milliseconds, signal) {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return Promise.reject(new Error("Invalid workflow delay"));
-  return new Promise((resolve8, reject) => {
+  return new Promise((resolve10, reject) => {
     let timer;
     let remaining = milliseconds;
     const cleanup = () => {
@@ -2199,7 +2244,7 @@ function waitForWorkflowDelay(milliseconds, signal) {
         if (remaining > 0) schedule();
         else {
           cleanup();
-          resolve8();
+          resolve10();
         }
       }, chunk);
     };
@@ -2307,15 +2352,15 @@ async function reconcileWorkflowTask(journal, definition, read, host) {
 }
 
 // workflow-branch.ts
-var path7 = __toESM(require("path"));
-var import_child_process3 = require("child_process");
+var path8 = __toESM(require("path"));
+var import_child_process4 = require("child_process");
 function validateBranchOptions(task) {
   if (task.branch !== void 0 && typeof task.branch !== "string") throw new Error("Branch must be a string");
   if (task.createBranch !== void 0 && typeof task.createBranch !== "boolean") throw new Error("createBranch must be boolean");
   if (task.createBranch && !task.branch?.trim()) throw new Error("Creating a branch requires its name");
   if (task.branch?.trim()) {
     try {
-      (0, import_child_process3.execFileSync)("git", ["check-ref-format", "--branch", task.branch], { stdio: "ignore", windowsHide: true });
+      (0, import_child_process4.execFileSync)("git", ["check-ref-format", "--branch", task.branch], { stdio: "ignore", windowsHide: true });
     } catch {
       throw new Error("Invalid Git branch name");
     }
@@ -2324,7 +2369,7 @@ function validateBranchOptions(task) {
 }
 function git(cwd, args) {
   try {
-    const output = (0, import_child_process3.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const output = (0, import_child_process4.execFileSync)("git", ["-c", `safe.directory=${cwd.replace(/\\/g, "/")}`, ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     return args.includes("-z") ? output : output.trim();
   } catch {
     throw new Error("Git branch operation failed; working tree preserved, no forced checkout or cleanup");
@@ -2334,7 +2379,7 @@ function branchRepository(cwd, vault) {
   const directory = physicalPath(git(physicalPath(cwd), ["rev-parse", "--show-toplevel"]));
   if (!isWithinPhysicalPath(vault, directory)) throw new Error("Git repository is outside the selected vault");
   const metadata = physicalPath(git(directory, ["rev-parse", "--absolute-git-dir"]));
-  const common = physicalPath(path7.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
+  const common = physicalPath(path8.resolve(directory, git(directory, ["rev-parse", "--git-common-dir"])));
   if (!isWithinPhysicalPath(vault, metadata) || !isWithinPhysicalPath(vault, common)) throw new Error("Git metadata is outside the selected vault");
   return directory;
 }
@@ -2372,11 +2417,11 @@ function verifyWorkflowBranch(journal, vault) {
 
 // workflow-approval.ts
 var fs6 = __toESM(require("fs"));
-var path8 = __toESM(require("path"));
+var path9 = __toESM(require("path"));
 var import_crypto6 = require("crypto");
 function responseFile(directory, runId, token) {
   if (!/^[a-f0-9-]+$/.test(token)) throw new Error("Invalid approval identity");
-  return path8.join(directory, `${runId}-${token}.approval.json`);
+  return path9.join(directory, `${runId}-${token}.approval.json`);
 }
 function answerWorkflowApproval(directory, runId, token, approved) {
   if (typeof approved !== "boolean") throw new Error("Explicit approval decision required");
@@ -2398,11 +2443,11 @@ async function awaitWorkflowApproval(journal, directory, request, redact, signal
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await onCheckpoint?.(journal.snapshot());
   const file = responseFile(directory, runId, token);
-  const approved = await new Promise((resolve8, reject) => {
+  const approved = await new Promise((resolve10, reject) => {
     const finish = (error, value) => {
       clearInterval(timer);
       signal?.removeEventListener("abort", abort);
-      error ? reject(error) : resolve8(value);
+      error ? reject(error) : resolve10(value);
     };
     const abort = () => finish(new Error("Approval interrupted; execution requires reconciliation"));
     const timer = setInterval(() => {
@@ -2654,7 +2699,7 @@ function standaloneTaskWorkflow(taskId) {
 
 // task-history.ts
 var fs8 = __toESM(require("fs"));
-var path9 = __toESM(require("path"));
+var path10 = __toESM(require("path"));
 function regularDirectory(directory) {
   if (!fs8.existsSync(directory)) fs8.mkdirSync(directory);
   const stat = fs8.lstatSync(directory);
@@ -2670,12 +2715,12 @@ function persistTaskHistory(vault, workflow, checkpoint, settings) {
     if (!/^[a-zA-Z0-9_-]+$/.test(step.taskId)) throw new Error("Unsafe task history identity");
     let directory = root;
     for (const part of [".opencode", "logs", step.taskId]) {
-      directory = path9.join(directory, part);
+      directory = path10.join(directory, part);
       regularDirectory(directory);
     }
     const date = new Date(observed.startedAt), pad = (n) => String(n).padStart(2, "0");
     const timestamp = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}_${pad(date.getHours())}-${pad(date.getMinutes())}-${pad(date.getSeconds())}.${String(date.getMilliseconds()).padStart(3, "0")}`;
-    const file = path9.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
+    const file = path10.join(directory, `${timestamp}_${checkpoint.runId}_${String(index).padStart(6, "0")}.log`);
     const content = `Run: ${checkpoint.runId}
 Step: ${observed.stepId}
 Status: ${observed.status}
@@ -2697,20 +2742,20 @@ ${observed.output || "(no output)"}`;
     const max = settings.maxLogsPerTask ?? 50, days = settings.logRetentionDays ?? 30;
     const retained = [];
     for (const name of files2) {
-      const file = path9.join(directory, name), stat2 = fs8.lstatSync(file);
+      const file = path10.join(directory, name), stat2 = fs8.lstatSync(file);
       if (!stat2.isFile() || stat2.isSymbolicLink()) throw new Error("Task history requires regular files");
       const match = name.match(/^(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/);
       const date = match ? Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}`) : NaN;
       if (days > 0 && date < Date.now() - days * 864e5) fs8.unlinkSync(file);
       else retained.push(name);
     }
-    while (max > 0 && retained.length > max) fs8.unlinkSync(path9.join(directory, retained.shift()));
-    const latest = path9.join(directory, "latest.log");
+    while (max > 0 && retained.length > max) fs8.unlinkSync(path10.join(directory, retained.shift()));
+    const latest = path10.join(directory, "latest.log");
     const stat = fs8.lstatSync(latest, { throwIfNoEntry: false });
     if (stat) {
       if (!stat.isFile() || stat.isSymbolicLink()) throw new Error("Task history latest must be a regular file");
     }
-    if (retained.length) fs8.writeFileSync(latest, fs8.readFileSync(path9.join(directory, retained[retained.length - 1])));
+    if (retained.length) fs8.writeFileSync(latest, fs8.readFileSync(path10.join(directory, retained[retained.length - 1])));
   }
 }
 
@@ -2870,9 +2915,143 @@ function presentationFields(value) {
   };
 }
 
-// installed-workflow-host.ts
-var fs20 = __toESM(require("fs"));
-var path21 = __toESM(require("path"));
+// page-workflow.ts
+var fs21 = __toESM(require("fs"));
+var path23 = __toESM(require("path"));
+
+// work-pages.ts
+var fs9 = __toESM(require("fs"));
+var path11 = __toESM(require("path"));
+var import_crypto7 = require("crypto");
+var import_child_process5 = require("child_process");
+function validateWorkPages(settings) {
+  if (settings.worktreesEnabled !== void 0 && typeof settings.worktreesEnabled !== "boolean") throw new Error("Invalid worktree preference");
+  if (settings.workPages !== void 0 && !Array.isArray(settings.workPages)) throw new Error("Invalid work pages; existing data has been preserved");
+  const ids = /* @__PURE__ */ new Set();
+  for (const page2 of settings.workPages || []) {
+    if (!page2 || !/^[a-zA-Z0-9-]{1,80}$/.test(page2.id) || ["main", "general"].includes(page2.id) || ids.has(page2.id) || typeof page2.name !== "string" || !page2.name.trim() || typeof page2.objective !== "string" || typeof page2.directory !== "string" || !path11.isAbsolute(page2.directory) || !["folder", "worktree"].includes(page2.kind) || !Array.isArray(page2.workflowIds) || !Array.isArray(page2.taskIds) || [...page2.workflowIds, ...page2.taskIds].some((id) => typeof id !== "string" || !id)) {
+      throw new Error("Invalid work page; existing data has been preserved");
+    }
+    ids.add(page2.id);
+    const removal = page2.worktreeRemoval;
+    if (removal && (removal.mode !== void 0 && removal.mode !== "discard" || removal.mode === "discard" && (!removal.proof?.discard || !/^[a-f0-9]{64}$/.test(removal.proof.discard.treeHash) || !/^[a-f0-9]{40,64}$/.test(removal.proof.discard.comparisonBase)) || removal.mode !== "discard" && removal.proof?.discard !== void 0)) throw new Error("Invalid discard evidence; existing data has been preserved");
+    if (removal !== void 0 && (!removal || page2.kind !== "worktree" || page2.archived !== true || !["pending", "removed"].includes(removal.status) || typeof removal.token !== "string" || !/^[a-f0-9-]{36}$/.test(removal.token) || typeof removal.ownerToken !== "string" || !/^[a-f0-9-]{36}$/.test(removal.ownerToken) || typeof removal.requestedAt !== "string" || !Number.isFinite(Date.parse(removal.requestedAt)) || removal.status === "removed" && (typeof removal.completedAt !== "string" || !Number.isFinite(Date.parse(removal.completedAt))) || !removal.proof || ["directory", "repository", "commonDirectory", "gitDirectory"].some((key) => typeof removal.proof[key] !== "string" || !path11.isAbsolute(removal.proof[key])) || ["branch", "head", "directoryIdentity", "gitIdentity"].some((key) => typeof removal.proof[key] !== "string" || !removal.proof[key]) || removal.proof.directory !== page2.directory || removal.proof.repository !== page2.repository || removal.proof.branch !== page2.branch)) {
+      throw new Error("Invalid worktree removal evidence; existing data has been preserved");
+    }
+  }
+  for (const key of ["pageRuns", "pageTerminalClaims", "worktreeNoticeDismissed"]) {
+    if (settings[key] !== void 0 && !Array.isArray(settings[key])) throw new Error("Invalid " + key + "; existing data has been preserved");
+  }
+  if (settings.worktreeNoticeDismissed?.some((key) => typeof key !== "string" || !key)) throw new Error("Invalid worktree notice preferences");
+  if (settings.pageTerminalClaims?.some((claim) => !claim || typeof claim.id !== "string" || !claim.id || typeof claim.pageId !== "string" || typeof claim.directory !== "string" || !path11.isAbsolute(claim.directory) || typeof claim.createdAt !== "string" || claim.exclusive !== void 0 && typeof claim.exclusive !== "boolean")) throw new Error("Invalid page terminal reservations; existing data has been preserved");
+  if (settings.pageRuns?.some((run2) => !run2 || typeof run2.runId !== "string" || !/^[a-f0-9-]+$/.test(run2.runId) || typeof run2.pageId !== "string" || typeof run2.sourceId !== "string" || typeof run2.task !== "boolean" || typeof run2.workflowId !== "string" || typeof run2.name !== "string" || typeof run2.createdAt !== "string" || typeof run2.uncertain !== "boolean" || !Number.isSafeInteger(run2.revision) || run2.revision < 0 || !["ready", "in_flight", "completed", "failed", "abandoned"].includes(run2.phase))) throw new Error("Invalid page history; existing data has been preserved");
+}
+function selectWorkPage(settings, id) {
+  validateWorkPages(settings);
+  const matches = (settings.workPages || []).filter((page2) => page2.id === id);
+  if (matches.length !== 1) throw new Error("Work page is missing or ambiguous");
+  return matches[0];
+}
+function pageExecutionId(pageId, sourceId, task = false) {
+  return "@page:" + pageId + ":" + (task ? "task:" : "workflow:") + sourceId;
+}
+function directoriesOverlap(a, b) {
+  return isWithinPhysicalPath(a, b) || isWithinPhysicalPath(b, a);
+}
+function assertNoPageTerminal(settings, directory, scopedWorkspace = false) {
+  for (const claim of settings.pageTerminalClaims || []) {
+    if (!claim || typeof claim.directory !== "string") throw new Error("Invalid terminal reservation; review existing sessions");
+    if (claim.exclusive) throw new Error("An exclusive page terminal reserves execution. Close its session before starting another writer.");
+    if (directoriesOverlap(claim.directory, directory) && !(scopedWorkspace && independentGitWorkspaces(claim.directory, directory))) throw new Error("A page terminal reserves this folder. Close the session and confirm its completion in the page before starting another writer.");
+  }
+}
+function gitIn(directory, args) {
+  return new Promise((resolve10, reject) => (0, import_child_process5.execFile)(
+    "git",
+    ["-c", "safe.directory=" + directory.replace(/\\/g, "/"), ...args],
+    { cwd: directory, encoding: "utf8", windowsHide: true, timeout: 3e4, maxBuffer: 4 * 1024 * 1024 },
+    (error, stdout, stderr) => error ? reject(Object.assign(new Error("Git: " + String(stderr || error.message).trim()), { gitExitCode: error.code })) : resolve10(stdout.trim())
+  ));
+}
+async function verifyWorkPageEnvironment(page2) {
+  if (physicalPath(page2.directory) !== page2.directory || !fs9.statSync(page2.directory).isDirectory()) throw new Error("Page folder is unavailable or changed");
+  if (page2.kind !== "worktree") return;
+  if (!page2.repository || !page2.branch) throw new Error("Worktree identity is incomplete");
+  const top = physicalPath(await gitIn(page2.directory, ["rev-parse", "--show-toplevel"]));
+  if (top !== page2.directory || !fs9.lstatSync(path11.join(top, ".git")).isFile()) throw new Error("Page is no longer the root of a linked worktree");
+  const common = physicalPath(path11.resolve(page2.directory, await gitIn(page2.directory, ["rev-parse", "--git-common-dir"])));
+  const expected = physicalPath(path11.resolve(page2.repository, await gitIn(page2.repository, ["rev-parse", "--git-common-dir"])));
+  if (common !== expected || await gitIn(page2.directory, ["branch", "--show-current"]) !== page2.branch) throw new Error("Page repository or branch changed; review its environment before continuing");
+}
+function pageIdentityHash(page2) {
+  return (0, import_crypto7.createHash)("sha256").update(JSON.stringify([page2.id, physicalPath(page2.directory), page2.kind, page2.repository, page2.branch])).digest("hex");
+}
+
+// installed-workflow-location.ts
+var fs10 = __toESM(require("fs"));
+var path12 = __toESM(require("path"));
+function regularDirectory2(directory) {
+  const stat = fs10.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Installation must use regular directories");
+}
+function optionalStat(file) {
+  try {
+    return fs10.lstatSync(file);
+  } catch (error) {
+    if (error.code === "ENOENT") return void 0;
+    throw error;
+  }
+}
+function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
+  if (!path12.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
+  const vault = physicalPath(vaultPath);
+  regularDirectory2(vault);
+  let relative7 = path12.join(".obsidian", "plugins", "auto-oc");
+  if (installationDirectory !== void 0) {
+    if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
+      throw new Error("Invalid installation location");
+    }
+    if (process.platform === "win32" && path12.isAbsolute(installationDirectory)) {
+      let inspected = path12.parse(installationDirectory).root;
+      for (const part of installationDirectory.slice(inspected.length).split(/[\\/]/)) {
+        if (!part || part.includes(":")) throw new Error("Invalid installation component");
+        inspected = path12.join(inspected, part);
+        regularDirectory2(inspected);
+      }
+      relative7 = path12.relative(vault, physicalPath(inspected));
+    } else {
+      relative7 = path12.isAbsolute(installationDirectory) ? path12.relative(path12.resolve(vaultPath), installationDirectory) : installationDirectory;
+    }
+    if (!relative7 || path12.isAbsolute(relative7) || relative7.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
+      throw new Error("Installation must remain inside the vault");
+    }
+  }
+  let directory = vault;
+  for (const part of relative7.split(/[\\/]/)) {
+    if (!part) throw new Error("Invalid installation component");
+    directory = path12.join(directory, part);
+    regularDirectory2(directory);
+  }
+  directory = physicalPath(directory);
+  if (!isWithinPhysicalPath(vault, directory)) throw new Error("Installation must remain inside the vault");
+  const configurationFile = path12.join(directory, "data.json");
+  const configStat = optionalStat(configurationFile);
+  if (configStat && (configStat.isSymbolicLink() || !configStat.isFile())) throw new Error("Configuration must be a regular file");
+  const runtimeDirectory = path12.join(directory, "runtime");
+  const runtimeStat = optionalStat(runtimeDirectory);
+  if (runtimeStat && (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory())) throw new Error("Invalid runtime directory");
+  return { vault, installationDirectory: directory, configurationFile, runtimeDirectory };
+}
+function ensureInstalledWorkflowRuntime(location) {
+  const current = resolveInstalledWorkflowLocation(location.vault, location.installationDirectory);
+  if (current.runtimeDirectory !== location.runtimeDirectory) throw new Error("Installation location changed");
+  try {
+    fs10.mkdirSync(current.runtimeDirectory);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  }
+  regularDirectory2(current.runtimeDirectory);
+}
 
 // code-workflow-adapter.ts
 function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaultMutations) {
@@ -2918,11 +3097,11 @@ async function executeCodexTask(client, request) {
 }
 
 // codex-client.ts
-var import_child_process4 = require("child_process");
+var import_child_process6 = require("child_process");
 var import_string_decoder2 = require("string_decoder");
-var fs9 = __toESM(require("fs"));
+var fs11 = __toESM(require("fs"));
 var os = __toESM(require("os"));
-var path10 = __toESM(require("path"));
+var path13 = __toESM(require("path"));
 function codexResultOutput(messages, status) {
   const transcript = messages.map((item) => item.text).filter(Boolean).join("\n\n").trim();
   const finals = messages.filter((item) => item.completed && item.phase === "final_answer");
@@ -2970,12 +3149,12 @@ var JsonLineRpcPeer = class {
   }
   request(method, params = {}, timeoutMs = 3e4) {
     const id = this.nextId++;
-    return new Promise((resolve8, reject) => {
+    return new Promise((resolve10, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`Codex RPC request timed out: ${method}`));
       }, timeoutMs);
-      this.pending.set(id, { resolve: resolve8, reject, timer });
+      this.pending.set(id, { resolve: resolve10, reject, timer });
       this.writeLine(JSON.stringify({ id, method, params }) + "\n");
     });
   }
@@ -2994,55 +3173,73 @@ var JsonLineRpcPeer = class {
   }
 };
 function resolveCodexNativeBin(bin) {
-  if (os.platform() !== "win32" || !path10.isAbsolute(bin) || !/^codex\.(cmd|bat|ps1)$/i.test(path10.basename(bin))) return bin;
+  if (os.platform() !== "win32" || !path13.isAbsolute(bin) || !/^codex\.(cmd|bat|ps1)$/i.test(path13.basename(bin))) return bin;
   try {
-    if (!fs9.statSync(bin).isFile()) return bin;
+    if (!fs11.statSync(bin).isFile()) return bin;
   } catch {
     return bin;
   }
   const target = process.arch === "x64" ? "x86_64-pc-windows-msvc" : process.arch === "arm64" ? "aarch64-pc-windows-msvc" : void 0;
   if (!target) return bin;
-  const scope = path10.join(path10.dirname(bin), "node_modules", "@openai");
+  const scope = path13.join(path13.dirname(bin), "node_modules", "@openai");
   const platformPackage = `codex-win32-${process.arch}`;
   const vendors = [
-    path10.join(scope, "codex", "node_modules", "@openai", platformPackage, "vendor"),
-    path10.join(scope, platformPackage, "vendor"),
-    path10.join(scope, "codex", "vendor")
+    path13.join(scope, "codex", "node_modules", "@openai", platformPackage, "vendor"),
+    path13.join(scope, platformPackage, "vendor"),
+    path13.join(scope, "codex", "vendor")
   ];
   for (const vendor of vendors) for (const directory of ["bin", "codex"]) {
-    const candidate = path10.join(vendor, target, directory, "codex.exe");
+    const candidate = path13.join(vendor, target, directory, "codex.exe");
     try {
-      if (fs9.statSync(candidate).isFile()) return candidate;
+      if (fs11.statSync(candidate).isFile()) return candidate;
     } catch {
     }
   }
   return bin;
 }
 function resolveCodexBin(configured = "codex") {
-  if (configured.trim() && configured.trim() !== "codex") return resolveCodexNativeBin(configured.trim());
+  const requested = (configured.trim() || "codex").replace(/^~(?=[/\\])/, os.homedir());
+  if (path13.isAbsolute(requested)) return resolveCodexNativeBin(requested);
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(requested)) return "";
+  const windows = os.platform() === "win32";
+  const extensions = windows && !path13.extname(requested) ? [".exe", ".cmd", ".bat", ".ps1"] : [""];
+  const directories = (process.env.PATH || process.env.Path || "").split(path13.delimiter).map((value) => value.trim().replace(/^"|"$/g, "")).filter((directory) => path13.isAbsolute(directory));
   const candidates = [];
-  if (os.platform() === "win32") {
+  const addDirectory = (directory) => {
+    if (path13.isAbsolute(directory)) for (const extension of extensions) candidates.push(path13.join(directory, requested + extension));
+  };
+  directories.forEach(addDirectory);
+  if (requested === "codex") {
+    const home = os.homedir();
+    [
+      path13.join(home, ".local", "bin"),
+      path13.join(home, ".npm-global", "bin"),
+      path13.join(home, ".bun", "bin"),
+      path13.join(home, "bin")
+    ].forEach(addDirectory);
+    if (windows && process.env.APPDATA) addDirectory(path13.join(process.env.APPDATA, "npm"));
+    if (!windows) ["/opt/homebrew/bin", "/usr/local/bin"].forEach(addDirectory);
+  }
+  if (windows && requested === "codex") {
     const localAppData = process.env.LOCALAPPDATA || "";
-    const desktopBinRoot = path10.join(localAppData, "OpenAI", "Codex", "bin");
+    const desktopBinRoot = path13.join(localAppData, "OpenAI", "Codex", "bin");
     try {
-      const versionDirs = fs9.readdirSync(desktopBinRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory()).map((entry) => path10.join(desktopBinRoot, entry.name, "codex.exe")).filter((candidate) => fs9.existsSync(candidate)).sort((a, b) => fs9.statSync(b).mtimeMs - fs9.statSync(a).mtimeMs);
+      const versionDirs = (path13.isAbsolute(desktopBinRoot) ? fs11.readdirSync(desktopBinRoot, { withFileTypes: true }) : []).filter((entry) => entry.isDirectory()).map((entry) => path13.join(desktopBinRoot, entry.name, "codex.exe")).filter((candidate) => fs11.existsSync(candidate)).sort((a, b) => fs11.statSync(b).mtimeMs - fs11.statSync(a).mtimeMs);
       candidates.push(...versionDirs);
     } catch {
     }
-    candidates.push(
-      path10.join(localAppData, "OpenAI", "Codex", "codex.exe"),
-      path10.join(process.env.APPDATA || "", "npm", "codex.cmd")
-    );
-  } else {
-    const userHome = process.env.HOME || "";
-    candidates.push(
-      path10.join(userHome, ".local", "bin", "codex"),
-      path10.join(userHome, ".npm-global", "bin", "codex"),
-      "/opt/homebrew/bin/codex",
-      "/usr/local/bin/codex"
-    );
+    if (path13.isAbsolute(localAppData)) candidates.push(path13.join(localAppData, "OpenAI", "Codex", "codex.exe"));
   }
-  return resolveCodexNativeBin(candidates.find((candidate) => candidate && fs9.existsSync(candidate)) || configured || "codex");
+  const selected = candidates.find((candidate) => {
+    try {
+      if (!fs11.statSync(candidate).isFile()) return false;
+      fs11.accessSync(candidate, fs11.constants.X_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return selected ? resolveCodexNativeBin(selected) : "";
 }
 function buildCodexThreadUrl(threadId) {
   return `codex://threads/${encodeURIComponent(threadId)}`;
@@ -3063,8 +3260,8 @@ function openCodexUrl(url) {
     ],
     env: { ...process.env, AUTOOC_CODEX_URL: url }
   } : process.platform === "darwin" ? { bin: "open", args: [url], env: process.env } : { bin: "xdg-open", args: [url], env: process.env };
-  return new Promise((resolve8, reject) => {
-    const child = (0, import_child_process4.spawn)(launcher.bin, launcher.args, {
+  return new Promise((resolve10, reject) => {
+    const child = (0, import_child_process6.spawn)(launcher.bin, launcher.args, {
       detached: false,
       stdio: "ignore",
       windowsHide: true,
@@ -3077,7 +3274,7 @@ function openCodexUrl(url) {
     });
     child.once("close", (code) => {
       if (settled) return;
-      if (code === 0) resolve8();
+      if (code === 0) resolve10();
       else reject(new Error(`ChatGPT/Codex URL launcher exited with code ${code ?? "unknown"}`));
     });
   });
@@ -3102,7 +3299,11 @@ var CodexAppServerClient = class {
   }
   async initialize() {
     if (this.initialized) return;
-    this.child = (0, import_child_process4.spawn)(this.bin, ["app-server"], {
+    if (!this.bin) throw new Error("Codex CLI was not found. Set its executable in AutoOC Settings > Harnesses > Codex CLI.");
+    if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
+      throw new Error(`Codex background execution requires a native App Server executable. No native binary was found for ${this.bin}. Update this Codex CLI installation or select its codex.exe in Settings; no alternative installation was started.`);
+    }
+    this.child = (0, import_child_process6.spawn)(this.bin, ["app-server"], {
       cwd: this.cwd,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true
@@ -3196,8 +3397,8 @@ var CodexAppServerClient = class {
     this.threadId = threadResponse?.thread?.id || "";
     if (!this.threadId) throw new Error("Codex did not return a thread id");
     await this.callbacks.onThreadCreated?.({ threadId: this.threadId });
-    const completion = new Promise((resolve8, reject) => {
-      this.completionResolve = resolve8;
+    const completion = new Promise((resolve10, reject) => {
+      this.completionResolve = resolve10;
       this.completionReject = reject;
     });
     void completion.catch(() => {
@@ -3395,7 +3596,7 @@ var CodexAppServerClient = class {
 };
 
 // codex-workflow-adapter.ts
-var fs10 = __toESM(require("fs"));
+var fs12 = __toESM(require("fs"));
 function codexWorkflowAdapter(createClient, defaults = {}) {
   return {
     supports: (task) => task.taskKind === "codex" && (task.interactiveTerminal === void 0 || typeof task.interactiveTerminal === "boolean"),
@@ -3447,8 +3648,8 @@ function codexWorkflowAdapter(createClient, defaults = {}) {
 }
 function createCodexWorkflowAdapter(definition, vaultBase) {
   const directory = (task) => {
-    const cwd = fs10.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
-    if (!fs10.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
+    const cwd = fs12.realpathSync(task.workingDirectory || definition.settings.workingDirectory || vaultBase);
+    if (!fs12.statSync(cwd).isDirectory()) throw new Error("Codex working directory is unavailable");
     return cwd;
   };
   const create = (task, callbacks) => {
@@ -3479,21 +3680,21 @@ function createCodexWorkflowAdapter(definition, vaultBase) {
 }
 
 // cli-workflow-adapters.ts
-var fs16 = __toESM(require("fs"));
-var path17 = __toESM(require("path"));
+var fs18 = __toESM(require("fs"));
+var path20 = __toESM(require("path"));
 
 // interactive-cli-task.ts
-var fs14 = __toESM(require("fs"));
-var path15 = __toESM(require("path"));
+var fs16 = __toESM(require("fs"));
+var path18 = __toESM(require("path"));
 
 // interactive-cli.ts
-var fs13 = __toESM(require("fs"));
-var path14 = __toESM(require("path"));
+var fs15 = __toESM(require("fs"));
+var path17 = __toESM(require("path"));
 var os4 = __toESM(require("os"));
 
 // cli-launchers.ts
-var fs12 = __toESM(require("fs"));
-var path12 = __toESM(require("path"));
+var fs14 = __toESM(require("fs"));
+var path15 = __toESM(require("path"));
 var os2 = __toESM(require("os"));
 
 // interactive-task-terminal.ts
@@ -3506,52 +3707,52 @@ var InteractiveTerminalLaunchUncertainError = class extends Error {
 
 // cli-launchers.ts
 var crypto = __toESM(require("crypto"));
-var import_child_process5 = require("child_process");
+var import_child_process7 = require("child_process");
 
 // execution-files.ts
-var fs11 = __toESM(require("fs"));
-var path11 = __toESM(require("path"));
+var fs13 = __toESM(require("fs"));
+var path14 = __toESM(require("path"));
 var AUXILIARY_COMPLETION = "autooc-cleanup.json";
 var files = {
   interactive: ["prompt.txt", "state.json", ".gitignore"],
   runtime: ["stdout.txt", "stderr.txt", "done.txt", "process.pid", "instruction.txt", "input.txt", "launch.ps1", "launch.sh", "launch.vbs"]
 };
 function directoryOnly(directory) {
-  const stat = fs11.lstatSync(directory);
+  const stat = fs13.lstatSync(directory);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("AutoOC auxiliary directory is redirected or invalid");
 }
 function validateDirectory(directory, kind) {
-  const root = path11.dirname(directory);
-  if (path11.basename(root) !== "auxiliary" || path11.basename(path11.dirname(root)) !== ".autooc" || !new RegExp(`^${kind}-[A-Za-z0-9]{6}$`).test(path11.basename(directory))) {
+  const root = path14.dirname(directory);
+  if (path14.basename(root) !== "auxiliary" || path14.basename(path14.dirname(root)) !== ".autooc" || !new RegExp(`^${kind}-[A-Za-z0-9]{6}$`).test(path14.basename(directory))) {
     throw new Error("Invalid AutoOC auxiliary directory");
   }
-  for (const location of [path11.dirname(root), root, directory]) directoryOnly(location);
+  for (const location of [path14.dirname(root), root, directory]) directoryOnly(location);
 }
 function auxiliaryCompletionRecord(directory, kind) {
-  return JSON.stringify({ schemaVersion: 1, kind, directory: path11.basename(directory), completed: true });
+  return JSON.stringify({ schemaVersion: 1, kind, directory: path14.basename(directory), completed: true });
 }
 function cleanCompleted(directory, kind) {
   validateDirectory(directory, kind);
-  const marker = path11.join(directory, AUXILIARY_COMPLETION);
-  const stat = fs11.lstatSync(marker);
+  const marker = path14.join(directory, AUXILIARY_COMPLETION);
+  const stat = fs13.lstatSync(marker);
   if (!stat.isFile() || stat.isSymbolicLink()) return;
-  const receipt = JSON.parse(fs11.readFileSync(marker, "utf8").replace(/^\uFEFF/, ""));
-  if (receipt.schemaVersion !== 1 || receipt.kind !== kind || receipt.directory !== path11.basename(directory) || receipt.completed !== true) return;
+  const receipt = JSON.parse(fs13.readFileSync(marker, "utf8").replace(/^\uFEFF/, ""));
+  if (receipt.schemaVersion !== 1 || receipt.kind !== kind || receipt.directory !== path14.basename(directory) || receipt.completed !== true) return;
   for (const name of files[kind]) {
     try {
-      fs11.unlinkSync(path11.join(directory, name));
+      fs13.unlinkSync(path14.join(directory, name));
     } catch (error) {
       if (error.code !== "ENOENT") return;
     }
   }
-  if (fs11.readdirSync(directory).some((name) => name !== AUXILIARY_COMPLETION)) return;
-  fs11.unlinkSync(marker);
-  fs11.rmdirSync(directory);
+  if (fs13.readdirSync(directory).some((name) => name !== AUXILIARY_COMPLETION)) return;
+  fs13.unlinkSync(marker);
+  fs13.rmdirSync(directory);
 }
 function completeAuxiliaryDirectory(directory, kind) {
   try {
     validateDirectory(directory, kind);
-    fs11.writeFileSync(path11.join(directory, AUXILIARY_COMPLETION), auxiliaryCompletionRecord(directory, kind), { encoding: "utf8", flag: "wx", mode: 384 });
+    fs13.writeFileSync(path14.join(directory, AUXILIARY_COMPLETION), auxiliaryCompletionRecord(directory, kind), { encoding: "utf8", flag: "wx", mode: 384 });
   } catch (error) {
     if (error.code !== "EEXIST") {
       console.warn("AutoOC: auxiliary cleanup pending");
@@ -3564,34 +3765,34 @@ function completeAuxiliaryDirectory(directory, kind) {
   }
 }
 function createAuxiliaryDirectory(cwd, kind) {
-  const container = path11.join(path11.resolve(cwd), ".autooc");
-  const root = path11.join(container, "auxiliary");
+  const container = path14.join(path14.resolve(cwd), ".autooc");
+  const root = path14.join(container, "auxiliary");
   for (const directory of [container, root]) {
     try {
-      fs11.mkdirSync(directory, { mode: 448 });
+      fs13.mkdirSync(directory, { mode: 448 });
     } catch (error) {
       if (error.code !== "EEXIST") throw error;
     }
     directoryOnly(directory);
   }
-  const ignore = path11.join(root, ".gitignore");
+  const ignore = path14.join(root, ".gitignore");
   try {
-    fs11.writeFileSync(ignore, "*\n", { encoding: "utf8", flag: "wx", mode: 384 });
+    fs13.writeFileSync(ignore, "*\n", { encoding: "utf8", flag: "wx", mode: 384 });
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
-    const stat = fs11.lstatSync(ignore);
-    if (!stat.isFile() || stat.isSymbolicLink() || fs11.readFileSync(ignore, "utf8") !== "*\n") throw new Error("AutoOC auxiliary ignore rules conflict");
+    const stat = fs13.lstatSync(ignore);
+    if (!stat.isFile() || stat.isSymbolicLink() || fs13.readFileSync(ignore, "utf8") !== "*\n") throw new Error("AutoOC auxiliary ignore rules conflict");
   }
-  for (const name of fs11.readdirSync(root)) {
+  for (const name of fs13.readdirSync(root)) {
     const previousKind = /^(interactive|runtime)-[A-Za-z0-9]{6}$/.exec(name)?.[1];
     if (previousKind) {
       try {
-        cleanCompleted(path11.join(root, name), previousKind);
+        cleanCompleted(path14.join(root, name), previousKind);
       } catch {
       }
     }
   }
-  return fs11.mkdtempSync(path11.join(root, `${kind}-`));
+  return fs13.mkdtempSync(path14.join(root, `${kind}-`));
 }
 
 // cli-launchers.ts
@@ -3600,10 +3801,10 @@ function resolveOpencodeBin(configured) {
   if (requested && requested !== "opencode") return requested;
   const candidates = [];
   const extensions = os2.platform() === "win32" ? [".exe", ".cmd", ".bat"] : [""];
-  for (const entry of (process.env.PATH || process.env.Path || "").split(path12.delimiter)) {
+  for (const entry of (process.env.PATH || process.env.Path || "").split(path15.delimiter)) {
     const directory = entry.trim().replace(/^"|"$/g, "");
-    if (!path12.isAbsolute(directory)) continue;
-    for (const extension of extensions) candidates.push(path12.join(directory, `opencode${extension}`));
+    if (!path15.isAbsolute(directory)) continue;
+    for (const extension of extensions) candidates.push(path15.join(directory, `opencode${extension}`));
   }
   if (os2.platform() === "win32") {
     candidates.push(`${process.env.APPDATA}\\npm\\opencode.cmd`);
@@ -3618,11 +3819,11 @@ function resolveOpencodeBin(configured) {
       "/usr/local/bin/opencode"
     );
   }
-  const { accessSync: accessSync2, statSync: statSync7, constants: constants2 } = require("fs");
+  const { accessSync: accessSync3, statSync: statSync8, constants: constants3 } = require("fs");
   for (const candidate of candidates) {
     try {
-      accessSync2(candidate, constants2.X_OK);
-      if (!statSync7(candidate).isFile()) continue;
+      accessSync3(candidate, constants3.X_OK);
+      if (!statSync8(candidate).isFile()) continue;
       return candidate;
     } catch {
     }
@@ -3689,7 +3890,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
     const envScript = buildPowerShellEnvLines(env).join("; ");
     const runCommand = args.length > 0 ? `$bin = ${psSingleQuoted(bin)}; $argList = @(${args.map(psSingleQuoted).join(",")}); & $bin @argList` : `& ${psSingleQuoted(bin)}`;
     const command2 = `${envScript ? `${envScript}; ` : ""}Set-Location -LiteralPath ${psSingleQuoted(cwd)}; ${runCommand}`;
-    const launcher = (0, import_child_process5.spawn)(
+    const launcher = (0, import_child_process7.spawn)(
       "cmd.exe",
       ["/c", "start", "OpenCode CLI", "/D", cwd, "powershell.exe", "-NoLogo", "-NoExit", "-Command", command2],
       { detached: true, stdio: "ignore", windowsHide: false }
@@ -3702,7 +3903,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
   const command = buildPosixLaunchCommand(bin, cwd, env, args);
   if (process.platform === "darwin") {
     const script = `tell application "Terminal" to do script ${appleScriptQuoted(command)}`;
-    const launcher = (0, import_child_process5.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process7.spawn)("osascript", ["-e", script], { detached: true, stdio: "ignore" });
     launcher.on?.("error", (error) => options.onError?.(error));
     launcher.on?.("spawn", () => options.onLaunched?.());
     launcher.unref();
@@ -3715,7 +3916,7 @@ function openOpencodeCli(bin, cwd, env = {}, args = [], options = {}) {
         "no supported Linux terminal emulator found (tried x-terminal-emulator, gnome-terminal, konsole, xfce4-terminal, lxterminal, alacritty, xterm)"
       );
     }
-    const launcher = (0, import_child_process5.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
+    const launcher = (0, import_child_process7.spawn)(terminal.cmd, [...terminal.args, "sh", "-lc", command], { detached: true, stdio: "ignore" });
     launcher.on?.("error", (error) => options.onError?.(error));
     launcher.on?.("spawn", () => options.onLaunched?.());
     launcher.unref();
@@ -3731,9 +3932,9 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     options.onError?.(error instanceof Error ? error : new Error(String(error)));
     return;
   }
-  const promptFile = path12.join(directory, "prompt.txt");
-  const stateFile = path12.join(directory, "state.json");
-  const ignoreFile = path12.join(directory, ".gitignore");
+  const promptFile = path15.join(directory, "prompt.txt");
+  const stateFile = path15.join(directory, "state.json");
+  const ignoreFile = path15.join(directory, ".gitignore");
   const cleanup = () => completeAuxiliaryDirectory(directory, "interactive");
   let settled = false;
   let poll;
@@ -3750,16 +3951,16 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     if (poll) clearInterval(poll);
   };
   try {
-    fs12.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
-    fs12.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
-    const instruction = `Read the full task prompt from ${path12.relative(path12.resolve(cwd), promptFile).split(path12.sep).join("/")} and follow it exactly.`;
-    const completionFile = path12.join(directory, AUXILIARY_COMPLETION);
+    fs14.writeFileSync(ignoreFile, "*\n", { encoding: "utf8", flag: "wx" });
+    fs14.writeFileSync(promptFile, prompt, { encoding: "utf8", flag: "wx" });
+    const instruction = `Read the full task prompt from ${path15.relative(path15.resolve(cwd), promptFile).split(path15.sep).join("/")} and follow it exactly.`;
+    const completionFile = path15.join(directory, AUXILIARY_COMPLETION);
     const completion = `  ${psSingleQuoted(auxiliaryCompletionRecord(directory, "interactive"))} | Set-Content -LiteralPath ${psSingleQuoted(completionFile)} -Encoding UTF8`;
     const checkDirectory = `function Test-AutoOCAuxiliary { $item = Get-Item -LiteralPath ${psSingleQuoted(directory)} -Force -ErrorAction SilentlyContinue; for ($i = 0; $i -lt 3; $i++) { if ($null -eq $item -or -not $item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }; $item = Get-Item -LiteralPath $item.Parent.FullName -Force -ErrorAction SilentlyContinue }; return $true }`;
     const runner = [
       "$ErrorActionPreference = 'Stop'",
       checkDirectory,
-      `Set-Location -LiteralPath ${psSingleQuoted(path12.resolve(cwd))}`,
+      `Set-Location -LiteralPath ${psSingleQuoted(path15.resolve(cwd))}`,
       "try {",
       `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application,ExternalScript -ErrorAction Stop | Select-Object -First 1`,
       `  $cliArgs = @(${options.promptArgs ? options.promptArgs(instruction).map(psSingleQuoted).join(", ") : `${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)}`})`,
@@ -3783,7 +3984,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
       "$session = $null; $confirmed = $false",
       `function Report($status, $ended) { if (-not (Test-AutoOCAuxiliary)) { throw 'AutoOC auxiliary directory changed' }; @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
       "try {",
-      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path12.resolve(cwd))} -PassThru`,
+      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path15.resolve(cwd))} -PassThru`,
       "  while (-not $session.HasExited) {",
       "    if (-not $confirmed) {",
       "      $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name)",
@@ -3815,7 +4016,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     const readState = () => {
       let state;
       try {
-        state = JSON.parse(fs12.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, ""));
+        state = JSON.parse(fs14.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, ""));
       } catch {
         return;
       }
@@ -3830,7 +4031,7 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
     };
     poll = setInterval(readState, 100);
     timeout = setTimeout(() => finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 3e4);
-    const launcher = (0, import_child_process5.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
+    const launcher = (0, import_child_process7.spawn)("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
       // A detached hidden PowerShell can exit without executing its command on
       // Windows. The observer does not need a new process group; unref below
       // releases the host after confirmation while its visible session runs.
@@ -3857,26 +4058,26 @@ function openOpencodeCliLongPromptWindows(bin, cwd, env, model, agent, prompt, o
   }
 }
 function launchHiddenPS(psScriptFile, pidFile) {
-  const fs26 = require("fs");
+  const fs28 = require("fs");
   const launcherFile = psScriptFile.replace(/\.ps1$/, ".vbs");
   const effectivePidFile = pidFile || psScriptFile.replace(/\.ps1$/, ".pid");
   const quotedPsScriptFile = psScriptFile.replace(/"/g, '""');
   const launcherScript = `Set sh = CreateObject("WScript.Shell")\r
 sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File ""${quotedPsScriptFile}""", 0, False\r
 `;
-  fs26.writeFileSync(launcherFile, launcherScript, "utf8");
+  fs28.writeFileSync(launcherFile, launcherScript, "utf8");
   const { spawn: spawn4 } = require("child_process");
   const child = spawn4("wscript.exe", [launcherFile], { detached: true, stdio: "ignore", windowsHide: true });
   child.unref();
   const launcherTimer = setTimeout(() => {
     try {
-      fs26.unlinkSync(launcherFile);
+      fs28.unlinkSync(launcherFile);
     } catch {
     }
   }, 1e4);
   const scriptTimer = setTimeout(() => {
     try {
-      fs26.unlinkSync(psScriptFile);
+      fs28.unlinkSync(psScriptFile);
     } catch {
     }
   }, 6e5);
@@ -3884,12 +4085,12 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     clearTimeout(launcherTimer);
     clearTimeout(scriptTimer);
     try {
-      fs26.unlinkSync(launcherFile);
+      fs28.unlinkSync(launcherFile);
     } catch {
     }
     if (removeScript) {
       try {
-        fs26.unlinkSync(psScriptFile);
+        fs28.unlinkSync(psScriptFile);
       } catch {
       }
     }
@@ -3911,7 +4112,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
       }
     }
     try {
-      const pid = fs26.existsSync(effectivePidFile) ? String(fs26.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs28.existsSync(effectivePidFile) ? String(fs28.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         const killer = spawn4("taskkill.exe", ["/PID", pid, "/T", "/F"], { detached: true, stdio: "ignore", windowsHide: true });
         killer.unref();
@@ -3920,7 +4121,7 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
     }
     cleanup(true);
     try {
-      fs26.unlinkSync(effectivePidFile);
+      fs28.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -3941,18 +4142,18 @@ sh.Run "powershell.exe -NoLogo -NonInteractive -ExecutionPolicy Bypass -WindowSt
   };
 }
 function launchHiddenSh(shScriptFile, pidFile) {
-  const fs26 = require("fs");
+  const fs28 = require("fs");
   const { spawn: spawn4 } = require("child_process");
   const effectivePidFile = pidFile || shScriptFile.replace(/\.sh$/, ".pid");
   try {
-    fs26.chmodSync(shScriptFile, 448);
+    fs28.chmodSync(shScriptFile, 448);
   } catch {
   }
   const child = spawn4("/bin/sh", [shScriptFile], { detached: true, stdio: "ignore" });
   child.unref();
   const scriptTimer = setTimeout(() => {
     try {
-      fs26.unlinkSync(shScriptFile);
+      fs28.unlinkSync(shScriptFile);
     } catch {
     }
   }, 6e5);
@@ -3960,7 +4161,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     clearTimeout(scriptTimer);
     if (removeScript) {
       try {
-        fs26.unlinkSync(shScriptFile);
+        fs28.unlinkSync(shScriptFile);
       } catch {
       }
     }
@@ -3981,7 +4182,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
       }
     }
     try {
-      const pid = fs26.existsSync(effectivePidFile) ? String(fs26.readFileSync(effectivePidFile, "utf8")).trim() : "";
+      const pid = fs28.existsSync(effectivePidFile) ? String(fs28.readFileSync(effectivePidFile, "utf8")).trim() : "";
       if (/^\d+$/.test(pid) && pid !== String(child.pid || "")) {
         try {
           process.kill(-Number(pid), "SIGKILL");
@@ -3996,7 +4197,7 @@ function launchHiddenSh(shScriptFile, pidFile) {
     }
     cleanup(true);
     try {
-      fs26.unlinkSync(effectivePidFile);
+      fs28.unlinkSync(effectivePidFile);
     } catch {
     }
   };
@@ -4020,7 +4221,7 @@ function launchHidden(scriptFile, pidFile) {
   return isWindows() ? launchHiddenPS(scriptFile, pidFile) : launchHiddenSh(scriptFile, pidFile);
 }
 function writeUtf8BomFile(filePath, content) {
-  fs12.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
+  fs14.writeFileSync(filePath, Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(content, "utf8")]));
 }
 function psUtf8Prelude() {
   return [
@@ -4031,27 +4232,27 @@ function psUtf8Prelude() {
 }
 
 // opencode-version.ts
-var import_child_process6 = require("child_process");
-var path13 = __toESM(require("path"));
+var import_child_process8 = require("child_process");
+var path16 = __toESM(require("path"));
 var os3 = __toESM(require("os"));
 function parseOpenCodeVersion(text) {
   const match = text.trim().match(/^(?:opencode\s+)?v?(\d+)\.(\d+)\.(\d+)(?:[-+][\w.-]+)?$/i);
   return match ? { version: match[0], major: Number(match[1]) } : void 0;
 }
 function readOpenCodeOutput(bin, args, cwd, timeout, maxBuffer) {
-  if (!bin || !path13.isAbsolute(bin) && !/^[\w.-]+$/.test(bin)) throw new Error("Choose an absolute OpenCode executable path or a command name without arguments.");
+  if (!bin || !path16.isAbsolute(bin) && !/^[\w.-]+$/.test(bin)) throw new Error("Choose an absolute OpenCode executable path or a command name without arguments.");
   let command = bin;
   if (process.platform === "win32" && !/\.exe$/i.test(bin)) {
-    command = path13.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    command = path16.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
     const invocation = [bin, ...args].map((value) => `'${value.replace(/'/g, "''")}'`).join(" ");
     const script = `$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); & ${invocation}; exit $LASTEXITCODE`;
     args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")];
   }
-  return new Promise((resolve8, reject) => (0, import_child_process6.execFile)(
+  return new Promise((resolve10, reject) => (0, import_child_process8.execFile)(
     command,
     args,
     { cwd, windowsHide: true, timeout, maxBuffer, encoding: "utf8" },
-    (error, stdout) => error ? reject(error) : resolve8(stdout)
+    (error, stdout) => error ? reject(error) : resolve10(stdout)
   ));
 }
 async function detectOpenCodeVersion(bin) {
@@ -4077,36 +4278,36 @@ var INTERACTIVE_CLIS = [
 ];
 function executable(file) {
   try {
-    if (!path14.isAbsolute(file) || !fs13.statSync(file).isFile()) return false;
+    if (!path17.isAbsolute(file) || !fs15.statSync(file).isFile()) return false;
     if (process.platform === "win32" && !/\.(exe|cmd|bat|ps1)$/i.test(file)) return false;
-    fs13.accessSync(file, fs13.constants.X_OK);
+    fs15.accessSync(file, fs15.constants.X_OK);
     return true;
   } catch {
     return false;
   }
 }
 function resolveInteractiveCli(provider, configured) {
+  if (provider === "codex") {
+    const selected = resolveCodexBin(configured);
+    return selected && executable(selected) ? selected : void 0;
+  }
   const defaultCommand = provider === "opencode2" ? "opencode" : provider;
   const requested = (configured?.trim() || defaultCommand).replace(/^~(?=[/\\])/, os4.homedir());
-  if (path14.isAbsolute(requested)) return executable(requested) ? requested : void 0;
+  if (path17.isAbsolute(requested)) return executable(requested) ? requested : void 0;
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(requested)) return void 0;
-  const directories = (process.env.PATH || process.env.Path || "").split(path14.delimiter).map((value) => value.trim().replace(/^"|"$/g, "")).filter((value) => path14.isAbsolute(value));
+  const directories = (process.env.PATH || process.env.Path || "").split(path17.delimiter).map((value) => value.trim().replace(/^"|"$/g, "")).filter((value) => path17.isAbsolute(value));
   if (requested === defaultCommand) {
     const home = os4.homedir();
-    directories.push(path14.join(home, ".local", "bin"), path14.join(home, ".npm-global", "bin"), path14.join(home, ".bun", "bin"), path14.join(home, "bin"));
+    directories.push(path17.join(home, ".local", "bin"), path17.join(home, ".npm-global", "bin"), path17.join(home, ".bun", "bin"), path17.join(home, "bin"));
     if (process.platform === "win32") {
-      if (process.env.APPDATA) directories.push(path14.join(process.env.APPDATA, "npm"));
+      if (process.env.APPDATA) directories.push(path17.join(process.env.APPDATA, "npm"));
     } else directories.push("/opt/homebrew/bin", "/usr/local/bin");
-    if (provider === "claude") directories.push(path14.join(home, ".claude", "local"));
+    if (provider === "claude") directories.push(path17.join(home, ".claude", "local"));
   }
-  const extensions = process.platform === "win32" && !path14.extname(requested) ? [".exe", ".cmd", ".bat", ".ps1"] : [""];
+  const extensions = process.platform === "win32" && !path17.extname(requested) ? [".exe", ".cmd", ".bat", ".ps1"] : [""];
   for (const directory of directories) for (const extension of extensions) {
-    const file = path14.join(directory, requested + extension);
+    const file = path17.join(directory, requested + extension);
     if (executable(file)) return file;
-  }
-  if (provider === "codex" && requested === provider) {
-    const fallback = resolveCodexBin("codex");
-    if (executable(fallback)) return fallback;
   }
   return void 0;
 }
@@ -4152,7 +4353,7 @@ function prepareCliTask(task, settings, cwd, prompt, signal) {
   if (error) throw new Error(error);
   if (task.taskKind !== "cli") throw new Error("Expected an interactive CLI task.");
   if (signal?.aborted) throw new Error("CLI task cancelled before launch.");
-  if (!path15.isAbsolute(cwd) || !fs14.statSync(cwd).isDirectory()) throw new Error("CLI task requires an existing absolute project directory.");
+  if (!path18.isAbsolute(cwd) || !fs16.statSync(cwd).isDirectory()) throw new Error("CLI task requires an existing absolute project directory.");
   if (!prompt.trim()) throw new Error("CLI task prompt must be nonempty.");
   const cli = INTERACTIVE_CLIS.find((cli2) => cli2.id === task.cliProvider);
   const bin = resolveInteractiveCli(cli.id, settings[cli.pathKey]);
@@ -4177,49 +4378,49 @@ async function launchExternalCliTask(request, linuxTerminal) {
   if (request.signal?.aborted) throw new Error("CLI task cancelled before launch.");
   const argsForPrompt = (instruction) => interactiveCliTaskArgs(request.provider, request.model, request.agent, instruction, request.reasoningEffort);
   if (process.platform === "win32") {
-    await new Promise((resolve8, reject) => openOpencodeCliLongPromptWindows(
+    await new Promise((resolve10, reject) => openOpencodeCliLongPromptWindows(
       request.bin,
       request.cwd,
       {},
       request.model,
       request.agent,
       request.prompt,
-      { onLaunched: resolve8, onError: reject, promptArgs: argsForPrompt }
+      { onLaunched: resolve10, onError: reject, promptArgs: argsForPrompt }
     ));
     return;
   }
   if (!["linux", "darwin"].includes(process.platform)) throw new Error("Interactive CLI tasks require Windows, macOS or Linux.");
   if (process.platform === "linux" && !resolveLinuxTerminal(linuxTerminal)) throw new Error("No supported Linux terminal is available. Nothing was launched.");
   const directory = createAuxiliaryDirectory(request.cwd, "interactive");
-  const promptFile = path15.join(directory, "prompt.txt"), scriptFile = path15.join(directory, "launch.sh");
+  const promptFile = path18.join(directory, "prompt.txt"), scriptFile = path18.join(directory, "launch.sh");
   let scriptWritten = false;
   const cleanupBeforeLaunch = () => {
-    for (const parent of [path15.dirname(path15.dirname(directory)), path15.dirname(directory), directory]) {
-      const stat = fs14.lstatSync(parent);
+    for (const parent of [path18.dirname(path18.dirname(directory)), path18.dirname(directory), directory]) {
+      const stat = fs16.lstatSync(parent);
       if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("CLI auxiliary directory changed; input preserved.");
     }
-    if (scriptWritten) fs14.unlinkSync(scriptFile);
+    if (scriptWritten) fs16.unlinkSync(scriptFile);
     completeAuxiliaryDirectory(directory, "interactive");
   };
   try {
-    fs14.writeFileSync(promptFile, request.prompt, { encoding: "utf8", flag: "wx", mode: 384 });
-    const instruction = `Read ${path15.relative(request.cwd, promptFile).split(path15.sep).join("/")} as UTF-8 and follow its instructions.`;
+    fs16.writeFileSync(promptFile, request.prompt, { encoding: "utf8", flag: "wx", mode: 384 });
+    const instruction = `Read ${path18.relative(request.cwd, promptFile).split(path18.sep).join("/")} as UTF-8 and follow its instructions.`;
     const q = shSingleQuoted;
     const command = [request.bin, ...argsForPrompt(instruction)].map(q).join(" ");
     const script = [
       "#!/bin/sh",
       "cleanup() {",
       "  status=$?",
-      `  if [ -d ${q(directory)} ] && [ ! -L ${q(directory)} ] && [ ! -L ${q(path15.dirname(directory))} ] && [ ! -L ${q(path15.dirname(path15.dirname(directory)))} ]; then`,
+      `  if [ -d ${q(directory)} ] && [ ! -L ${q(directory)} ] && [ ! -L ${q(path18.dirname(directory))} ] && [ ! -L ${q(path18.dirname(path18.dirname(directory)))} ]; then`,
       `    rm -f -- ${q(promptFile)} ${q(scriptFile)}`,
-      `    printf '%s' ${q(auxiliaryCompletionRecord(directory, "interactive"))} > ${q(path15.join(directory, AUXILIARY_COMPLETION))}`,
+      `    printf '%s' ${q(auxiliaryCompletionRecord(directory, "interactive"))} > ${q(path18.join(directory, AUXILIARY_COMPLETION))}`,
       "  fi",
       '  exit "$status"',
       "}",
       "trap cleanup EXIT",
       command
     ].join("\n") + "\n";
-    fs14.writeFileSync(scriptFile, script, { encoding: "utf8", flag: "wx", mode: 448 });
+    fs16.writeFileSync(scriptFile, script, { encoding: "utf8", flag: "wx", mode: 448 });
     scriptWritten = true;
     if (request.signal?.aborted) {
       throw new Error("CLI task cancelled before launch.");
@@ -4228,7 +4429,7 @@ async function launchExternalCliTask(request, linuxTerminal) {
     cleanupBeforeLaunch();
     throw error;
   }
-  await new Promise((resolve8, reject) => {
+  await new Promise((resolve10, reject) => {
     let acknowledged = false;
     const failed = (error) => {
       if (acknowledged) return;
@@ -4242,7 +4443,7 @@ async function launchExternalCliTask(request, linuxTerminal) {
     try {
       openOpencodeCli("/bin/sh", request.cwd, {}, [scriptFile], { linuxTerminal, onLaunched: () => {
         acknowledged = true;
-        resolve8();
+        resolve10();
       }, onError: failed });
     } catch (error) {
       failed(error);
@@ -4251,35 +4452,35 @@ async function launchExternalCliTask(request, linuxTerminal) {
 }
 
 // copilot-client.ts
-var import_child_process7 = require("child_process");
-var fs15 = __toESM(require("fs"));
+var import_child_process9 = require("child_process");
+var fs17 = __toESM(require("fs"));
 var os5 = __toESM(require("os"));
-var path16 = __toESM(require("path"));
+var path19 = __toESM(require("path"));
 function resolveCopilotBin(configured = "copilot") {
   const value = configured.trim() || "copilot";
   const nativeFromShim = (shim) => {
-    const npmRoot = path16.join(path16.dirname(shim), "node_modules", "@github");
+    const npmRoot = path19.join(path19.dirname(shim), "node_modules", "@github");
     const packageName = `copilot-${process.platform}-${process.arch}`;
     const executable2 = process.platform === "win32" ? "copilot.exe" : "copilot";
     return [
-      path16.join(npmRoot, "copilot", "node_modules", "@github", packageName, executable2),
-      path16.join(npmRoot, packageName, executable2)
-    ].find((candidate) => fs15.existsSync(candidate));
+      path19.join(npmRoot, "copilot", "node_modules", "@github", packageName, executable2),
+      path19.join(npmRoot, packageName, executable2)
+    ].find((candidate) => fs17.existsSync(candidate));
   };
   if (value !== "copilot") {
     return /\.(cmd|bat|ps1)$/i.test(value) ? nativeFromShim(value) || value : value;
   }
   const home = os5.homedir();
   const dirs = [
-    ...(process.env.PATH || "").split(path16.delimiter),
-    path16.join(home, ".local", "bin"),
-    path16.join(home, ".npm-global", "bin"),
-    ...process.platform === "win32" ? [path16.join(process.env.APPDATA || path16.join(home, "AppData", "Roaming"), "npm")] : ["/opt/homebrew/bin", "/usr/local/bin"]
+    ...(process.env.PATH || "").split(path19.delimiter),
+    path19.join(home, ".local", "bin"),
+    path19.join(home, ".npm-global", "bin"),
+    ...process.platform === "win32" ? [path19.join(process.env.APPDATA || path19.join(home, "AppData", "Roaming"), "npm")] : ["/opt/homebrew/bin", "/usr/local/bin"]
   ];
   for (const dir of dirs.filter(Boolean)) {
     for (const extension of process.platform === "win32" ? [".exe", ".cmd", ".ps1"] : [""]) {
-      const candidate = path16.join(dir.replace(/^"|"$/g, ""), `copilot${extension}`);
-      if (fs15.existsSync(candidate)) return nativeFromShim(candidate) || candidate;
+      const candidate = path19.join(dir.replace(/^"|"$/g, ""), `copilot${extension}`);
+      if (fs17.existsSync(candidate)) return nativeFromShim(candidate) || candidate;
     }
   }
   return value;
@@ -4308,7 +4509,7 @@ var CopilotCliClient = class {
     if (process.platform === "win32" && /\.(cmd|bat|ps1)$/i.test(this.bin)) {
       return Promise.reject(new Error("Select the native copilot.exe executable, or reinstall @github/copilot with optional dependencies enabled."));
     }
-    return new Promise((resolve8) => {
+    return new Promise((resolve10) => {
       let output = "";
       let error = "";
       let settled = false;
@@ -4321,26 +4522,26 @@ var CopilotCliClient = class {
         if (timer) clearTimeout(timer);
         if (promptDir) {
           try {
-            fs15.unlinkSync(path16.join(promptDir, "task.txt"));
-            fs15.rmdirSync(promptDir);
+            fs17.unlinkSync(path19.join(promptDir, "task.txt"));
+            fs17.rmdirSync(promptDir);
           } catch {
           }
         }
-        resolve8(result);
+        resolve10(result);
       };
       this.finish = finish;
       try {
         let args;
         if (prompt.length > 12e3) {
-          promptDir = fs15.mkdtempSync(path16.join(os5.tmpdir(), "autooc-copilot-"));
-          const promptFile = path16.join(promptDir, "task.txt");
-          fs15.writeFileSync(promptFile, prompt, { encoding: "utf8", mode: 384 });
+          promptDir = fs17.mkdtempSync(path19.join(os5.tmpdir(), "autooc-copilot-"));
+          const promptFile = path19.join(promptDir, "task.txt");
+          fs17.writeFileSync(promptFile, prompt, { encoding: "utf8", mode: 384 });
           args = buildCopilotArgs(`Read the UTF-8 file ${JSON.stringify(promptFile)} and carry out the complete task instructions it contains.`, options);
           args.push("--add-dir", promptDir);
         } else {
           args = buildCopilotArgs(prompt, options);
         }
-        this.child = (0, import_child_process7.spawn)(this.bin, args, {
+        this.child = (0, import_child_process9.spawn)(this.bin, args, {
           cwd: this.cwd,
           env: { ...process.env, ...options.env },
           stdio: "pipe",
@@ -4378,7 +4579,7 @@ var CopilotCliClient = class {
     const child = this.child;
     if (!child?.pid || child.exitCode !== null) return;
     if (process.platform === "win32") {
-      const killer = (0, import_child_process7.spawn)("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      const killer = (0, import_child_process9.spawn)("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
       killer.on("error", () => {
         try {
           child.kill();
@@ -4698,7 +4899,7 @@ function createOpenCodeWorkflowAdapter(definition, vault, terminal) {
     const agent = task.agent || (major === 2 ? definition.settings.defaultOpencode2Agent : definition.settings.defaultAgent) || "build";
     if (task.useRalphLoop) prompt = "/ralph-loop " + prompt;
     if (task.interactiveTerminal) {
-      if (path17.isAbsolute(bin) && !fs16.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
+      if (path20.isAbsolute(bin) && !fs18.existsSync(bin)) return { succeeded: false, output: "[interactive OpenCode executable is unavailable; nothing was launched]" };
       if (terminal?.destination === "integrated") {
         if (!terminal.launch) throw new Error("Integrated CLI tasks require a loaded Obsidian terminal host. No external terminal was started.");
         await terminal.launch({
@@ -4713,28 +4914,28 @@ function createOpenCodeWorkflowAdapter(definition, vault, terminal) {
         });
         return { succeeded: true, output: "[opened integrated OpenCode CLI with preloaded prompt; interactive task result is not observed]" };
       }
-      await new Promise((resolve8, reject) => {
-        const options = { onLaunched: resolve8, onError: reject, linuxTerminal: definition.settings.linuxTerminal, opencodeMajor: major };
+      await new Promise((resolve10, reject) => {
+        const options = { onLaunched: resolve10, onError: reject, linuxTerminal: definition.settings.linuxTerminal, opencodeMajor: major };
         if (process.platform === "win32") openOpencodeCliLongPromptWindows(bin, taskCwd, {}, model, task.forceModel ? "" : agent, prompt, options);
         else openOpencodeCli(bin, taskCwd, {}, openCodeInteractiveArgs(major, model, task.forceModel ? "" : agent, prompt), options);
       });
       return { succeeded: true, output: "[opened interactive OpenCode CLI with preloaded prompt; interactive task result is not observed]" };
     }
     const folder = createAuxiliaryDirectory(taskCwd, "runtime");
-    const outFile = path17.join(folder, "stdout.txt"), errFile = path17.join(folder, "stderr.txt"), doneFile = path17.join(folder, "done.txt");
-    const pidFile = path17.join(folder, "process.pid"), promptFile = path17.join(folder, "instruction.txt"), full = path17.join(folder, "input.txt");
-    const scriptFile = path17.join(folder, "launch" + scriptExt());
+    const outFile = path20.join(folder, "stdout.txt"), errFile = path20.join(folder, "stderr.txt"), doneFile = path20.join(folder, "done.txt");
+    const pidFile = path20.join(folder, "process.pid"), promptFile = path20.join(folder, "instruction.txt"), full = path20.join(folder, "input.txt");
+    const scriptFile = path20.join(folder, "launch" + scriptExt());
     let handle;
     let known = false, launchAttempted = false;
     try {
-      fs16.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
-      fs16.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
+      fs18.writeFileSync(full, prompt, { encoding: "utf8", mode: 384 });
+      fs18.writeFileSync(promptFile, `Read the complete task prompt and workflow context from the workspace file at ${full} and follow it exactly.`, { encoding: "utf8", mode: 384 });
       const script = buildOpenCodeScript({ pidFile, secretEnv: {}, safeCwd: taskCwd.replace(/'/g, "''"), gitCmds: "", bin, model, effectiveAgent: agent, effectiveTask: task, promptFile, outFile, errFile, doneFile, taskCwd, major });
       if (process.platform === "win32") writeUtf8BomFile(scriptFile, script);
-      else fs16.writeFileSync(scriptFile, script, { mode: 384 });
+      else fs18.writeFileSync(scriptFile, script, { mode: 384 });
       launchAttempted = true;
       const launched = handle = launchHidden(scriptFile, pidFile);
-      const result = await new Promise((resolve8, reject) => {
+      const result = await new Promise((resolve10, reject) => {
         let ended = false;
         const finish = (error) => {
           if (ended) return;
@@ -4748,7 +4949,7 @@ function createOpenCodeWorkflowAdapter(definition, vault, terminal) {
           finish(new Error("OpenCode interrupted; effects require reconciliation"));
         };
         const started = Date.now(), timeout = Number(definition.settings.taskTimeoutSeconds) * 1e3;
-        const read = (file) => fs16.existsSync(file) ? decodeCommandBuffer(fs16.readFileSync(file)) : "";
+        const read = (file) => fs18.existsSync(file) ? decodeCommandBuffer(fs18.readFileSync(file)) : "";
         let lastOutput = "", nextOutputAt = 0;
         const timer = setInterval(() => {
           try {
@@ -4756,7 +4957,7 @@ function createOpenCodeWorkflowAdapter(definition, vault, terminal) {
               abort();
               return;
             }
-            const completed = fs16.existsSync(doneFile);
+            const completed = fs18.existsSync(doneFile);
             if (!completed && (!interaction?.onOutput || Date.now() < nextOutputAt)) return;
             const output = formatTaskOutput(read(outFile), read(errFile));
             if (output !== lastOutput) {
@@ -4765,11 +4966,11 @@ function createOpenCodeWorkflowAdapter(definition, vault, terminal) {
             }
             nextOutputAt = Date.now() + 500;
             if (!completed) return;
-            const exit = fs16.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
+            const exit = fs18.readFileSync(doneFile, "utf8").replace(/^\uFEFF/, "").trim();
             if (!/^-?\d+$/.test(exit)) throw new Error("Invalid OpenCode completion marker");
             known = true;
             finish();
-            resolve8({ succeeded: exit === "0", output: output || "(no output)" });
+            resolve10({ succeeded: exit === "0", output: output || "(no output)" });
           } catch (error) {
             finish(error);
           }
@@ -4815,78 +5016,6 @@ function createWorkflowTaskAdapter(definition, vaultBase, vaultMutations, termin
   ]);
 }
 
-// workflow-stop.ts
-var fs17 = __toESM(require("fs"));
-var path18 = __toESM(require("path"));
-var import_crypto7 = require("crypto");
-function readStopRequest(directory, runId) {
-  if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
-  const file = path18.join(directory, runId + ".stop.json");
-  try {
-    const stat = fs17.lstatSync(file);
-    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid stop request file");
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  let value;
-  try {
-    value = JSON.parse(fs17.readFileSync(file, "utf8"));
-  } catch {
-    throw new Error("Invalid stop request");
-  }
-  if (value.schemaVersion !== 1 || value.runId !== runId || !/^[a-f0-9-]+$/.test(value.requestId || "")) throw new Error("Invalid stop request identity");
-  return value.requestId;
-}
-async function requestWorkflowStop(directory, runId) {
-  const stat = fs17.lstatSync(directory);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
-  const state = readExecutionCheckpoint(directory, runId);
-  if (["completed", "failed", "abandoned"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
-  readStopRequest(directory, runId);
-  const requestId = (0, import_crypto7.randomUUID)();
-  await atomicSettingsWrite(path18.join(directory, runId + ".stop.json"), { schemaVersion: 1, runId, requestId });
-  return { runId, requestId, requested: true, phase: state.phase };
-}
-
-// workflow-preflight.ts
-var fs18 = __toESM(require("fs"));
-var path19 = __toESM(require("path"));
-function preflightInstalledWorkflow(definition, vault) {
-  assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
-  const root = physicalPath(vault);
-  const checkDirectory = (value) => {
-    if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
-    const configured = value || root;
-    if (!path19.isAbsolute(configured)) throw new Error("Working directory must be absolute");
-    const directory = physicalPath(configured);
-    if (!isWithinPhysicalPath(root, directory)) throw new Error("Working directory is outside the selected vault");
-    if (!fs18.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
-  };
-  checkDirectory(definition.settings.workingDirectory);
-  for (const item of [definition.workflow, ...definition.workflow.steps, ...(definition.workflows || []).flatMap((w) => [w, ...w.steps]), ...definition.tasks]) {
-    if (item.workingDirectory !== void 0) checkDirectory(item.workingDirectory);
-    if (item.interactiveTerminal !== void 0 && typeof item.interactiveTerminal !== "boolean") throw new Error("interactiveTerminal must be boolean");
-    if (item.taskKind === "code" && item.interactiveTerminal === true) throw new Error("Code tasks cannot be interactive");
-    validateConcurrency(item);
-    validateBranchOptions(item);
-    if (item.branch?.trim() || definition.workflow.handoffBranch) branchRepository(item.workingDirectory || definition.settings.workingDirectory || root, root);
-    if (definition.workflow.id.startsWith("@task:")) preflightTaskBranch(item, item.workingDirectory || definition.settings.workingDirectory || root, root);
-  }
-  for (const task of definition.tasks) {
-    const cliError = getCliTaskValidationError(task);
-    if (cliError) throw new Error(cliError);
-    if (task.taskKind === "cli") {
-      prepareCliTask(task, definition.settings, task.workingDirectory || definition.settings.workingDirectory || root, task.prompt);
-      continue;
-    }
-    if (task.taskKind === "code") continue;
-    if (typeof task.prompt !== "string" || !task.prompt.trim()) throw new Error("Task prompt must be nonempty before execution");
-    if (isOpenCodeTask(task.taskKind) && !(task.model || (task.taskKind === "opencode2" ? definition.settings.defaultOpencode2Model : definition.settings.defaultModel))?.trim()) throw new Error("OpenCode model must be selected before execution");
-    if (task.taskKind === "opencode2" && task.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks");
-  }
-}
-
 // workflow-evaluation.ts
 function createWorkflowEvaluator(definition, vault, signal) {
   const adapter = createOpenCodeWorkflowAdapter(definition, vault);
@@ -4915,78 +5044,272 @@ Reply ONLY with YES or NO.`,
   };
 }
 
-// installed-workflow-location.ts
+// workflow-preflight.ts
 var fs19 = __toESM(require("fs"));
-var path20 = __toESM(require("path"));
-function regularDirectory2(directory) {
-  const stat = fs19.lstatSync(directory);
-  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Installation must use regular directories");
+var path21 = __toESM(require("path"));
+function preflightInstalledWorkflow(definition, vault) {
+  assertWorkflowDependencies(definition.workflow, definition.tasks, definition.workflows);
+  const root = physicalPath(vault);
+  const checkDirectory = (value) => {
+    if (value !== void 0 && typeof value !== "string") throw new Error("Invalid working directory");
+    const configured = value || root;
+    if (!path21.isAbsolute(configured)) throw new Error("Working directory must be absolute");
+    const directory = physicalPath(configured);
+    if (!isWithinPhysicalPath(root, directory)) throw new Error("Working directory is outside the selected vault");
+    if (!fs19.statSync(directory).isDirectory()) throw new Error("Working directory is unavailable");
+  };
+  checkDirectory(definition.settings.workingDirectory);
+  for (const item of [definition.workflow, ...definition.workflow.steps, ...(definition.workflows || []).flatMap((w) => [w, ...w.steps]), ...definition.tasks]) {
+    if (item.workingDirectory !== void 0) checkDirectory(item.workingDirectory);
+    if (item.interactiveTerminal !== void 0 && typeof item.interactiveTerminal !== "boolean") throw new Error("interactiveTerminal must be boolean");
+    if (item.taskKind === "code" && item.interactiveTerminal === true) throw new Error("Code tasks cannot be interactive");
+    validateConcurrency(item);
+    validateBranchOptions(item);
+    if (item.branch?.trim() || definition.workflow.handoffBranch) branchRepository(item.workingDirectory || definition.settings.workingDirectory || root, root);
+    if (definition.workflow.id.startsWith("@task:")) preflightTaskBranch(item, item.workingDirectory || definition.settings.workingDirectory || root, root);
+  }
+  for (const task of definition.tasks) {
+    const cliError = getCliTaskValidationError(task);
+    if (cliError) throw new Error(cliError);
+    if (task.taskKind === "cli") {
+      prepareCliTask(task, definition.settings, task.workingDirectory || definition.settings.workingDirectory || root, task.prompt);
+      continue;
+    }
+    if (task.taskKind === "code") continue;
+    if (typeof task.prompt !== "string" || !task.prompt.trim()) throw new Error("Task prompt must be nonempty before execution");
+    if (isOpenCodeTask(task.taskKind) && !(task.model || (task.taskKind === "opencode2" ? definition.settings.defaultOpencode2Model : definition.settings.defaultModel))?.trim()) throw new Error("OpenCode model must be selected before execution");
+    if (task.taskKind === "opencode2" && task.useRalphLoop) throw new Error("Ralph Loop integration is only supported for OpenCode 1 tasks");
+  }
 }
-function optionalStat(file) {
+
+// workflow-stop.ts
+var fs20 = __toESM(require("fs"));
+var path22 = __toESM(require("path"));
+var import_crypto8 = require("crypto");
+function readStopRequest(directory, runId) {
+  if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
+  const file = path22.join(directory, runId + ".stop.json");
   try {
-    return fs19.lstatSync(file);
+    const stat = fs20.lstatSync(file);
+    if (stat.isSymbolicLink() || !stat.isFile()) throw new Error("Invalid stop request file");
   } catch (error) {
-    if (error.code === "ENOENT") return void 0;
+    if (error.code === "ENOENT") return;
     throw error;
   }
-}
-function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
-  if (!path20.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
-  const vault = physicalPath(vaultPath);
-  regularDirectory2(vault);
-  let relative6 = path20.join(".obsidian", "plugins", "auto-oc");
-  if (installationDirectory !== void 0) {
-    if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
-      throw new Error("Invalid installation location");
-    }
-    if (process.platform === "win32" && path20.isAbsolute(installationDirectory)) {
-      let inspected = path20.parse(installationDirectory).root;
-      for (const part of installationDirectory.slice(inspected.length).split(/[\\/]/)) {
-        if (!part || part.includes(":")) throw new Error("Invalid installation component");
-        inspected = path20.join(inspected, part);
-        regularDirectory2(inspected);
-      }
-      relative6 = path20.relative(vault, physicalPath(inspected));
-    } else {
-      relative6 = path20.isAbsolute(installationDirectory) ? path20.relative(path20.resolve(vaultPath), installationDirectory) : installationDirectory;
-    }
-    if (!relative6 || path20.isAbsolute(relative6) || relative6.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
-      throw new Error("Installation must remain inside the vault");
-    }
-  }
-  let directory = vault;
-  for (const part of relative6.split(/[\\/]/)) {
-    if (!part) throw new Error("Invalid installation component");
-    directory = path20.join(directory, part);
-    regularDirectory2(directory);
-  }
-  directory = physicalPath(directory);
-  if (!isWithinPhysicalPath(vault, directory)) throw new Error("Installation must remain inside the vault");
-  const configurationFile = path20.join(directory, "data.json");
-  const configStat = optionalStat(configurationFile);
-  if (configStat && (configStat.isSymbolicLink() || !configStat.isFile())) throw new Error("Configuration must be a regular file");
-  const runtimeDirectory = path20.join(directory, "runtime");
-  const runtimeStat = optionalStat(runtimeDirectory);
-  if (runtimeStat && (runtimeStat.isSymbolicLink() || !runtimeStat.isDirectory())) throw new Error("Invalid runtime directory");
-  return { vault, installationDirectory: directory, configurationFile, runtimeDirectory };
-}
-function ensureInstalledWorkflowRuntime(location) {
-  const current = resolveInstalledWorkflowLocation(location.vault, location.installationDirectory);
-  if (current.runtimeDirectory !== location.runtimeDirectory) throw new Error("Installation location changed");
+  let value;
   try {
-    fs19.mkdirSync(current.runtimeDirectory);
-  } catch (error) {
-    if (error.code !== "EEXIST") throw error;
+    value = JSON.parse(fs20.readFileSync(file, "utf8"));
+  } catch {
+    throw new Error("Invalid stop request");
   }
-  regularDirectory2(current.runtimeDirectory);
+  if (value.schemaVersion !== 1 || value.runId !== runId || !/^[a-f0-9-]+$/.test(value.requestId || "")) throw new Error("Invalid stop request identity");
+  return value.requestId;
+}
+async function requestWorkflowStop(directory, runId) {
+  const stat = fs20.lstatSync(directory);
+  if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("Invalid runtime directory");
+  const state = readExecutionCheckpoint(directory, runId);
+  if (["completed", "failed", "abandoned"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
+  readStopRequest(directory, runId);
+  const requestId = (0, import_crypto8.randomUUID)();
+  await atomicSettingsWrite(path22.join(directory, runId + ".stop.json"), { schemaVersion: 1, runId, requestId });
+  return { runId, requestId, requested: true, phase: state.phase };
+}
+
+// page-workflow.ts
+var runtimeFields2 = /* @__PURE__ */ new Set(["status", "lastRun", "output", "currentStep", "runtimeExecution", "legacyExecution", "codeExecution", "lastCodexThreadId", "lastCodexTurnId", "pendingCodexApproval"]);
+var clean = (item) => Object.fromEntries(Object.entries(item).filter(([key]) => !runtimeFields2.has(key)));
+var interactivePageTask = (task) => task.taskKind === "cli" || task.interactiveTerminal === true;
+function preparePageDefinition(config, page2, sourceId, task) {
+  const root = task ? standaloneTaskWorkflow(sourceId) : config.workflows.find((w) => w.id === sourceId);
+  if (!root) throw new Error("Workflow no longer exists");
+  assertWorkflowEnabled(root, config.tasks, config.workflows);
+  const workflows = [root, ...workflowClosure(root, config.workflows)];
+  const taskIds = new Set(workflows.flatMap((w) => w.steps).filter((s) => s.taskId && (!s.stepKind || s.stepKind === "task")).map((s) => s.taskId));
+  const directory = physicalPath(page2.directory);
+  const mappedId = (id) => pageExecutionId(page2.id, id);
+  const tasks = config.tasks.filter((t) => taskIds.has(t.id)).map((t) => {
+    if (t.workingDirectory && !isWithinPhysicalPath(directory, t.workingDirectory)) throw new Error("Task '" + t.name + "' has a fixed folder outside this page. Edit its global folder explicitly to inherit the page.");
+    if (t.branch || t.createBranch) throw new Error("This task changes Git branches. Use a workflow that works on the page's existing branch.");
+    return {
+      ...clean(t),
+      id: mappedId(t.id),
+      workingDirectory: t.workingDirectory || directory,
+      prompt: page2.objective ? "Page objective:\n" + page2.objective + "\n\n" + (t.prompt || "") : t.prompt
+    };
+  });
+  const mapped = workflows.map((w) => {
+    if (w.handoffBranch) throw new Error("Branch handoff is not supported in page runs yet. The worktree already owns its branch.");
+    return { ...clean(w), id: mappedId(w.id), steps: w.steps.map((s) => ({ ...clean(s), taskId: s.taskId ? mappedId(s.taskId) : void 0, workflowId: s.workflowId ? mappedId(s.workflowId) : void 0 })) };
+  });
+  const interactive = tasks.filter(interactivePageTask), onlyStep = mapped[0].steps[0];
+  if (interactive.length && (mapped.length !== 1 || mapped[0].steps.length !== 1 || !onlyStep.taskId || onlyStep.stepKind && onlyStep.stepKind !== "task")) {
+    throw new Error("Run an interactive CLI as a standalone page task or one-step workflow. Its launch does not confirm completion; subsequent page work must wait for the session to end.");
+  }
+  mapped[0].id = pageExecutionId(page2.id, sourceId, task);
+  if (task) {
+    mapped[0].name = config.tasks.find((item) => item.id === sourceId)?.name || "Standalone task";
+    mapped[0].concurrency = config.tasks.find((item) => item.id === sourceId)?.concurrency;
+  }
+  mapped[0].workPage = { id: page2.id, identity: pageIdentityHash(page2), directory, objective: page2.objective };
+  return prepareWorkflowDefinition(mapped[0], tasks, { ...config, workingDirectory: directory, workflows: mapped.slice(1) });
+}
+async function runPageWorkflow(options) {
+  if (!options.pageId || options.pageId === "main" || options.stepId) throw new Error("Page execution requires a page and a complete task or workflow");
+  const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
+  const reader = options.catalogWriter || new SettingsWriter();
+  ensureInstalledWorkflowRuntime(location);
+  const owned = options.lease ? void 0 : acquireExecutionLease(location.runtimeDirectory);
+  const lease = options.lease || owned;
+  if (physicalPath(lease.directory) !== physicalPath(location.runtimeDirectory)) {
+    owned?.release();
+    throw new Error("Lease belongs to another installation");
+  }
+  const coordinator = executionCoordinator(lease);
+  let admission;
+  const controller = new AbortController(), abort = () => controller.abort();
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) abort();
+  let timer;
+  try {
+    const definitions = path23.join(location.runtimeDirectory, "page-definitions");
+    if (fs21.existsSync(definitions) && fs21.lstatSync(definitions).isSymbolicLink()) throw new Error("Page definitions cannot be a link");
+    fs21.mkdirSync(definitions, { recursive: true });
+    const prepared = await catalogTransaction(location.configurationFile, async () => {
+      lease.assertOwned();
+      const config = await reader.loadAsync(location.configurationFile);
+      const page3 = selectWorkPage(config, options.pageId);
+      if (page3.worktreeRemoval) throw new Error("This worktree has been removed or its removal needs review. Page history remains available.");
+      if (page3.archived && !options.resumeRunId) throw new Error("Restore this page before starting work");
+      assertNoPageTerminal(config, page3.directory, true);
+      if ([...config.tasks, ...config.workflows].some((item) => item.status === "running" && !coordinator.knows(item.runtimeExecution?.runId))) throw new Error("Catalog has unresolved running activity");
+      await verifyWorkPageEnvironment(page3);
+      const sourceId2 = options.taskId || options.workflowId, task2 = !!options.taskId;
+      let definition2;
+      if (options.resumeRunId) {
+        if (!/^[a-f0-9-]+$/.test(options.resumeRunId)) throw new Error("Invalid page run identity");
+        const snapshotPath = path23.join(definitions, options.resumeRunId + ".json");
+        if (fs21.lstatSync(snapshotPath).isSymbolicLink()) throw new Error("Page definition cannot be a link");
+        const snapshot = JSON.parse(fs21.readFileSync(snapshotPath, "utf8"));
+        if (snapshot.pageId !== page3.id || snapshot.sourceId !== sourceId2 || snapshot.task !== task2 || snapshot.pageIdentity !== pageIdentityHash(page3)) throw new Error("Page execution context changed");
+        definition2 = snapshot.definition;
+        const checkpoint = readExecutionCheckpoint(location.runtimeDirectory, options.resumeRunId);
+        if (checkpoint.workflowId !== pageExecutionId(page3.id, sourceId2, task2) || checkpoint.definitionHash !== definition2.hash) throw new Error("Page snapshot does not match its journal");
+        if (!options.reconcile) {
+          const current = task2 ? standaloneTaskWorkflow(sourceId2) : config.workflows.find((w) => w.id === sourceId2);
+          if (!current) throw new Error("Original workflow was removed");
+          assertWorkflowEnabled(current, config.tasks, config.workflows);
+        }
+      } else definition2 = preparePageDefinition(config, page3, sourceId2, task2);
+      preflightInstalledWorkflow(definition2, page3.directory);
+      const terminal2 = { destination: config.cliTerminalDestination === "integrated" ? "integrated" : "external", launch: options.launchInteractiveTerminal };
+      if (terminal2.destination === "integrated" && !terminal2.launch && definition2.tasks.some(interactivePageTask)) throw new Error("Integrated CLI tasks need the open Obsidian plugin");
+      admission = coordinator.admit(definition2, page3.directory, options.resumeRunId, { directory: physicalPath(page3.directory), worktree: page3.kind === "worktree" });
+      if (config.pageTerminalClaims?.length && admission.resources.exclusive) throw new Error("Exclusive execution must wait for page terminals to finish.");
+      return { page: { ...page3 }, sourceId: sourceId2, task: task2, definition: definition2, terminal: terminal2 };
+    });
+    const { page: page2, sourceId, task, definition, terminal } = prepared;
+    let activeRunId = options.resumeRunId;
+    if (terminal.launch) {
+      const launch = terminal.launch;
+      terminal.launch = (request) => {
+        if (!activeRunId) throw new Error("Page terminal requires a durable execution identity");
+        return launch({
+          ...request,
+          label: page2.name + " \xB7 " + request.label,
+          page: { pageId: page2.id, claimId: "page-cli-" + activeRunId }
+        });
+      };
+    }
+    const acknowledged = activeRunId ? readStopRequest(location.runtimeDirectory, activeRunId) : void 0;
+    let stopError;
+    timer = setInterval(() => {
+      if (!activeRunId) return;
+      try {
+        const request = readStopRequest(location.runtimeDirectory, activeRunId);
+        if (request && request !== acknowledged) abort();
+      } catch (error) {
+        stopError = error;
+        abort();
+      }
+    }, 100);
+    timer.unref?.();
+    const result = await runCodeWorkflowHost({
+      definition,
+      runtimeDirectory: location.runtimeDirectory,
+      vaultBase: page2.directory,
+      lease,
+      admission,
+      resumeRunId: options.resumeRunId,
+      reconcile: options.reconcile,
+      maxSteps: options.maxSteps,
+      signal: controller.signal,
+      redact: options.redact,
+      onTaskOutput: options.onTaskOutput,
+      tasks: createWorkflowTaskAdapter(definition, page2.directory, void 0, terminal),
+      evaluate: createWorkflowEvaluator(definition, page2.directory, controller.signal),
+      onCheckpoint: async (checkpoint) => {
+        admission.bind(checkpoint);
+        activeRunId = checkpoint.runId;
+        const snapshotPath = path23.join(definitions, checkpoint.runId + ".json");
+        if (!fs21.existsSync(snapshotPath)) {
+          await atomicSettingsWrite(snapshotPath, { pageId: page2.id, sourceId, task, pageIdentity: pageIdentityHash(page2), definition });
+        }
+        await catalogTransaction(location.configurationFile, async (transaction) => {
+          lease.assertOwned();
+          const baseline = options.catalogVersion?.() || coordinator.catalogVersion;
+          if (baseline?.textHash && baseline.textHash === baseline.valueHash) await reader.adoptConfirmed(location.configurationFile, baseline, () => true);
+          const current = await reader.loadAsync(location.configurationFile);
+          if (pageIdentityHash(selectWorkPage(current, page2.id)) !== pageIdentityHash(page2)) throw new Error("Page changed during execution; checkpoint preserved");
+          const row = {
+            pageId: page2.id,
+            sourceId,
+            task,
+            runId: checkpoint.runId,
+            workflowId: checkpoint.workflowId,
+            name: definition.workflow.name || sourceId,
+            phase: checkpoint.phase,
+            revision: checkpoint.revision,
+            createdAt: checkpoint.createdAt || "",
+            uncertain: checkpointUncertainties(checkpoint).length > 0
+          };
+          const previous = (current.pageRuns || []).find((run2) => run2.runId === row.runId);
+          if (previous && previous.revision > row.revision) throw new Error("Stale page progress");
+          const next = { ...current, pageRuns: [...(current.pageRuns || []).filter((run2) => run2.runId !== row.runId), row] };
+          const interactive = definition.tasks.some(interactivePageTask);
+          if (interactive && checkpoint.phase === "in_flight" && !checkpoint.steps[checkpoint.steps.length - 1]?.result) {
+            const id = "page-cli-" + checkpoint.runId;
+            if (!(current.pageTerminalClaims || []).some((claim) => claim.id === id)) {
+              next.pageTerminalClaims = [...current.pageTerminalClaims || [], { id, pageId: page2.id, directory: page2.directory, createdAt: (/* @__PURE__ */ new Date()).toISOString(), exclusive: admission.resources.exclusive }];
+            }
+          }
+          await reader.save(location.configurationFile, () => next);
+          const version = reader.confirmedVersion(location.configurationFile);
+          coordinator.catalogVersion = version;
+          await options.onCheckpoint?.(checkpoint, { catalog: next, version, runId: row.runId, workflowId: row.workflowId, revision: row.revision }, void 0, transaction);
+          admission.confirm(checkpoint);
+        });
+      }
+    });
+    if (stopError) throw stopError;
+    return result;
+  } finally {
+    if (timer) clearInterval(timer);
+    options.signal?.removeEventListener("abort", abort);
+    admission?.finish();
+    owned?.release();
+  }
 }
 
 // installed-workflow-host.ts
+var fs22 = __toESM(require("fs"));
+var path24 = __toESM(require("path"));
 var preparingInstallations = /* @__PURE__ */ new Set();
 async function runInstalledWorkflow(options) {
-  if (!path21.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
+  if (!path24.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.stepId !== void 0 && (!options.workflowId || !options.stepId)) throw new Error("A code step requires its parent workflow identity");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
+  if (options.pageId && options.pageId !== "main") return runPageWorkflow(options);
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
   const { vault, configurationFile, runtimeDirectory } = location;
   if (options.lease) {
@@ -4998,7 +5321,7 @@ async function runInstalledWorkflow(options) {
   let ownedLease;
   let admission;
   try {
-    if (!options.lease && fs20.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
+    if (!options.lease && fs22.existsSync(runtimeDirectory)) ownedLease = acquireExecutionLease(runtimeDirectory);
     const reader = options.catalogWriter || new SettingsWriter();
     const prepared = await catalogTransaction(configurationFile, async () => {
       let config = await reader.loadAsync(configurationFile);
@@ -5017,6 +5340,10 @@ async function runInstalledWorkflow(options) {
       }
       if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks, config.workflows);
       const definition2 = prepareWorkflowDefinition(virtual || matches[0], config.tasks, config);
+      if (config.pageTerminalClaims?.length) {
+        assertNoPageTerminal(config, definition2.settings.workingDirectory || vault);
+        for (const task of definition2.tasks) assertNoPageTerminal(config, task.workingDirectory || definition2.settings.workingDirectory || vault);
+      }
       preflightInstalledWorkflow(definition2, vault);
       const terminal2 = { destination: config.cliTerminalDestination === "integrated" ? "integrated" : "external", launch: options.launchInteractiveTerminal };
       if (!options.reconcile && terminal2.destination === "integrated" && !terminal2.launch && definition2.tasks.some((task) => task.taskKind === "cli" || isOpenCodeTask(task.taskKind) && task.interactiveTerminal)) {
@@ -5115,7 +5442,7 @@ async function runInstalledWorkflow(options) {
 }
 
 // execution-abandonment.ts
-var fs21 = __toESM(require("fs"));
+var fs23 = __toESM(require("fs"));
 function inspectTerminalExecution(options) {
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
   const identity = dispositionLocation(location), state = readExecutionCheckpoint(location.runtimeDirectory, options.runId);
@@ -5145,10 +5472,10 @@ async function disposeTerminalExecution(options) {
       lease.assertOwned();
       const current = dispositionLocation(resolveInstalledWorkflowLocation(options.vault, options.installationDirectory));
       if (Object.entries(current).some(([key, value]) => options[key] !== value)) throw new Error("Disposition installation identity changed");
-      if (fs21.existsSync(location.configurationFile + ".write-lock") || fs21.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs21.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
-      const config = JSON.parse(fs21.readFileSync(location.configurationFile, "utf8"));
+      if (fs23.existsSync(location.configurationFile + ".write-lock") || fs23.readdirSync(location.installationDirectory).some((name) => name.startsWith("data.json.") && name.endsWith(".tmp")) || fs23.readdirSync(location.runtimeDirectory).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) throw new Error("Unfinished write requires reconciliation");
+      const config = JSON.parse(fs23.readFileSync(location.configurationFile, "utf8"));
       if (["tasks", "workflows"].some((kind) => !Array.isArray(config[kind]) || config[kind].some((entry) => entry.status === "running" || entry.pendingCodexApproval))) throw new Error("Active execution requires reconciliation");
-      for (const name of fs21.readdirSync(location.runtimeDirectory)) {
+      for (const name of fs23.readdirSync(location.runtimeDirectory)) {
         if (!/^[a-zA-Z0-9-]+\.json$/.test(name)) continue;
         const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
         if (["ready", "in_flight"].includes(state.phase)) throw new Error("Active or unfinished execution requires reconciliation");
@@ -5181,9 +5508,9 @@ async function abandonInstalledExecution(options) {
 }
 
 // release-maintenance.ts
-var fs24 = __toESM(require("fs"));
-var path24 = __toESM(require("path"));
-var import_crypto9 = require("crypto");
+var fs26 = __toESM(require("fs"));
+var path27 = __toESM(require("path"));
+var import_crypto10 = require("crypto");
 
 // execution-idle.ts
 function assertIdleCatalog(settings, checkpoints) {
@@ -5225,20 +5552,20 @@ function assertIdleCatalog(settings, checkpoints) {
 }
 
 // package-maintenance.ts
-var fs22 = __toESM(require("fs"));
-var path22 = __toESM(require("path"));
+var fs24 = __toESM(require("fs"));
+var path25 = __toESM(require("path"));
 function assertPackageMaintenanceSafe(directory) {
-  const runtime = path22.join(directory, "runtime");
-  if (fs22.existsSync(path22.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery");
-  if (fs22.readdirSync(directory).some((name) => name === "data.json.write-lock" || name === "data.json.write-intent" || name.startsWith("data.json.") && name.endsWith(".tmp")) || fs22.readdirSync(runtime).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) {
+  const runtime = path25.join(directory, "runtime");
+  if (fs24.existsSync(path25.join(runtime, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery");
+  if (fs24.readdirSync(directory).some((name) => name === "data.json.write-lock" || name === "data.json.write-intent" || name.startsWith("data.json.") && name.endsWith(".tmp")) || fs24.readdirSync(runtime).some((name) => name.endsWith(".tmp") || name.endsWith(".write-lock"))) {
     throw new Error("Unfinished write requires reconciliation before package maintenance");
   }
 }
 
 // release-update.ts
-var fs23 = __toESM(require("fs"));
-var path23 = __toESM(require("path"));
-var import_crypto8 = require("crypto");
+var fs25 = __toESM(require("fs"));
+var path26 = __toESM(require("path"));
+var import_crypto9 = require("crypto");
 var RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"];
 var RELEASE_DESCRIPTOR = "release-integrity.json";
 function verifyRelease(files2, expectedVersion) {
@@ -5247,63 +5574,63 @@ function verifyRelease(files2, expectedVersion) {
     throw new Error("Incomplete or incompatible AutoOC release");
   }
   for (const file of RELEASE_FILES) {
-    if (!Buffer.isBuffer(files2[file]) || (0, import_crypto8.createHash)("sha256").update(files2[file]).digest("hex") !== descriptor.sha256[file]) {
+    if (!Buffer.isBuffer(files2[file]) || (0, import_crypto9.createHash)("sha256").update(files2[file]).digest("hex") !== descriptor.sha256[file]) {
       throw new Error(`Release integrity mismatch: ${file}`);
     }
   }
   const manifest = JSON.parse(files2["manifest.json"].toString("utf8"));
   if (manifest.id !== "auto-oc" || manifest.version !== expectedVersion) throw new Error("Release manifest identity mismatch");
 }
-function regularPath(root, relative6, create = false) {
+function regularPath(root, relative7, create = false) {
   let current = root;
-  const parts = relative6.split("/");
+  const parts = relative7.split("/");
   for (let i = 0; i < parts.length; i++) {
-    current = path23.join(current, parts[i]);
+    current = path26.join(current, parts[i]);
     let stat;
     try {
-      stat = fs23.lstatSync(current);
+      stat = fs25.lstatSync(current);
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
-      throw new Error(`Unsafe release destination: ${relative6}`);
+      throw new Error(`Unsafe release destination: ${relative7}`);
     }
-    if (!stat && i < parts.length - 1 && create) fs23.mkdirSync(current);
+    if (!stat && i < parts.length - 1 && create) fs25.mkdirSync(current);
   }
   return current;
 }
 function installRelease(options) {
   const { files: files2, version, lease } = options;
   verifyRelease(files2, version);
-  const directory = fs23.realpathSync(options.directory);
-  if (fs23.lstatSync(options.directory).isSymbolicLink() || path23.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
+  const directory = fs25.realpathSync(options.directory);
+  if (fs25.lstatSync(options.directory).isSymbolicLink() || path26.join(directory, "runtime") !== lease.directory) throw new Error("Update lease belongs to another installation");
   lease.assertOwned();
-  const marker = path23.join(lease.directory, "update-pending.json");
-  if (fs23.existsSync(marker)) throw new Error("Previous update requires recovery");
+  const marker = path26.join(lease.directory, "update-pending.json");
+  if (fs25.existsSync(marker)) throw new Error("Previous update requires recovery");
   assertPackageMaintenanceSafe(directory);
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names) regularPath(directory, name);
-  const backup = path23.join(lease.directory, `update-backup-${(0, import_crypto8.randomUUID)()}`);
-  fs23.mkdirSync(backup);
+  const backup = path26.join(lease.directory, `update-backup-${(0, import_crypto9.randomUUID)()}`);
+  fs25.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
   for (const name of names) {
     const source = regularPath(directory, name);
-    const bytes = fs23.existsSync(source) ? fs23.readFileSync(source) : void 0;
+    const bytes = fs25.existsSync(source) ? fs25.readFileSync(source) : void 0;
     previous.set(name, bytes);
     if (bytes) {
-      const target = path23.join(backup, name);
-      fs23.mkdirSync(path23.dirname(target), { recursive: true });
-      fs23.writeFileSync(target, bytes, { flag: "wx" });
+      const target = path26.join(backup, name);
+      fs25.mkdirSync(path26.dirname(target), { recursive: true });
+      fs25.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
-  const record = { schemaVersion: 1, version, backup: path23.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
-  fs23.writeFileSync(path23.join(backup, "recovery.json"), JSON.stringify(record));
-  const fd = fs23.openSync(marker, "wx");
+  const record = { schemaVersion: 1, version, backup: path26.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
+  fs25.writeFileSync(path26.join(backup, "recovery.json"), JSON.stringify(record));
+  const fd = fs25.openSync(marker, "wx");
   try {
-    fs23.writeFileSync(fd, JSON.stringify(record));
-    fs23.fsyncSync(fd);
+    fs25.writeFileSync(fd, JSON.stringify(record));
+    fs25.fsyncSync(fd);
   } finally {
-    fs23.closeSync(fd);
+    fs25.closeSync(fd);
   }
   const written = [];
   try {
@@ -5311,20 +5638,20 @@ function installRelease(options) {
       lease.assertOwned();
       const target = regularPath(directory, name, true);
       written.push(name);
-      fs23.writeFileSync(target, files2[name]);
+      fs25.writeFileSync(target, files2[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs23.readFileSync(regularPath(directory, name))]));
+    const installed = Object.fromEntries(names.map((name) => [name, fs25.readFileSync(regularPath(directory, name))]));
     verifyRelease(installed, version);
-    fs23.unlinkSync(marker);
+    fs25.unlinkSync(marker);
     return { version, backup, installed: names };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath(directory, name);
       const bytes = previous.get(name);
-      if (bytes !== void 0) fs23.writeFileSync(target, bytes);
-      else if (fs23.existsSync(target)) fs23.unlinkSync(target);
+      if (bytes !== void 0) fs25.writeFileSync(target, bytes);
+      else if (fs25.existsSync(target)) fs25.unlinkSync(target);
     }
-    fs23.unlinkSync(marker);
+    fs25.unlinkSync(marker);
     throw error;
   }
 }
@@ -5333,18 +5660,18 @@ function installRelease(options) {
 async function maintainRelease(options) {
   const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   const regular = (file) => {
-    const stat = fs24.lstatSync(file);
+    const stat = fs26.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe maintenance file");
-    return fs24.readFileSync(file);
+    return fs26.readFileSync(file);
   };
   const source = physicalPath(options.sourceDirectory), files2 = {};
   for (const name of names) {
     let current = source;
     for (const part of name.split("/").slice(0, -1)) {
-      current = path24.join(current, part);
-      if (fs24.lstatSync(current).isSymbolicLink() || !fs24.statSync(current).isDirectory()) throw new Error("Unsafe package directory");
+      current = path27.join(current, part);
+      if (fs26.lstatSync(current).isSymbolicLink() || !fs26.statSync(current).isDirectory()) throw new Error("Unsafe package directory");
     }
-    files2[name] = regular(path24.join(source, name));
+    files2[name] = regular(path27.join(source, name));
   }
   verifyRelease(files2, options.version);
   const location = resolveInstalledWorkflowLocation(options.vault), identity = dispositionLocation(location);
@@ -5356,13 +5683,13 @@ async function maintainRelease(options) {
     assertPackageMaintenanceSafe(location.installationDirectory);
     const catalog = JSON.parse(regular(location.configurationFile).toString("utf8"));
     if (["tasks", "workflows"].some((k) => !Array.isArray(catalog[k]))) throw new Error("Invalid maintenance catalog");
-    const checkpoints = new Map(fs24.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).map((name) => {
+    const checkpoints = new Map(fs26.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).map((name) => {
       const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
       return [state.runId, state];
     }));
     const evidence = /* @__PURE__ */ new Map();
     for (const state of checkpoints.values()) if (state.abandonment) for (const name of [state.runId + ".json", state.abandonment.snapshot]) {
-      evidence.set(name, regular(path24.join(location.runtimeDirectory, name)));
+      evidence.set(name, regular(path27.join(location.runtimeDirectory, name)));
     }
     if (abandonmentEvidence && (evidence.size !== abandonmentEvidence.size || [...evidence].some(([name, bytes]) => !abandonmentEvidence.get(name)?.equals(bytes)))) throw new Error("Abandonment evidence changed during maintenance");
     abandonmentEvidence ??= evidence;
@@ -5372,13 +5699,13 @@ async function maintainRelease(options) {
     })])), checkpoints);
   };
   assertContext();
-  if (fs24.existsSync(path24.join(location.runtimeDirectory, "execution.lock"))) throw new Error("Unload AutoOC normally; execution reservation is present");
-  const executions = fs24.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).sort().map((name) => {
+  if (fs26.existsSync(path27.join(location.runtimeDirectory, "execution.lock"))) throw new Error("Unload AutoOC normally; execution reservation is present");
+  const executions = fs26.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n)).sort().map((name) => {
     const state = readExecutionCheckpoint(location.runtimeDirectory, name.slice(0, -5));
     if (["ready", "in_flight"].includes(state.phase)) return { runId: state.runId, workflowId: state.workflowId, phase: state.phase, revision: state.revision, causes: [], disposition: void 0, requiresReconciliation: true };
     return inspectTerminalExecution({ vault: location.vault, runId: state.runId });
   });
-  const installedVersion = JSON.parse(regular(path24.join(location.installationDirectory, "manifest.json")).toString("utf8")).version;
+  const installedVersion = JSON.parse(regular(path27.join(location.installationDirectory, "manifest.json")).toString("utf8")).version;
   if (!options.decisions) return { mode: "inspect", version: options.version, installedVersion, ...identity, executions, activityVerified: false };
   if (!Array.isArray(options.decisions) || new Set(options.decisions.map((d) => d?.runId)).size !== options.decisions.length) throw new Error("Select distinct individual decisions");
   for (const d of options.decisions) {
@@ -5390,29 +5717,29 @@ async function maintainRelease(options) {
   try {
     lease.assertOwned();
     assertContext();
-    backup = path24.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto9.randomUUID)());
-    fs24.mkdirSync(backup, { mode: 448 });
+    backup = path27.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto10.randomUUID)());
+    fs26.mkdirSync(backup, { mode: 448 });
     const hashes = {};
-    const save = (relative6, bytes) => {
+    const save = (relative7, bytes) => {
       lease.assertOwned();
-      const target = path24.join(backup, relative6);
-      fs24.mkdirSync(path24.dirname(target), { recursive: true, mode: 448 });
-      const fd = fs24.openSync(target, "wx", 384);
+      const target = path27.join(backup, relative7);
+      fs26.mkdirSync(path27.dirname(target), { recursive: true, mode: 448 });
+      const fd = fs26.openSync(target, "wx", 384);
       try {
-        fs24.writeFileSync(fd, bytes);
-        fs24.fsyncSync(fd);
+        fs26.writeFileSync(fd, bytes);
+        fs26.fsyncSync(fd);
       } finally {
-        fs24.closeSync(fd);
+        fs26.closeSync(fd);
       }
-      const digest = (b) => (0, import_crypto9.createHash)("sha256").update(b).digest("hex");
+      const digest = (b) => (0, import_crypto10.createHash)("sha256").update(b).digest("hex");
       if (digest(regular(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
-      hashes[relative6] = digest(bytes);
+      hashes[relative7] = digest(bytes);
     };
-    for (const name of names) save(name, regular(path24.join(location.installationDirectory, name)));
+    for (const name of names) save(name, regular(path27.join(location.installationDirectory, name)));
     const catalog = regular(location.configurationFile);
     save("data.json", catalog);
-    const journals = fs24.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n) || /^(abandonment|disposition)-[a-zA-Z0-9-]+\.snapshot$/.test(n));
-    for (const name of journals) save("runtime/" + name, regular(path24.join(location.runtimeDirectory, name)));
+    const journals = fs26.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n) || /^(abandonment|disposition)-[a-zA-Z0-9-]+\.snapshot$/.test(n));
+    for (const name of journals) save("runtime/" + name, regular(path27.join(location.runtimeDirectory, name)));
     save("backup-integrity.json", Buffer.from(JSON.stringify({ version: installedVersion, ...identity, sha256: hashes })));
     lease.assertOwned();
     assertContext();
@@ -5459,8 +5786,120 @@ var import_node_crypto = require("node:crypto");
 var import_node_fs = require("node:fs");
 var import_node_module = require("node:module");
 var import_node_os = require("node:os");
-var path25 = __toESM(require("node:path"));
+var path29 = __toESM(require("node:path"));
 var import_node_zlib = require("node:zlib");
+
+// terminal-pty-posix.ts
+var path28 = __toESM(require("node:path"));
+function createPosixTerminalBackend(backend) {
+  if (typeof backend?.spawn !== "function") throw new Error("Terminal PTY: falta spawn en node-pty.");
+  return {
+    spawn(file, args, options) {
+      if (!file || file.includes("\0") || !Array.isArray(args) || args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+        throw new Error("Terminal PTY: ejecutable/argumentos invalidos.");
+      }
+      const dimensions = (cols, rows) => {
+        if (![cols, rows].every((n) => Number.isInteger(n) && n > 0 && n <= 32767)) {
+          throw new Error("Terminal PTY: cols/rows deben ser enteros entre 1 y 32767.");
+        }
+      };
+      dimensions(options.cols, options.rows);
+      if (!path28.isAbsolute(options.cwd) || options.cwd.includes("\0") || !options.name || options.name.includes("\0")) {
+        throw new Error("Terminal PTY: cwd absoluto y name no vacio son obligatorios.");
+      }
+      const env = { ...options.env };
+      if (Object.entries(env).some(([key, value]) => !key || key.includes("=") || key.includes("\0") || typeof value !== "string" || value.includes("\0"))) {
+        throw new Error("Terminal PTY: env debe contener solo strings validos.");
+      }
+      const terminal = backend.spawn(file, [...args], { ...options, env });
+      const listeners = /* @__PURE__ */ new Set();
+      let nativeExit;
+      let exited = false, stopping = false, signalSent = false;
+      let cleanup, stop;
+      let resolveStop, rejectStop;
+      let deadline;
+      let exitSubscription;
+      const finish = () => {
+        if (!nativeExit || exited || cleanup) return;
+        cleanup = Promise.resolve().then(() => {
+          terminal._writeStream.dispose();
+          exitSubscription.dispose();
+          exited = true;
+          if (deadline) clearTimeout(deadline);
+          resolveStop?.();
+          const event = nativeExit;
+          const current = [...listeners];
+          listeners.clear();
+          for (const listener of current) {
+            try {
+              listener(event);
+            } catch (error) {
+              console.error("Terminal PTY: error en onExit.", error);
+            }
+          }
+        });
+        void cleanup.catch((error) => {
+          cleanup = void 0;
+          if (deadline) clearTimeout(deadline);
+          const failure = new Error(`Terminal PTY: salida nativa confirmada, pero fallo el cleanup: ${String(error)}`);
+          rejectStop?.(failure);
+          console.error(failure);
+        });
+      };
+      exitSubscription = terminal.onExit((event) => {
+        if (nativeExit || !Number.isFinite(event.exitCode)) return;
+        nativeExit = { ...event };
+        finish();
+      });
+      return {
+        get pid() {
+          return terminal.pid;
+        },
+        write(data) {
+          if (!stopping && !nativeExit) terminal.write(data);
+        },
+        resize(cols, rows) {
+          dimensions(cols, rows);
+          if (!stopping && !nativeExit) terminal.resize(cols, rows);
+        },
+        onData: (listener) => terminal.onData(listener),
+        onExit(listener) {
+          if (!exited) listeners.add(listener);
+          return { dispose() {
+            listeners.delete(listener);
+          } };
+        },
+        kill() {
+          if (exited) return Promise.resolve();
+          if (stop) return stop;
+          stopping = true;
+          stop = new Promise((resolve10, reject) => {
+            resolveStop = resolve10;
+            rejectStop = reject;
+          });
+          const attempt = stop;
+          void attempt.catch(() => {
+            if (stop === attempt) stop = void 0;
+          });
+          deadline = setTimeout(() => rejectStop(new Error("Terminal PTY: parada no confirmada en 5 s. Se conserva la observacion; no asumir que termino.")), 5e3);
+          if (nativeExit) finish();
+          else if (!signalSent) {
+            signalSent = true;
+            try {
+              terminal.kill("SIGHUP");
+            } catch (error) {
+              clearTimeout(deadline);
+              rejectStop(new Error(`Terminal PTY: parada no confirmada: ${String(error)}`));
+            }
+          }
+          return attempt;
+        }
+      };
+    }
+  };
+}
+
+// terminal-pty.ts
 var TERMINAL_SUPPORT = Object.freeze({
   package: "node-pty",
   version: "1.1.0",
@@ -5468,16 +5907,19 @@ var TERMINAL_SUPPORT = Object.freeze({
   url: "https://registry.npmjs.org/node-pty/-/node-pty-1.1.0.tgz",
   integrity: "sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg=="
 });
-var DIRECTORY = "node-pty-1.1.0-win32-x64";
+function supportDirectory() {
+  return process.platform === "darwin" ? "node-pty-1.1.0-darwin" : "node-pty-1.1.0-win32-x64";
+}
+var DARWIN_FILES = ["darwin-arm64", "darwin-x64"].flatMap((host) => [`prebuilds/${host}/pty.node`, `prebuilds/${host}/spawn-helper`]);
 var ARCHIVE = "source.tgz";
 var MAX_DOWNLOAD = 48 * 1024 * 1024;
 var MAX_UNPACKED = 96 * 1024 * 1024;
 function supportedHost() {
-  if (process.platform !== "win32" || process.arch !== "x64") {
-    throw new Error(`Terminal PTY: solo Windows x64 esta soportado; host ${process.platform}/${process.arch}. No se descargara ni compilara otro binario.`);
+  if (!(process.platform === "win32" && process.arch === "x64") && !(process.platform === "darwin" && ["x64", "arm64"].includes(process.arch))) {
+    throw new Error(`Terminal PTY: soporta Windows x64 y macOS Intel/Apple Silicon; host ${process.platform}/${process.arch}. No se descargara ni compilara otro binario.`);
   }
   const version = (0, import_node_os.release)().split(".").map(Number);
-  if (version[0] < 10 || !Number.isFinite(version[2]) || version[2] < 18309) {
+  if (process.platform === "win32" && (version[0] < 10 || !Number.isFinite(version[2]) || version[2] < 18309)) {
     throw new Error(`Terminal PTY: se requiere Windows build 18309 o posterior (recomendado Windows 10 1903+/11); actual ${(0, import_node_os.release)()}.`);
   }
   if (Number(process.versions.napi || 0) < 8) {
@@ -5492,10 +5934,10 @@ async function directoryWithoutLink(directory) {
 }
 async function supportRoot(pluginDirectory, create) {
   supportedHost();
-  if (!path25.isAbsolute(pluginDirectory)) throw new Error("Terminal PTY: pluginDirectory debe ser una ruta absoluta.");
+  if (!path29.isAbsolute(pluginDirectory)) throw new Error("Terminal PTY: pluginDirectory debe ser una ruta absoluta.");
   const plugin = await import_node_fs.promises.realpath(pluginDirectory);
   await directoryWithoutLink(plugin);
-  const root = path25.join(plugin, "terminal-support");
+  const root = path29.join(plugin, "terminal-support");
   if (create) await import_node_fs.promises.mkdir(root).catch((error) => {
     if (error.code !== "EEXIST") throw error;
   });
@@ -5513,8 +5955,8 @@ async function contents(archive) {
   if (archive.length > MAX_DOWNLOAD || `sha512-${(0, import_node_crypto.createHash)("sha512").update(archive).digest("base64")}` !== TERMINAL_SUPPORT.integrity) {
     throw new Error("Terminal PTY: integridad SHA-512 del paquete incorrecta; no se ejecutara su contenido.");
   }
-  const tar = await new Promise((resolve8, reject) => {
-    (0, import_node_zlib.gunzip)(archive, { maxOutputLength: MAX_UNPACKED }, (error, data) => error ? reject(error) : resolve8(data));
+  const tar = await new Promise((resolve10, reject) => {
+    (0, import_node_zlib.gunzip)(archive, { maxOutputLength: MAX_UNPACKED }, (error, data) => error ? reject(error) : resolve10(data));
   });
   const result = /* @__PURE__ */ new Map();
   const field = (header, start, end) => header.subarray(start, end).toString("utf8").split("\0")[0];
@@ -5530,23 +5972,20 @@ async function contents(archive) {
     if (!/^[0-7]+$/.test(sizeText) || !/^[0-7]+$/.test(checksumText) || checksum !== parseInt(checksumText, 8) || header[156] !== 48 || field(header, 345, 500) || !name.startsWith("package/") || !/^package\/[a-zA-Z0-9_./-]+$/.test(name) || name.split("/").some((part) => !part || part === "." || part === "..") || offset + 512 + size > tar.length) {
       throw new Error("Terminal PTY: formato tar no admitido; no se extraeran enlaces ni rutas arbitrarias.");
     }
-    const relative6 = name.slice("package/".length);
-    const selected = relative6 === "package.json" || relative6 === "LICENSE" || relative6.startsWith("lib/") && relative6.endsWith(".js") && !relative6.endsWith(".test.js") || relative6 === "deps/winpty/LICENSE" || relative6 === "prebuilds/win32-x64/conpty.node" || relative6 === "prebuilds/win32-x64/conpty_console_list.node" || relative6.startsWith("prebuilds/win32-x64/conpty/");
+    const relative7 = name.slice("package/".length);
+    const selected = relative7 === "package.json" || relative7 === "LICENSE" || relative7.startsWith("lib/") && relative7.endsWith(".js") && !relative7.endsWith(".test.js") || (process.platform === "darwin" ? DARWIN_FILES.includes(relative7) : relative7 === "deps/winpty/LICENSE" || relative7 === "prebuilds/win32-x64/conpty.node" || relative7 === "prebuilds/win32-x64/conpty_console_list.node" || relative7.startsWith("prebuilds/win32-x64/conpty/"));
     if (selected) {
-      if (result.has(relative6)) throw new Error("Terminal PTY: entrada duplicada en tar.");
-      result.set(relative6, tar.subarray(offset + 512, offset + 512 + size));
+      if (result.has(relative7)) throw new Error("Terminal PTY: entrada duplicada en tar.");
+      result.set(relative7, tar.subarray(offset + 512, offset + 512 + size));
     }
     offset += 512 + Math.ceil(size / 512) * 512;
   }
-  for (const required of [
-    "package.json",
-    "LICENSE",
-    "lib/index.js",
+  for (const required of ["package.json", "LICENSE", "lib/index.js", ...process.platform === "darwin" ? ["lib/unixTerminal.js", ...DARWIN_FILES] : [
     "lib/worker/conoutSocketWorker.js",
     "prebuilds/win32-x64/conpty.node",
     "prebuilds/win32-x64/conpty/conpty.dll",
     "prebuilds/win32-x64/conpty/OpenConsole.exe"
-  ]) {
+  ]]) {
     if (!result.has(required)) throw new Error(`Terminal PTY: paquete incompleto, falta ${required}.`);
   }
   const metadata = JSON.parse(result.get("package.json").toString("utf8"));
@@ -5564,18 +6003,18 @@ async function readRegular(file, maxSize) {
 }
 async function verify(directory) {
   await directoryWithoutLink(directory);
-  const files2 = await contents(await readRegular(path25.join(directory, ARCHIVE), MAX_DOWNLOAD));
+  const files2 = await contents(await readRegular(path29.join(directory, ARCHIVE), MAX_DOWNLOAD));
   const directories = /* @__PURE__ */ new Set();
   for (const name of files2.keys()) {
-    let parent = path25.posix.dirname(name);
+    let parent = path29.posix.dirname(name);
     while (parent !== ".") {
       directories.add(parent);
-      parent = path25.posix.dirname(parent);
+      parent = path29.posix.dirname(parent);
     }
   }
-  async function walk(relative6) {
-    for (const entry of await import_node_fs.promises.readdir(path25.join(directory, relative6), { withFileTypes: true })) {
-      const name = relative6 ? `${relative6}/${entry.name}` : entry.name;
+  async function walk(relative7) {
+    for (const entry of await import_node_fs.promises.readdir(path29.join(directory, relative7), { withFileTypes: true })) {
+      const name = relative7 ? `${relative7}/${entry.name}` : entry.name;
       if (entry.isSymbolicLink()) throw new Error(`Terminal PTY: enlace no admitido: ${name}`);
       if (entry.isDirectory() && directories.has(name)) await walk(name);
       else if (entry.isFile() && (files2.has(name) || name === ARCHIVE)) continue;
@@ -5584,13 +6023,16 @@ async function verify(directory) {
   }
   await walk("");
   for (const [name, expected] of files2) {
-    const actual = await readRegular(path25.join(directory, name), expected.length);
+    const actual = await readRegular(path29.join(directory, name), expected.length);
     if (!actual.equals(expected)) throw new Error(`Terminal PTY: fichero alterado: ${name}. Restaura el soporte original y reinicia Obsidian.`);
+    if (process.platform === "darwin" && name.endsWith("/spawn-helper") && !((await import_node_fs.promises.lstat(path29.join(directory, name))).mode & 73)) {
+      throw new Error(`Terminal PTY: falta permiso de ejecucion en ${name}. Revisa los permisos del soporte instalado.`);
+    }
   }
 }
 async function verifyTerminalSupport(pluginDirectory) {
   const root = await supportRoot(pluginDirectory, false);
-  const directory = path25.join(root, DIRECTORY);
+  const directory = path29.join(root, supportDirectory());
   try {
     await verify(directory);
   } catch (error) {
@@ -5600,22 +6042,30 @@ async function verifyTerminalSupport(pluginDirectory) {
 }
 async function loadTerminalPty(pluginDirectory) {
   const directory = await verifyTerminalSupport(pluginDirectory);
-  let nativeRequire = (0, import_node_module.createRequire)(path25.join(directory, "package.json"));
+  let nativeRequire = (0, import_node_module.createRequire)(path29.join(directory, "package.json"));
   if (process.type === "renderer") {
     try {
       const obsidianRequire = window.require;
       const remote = obsidianRequire?.("electron")?.remote;
       if (typeof remote?.require !== "function") throw new Error("electron.remote.require no disponible");
-      nativeRequire = remote.require("node:module").createRequire(path25.join(directory, "package.json"));
+      nativeRequire = remote.require("node:module").createRequire(path29.join(directory, "package.json"));
     } catch (error) {
       throw new Error(`Terminal PTY: el renderer requiere el puente electron.remote de Obsidian para ejecutar node-pty/workers en main. No se creara ningun PTY ni se habilitaran permisos nuevos. ${String(error)}`);
+    }
+  }
+  if (process.platform === "darwin") {
+    try {
+      nativeRequire(path29.join(directory, `prebuilds/darwin-${process.arch}/pty.node`));
+      return createPosixTerminalBackend(nativeRequire(path29.join(directory, "lib/index.js")));
+    } catch (error) {
+      throw new Error(`Terminal PTY: no se pudo cargar el soporte macOS ${process.arch} (Node ${process.versions.node}, N-API ${process.versions.napi}). Comprueba Node.js 18+ y los permisos de spawn-helper. No se intentara node-gyp. ${String(error)}`);
     }
   }
   let conpty;
   let backend;
   try {
-    conpty = nativeRequire(path25.join(directory, "prebuilds/win32-x64/conpty.node"));
-    backend = nativeRequire(path25.join(directory, "lib/index.js"));
+    conpty = nativeRequire(path29.join(directory, "prebuilds/win32-x64/conpty.node"));
+    backend = nativeRequire(path29.join(directory, "lib/index.js"));
     if (typeof backend.spawn !== "function") throw new Error("Falta spawn en node-pty.");
   } catch (error) {
     throw new Error(`Terminal PTY: no se pudo cargar el prebuild Node-API Windows x64 (Electron ${process.versions.electron || "no disponible"}, Node ${process.versions.node}, N-API ${process.versions.napi}). Comprueba el instalador de Obsidian y el runtime Microsoft Visual C++ 2015-2022 x64; no se intentara node-gyp. ${String(error)}`);
@@ -5631,7 +6081,7 @@ async function loadTerminalPty(pluginDirectory) {
         }
       };
       dimensions(options.cols, options.rows);
-      if (!path25.isAbsolute(options.cwd) || options.cwd.includes("\0") || !options.name || options.name.includes("\0")) {
+      if (!path29.isAbsolute(options.cwd) || options.cwd.includes("\0") || !options.name || options.name.includes("\0")) {
         throw new Error("Terminal PTY: cwd absoluto y name no vacio son obligatorios.");
       }
       const env = { ...options.env };
@@ -5721,8 +6171,8 @@ async function loadTerminalPty(pluginDirectory) {
         kill() {
           if (exited) return Promise.resolve();
           if (stop) return stop;
-          stop = new Promise((resolve8, reject) => {
-            resolveStop = resolve8;
+          stop = new Promise((resolve10, reject) => {
+            resolveStop = resolve10;
             rejectStop = reject;
           });
           const attempt = stop;
@@ -6153,9 +6603,9 @@ async function runTerminalSessionHost(config) {
   server.requestTimeout = 1e4;
   server.headersTimeout = 1e4;
   server.maxConnections = 32;
-  await new Promise((resolve8, reject) => {
+  await new Promise((resolve10, reject) => {
     server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve8());
+    server.listen(0, "127.0.0.1", () => resolve10());
   });
   const address = server.address();
   notifyParent({ type: "ready", port: address.port, pid: pty.pid });

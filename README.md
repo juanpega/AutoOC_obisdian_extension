@@ -12,6 +12,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Candidato 1.7.22:** [terminales independientes, Settings ordenados y límites de validación](docs/autoOC/04_Desarrollo/settings-ordenados/Notas_version-1.7.22.md).
 
+**Páginas y worktrees (candidato):** [recorrido para desarrollar, usar la CLI y cerrar el trabajo](docs/work-pages.md).
+
 ## Area dashboard
 
 Since 1.7.12, **Dashboard** groups workflows and tasks by their **Area** field, with a **No area** group for unassigned items. To reorganize them, change their area in the editor or through the selection actions. Positions from the previous map remain saved in the settings.
@@ -44,13 +46,38 @@ Each session opens directly in a terminal and uses that CLI's own authentication
 
 If an executable is missing or disabled, the dialog offers **Configure CLIs**. **Working Directory** sets the initial folder; leaving it empty uses the vault. Linux retains the **Linux terminal emulator** setting. The previous Codex command keeps its identifier to preserve shortcuts and is now named **Open Codex CLI**.
 
+## Codex: segundo plano, terminal y aplicación (candidato de desarrollo)
+
+En **Settings → AutoOC → Harnesses → Codex CLI** hay un único ejecutable compartido.
+La ruta explícita tiene prioridad; con `codex`, se busca primero en PATH, después
+en ubicaciones conocidas y finalmente en la distribución de escritorio si existe.
+En Windows, los shims npm oficiales se resuelven al binario nativo de la misma
+instalación para todos los usos. Una instalación incompatible no se sustituye
+silenciosamente por otra. Settings muestra la ruta efectiva; **Check version**
+consulta versión y ayuda para comprobar si anuncia App Server. No prueba login ni
+ejecuta una tarea, y al cambiar la ruta se invalida el diagnóstico anterior.
+
+| Opción de tarea | Comportamiento |
+| --- | --- |
+| Codex CLI · background (App Server) | Ejecuta `codex app-server` sin necesitar la aplicación Codex abierta. |
+| Codex CLI · App conversation (approvals) | Usa el mismo App Server y abre la conversación en la aplicación, conservando las aprobaciones y la espera del resultado del turno. |
+| CLI task (interactive), harness Codex CLI | Abre una sesión de terminal con sus propios overrides o defaults nativos; completar el lanzamiento no acredita el resultado humano. |
+
+Se conservan tipos, campos, modelos y permisos de tareas existentes. Las tareas
+App Server requieren una CLI compatible; un shim Windows sin binario nativo se
+rechaza con un diagnóstico antes de lanzar trabajo. Cerrar Obsidian no transfiere
+las ejecuciones del plugin a la aplicación Codex. La CLI autónoma de AutoOC puede
+iniciar ejecuciones compatibles sin Obsidian, bajo sus reglas de propiedad.
+
 ## Sacar una terminal de Obsidian (candidato de desarrollo)
 
 En las pestañas de **AutoOC Terminals**, el botón **↗** abre la misma sesión en el navegador externo. Espera al aviso de conexión confirmada antes de reiniciar Obsidian o AutoOC. No se inicia otro agente ni se repite el prompt. La entrada pasa a la ventana externa; Obsidian conserva una vista de la salida mientras siga abierto.
 
 Si la terminal integrada se dibuja mal, pulsa **↻** junto a **+**: recalcula su tamaño y repinta la pantalla sin reiniciar la sesión, limpiar la conversación ni enviar comandos al agente.
 
-Las nuevas sesiones integradas usan un host Node independiente: requieren **Node.js 18+ en PATH**, el soporte PTY opt-in instalado y **Windows x64** compatible con ese soporte. El cliente externo se sirve solo en `127.0.0.1`, con una credencial privada por sesión y sin recursos web externos. No compartas su URL: permite controlar esa terminal. No hay campos nuevos en tareas/workflows ni cambios en el prompt de sus creadores.
+Las nuevas sesiones integradas usan un host Node independiente: requieren **Node.js 18+**, el soporte PTY instalado expresamente y **Windows x64 o macOS Intel/Apple Silicon**. En Mac, además del PATH heredado, se buscan Node y las dependencias de la CLI en Homebrew, carpetas habituales del usuario y la carpeta del ejecutable configurado. No se ejecutan perfiles de shell. Si usas un gestor de versiones cuya carpeta no se detecta, configura la ruta absoluta de la CLI y asegúrate de que Node esté disponible en esa carpeta o en PATH. El cliente externo se sirve solo en `127.0.0.1`, con una credencial privada por sesión y sin recursos web externos. No compartas su URL: permite controlar esa terminal.
+
+**Configurar la terminal integrada en Mac:** en **Settings → AutoOC → Terminals**, pulsa **Download and install terminal support** y selecciona **Integrated in Obsidian** en **CLI terminal destination**. Configura los ejecutables en **Harnesses** y abre la CLI desde el panel. El soporte verificado incluye los binarios Intel y Apple Silicon, para admitir también un host Node de otra arquitectura bajo Rosetta; se conservan los permisos de ejecución de `spawn-helper`. No requiere Xcode, compilación local ni scripts npm. Actualizar AutoOC no instala este soporte automáticamente ni copia el instalado en otro ordenador. **Linux aún no dispone de PTY integrado** en esta versión; puede usar la ventana externa. El cambio conserva el esquema de tareas/workflows; la guía de creadores refleja las plataformas admitidas. La validación nativa en Mac del candidato debe consultarse en su expediente, sin confundir las pruebas con dobles con Obsidian real.
 
 Solo las sesiones cuya salida al navegador se haya confirmado sobreviven a la descarga del plugin. Cerrar la pestaña del navegador desconecta la vista, no detiene el proceso; conserva la pestaña o su URL para volver a acceder. Usa **Detener sesión** para terminarlo. Si la apertura falla, mantén Obsidian abierto y vuelve a usar **↗**: no lances otra tarea. Las sesiones iniciadas con la arquitectura anterior no se transfieren en caliente; tampoco hay reintegración automática tras recargar el plugin. Esta capacidad en las fuentes no acredita instalación, publicación ni validación visual en Obsidian.
 

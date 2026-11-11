@@ -4,6 +4,8 @@ import {executionPresentation, type ExecutionPresentation} from "./execution-pre
 import { catalogTransaction, type CatalogTransaction } from "./catalog-transaction";
 import { executionCoordinator, type ExecutionAdmission } from "./execution-coordinator";
 import { samePhysicalPath } from "./path-identity";
+import { runPageWorkflow } from "./page-workflow";
+import { assertNoPageTerminal } from "./work-pages";
 import * as fs from "fs";
 import * as path from "path";
 import { SettingsWriter, type ObservedVersion } from "./settings-writer";
@@ -27,12 +29,13 @@ const preparingInstallations = new Set<string>();
 
 // Shared installed-catalog entry point. The caller must authorize this vault
 // and its trusted Code capabilities. No discovery by name or implicit retry.
-export async function runInstalledWorkflow(options: {
+export interface InstalledWorkflowOptions {
   vault: string;
   installationDirectory?: string;
   workflowId?: string;
   taskId?: string;
   stepId?: string;
+  pageId?: string;
   resumeRunId?: string;
   newExecution?: boolean;
   reconcile?: boolean;
@@ -49,10 +52,12 @@ export async function runInstalledWorkflow(options: {
   // Opt in at presentation boundaries. The default result remains a reusable
   // durable checkpoint for runtime callers and strict progress validation.
   includePresentation?: boolean;
-}) {
+}
+export async function runInstalledWorkflow(options: InstalledWorkflowOptions) {
   if (!path.isAbsolute(options.vault) || !!options.workflowId === !!options.taskId) throw new Error("Explicit vault and exactly one workflow or task identity required");
   if (options.stepId !== undefined && (!options.workflowId || !options.stepId)) throw new Error("A code step requires its parent workflow identity");
   if (options.newExecution && (options.resumeRunId || options.reconcile)) throw new Error("New execution cannot also resume or reconcile");
+  if (options.pageId && options.pageId !== "main") return runPageWorkflow(options);
   const location = resolveInstalledWorkflowLocation(options.vault, options.installationDirectory);
   const {vault, configurationFile, runtimeDirectory} = location;
   // Reject a foreign reservation before reading the catalog or creating runtime.
@@ -87,6 +92,10 @@ export async function runInstalledWorkflow(options: {
   }
   if (!options.reconcile) assertWorkflowEnabled(virtual || matches[0], config.tasks, config.workflows);
   const definition = prepareWorkflowDefinition(virtual || matches[0],config.tasks,config);
+  if (config.pageTerminalClaims?.length) {
+    assertNoPageTerminal(config, definition.settings.workingDirectory || vault);
+    for (const task of definition.tasks) assertNoPageTerminal(config, task.workingDirectory || definition.settings.workingDirectory || vault);
+  }
   preflightInstalledWorkflow(definition,vault);
   // Terminal placement is a host preference, not part of historical fingerprints.
   const terminal:InteractiveTaskTerminalOptions = {destination:config.cliTerminalDestination === 'integrated' ? 'integrated' : 'external',launch:options.launchInteractiveTerminal};

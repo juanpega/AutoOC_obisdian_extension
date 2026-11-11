@@ -262,6 +262,7 @@ test('the actual shipped creator prompt contains a valid example for each engine
   for(const kind of ['task','workflow']) for(const engine of ['opencode','opencode2','codex','copilot']) {
     const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,version);
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
+    assert.match(prompt,/macOS Intel\/Apple Silicon/);assert.match(prompt,/Linux integrated PTY is not available/);
     assert.match(prompt,/Do not include model IDs in the JSON/);
     assert.match(prompt,/OpenCode 2 drafts use the configured default agent/);
     assert.match(prompt,/add existing workflows as steps in the editor|add existing workflows manually/);
@@ -413,7 +414,7 @@ test('Settings navigation reopens sections and retains disclosure/scroll state w
   const h = harness(); h.plugin.isRalphLoopEnabled = () => false;
   const settings = new h.AutoOCSettingTab(h.plugin.app, h.plugin); settings.containerEl = new h.Element(); settings.display();
   const section = title => settings.containerEl.all().find(el => el.tag === 'details' && el.children[0]?.textContent === title);
-  assert.equal(section('Codex / ChatGPT').open, true); assert.equal(section('OpenCode 1').open, false);
+  assert.equal(section('Codex CLI').open, true); assert.equal(section('OpenCode 1').open, false);
   section('General').open = false; section('General').events.toggle(); settings.containerEl.scrollTop = 123;
   settings.display(); assert.equal(section('General').open, false); assert.equal(settings.containerEl.scrollTop, 123);
   const jump = settings.containerEl.all().find(el => el.tag === 'button' && el.textContent === 'General'); jump.onclick();
@@ -424,7 +425,7 @@ test('Settings navigation reopens sections and retains disclosure/scroll state w
 test('version checks are available for Codex, Copilot and Claude without claiming authentication', async () => {
   const calls = [];
   const h = harness({child_process: {...require('node:child_process'), execFile(bin,args,options,callback) {
-    calls.push({bin,args}); callback(null, 'synthetic-cli 1.2.3');
+    calls.push({bin,args}); callback(null, args.includes('--help') ? 'Commands:\n  app-server  Run the app server\n' : 'synthetic-cli 1.2.3');
   }}});
   h.plugin.isRalphLoopEnabled = () => false;
   Object.assign(h.plugin.settings, {codexPath:process.execPath,copilotPath:process.execPath,claudePath:process.execPath});
@@ -433,9 +434,14 @@ test('version checks are available for Codex, Copilot and Claude without claimin
   for(const label of ['Codex CLI','GitHub Copilot CLI','Claude Code CLI']) {
     const row=settings.containerEl.all().find(el=>el.name===`${label} executable`);
     await row.all().find(el=>el.tag==='button'&&el.textContent==='Check version').onclick();
-    assert.match(row.desc,/synthetic-cli 1.2.3/);assert.match(row.desc,/authentication is checked by the CLI/);
+    assert.match(row.desc,/synthetic-cli 1.2.3/);
+    if(label==='Codex CLI') {
+      assert.match(row.desc,/App Server advertised/);assert.match(row.desc,/Authentication and task execution have not been tested/);
+      assert.ok(row.desc.includes(process.execPath));
+    } else assert.match(row.desc,/authentication is checked by the CLI/);
   }
-  assert.equal(calls.length,3);for(const call of calls)assert.deepEqual(Array.from(call.args),['--version']);
+  assert.deepEqual(calls.map(call=>Array.from(call.args)),[['--version'],['--help'],['--version'],['--version']]);
+  assert.ok(calls.every(call=>call.bin===process.execPath));
   assert.equal(h.writes(),0);
 });
 

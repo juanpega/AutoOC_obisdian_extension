@@ -8,6 +8,7 @@ import type { PreparedWorkflow } from "./workflow-definition";
 import { readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 
 import { concurrencySettings, validateConcurrency } from "./execution-concurrency-settings";
+import { independentGitWorkspaces } from "./workspace-conflicts";
 export { validateConcurrency, type ConcurrencyPolicy } from "./execution-concurrency-settings";
 // Only these fixed host diagnostics may cross the mailbox. Never forward an
 // arbitrary provider/filesystem message, which can contain private data.
@@ -26,19 +27,22 @@ export function executionAdmissionDiagnostic(error:unknown):string|undefined {
   const message=(error as {message?:unknown})?.message;
   return typeof message==='string' && (admissionDiagnostics.has(message) || /^Concurrent execution limit reached \([1-9][0-9]{0,15}\)$/.test(message)) ? message : undefined;
 }
-type Resources = {exclusive:boolean; sharedWorkspace:boolean; tasks:Set<string>; workflows:Set<string>; directories:string[]; repositories:Set<string>};
-function resources(definition:PreparedWorkflow,vault:string):Resources {
+export interface ExecutionWorkspace { directory: string; worktree: boolean; }
+type Resources = {exclusive:boolean; sharedWorkspace:boolean; tasks:Set<string>; workflows:Set<string>; directories:string[]; repositories:Set<string>; workspace?:ExecutionWorkspace};
+function resources(definition:PreparedWorkflow,vault:string,workspace?:ExecutionWorkspace):Resources {
   const {workflow,tasks,settings}=definition;
   const workflows=[workflow,...(definition.workflows || [])];
   for(const item of [...workflows,...tasks])validateConcurrency(item);
   const standalone=workflow.id.startsWith('@task:');
   const policy=(standalone ? tasks[0]?.concurrency : workflow.concurrency) ?? concurrencySettings(definition.admissionSettings || {}).defaultConcurrency;
   const result:Resources={exclusive:policy==="exclusive" || workflows.some(w=>!!w.handoffBranch || w.concurrency === "exclusive"),sharedWorkspace:policy==="parallel" && !workflows.some(w=>w.concurrency === "independent"),tasks:new Set(tasks.map(t=>t.id)),workflows:new Set(workflows.map(w=>w.id)),directories:[],repositories:new Set()};
+  if(workspace) {result.workspace=workspace;result.sharedWorkspace=false;result.directories.push(physicalPath(workspace.directory));}
   for(const item of [...workflows.flatMap(w=>w.steps).filter((s:any)=>s.stepKind==='code'),...tasks] as any[]) {
     if(item.branch || workflow.handoffBranch)result.exclusive=true;
     if(item.interactiveTerminal || (item.taskKind===undefined && item.stepKind!=='code' && settings.defaultInteractiveTerminal)) result.exclusive=true;
     if(item.stepKind==='code' || item.taskKind==='code') {
-      if(!result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal))result.exclusive=true;
+      if(!workspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal))result.directories.push(physicalPath(vault));
+      if(!workspace && !result.sharedWorkspace && (item.codeAllowVault || item.codeAllowFiles || item.codeAllowTerminal))result.exclusive=true;
       continue;
     }
     const directory=physicalPath(item.workingDirectory || settings.workingDirectory || vault);
@@ -54,7 +58,10 @@ function resources(definition:PreparedWorkflow,vault:string):Resources {
     // Engines can access their workspace. Their declared directories are a
     // cooperation contract for trusted tasks, never a security sandbox.
   }
-  if(!result.sharedWorkspace && workflows.some(w=>w.steps.some((s:any)=>s.transitionMode==='eval' || s.transitions?.some((t:any)=>t.mode==='eval'))))result.exclusive=true;
+  if(!workspace && workflows.some(w=>w.steps.some((s:any)=>s.transitionMode==='eval' || s.transitions?.some((t:any)=>t.mode==='eval')))) {
+    result.directories.push(physicalPath(vault));
+    if(!result.sharedWorkspace)result.exclusive=true;
+  }
   return result;
 }
 function canShareWorkspace(a:Resources,b:Resources):boolean {
@@ -72,7 +79,7 @@ export class ExecutionAdmission {
   assertOwned(lease:ExecutionLease,definition:PreparedWorkflow):void {
     this.coordinator.assertOwned(this,lease);
     if(this.definition.hash!==definition.hash)throw new Error('Admission definition changed');
-    const current=resources(definition,this.vault);
+    const current=resources(definition,this.vault,this.resources.workspace);
     if(JSON.stringify(current.directories)!==JSON.stringify(this.resources.directories) || JSON.stringify([...current.repositories])!==JSON.stringify([...this.resources.repositories]))throw new Error('Execution resource identity changed; reservation retained');
   }
   bind(checkpoint:RunCheckpoint):void {
@@ -108,9 +115,9 @@ export class ExecutionCoordinator {
       ![...admission.resources.workflows].some(id=>known.resources.workflows.has(id)) &&
       ![...admission.resources.tasks].some(id=>known.resources.tasks.has(id));
   }
-  admit(definition:PreparedWorkflow,vault:string,resumeRunId?:string):ExecutionAdmission {
+  admit(definition:PreparedWorkflow,vault:string,resumeRunId?:string,workspace?:ExecutionWorkspace):ExecutionAdmission {
     this.lease.assertOwned();
-    const requested=resources(definition,vault);
+    const requested=resources(definition,vault,workspace);
     for(const session of this.sessions) {
       if(session.advancing || !session.runId)continue;
       // Only a validated durable disposition/abandonment from the official
@@ -128,7 +135,11 @@ export class ExecutionCoordinator {
       if([...requested.workflows].some(id=>current.resources.workflows.has(id)) || [...requested.tasks].some(id=>current.resources.tasks.has(id)))throw new Error('A shared workflow is already executing; definition or referenced task is reserved');
       if(!current.advancing && !canShareWorkspace(requested,current.resources))throw new Error('Execution outcome requires continuation or reconciliation; reservation retained');
       if(requested.exclusive || current.resources.exclusive)throw new Error('Exclusive execution must finish before shared execution');
-      if(!canShareWorkspace(requested,current.resources) && (requested.directories.some(a=>current.resources.directories.some(b=>isWithinPhysicalPath(a,b)||isWithinPhysicalPath(b,a))) || [...requested.repositories].some(a=>[...current.resources.repositories].some(b=>samePhysicalPath(a,b)))))throw new Error('Execution resource is occupied (workspace or Git repository)');
+      const overlaps = requested.directories.some(a=>current.resources.directories.some(b=>isWithinPhysicalPath(a,b)||isWithinPhysicalPath(b,a)));
+      const sharesRepository = [...requested.repositories].some(a=>[...current.resources.repositories].some(b=>samePhysicalPath(a,b)));
+      const separateWorktrees = (overlaps || sharesRepository) && requested.workspace && current.resources.workspace &&
+        independentGitWorkspaces(requested.workspace.directory,current.resources.workspace.directory);
+      if(!canShareWorkspace(requested,current.resources) && !separateWorktrees && (overlaps || sharesRepository))throw new Error('Execution resource is occupied (workspace or Git repository)');
     }
     const limit=concurrencySettings(definition.admissionSettings || {}).maxConcurrentExecutions;
     if(limit>0 && this.sessions.size>=limit)throw new Error(`Concurrent execution limit reached (${limit})`);

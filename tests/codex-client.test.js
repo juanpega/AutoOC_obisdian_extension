@@ -353,7 +353,8 @@ test("Codex interrupt uses thread and turn identifiers before disposal", async (
 });
 
 test("Codex auto-detection prefers the configured path", () => {
-  assert.equal(resolveCodexBin("C:\\tools\\codex.exe"), "C:\\tools\\codex.exe");
+  const configured = path.resolve("custom tools", process.platform === "win32" ? "codex.exe" : "codex");
+  assert.equal(resolveCodexBin(configured), configured);
 });
 
 

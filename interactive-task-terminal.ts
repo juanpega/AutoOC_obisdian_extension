@@ -1,5 +1,8 @@
 import type { InteractiveCliProvider } from "./interactive-cli";
 
+/** Ephemeral host association; never persisted in a workflow definition. */
+export interface TerminalPageContext { pageId: string; claimId: string; }
+
 /** A host-owned terminal launch, separate from durable workflow definitions. */
 export interface InteractiveTaskTerminalRequest {
   provider?: InteractiveCliProvider;
@@ -12,6 +15,7 @@ export interface InteractiveTaskTerminalRequest {
   prompt: string;
   reasoningEffort?: string;
   signal?: AbortSignal;
+  page?: TerminalPageContext;
 }
 
 export interface InteractiveTaskTerminalOptions {

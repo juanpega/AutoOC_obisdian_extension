@@ -67,7 +67,7 @@ export class AiDraftModal extends Modal {
     new Setting(this.contentEl).setName("AI engine").setDesc("Uses your existing CLI sign-in and account.")
       .addDropdown(dropdown => {
         engineInput = dropdown.selectEl;
-        dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex").addOption("copilot", "GitHub Copilot");
+        dropdown.addOption("opencode", "OpenCode 1").addOption("opencode2", "OpenCode 2").addOption("codex", "Codex CLI (App Server)").addOption("copilot", "GitHub Copilot");
         dropdown.setValue(this.engine).onChange(value => {
           this.selectedModels[this.engine] = this.model;
           this.engine = value as DraftEngine;

@@ -415,7 +415,9 @@ test("workflow prompt documents the canonical export contract", () => {
   assert.match(prompt, /schemaVersion must be exactly "1\.0", "1\.4\.0", "1\.5\.0", "1\.6\.0", or "1\.7\.0"/);
   assert.match(prompt, /YYYY-MM-DDTHH:mm:ss\.sssZ/);
   assert.match(prompt, /Every task must include it, including taskKind "code"/);
-  assert.match(prompt, /"codex" for Codex in ChatGPT/);
+  assert.match(prompt, /"codex" for Codex CLI via App Server/);
+  assert.match(prompt, /one configured executable for background, App conversation, model discovery and interactive CLI/);
+  assert.match(prompt, /app-server without the desktop app/);
   assert.match(prompt, /reasoningEffort: optional for taskKind "codex"/);
   assert.match(prompt, /ChatGPT\/Codex app for taskKind "codex"/);
   assert.match(prompt, /workflow may mix engines; interactive CLI steps acknowledge launch only/);
@@ -430,8 +432,9 @@ test("workflow prompt documents the canonical export contract", () => {
   assert.match(prompt, /not restrictions enforced by the importer/);
 });
 
-test("task editors expose interactive OpenCode and ChatGPT modes without losing Automatic Codex selection", () => {
-  assert.match(mainTypeScriptSource, /addOption\("codex-app", "ChatGPT \/ Codex task"\)/);
+test("task editors distinguish Codex background and App conversation without losing Automatic model selection", () => {
+  assert.match(mainTypeScriptSource, /addOption\("codex", "Codex CLI · background \(App Server\)"\)/);
+  assert.match(mainTypeScriptSource, /addOption\("codex-app", "Codex CLI · App conversation \(approvals\)"\)/);
   assert.match(mainTypeScriptSource, /this\.draft\.model \?\? this\.plugin\.settings\.defaultCodexModel/);
 });
 

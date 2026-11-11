@@ -36,6 +36,10 @@ function executable(file: string): boolean {
 }
 
 export function resolveInteractiveCli(provider: InteractiveCliProvider, configured?: string): string | undefined {
+  if (provider === "codex") {
+    const selected = resolveCodexBin(configured);
+    return selected && executable(selected) ? selected : undefined;
+  }
   const defaultCommand = provider === "opencode2" ? "opencode" : provider;
   const requested = (configured?.trim() || defaultCommand).replace(/^~(?=[/\\])/, os.homedir());
   if (path.isAbsolute(requested)) return executable(requested) ? requested : undefined;
@@ -55,12 +59,6 @@ export function resolveInteractiveCli(provider: InteractiveCliProvider, configur
   for (const directory of directories) for (const extension of extensions) {
     const file = path.join(directory, requested + extension);
     if (executable(file)) return file;
-  }
-  // The desktop distribution also includes a CLI binary. Invoke its CLI entry,
-  // never `app` or a desktop deep link. Explicit invalid paths do not fall back.
-  if (provider === "codex" && requested === provider) {
-    const fallback = resolveCodexBin("codex");
-    if (executable(fallback)) return fallback;
   }
   return undefined;
 }

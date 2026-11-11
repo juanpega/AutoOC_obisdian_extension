@@ -18,8 +18,8 @@ test('Codex shared settings resolve npm shims to the matching native app-server 
   const selected = ['resolveCodexNativeBin', 'resolveCodexBin'].map(name => source.match(new RegExp(`(?:export )?function ${name}[\\s\\S]*?\\n}`))[0].replace('export ', '')).join('\n');
   const compiled = ts.transpileModule(selected, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText;
   const files = new Set(); let platform = 'win32', arch = 'x64';
-  const context = { path: path.win32, os: { platform: () => platform }, process: { env: {}, get arch() { return arch; } },
-    fs: { existsSync: file => files.has(file), readdirSync: () => [], statSync(file) { return { isFile: () => files.has(file) }; } } };
+  const context = { path: path.win32, os: { platform: () => platform, homedir: () => 'C:\\User' }, process: { env: {}, get arch() { return arch; } },
+    fs: { constants: { X_OK: 1 }, accessSync() {}, existsSync: file => files.has(file), readdirSync: () => [], statSync(file) { return { isFile: () => files.has(file) }; } } };
   const resolve = vm.runInNewContext(compiled + '; resolveCodexBin', context);
   const shim = 'C:\\npm\\codex.cmd', base = 'C:\\npm\\node_modules\\@openai';
   for (const relative of [
@@ -47,6 +47,14 @@ function backend(platform = 'win32', files = []) {
   const folder = platform === 'win32' ? 'C:\\Vault' : '/vault';
   const directories = new Set([folder]), existing = new Set(files), denied = new Set();
   const env = { PATH: platform === 'win32' ? 'C:\\Tools' : '/tools', APPDATA: 'C:\\Users\\Tester\\AppData\\Roaming' };
+  const filesystem = { constants: { X_OK: 1 }, existsSync: file => existing.has(file), readdirSync: () => [],
+    statSync(file) { probes.push(file); if (!existing.has(file) && !directories.has(file)) throw Error('missing'); return { isFile: () => existing.has(file), isDirectory: () => directories.has(file) }; },
+    accessSync(file) { if (denied.has(file)) throw Error('not executable'); },
+  };
+  const codexSource = fs.readFileSync(path.join(__dirname, '../codex-client.ts'), 'utf8');
+  const resolverSource = ['resolveCodexNativeBin', 'resolveCodexBin'].map(name => codexSource.match(new RegExp(`(?:export )?function ${name}[\\s\\S]*?\\n}`))[0].replace('export ', '')).join('\n');
+  const resolveCodex = vm.runInNewContext(ts.transpileModule(resolverSource, { compilerOptions: { target: ts.ScriptTarget.ES2020 } }).outputText + '; resolveCodexBin',
+    { path: paths, os: { homedir: () => home, platform: () => platform }, process: { env, arch: 'x64' }, fs: filesystem });
   const module = { exports: {} };
   let fallback = '', posixError;
   vm.runInNewContext(backendSource, { module, exports: module.exports, Buffer,
@@ -56,11 +64,8 @@ function backend(platform = 'win32', files = []) {
     require(id) {
       if (id === 'path') return paths;
       if (id === 'os') return { homedir: () => home };
-      if (id === 'fs') return { constants: { X_OK: 1 },
-        statSync(file) { probes.push(file); if (!existing.has(file) && !directories.has(file)) throw Error('missing'); return { isFile: () => existing.has(file), isDirectory: () => directories.has(file) }; },
-        accessSync(file) { if (denied.has(file)) throw Error('not executable'); },
-      };
-      if (id === './codex-client') return { resolveCodexBin: () => fallback };
+      if (id === 'fs') return filesystem;
+      if (id === './codex-client') return { resolveCodexBin: configured => resolveCodex(configured) || ((!configured || configured === 'codex') ? fallback : '') };
       if (id === './opencode-version') return { assertOpenCode2: async () => {} };
       if (id === './cli-launchers') return { psSingleQuoted: quote, openOpencodeCli(...args) {
         calls.push(args); if (posixError) args[4].onError(posixError); else args[4].onLaunched();
@@ -73,7 +78,7 @@ function backend(platform = 'win32', files = []) {
     },
   });
   const settings = { opencodePath: 'opencode', codexPath: 'codex', copilotPath: 'copilot', workingDirectory: '' };
-  return { ...module.exports, settings, calls, children, timers, probes, env, existing, denied, directories, folder,
+  return { ...module.exports, resolveCodex, settings, calls, children, timers, probes, env, existing, denied, directories, folder,
     fallback(value) { fallback = value; }, posixError(value) { posixError = value; } };
 }
 
@@ -112,6 +117,72 @@ test('active PATH wins over fallback installations; Codex desktop binary is only
   h.existing.delete('C:\\Tools\\codex.cmd');
   assert.equal(h.resolveInteractiveCli('codex'), 'C:\\Desktop\\codex.exe');
   assert.equal(h.resolveInteractiveCli('codex', 'C:\\missing\\codex.exe'), undefined);
+});
+
+test('Codex background and terminals select the same PATH installation and native npm binary', () => {
+  const native = 'C:\\Tools\\node_modules\\@openai\\codex-win32-x64\\vendor\\x86_64-pc-windows-msvc\\bin\\codex.exe';
+  const h = backend('win32', ['C:\\Tools\\codex.cmd', native, 'C:\\Users\\Tester\\AppData\\Roaming\\npm\\codex.cmd', 'C:\\Desktop\\codex.exe']);
+  h.fallback('C:\\Desktop\\codex.exe');
+  assert.equal(h.resolveCodex('codex'), native);
+  assert.equal(h.resolveInteractiveCli('codex', 'codex'), native);
+  assert.equal(h.configuredInteractiveClis(h.settings).find(cli => cli.id === 'codex').executable, native);
+  assert.equal(h.prepareInteractiveCli('codex', h.folder, h.settings).bin, native);
+  assert.equal(h.calls.length, 0);
+});
+
+test('a legacy Codex PATH shim is not silently replaced by a different installation', () => {
+  const h = backend('win32', ['C:\\Tools\\codex.cmd', 'C:\\Modern\\codex.exe']);
+  h.env.PATH = 'C:\\Tools;C:\\Modern';
+  assert.equal(h.resolveCodex(), 'C:\\Tools\\codex.cmd');
+  assert.equal(h.resolveInteractiveCli('codex'), 'C:\\Tools\\codex.cmd');
+  assert.equal(h.resolveCodex('C:\\Modern\\codex.exe'), 'C:\\Modern\\codex.exe');
+});
+
+test('Codex custom commands and explicit paths stay authoritative across both modes', () => {
+  const h = backend('win32', ['C:\\Tools\\codex.exe', 'C:\\Tools\\my-codex.exe', 'C:\\Pinned Version\\codex.exe']);
+  assert.equal(h.resolveCodex('my-codex'), 'C:\\Tools\\my-codex.exe');
+  assert.equal(h.resolveInteractiveCli('codex', 'my-codex'), 'C:\\Tools\\my-codex.exe');
+  assert.equal(h.resolveCodex('C:\\Pinned Version\\codex.exe'), 'C:\\Pinned Version\\codex.exe');
+  assert.equal(h.resolveInteractiveCli('codex', 'missing-custom'), undefined);
+  for (const invalid of ['codex --full-auto', '.\\codex.exe', 'codex;evil']) assert.equal(h.resolveCodex(invalid), '');
+  assert.equal(h.resolveInteractiveCli('codex', 'C:\\missing\\codex.exe'), undefined);
+});
+
+for (const platform of ['linux', 'darwin']) test(`Codex ${platform} discovery ignores relative PATH and respects executability and priority`, () => {
+  const h = backend(platform, ['/denied/codex', '/valid/codex', '/home/tester/.local/bin/codex']);
+  h.env.PATH = '.::relative:/directory:/denied:/valid'; h.denied.add('/denied/codex'); h.directories.add('/directory/codex');
+  assert.equal(h.resolveCodex(), '/valid/codex');
+  assert.equal(h.resolveInteractiveCli('codex'), '/valid/codex');
+  assert.ok(h.probes.every(file => path.posix.isAbsolute(file)));
+  h.env.PATH = '/missing'; assert.equal(h.resolveCodex(), '/home/tester/.local/bin/codex');
+  assert.equal(h.resolveInteractiveCli('codex', '~/.local/bin/codex'), '/home/tester/.local/bin/codex');
+  h.existing.clear(); assert.equal(h.resolveCodex(), ''); assert.equal(h.resolveInteractiveCli('codex'), undefined);
+});
+
+test('Codex App Server rejects a Windows shim without a native binary before spawning', async () => {
+  const module = {exports:{}}; const spawns = [];
+  vm.runInNewContext(compile('codex-client.ts'), {module,exports:module.exports,process:{platform:'win32'},
+    require: id => id === 'child_process' ? {spawn: (...args) => {spawns.push(args);throw Error('must not spawn');}} : require(id),
+  });
+  const client = new module.exports.CodexAppServerClient('C:\\Old\\codex.cmd', 'C:\\Vault');
+  await assert.rejects(client.initialize(), /requires a native App Server executable/);
+  assert.equal(spawns.length, 0);
+});
+
+test('Codex diagnostics only request version and help from the exact selected executable', async () => {
+  const calls = [], module = {exports:{}}; let help = 'Commands:\n  app-server  Run the app server\n';
+  vm.runInNewContext(compile('codex-diagnostics.ts'), {module,exports:module.exports,process:{platform:'win32'},
+    require: id => id === 'os' ? {tmpdir:()=> 'C:\\Temp'} : {
+      readCliVersion: async bin => {calls.push([bin,'--version']);return 'codex-cli 0.167.0';},
+      readOpenCodeOutput: async (bin,args,cwd) => {calls.push([bin,...args]);assert.equal(cwd,'C:\\Temp');return help;},
+    },
+  });
+  assert.equal((await module.exports.inspectCodexCli('C:\\Pinned\\codex.exe')).appServer,true);
+  assert.deepEqual(calls,[['C:\\Pinned\\codex.exe','--version'],['C:\\Pinned\\codex.exe','--help']]);
+  help='This text mentions app-server, but does not list the command.';
+  assert.equal((await module.exports.inspectCodexCli('C:\\Old\\codex.exe')).appServer,false);
+  help='  app-server  Run it';
+  assert.equal((await module.exports.inspectCodexCli('C:\\Wrapper\\codex.cmd')).appServer,false);
 });
 
 test('Windows launches bare interactive CLIs in a visible console through a hidden helper', async () => {
@@ -264,6 +335,7 @@ function ui(files = ['C:\\Tools\\codex.exe']) {
   const h = backend('win32', files), launches = [], notices = [], opened = [], saved = [];
   let picker = async () => ({ canceled: true }), launch = async (...args) => { launches.push(args); };
   let detectVersion = async () => ({version:'2.0.21',major:2});
+  let inspectCodex = async () => ({version:'codex-cli 0.167.0',appServer:true});
   class Element {
     constructor(text = '') { this.textContent = text; this.children = []; this.attrs = {}; }
     createEl(tag, opts = {}) { const child = new Element(opts.text); child.tag = tag; this.children.push(child); return child; }
@@ -295,7 +367,7 @@ function ui(files = ['C:\\Tools\\codex.exe']) {
   vm.runInNewContext(uiSource, { module, exports: module.exports, console,
     window: { require: () => ({ remote: { dialog: { showOpenDialog: (...args) => picker(...args) } } }) },
     require: id => id === 'obsidian' ? { Modal, Setting, Notice: class { constructor(text) { notices.push(text); } } }
-      : { ...h, detectOpenCodeVersion: (...args) => detectVersion(...args), launchInteractiveCli: (...args) => launch(...args) },
+      : { ...h, detectOpenCodeVersion: (...args) => detectVersion(...args), inspectCodexCli: (...args) => inspectCodex(...args), launchInteractiveCli: (...args) => launch(...args) },
   });
   const settingsOpened = [], app = { vault: { adapter: { basePath: h.folder } }, setting: { open() { settingsOpened.push('open'); }, openTabById(id) { settingsOpened.push(id); } } };
   const host = { settings: h.settings, manifest: { id: 'auto-oc' }, isLifecycleStopped: () => false,
@@ -303,7 +375,7 @@ function ui(files = ['C:\\Tools\\codex.exe']) {
   const modal = selected => { const m = new module.exports.CliLauncherModal(app, host, () => {}, selected); m.open(); return m; };
   const button = (m, label) => m.contentEl.all().find(el => el.tag === 'button' && el.textContent.includes(label));
   return { ...h, ...module.exports, Element, app, host, saved, opened, launches, notices, modal, button, settingsOpened,
-    picker(fn) { picker = fn; }, launch(fn) { launch = fn; }, detect(fn) { detectVersion = fn; } };
+    picker(fn) { picker = fn; }, launch(fn) { launch = fn; }, detect(fn) { detectVersion = fn; }, inspectCodex(fn) { inspectCodex = fn; } };
 }
 
 test('picker opens the selected direct CLI in the configured folder without saving or running tasks', async () => {
@@ -395,6 +467,40 @@ test('OpenCode version checks explain mismatches without changing tasks or execu
   h.detect(async()=>{throw Error('Could not check the OpenCode version');});
   await button(modern).onclick();assert.match(modern.description,/Could not check/);assert.equal(button(modern).disabled,false);
   assert.equal(JSON.stringify(h.host.settings),before);assert.equal(h.saved.length,0);assert.equal(h.launches.length,0);
+});
+
+test('Codex Settings show the shared path, modes and explicit capability check without mutating tasks', async () => {
+  const h=ui(),root=new h.Element(),calls=[];
+  h.host.settings.tasks=[{id:'keep',taskKind:'codex',interactiveTerminal:true,model:'pinned'}];
+  const before=JSON.stringify(h.host.settings);
+  h.inspectCodex(async bin=>{calls.push(bin);return {version:'codex-cli 0.167.0',appServer:true};});
+  h.addInteractiveCliSettings(root,h.host);
+  const row=root.all().find(el=>el.name==='Codex CLI executable');
+  const check=row.children.find(el=>el.textContent==='Check version');
+  assert.match(row.description,/background and terminal: C:\\Tools\\codex.exe/);
+  assert.match(row.description,/not checked/);assert.equal(calls.length,0);
+  assert.ok(root.all().some(el=>el.textContent.includes('Background tasks do not need the Codex desktop app open')));
+  await check.onclick();assert.deepEqual(calls,['C:\\Tools\\codex.exe']);
+  assert.match(row.description,/0.167.0/);assert.match(row.description,/App Server advertised/);
+  assert.match(row.description,/C:\\Tools\\codex.exe/);assert.match(row.description,/have not been tested/);
+  h.inspectCodex(async()=>({version:'old',appServer:false}));await check.onclick();
+  assert.match(row.description,/Background unavailable/);assert.match(row.description,/no fallback was used/);
+  assert.equal(JSON.stringify(h.host.settings),before);assert.equal(h.saved.length,0);assert.equal(h.launches.length,0);
+});
+
+test('Codex diagnostics cannot overwrite a changed executable with stale version or failure', async () => {
+  for(const fail of [false,true]) {
+    const h=ui(['C:\\Tools\\codex.exe','C:\\Other\\codex.exe']),root=new h.Element();let finish;
+    h.inspectCodex(()=>new Promise((resolve,reject)=>{finish=()=>fail?reject(Error('stale error')):resolve({version:'stale version',appServer:true});}));
+    h.addInteractiveCliSettings(root,h.host);
+    const row=root.all().find(el=>el.name==='Codex CLI executable');
+    const check=row.children.find(el=>el.textContent==='Check version');
+    const pending=check.onclick();
+    await row.children.find(el=>el.tag==='input').change('C:\\Other\\codex.exe');
+    finish();await pending;
+    assert.match(row.description,/C:\\Other\\codex.exe/);assert.match(row.description,/not checked/);
+    assert.doesNotMatch(row.description,/stale/);assert.equal(check.disabled,false);
+  }
 });
 
 function terminalSettings(h) {

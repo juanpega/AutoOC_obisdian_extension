@@ -75,7 +75,7 @@ function harness() {
     } },
     path: path.win32, os: { homedir: () => 'C:\\Users\\Tester' },
     child_process: { spawn: (...args) => { external.push(args); throw Error('External launch forbidden'); } },
-    './cli-launchers': launchers, './codex-client': { resolveCodexBin: () => '' },
+    './cli-launchers': launchers, './codex-client': { resolveCodexBin: configured => !configured || configured === 'codex' ? binary : configured },
     './opencode-version': { assertOpenCode2: async () => {} },
   }, { process });
   class Modal {
@@ -222,7 +222,8 @@ function harness() {
     window: { requestAnimationFrame(fn) { frames.set(++sequence, fn); return sequence; }, cancelAnimationFrame(id) { frames.delete(id); } },
   });
   const manager = new api.IntegratedTerminals(host, () => newSessions++);
-  const ui = evaluate('interactive-cli-ui.ts', { obsidian, './interactive-cli': backend, './opencode-version': {} });
+  const ui = evaluate('interactive-cli-ui.ts', { obsidian, './interactive-cli': backend, './opencode-version': {},
+    './codex-diagnostics': { inspectCodexCli: () => { throw Error('Codex diagnostics require an explicit Settings action'); } } });
   host.openIntegratedCli = (...args) => manager.open(...args);
   host.installCliTerminalSupport = () => manager.installSupport();
   host.showCliTerminals = () => manager.show();
@@ -247,6 +248,44 @@ test('terminal spacing stays outside the session box measured by FitAddon', () =
   assert.match(screen, /padding:\s*0\s*;/);
   assert.match(host, /padding:\s*8px\s*;/);
   assert.match(host, /box-sizing:\s*border-box\s*;/);
+});
+
+test('page sessions reuse their PTY and output when selecting or revealing a page', async () => {
+  const h=harness(),a={pageId:'a',claimId:'claim-a'},b={pageId:'b',claimId:'claim-b'};
+  await h.manager.open('codex',h.folder,'A · codex',a);
+  h.ptys[0].emit('data','retained output');
+  await h.manager.open('codex',h.folder,'B · codex',b);
+  assert.equal(await h.manager.focusPage('a',false),true);
+  assert.equal(h.manager.activeId,h.manager.sessions[0].id);
+  assert.equal(await h.manager.focusPage('a'),true);
+  assert.equal(h.spawns.length,2);assert.deepEqual(h.terminals[0].output,['retained output']);
+  assert.equal(await h.manager.focusPage('missing'),false);
+  await assert.rejects(h.manager.open('codex',h.folder,'Duplicate',a),/already has a terminal/);
+  assert.equal(h.spawns.length,2);await h.manager.dispose();
+});
+
+test('only verified exit or stop notifies the exact page claim, including detached sessions', async () => {
+  const h=harness(),ended=[];h.host.pageTerminalExited=async context=>ended.push({...context});
+  await h.manager.open('codex',h.folder,'Page',{pageId:'a',claimId:'first'});
+  h.ptys[0].emit('data','[Terminal host connection lost. Process state is unknown]');
+  h.faults.kill=true;assert.equal(await h.manager.close(h.manager.activeId),false);assert.equal(ended.length,0);
+  h.faults.kill=false;
+  await h.manager.detach(h.manager.activeId);assert.equal(ended.length,0);
+  h.ptys[0].emit('exit',{exitCode:0});
+  assert.equal(ended.length,1);assert.equal(ended[0].claimId,'first');
+  await h.manager.close(h.manager.activeId);assert.equal(ended.length,1);
+  await h.manager.open('codex',h.folder,'Page',{pageId:'a',claimId:'second'});
+  await h.manager.close(h.manager.activeId);assert.equal(ended.length,2);assert.equal(ended[1].claimId,'second');
+  await h.manager.open('codex',h.folder,'Page',{pageId:'a',claimId:'retained'});
+  await h.manager.detach(h.manager.activeId);await h.manager.dispose();assert.equal(ended.length,2);
+});
+
+test('page reservation save failure is reported without recreating a terminal', async () => {
+  const h=harness();h.host.pageTerminalExited=async()=>{throw Error('write failed');};
+  await h.manager.open('codex',h.folder,'Page',{pageId:'a',claimId:'claim'});
+  h.ptys[0].emit('exit',{exitCode:0});await Promise.resolve();
+  assert.ok(h.notices.some(s=>s.includes('reservation could not be saved')));
+  assert.equal(h.spawns.length,1);assert.equal(h.manager.pageSession('a').exited,true);await h.manager.dispose();
 });
 
 test('manual redraw repaints and fits only the active terminal without restarting or sending input', async () => {
@@ -1117,6 +1156,7 @@ function nativeHarness(options = {}) {
     async readFile() { throw Error('Unexpected disk read'); },
   };
   const api = evaluate('terminal-pty.ts', {
+    './terminal-pty-posix': { createPosixTerminalBackend() { throw Error('Unexpected native loading'); } },
     'node:crypto': require('node:crypto'), 'node:fs': { promises: disk }, 'node:path': path.win32,
     'node:os': { release: () => options.release || '10.0.22631' },
     'node:zlib': { gunzip() { throw Error('Unverified archive reached decompression'); } },
@@ -1177,7 +1217,7 @@ test('PTY install requires an absolute plugin directory before writes or downloa
 });
 
 for (const [options, expected] of [
-  [{ platform: 'linux' }, /solo Windows x64/], [{ arch: 'arm64' }, /solo Windows x64/],
+  [{ platform: 'linux' }, /soporta Windows x64 y macOS/], [{ arch: 'arm64' }, /soporta Windows x64 y macOS/],
   [{ release: '10.0.17763' }, /18309/], [{ napi: '7' }, /Node-API >= 8/],
 ]) test(`PTY unsupported host ${JSON.stringify(options)} rejects before network or writes`, async () => {
   const h = nativeHarness(options);

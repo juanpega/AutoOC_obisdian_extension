@@ -14,6 +14,7 @@ import * as path from 'node:path';
 import { gunzip } from 'node:zlib';
 import type { Socket } from 'node:net';
 import type { Worker } from 'node:worker_threads';
+import { createPosixTerminalBackend } from './terminal-pty-posix';
 
 export interface IDisposable { dispose(): void; }
 
@@ -78,18 +79,25 @@ export const TERMINAL_SUPPORT = Object.freeze({
     integrity: 'sha512-20JqtutY6JPXTUnL0ij1uad7Qe1baT46lyolh2sSENDd4sTzKZ4nmAFkeAARDKwmlLjPx6XKRlwRUxwjOy+lUg==',
 });
 
-const DIRECTORY = 'node-pty-1.1.0-win32-x64';
+// Both Darwin architectures are shipped together: Obsidian and the independent
+// Node host can have different architectures when Rosetta is in use.
+function supportDirectory(): string {
+    return process.platform === 'darwin' ? 'node-pty-1.1.0-darwin' : 'node-pty-1.1.0-win32-x64';
+}
+const DARWIN_FILES = ['darwin-arm64', 'darwin-x64'].flatMap(host =>
+    [`prebuilds/${host}/pty.node`, `prebuilds/${host}/spawn-helper`]);
 const ARCHIVE = 'source.tgz';
 const MAX_DOWNLOAD = 48 * 1024 * 1024;
 const MAX_UNPACKED = 96 * 1024 * 1024;
 
 function supportedHost(): void {
-    if (process.platform !== 'win32' || process.arch !== 'x64') {
-        throw new Error(`Terminal PTY: solo Windows x64 esta soportado; host ${process.platform}/${process.arch}. No se descargara ni compilara otro binario.`);
+    if (!(process.platform === 'win32' && process.arch === 'x64') &&
+        !(process.platform === 'darwin' && ['x64', 'arm64'].includes(process.arch))) {
+        throw new Error(`Terminal PTY: soporta Windows x64 y macOS Intel/Apple Silicon; host ${process.platform}/${process.arch}. No se descargara ni compilara otro binario.`);
     }
     const version = release().split('.').map(Number);
     // node-pty 1.1.0 usa este umbral para seleccionar ConPTY, incluso con useConpty.
-    if (version[0] < 10 || !Number.isFinite(version[2]) || version[2] < 18309) {
+    if (process.platform === 'win32' && (version[0] < 10 || !Number.isFinite(version[2]) || version[2] < 18309)) {
         throw new Error(`Terminal PTY: se requiere Windows build 18309 o posterior (recomendado Windows 10 1903+/11); actual ${release()}.`);
     }
     if (Number(process.versions.napi || 0) < 8) {
@@ -181,19 +189,21 @@ async function contents(archive: Buffer): Promise<Map<string, Buffer>> {
         const relative = name.slice('package/'.length);
         const selected = relative === 'package.json' || relative === 'LICENSE' ||
             (relative.startsWith('lib/') && relative.endsWith('.js') && !relative.endsWith('.test.js')) ||
+            (process.platform === 'darwin' ? DARWIN_FILES.includes(relative) :
             relative === 'deps/winpty/LICENSE' ||
             relative === 'prebuilds/win32-x64/conpty.node' ||
             relative === 'prebuilds/win32-x64/conpty_console_list.node' ||
-            relative.startsWith('prebuilds/win32-x64/conpty/');
+            relative.startsWith('prebuilds/win32-x64/conpty/'));
         if (selected) {
             if (result.has(relative)) throw new Error('Terminal PTY: entrada duplicada en tar.');
             result.set(relative, tar.subarray(offset + 512, offset + 512 + size));
         }
         offset += 512 + Math.ceil(size / 512) * 512;
     }
-    for (const required of ['package.json', 'LICENSE', 'lib/index.js', 'lib/worker/conoutSocketWorker.js',
+    for (const required of ['package.json', 'LICENSE', 'lib/index.js', ...(process.platform === 'darwin'
+        ? ['lib/unixTerminal.js', ...DARWIN_FILES] : ['lib/worker/conoutSocketWorker.js',
         'prebuilds/win32-x64/conpty.node', 'prebuilds/win32-x64/conpty/conpty.dll',
-        'prebuilds/win32-x64/conpty/OpenConsole.exe']) {
+        'prebuilds/win32-x64/conpty/OpenConsole.exe'])]) {
         if (!result.has(required)) throw new Error(`Terminal PTY: paquete incompleto, falta ${required}.`);
     }
     const metadata = JSON.parse(result.get('package.json')!.toString('utf8'));
@@ -236,13 +246,17 @@ async function verify(directory: string): Promise<void> {
     for (const [name, expected] of files) {
         const actual = await readRegular(path.join(directory, name), expected.length);
         if (!actual.equals(expected)) throw new Error(`Terminal PTY: fichero alterado: ${name}. Restaura el soporte original y reinicia Obsidian.`);
+        if (process.platform === 'darwin' && name.endsWith('/spawn-helper') &&
+            !((await fs.lstat(path.join(directory, name))).mode & 0o111)) {
+            throw new Error(`Terminal PTY: falta permiso de ejecucion en ${name}. Revisa los permisos del soporte instalado.`);
+        }
     }
 }
 
 /** Solo llamar desde una accion humana explicita; nunca desde load/onload. */
 export async function installTerminalSupport(pluginDirectory: string): Promise<void> {
     const root = await supportRoot(pluginDirectory, true);
-    const target = path.join(root, DIRECTORY);
+    const target = path.join(root, supportDirectory());
     try {
         await fs.lstat(target);
         await verify(target);
@@ -265,6 +279,9 @@ export async function installTerminalSupport(pluginDirectory: string): Promise<v
             const destination = path.join(staging, name);
             await fs.mkdir(path.dirname(destination), { recursive: true });
             await fs.writeFile(destination, data, { flag: 'wx' });
+            // The pinned 1.1.0 tarball ships Darwin helpers as 0644. Only these
+            // two verified files need execution permission; never run npm scripts.
+            if (process.platform === 'darwin' && name.endsWith('/spawn-helper')) await fs.chmod(destination, 0o755);
         }
         await fs.writeFile(path.join(staging, ARCHIVE), archive, { flag: 'wx' });
         await verify(staging);
@@ -284,7 +301,7 @@ export async function installTerminalSupport(pluginDirectory: string): Promise<v
 /** Preflight local sin cargar modulos nativos ni crear procesos. */
 export async function verifyTerminalSupport(pluginDirectory: string): Promise<string> {
     const root = await supportRoot(pluginDirectory, false);
-    const directory = path.join(root, DIRECTORY);
+    const directory = path.join(root, supportDirectory());
     try {
         await verify(directory);
     } catch (error) {
@@ -308,6 +325,14 @@ export async function loadTerminalPty(pluginDirectory: string): Promise<Terminal
             nativeRequire = remote.require('node:module').createRequire(path.join(directory, 'package.json'));
         } catch (error) {
             throw new Error(`Terminal PTY: el renderer requiere el puente electron.remote de Obsidian para ejecutar node-pty/workers en main. No se creara ningun PTY ni se habilitaran permisos nuevos. ${String(error)}`);
+        }
+    }
+    if (process.platform === 'darwin') {
+        try {
+            nativeRequire(path.join(directory, `prebuilds/darwin-${process.arch}/pty.node`));
+            return createPosixTerminalBackend(nativeRequire(path.join(directory, 'lib/index.js')));
+        } catch (error) {
+            throw new Error(`Terminal PTY: no se pudo cargar el soporte macOS ${process.arch} (Node ${process.versions.node}, N-API ${process.versions.napi}). Comprueba Node.js 18+ y los permisos de spawn-helper. No se intentara node-gyp. ${String(error)}`);
         }
     }
     let conpty: unknown;

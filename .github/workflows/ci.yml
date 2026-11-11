@@ -31,6 +31,12 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Verify native macOS PTY
+        if: runner.os == 'macOS'
+        env:
+          AUTOOC_TEST_NATIVE_PTY: '1'
+        run: node --test tests/terminal-pty-macos-native.test.cjs
+
       - name: Verify release packaging
         run: npm run pack:release
 
