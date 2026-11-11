@@ -7,7 +7,7 @@ function renderer() {
     {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText;
   vm.runInNewContext(source, {exports:api,require(id) {
     if (id === 'obsidian') return {setIcon() {}};
-    if (id === './catalog-availability' || id === './workflow-code-step' || id === './execution-status-help') return {};
+    if (id === './catalog-availability' || id === './workflow-code-step' || id === './execution-status-help' || id === './workflow-labels') return {};
     throw Error(id);
   }});
   const dashboard = Object.create(api.AreaDashboard.prototype);

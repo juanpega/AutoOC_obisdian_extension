@@ -1,5 +1,6 @@
 import { AreaDashboard, createAreaDashboardState, dashboardItems, workPageDashboardItems, type PageRunProgress, type DashboardItem } from "./dashboard-areas";
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
+import { workflowStepDisplayName, bindWorkflowLabel, refreshWorkflowLabels } from "./workflow-labels";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import { INTERACTIVE_CLIS, launchInteractiveCli, type InteractiveCliProvider } from "./interactive-cli";
@@ -287,6 +288,7 @@ Task step example:
 }
 
 taskExportId must match an existing task exportId.
+The task name belongs to the referenced task. A task step's optional name is a workflow-local alias, not its identity or a cached task name. Omit the step name unless a distinct alias is useful. WorkFlows shows a distinct alias alongside the current task name; renaming the task keeps IDs, transitions and aliases unchanged. Code and delay steps keep their own names. Workflow steps likewise show a distinct alias alongside the referenced workflow's current name.
 
 Transitions:
 The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The importer validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
@@ -6404,6 +6406,7 @@ class AutoOCView extends ItemView {
   }
 
   private updateTaskNameDom(task: ScheduledTask) {
+    refreshWorkflowLabels(this.containerEl, { taskId: task.id });
     this.areaDashboard?.update();
     const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
       return count + workflow.steps.filter((step) => step.taskId === task.id).length;
@@ -6419,6 +6422,7 @@ class AutoOCView extends ItemView {
   }
 
   private updateWorkflowNameDom(workflow: Workflow) {
+    refreshWorkflowLabels(this.containerEl, { workflowId: workflow.id });
     this.areaDashboard?.update();
     const area = workflow.area?.trim() || "No area";
     this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
@@ -7879,14 +7883,7 @@ class AutoOCView extends ItemView {
 
     // Steps list with task details/actions
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
-    const stepLabel = (step: WorkflowStep): string => {
-      if (step.name?.trim()) return step.name.trim();
-      if (step.stepKind === "workflow") return `Workflow: ${this.plugin.settings.workflows.find(w=>w.id===step.workflowId)?.name || "Missing workflow"}`;
-    if (step.stepKind === "code") return "{ } Code";
-      if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
-      const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
-      return t ? t.name : "(deleted task)";
-    };
+    const stepLabel = (step: WorkflowStep): string => workflowStepDisplayName(step, this.plugin.settings.tasks, this.plugin.settings.workflows);
     const transitionModeLabel = (mode?: TransitionMode): string => {
       if (mode === "force") return "force";
       if (mode === "eval") return "AI";
@@ -7909,10 +7906,11 @@ class AutoOCView extends ItemView {
       const icon = isDone ? "✅" : isCurrent ? "⏳" : "⬜";
 
       const stepHeader = stepItem.createDiv("auto-oc-workflow-task-header");
-      stepHeader.createSpan({
+      const stepTitle = stepHeader.createSpan({
         text: `${icon} Step ${i + 1}: ${stepName}`,
         cls: "auto-oc-workflow-task-title",
       });
+      bindWorkflowLabel(stepTitle, [step], () => stepTitle.setText(`${icon} Step ${i + 1}: ${stepLabel(step)}`));
       if (step.stepKind !== "task" && step.status) {
         stepHeader.createSpan({
           text: step.status,
@@ -7939,16 +7937,18 @@ class AutoOCView extends ItemView {
             ? [{ toStepId: workflow.steps[i + 1].id, mode: (step.transitionMode as TransitionMode) || "default" }]
             : []);
       if (transitions.length > 0) {
-        const transitionSummary = transitions
+        const transitionSummary = () => transitions
           .map((transition) => {
             const target = workflow.steps.find((candidate) => candidate.id === transition.toStepId);
             return `→ ${target ? stepLabel(target) : "missing step"} [${transitionModeLabel(transition.mode)}]`;
           })
           .join(" · ");
-        stepHeader.createSpan({
-          text: ` ${transitionSummary}`,
+        const transitionLabel = stepHeader.createSpan({
           cls: "auto-oc-workflow-transition-label",
         });
+        const targets = transitions.map(transition => workflow.steps.find(candidate => candidate.id === transition.toStepId))
+          .filter((target): target is WorkflowStep => !!target);
+        bindWorkflowLabel(transitionLabel, targets, () => transitionLabel.setText(` ${transitionSummary()}`));
       }
 
       if (!task) {
@@ -8336,6 +8336,8 @@ class CreateTaskModal extends Modal {
   constructor(app: App, plugin: AutoOCPlugin, editTask?: ScheduledTask, private readonly saveDraft?: (task: ScheduledTask) => void) {
     super(app);
     this.plugin = plugin;
+    // Cards can outlive a catalog object replaced by a previous save.
+    if (editTask && !saveDraft) editTask = plugin.settings.tasks.find(task => task.id === editTask!.id) || editTask;
     this.editTask = editTask;
     this.draft = editTask
       ? (saveDraft ? JSON.parse(JSON.stringify(editTask)) : { ...editTask })
@@ -9231,6 +9233,8 @@ class EditWorkflowStepModal extends Modal {
 }
 
 class CreateWorkflowModal extends Modal {
+  private unsubscribeTaskUpdated?: () => void;
+  private unsubscribeWorkflowUpdated?: () => void;
   private draftTasks: ScheduledTask[] = [];
   private generatedDraft = false;
   private savingGeneratedDraft = false;
@@ -9239,6 +9243,13 @@ class CreateWorkflowModal extends Modal {
   private draftTaskModal?: CreateTaskModal;
 
   private availableTasks(): ScheduledTask[] { return [...this.plugin.settings.tasks, ...this.draftTasks]; }
+
+  private subscribeNameUpdates(): void {
+    this.unsubscribeTaskUpdated?.();
+    this.unsubscribeWorkflowUpdated?.();
+    this.unsubscribeTaskUpdated = this.plugin.onTaskUpdated(task => refreshWorkflowLabels(this.contentEl, { taskId: task.id }));
+    this.unsubscribeWorkflowUpdated = this.plugin.onWorkflowUpdated(workflow => refreshWorkflowLabels(this.contentEl, { workflowId: workflow.id }));
+  }
   private plugin: AutoOCPlugin;
   private editWorkflow?: Workflow;
   private draft: Partial<Workflow>;
@@ -9281,6 +9292,7 @@ class CreateWorkflowModal extends Modal {
     if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 1100);
+    this.subscribeNameUpdates();
     preventBackdropClose(this);
 
     // Header with X button
@@ -9665,8 +9677,7 @@ class CreateWorkflowModal extends Modal {
   }
 
   private workflowStepLabel(step: WorkflowStep): string {
-    if (step.name?.trim()) return step.name.trim();
-    return this.defaultWorkflowStepName(step);
+    return workflowStepDisplayName(step, this.availableTasks(), this.plugin.settings.workflows);
   }
 
   private defaultWorkflowStepName(step: WorkflowStep, index?: number): string {
@@ -9714,10 +9725,10 @@ class CreateWorkflowModal extends Modal {
         text: `Step ${i + 1}`,
         cls: "auto-oc-workflow-step-num",
       });
-      header.createEl("span", {
-        text: this.workflowStepLabel(step),
+      const stepTitle = header.createEl("span", {
         cls: step.stepKind === "task" && !task ? "auto-oc-workflow-step-err" : "",
       });
+      bindWorkflowLabel(stepTitle, [step], () => stepTitle.setText(this.workflowStepLabel(step)));
 
       if (!isLast) {
         header.createEl("span", { text: "→", cls: "auto-oc-workflow-step-arrow" });
@@ -9725,7 +9736,8 @@ class CreateWorkflowModal extends Modal {
           text: `Step ${i + 2}`,
           cls: "auto-oc-workflow-step-num",
         });
-        header.createEl("span", { text: this.workflowStepLabel(this.selectedSteps[i + 1]) });
+        const nextStep = this.selectedSteps[i + 1], nextTitle = header.createEl("span");
+        bindWorkflowLabel(nextTitle, [nextStep], () => nextTitle.setText(this.workflowStepLabel(nextStep)));
       }
 
       // Remove button
@@ -9742,14 +9754,18 @@ class CreateWorkflowModal extends Modal {
 
       new Setting(stepEl)
         .setName("Step name")
-        .setDesc("Optional label used in this workflow")
+        .setDesc(step.stepKind === "task" || step.stepKind === "workflow"
+          ? "Optional alias for this step. The current referenced name is also shown; leave blank to follow it."
+          : "Optional label used in this workflow")
         .addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
+          bindWorkflowLabel(text.inputEl, [step], () => { text.inputEl.placeholder = this.defaultWorkflowStepName(step, i); });
           text
             .setPlaceholder(this.defaultWorkflowStepName(step, i))
             .setValue(step.name || "")
             .onChange((v) => {
               step.name = v.trim();
+              refreshWorkflowLabels(this.contentEl);
             });
         });
 
@@ -9848,10 +9864,11 @@ class CreateWorkflowModal extends Modal {
           text: `Transition: Step ${i + 1} → Step ${i + 2}`,
           cls: "auto-oc-workflow-transition-title",
         });
-        transitionHeader.createSpan({
-          text: `After «${this.workflowStepLabel(step)}» finishes, decide whether «${this.workflowStepLabel(nextStep)}» starts.`,
+        const transitionHelp = transitionHeader.createSpan({
           cls: "auto-oc-workflow-transition-help",
         });
+        bindWorkflowLabel(transitionHelp, [step, nextStep], () => transitionHelp.setText(
+          `After «${this.workflowStepLabel(step)}» finishes, decide whether «${this.workflowStepLabel(nextStep)}» starts.`));
 
         // Mode selector: force, evaluate, or stop-on-fail (default)
         const modeDiv = transConfig.createDiv("auto-oc-workflow-mode");
@@ -10123,6 +10140,10 @@ class CreateWorkflowModal extends Modal {
     this.editorClosed = true;
     this.aiDraftModal?.close();
     this.draftTaskModal?.close();
+    this.unsubscribeTaskUpdated?.();
+    this.unsubscribeWorkflowUpdated?.();
+    this.unsubscribeTaskUpdated = undefined;
+    this.unsubscribeWorkflowUpdated = undefined;
     this.contentEl.empty();
   }
 }

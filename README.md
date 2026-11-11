@@ -16,6 +16,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 ## Area dashboard
 
+**Nombres de tareas (1.7.24):** al renombrar una tarea, WorkFlows y Dashboard muestran el nombre actual en sus referencias. Los alias de paso se conservan y se muestran junto al nombre de la tarea. [Comportamiento y compatibilidad](docs/workflow-task-names.md).
+
 Since 1.7.12, **Dashboard** groups workflows and tasks by their **Area** field, with a **No area** group for unassigned items. To reorganize them, change their area in the editor or through the selection actions. Positions from the previous map remain saved in the settings.
 
 Debajo de **Your areas**, pulsa **Workflows** o **Tasks** para mostrar solo ese tipo en sus respectivas áreas; **Tasks** incluye las tareas Code. **All** restaura la vista conjunta. El filtro se combina con la búsqueda, **Needs attention** y **Show disabled**, conserva las áreas plegadas y se mantiene durante la sesión del panel. Los contadores de estos botones indican el total del catálogo, incluidos los elementos desactivados.

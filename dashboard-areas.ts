@@ -1,4 +1,5 @@
 import { setIcon } from "obsidian";
+import { workflowStepDisplayName } from "./workflow-labels";
 import { workflowDisabledReason } from "./catalog-availability";
 import { codeStepDisplay } from "./workflow-code-step";
 import { executionStatusHelp } from "./execution-status-help";
@@ -77,7 +78,9 @@ export function dashboardItems(tasks: Source[], workflows: Flow[], ownsExecution
         key: JSON.stringify(["step", workflow.id, step.id]), id: step.id, workflowId: workflow.id,
         taskId: code || step.stepKind === "delay" ? undefined : step.taskId,
         kind: nested ? "workflow" : code || task?.taskKind === "code" ? "code" : step.stepKind === "delay" ? "delay" : "task",
-        name: step.name?.trim() || child?.name || task?.name || (nested ? "Missing workflow" : code ? `Code step ${index + 1}` : step.stepKind === "delay" ? "Delay" : "Missing task"),
+        name: code || step.stepKind === "delay"
+          ? step.name?.trim() || (code ? `Code step ${index + 1}` : "Delay")
+          : workflowStepDisplayName(step, task ? [task] : [], child ? [child] : []),
         area: areaName(step.area || workflow.area), status,
         disabled: !!(workflow.disabled || step.disabled || task?.disabled || child?.disabled),
         attention: needsAttention({ ...step, status, runtimeExecution: binding }, owned(binding, workflow.id)) ||
