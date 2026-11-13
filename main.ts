@@ -28,7 +28,8 @@ import { LegacyOutputRedaction } from "./legacy-output-redaction";
 import { LegacyCredentialNoticeModal } from "./legacy-credential-notice";
 import { samePhysicalPath } from "./path-identity";
 import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
-import {createPluginRequestHost} from "./cli-plugin-requests";
+import {createPluginRequestHost, startPluginRequestPump} from "./cli-plugin-requests";
+import type { TimingContext } from "./execution-timing";
 import {applyWorkflowEdit} from "./workflow-edit";
 import { buildOpenCodeScript } from "./opencode-script";
 import { isOpenCodeTask, openCodeRunArgs, openCodeInteractiveArgs } from "./opencode-profile";
@@ -113,6 +114,8 @@ import { resolveOpencodeBin, psSingleQuoted, commandPreviewArg, shSingleQuoted, 
 const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an Obsidian plugin that automates OpenCode, Codex and GitHub Copilot tasks and workflows, and can launch interactive OpenCode, Codex, Copilot and Claude Code CLIs. Your goal is to generate valid import-ready AutoOC JSON for tasks and/or workflows.
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
+
+CLI reconnection: hosts advertising requestInspection:1 support inspect-request and follow with exactly one --request-id or --run selector. Capture the submitted requestId and subsequent runId; after a lost heartbeat, observe that same identity rather than launching again. States are not-accepted, running, finished and unknown; finished does not imply success. Following is read-only, and interrupting follow does not cancel the run. Phase timings are auxiliary diagnostics, not evidence that work completed. These are CLI capabilities, not task/workflow schema fields. Do not synchronously follow child work that waits for its parent to finish.
 
 Page preparation CLI: compatible hosts advertise pageCreation:1. A trusted task with explicit terminal permission can submit create-page --vault ROOT --request FILE. The request uses a stable requestId and may include a launch object selecting exactly one existing workflowId or taskId. During active work, submission returns queued with created:false and a reserved pageId; it does not mean the page or child run has completed. The owner waits for current runs to complete successfully before creating and launching; never synchronously wait for that child inside its parent or recursively call run on a not-yet-created page. Inspect with inspect-page-request --vault ROOT --request-id ID. Reuse the same request ID after a lost response; never generate a new ID as a transport retry. Worktrees must already be enabled and any gitignore change authorized. Optional requirementId/requirementText writes a hash-checked snapshot at .autooc/requirement.md; Code needs explicit vault permission to read it. These are CLI request fields, not new task/workflow schema fields. Do not grant permissions, create pages merely by importing JSON, or embed private requirement text in examples.
 
@@ -2017,7 +2020,7 @@ export default class AutoOCPlugin extends Plugin {
   private pluginExecutionLease?: ExecutionLease;
   private cliRequestHost?: ReturnType<typeof createPluginRequestHost>;
   private workflowEditPending = false;
-  private cliRequestTimer?: number;
+  private cliRequestTimer?: () => void;
   private pluginExecutionLocation?: InstalledWorkflowLocation;
   private sharedWorkflowExecutions = new Map<string, {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint;liveOutput?:WorkflowTaskOutput}>();
   // Compatibility for exclusive maintenance reservations and existing observers.
@@ -2411,15 +2414,11 @@ export default class AutoOCPlugin extends Plugin {
       // Pending writes/effects still retain their reservation if not drained.
       this.ready = true;
       this.startCliRequests();
-      this.cliRequestTimer = window.setInterval(() => {
-        void this.cliRequestHost?.poll().catch(() => {
-          if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
-          this.cliRequestTimer = undefined;
-          try { this.cliRequestHost?.close(); } catch { /* Preserve unresolved ownership. */ }
-          console.warn("AutoOC CLI request reception stopped; inspect execution ownership before retrying");
-        });
-      }, 200);
-      this.registerInterval(this.cliRequestTimer);
+      this.cliRequestTimer = startPluginRequestPump(this.cliRequestHost!, () => {
+        this.cliRequestTimer = undefined;
+        try { this.cliRequestHost?.close(); } catch { /* Preserve unresolved ownership. */ }
+        console.warn("AutoOC CLI reception stopped; inspect the existing request and run");
+      });
     } catch (error) {
       this.startupPending = false;
       await this.onunload().catch(cleanup => console.warn("AutoOC startup cleanup retained reservation", cleanup));
@@ -2484,7 +2483,7 @@ export default class AutoOCPlugin extends Plugin {
     this.stopStartupWait();
     this.lifecycleStopped = true;
     this.ready = false;
-    if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
+    this.cliRequestTimer?.();
     this.cliRequestTimer = undefined;
     const closingRequestHost = this.cliRequestHost;
     try { closingRequestHost?.close(); }
@@ -2772,11 +2771,11 @@ export default class AutoOCPlugin extends Plugin {
       register:async page=>{await registerWorkPage(this.settings,page,()=>this.saveSettings());this.refreshOpenViews();},
       launch:async(selection,pageId,signal,progress)=>this.runSharedWorkflow(selection.taskId ? standaloneTaskWorkflow(selection.taskId).id : selection.workflowId!,undefined,false,true,selection.taskId,{signal,progress},undefined,pageId),
     });
-    this.cliRequestHost = createPluginRequestHost(this.pluginExecutionLease!, async (request, signal, progress) => {
+    this.cliRequestHost = createPluginRequestHost(this.pluginExecutionLease!, async (request, signal, progress,timing) => {
       this.assertLifecycleOpen();
       try {
         return await this.runSharedWorkflow(request.taskId ? standaloneTaskWorkflow(request.taskId).id : request.workflowId!,
-          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress}, request.stepId, request.pageId);
+          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress,timing}, request.stepId, request.pageId);
       } catch (error) {
         if (!this.lifecycleStopped) new Notice(`AutoOC: CLI request failed — ${this.redactSecrets(String(error))}`);
         throw error;
@@ -2796,7 +2795,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, stepId?:string, pageId?:string) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>;timing?:TimingContext}, stepId?:string, pageId?:string) {
     if(pageId === "main")pageId = undefined;
     const kind = taskId ? "task" : "workflow", id = pageId ? pageExecutionId(pageId,taskId || workflowId,!!taskId) : taskId || workflowId;
     if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
@@ -2808,7 +2807,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void, stepId?:string, pageId?:string) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>;timing?:TimingContext}, releaseStart?: () => void, stepId?:string, pageId?:string) {
     if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
     let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
     if (stepId && selected) selected = selectCodeStep(selected, stepId);
@@ -2836,13 +2835,13 @@ export default class AutoOCPlugin extends Plugin {
     let expectedSettings: ReturnType<typeof captureJsonStructure> | undefined;
     let lastCatalog: PersistedWorkflowCatalog | undefined, executionFailed = false;
     try {
-      await this.saveSettings(false);
+      await this.saveSettings(false,undefined,undefined,external?.timing);
       if(this.sharedSettingsBaseline && !matchesJsonStructure(this.settings,this.sharedSettingsBaseline))throw new Error("AutoOC settings changed during save; local edits preserved; reload before continuing");
       expectedSettings = captureJsonStructure(this.settings);
       this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
         vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : sourceWorkflowId,taskId,stepId,resumeRunId,reconcile,newExecution,pageId,
-        lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
+        lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,timing:external?.timing,
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations:()=>this.createVaultMutationBatch(),
@@ -3875,16 +3874,16 @@ export default class AutoOCPlugin extends Plugin {
     return { changed, configPath, mcpPath };
   }
 
-  async saveSettings(refreshView = true, validate?:()=>void, transaction?:CatalogTransaction) {
+  async saveSettings(refreshView = true, validate?:()=>void, transaction?:CatalogTransaction,timing?:TimingContext) {
     this.assertLifecycleOpen();
     const basePath=(this.app.vault.adapter as any).basePath;
-    if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate);
+    if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate,timing);
     return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile,async()=>{
-      await this.saveSettingsWithinTransaction(refreshView,validate);
+      await this.saveSettingsWithinTransaction(refreshView,validate,timing);
     },transaction));
   }
 
-  private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void) {
+  private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void,timing?:TimingContext) {
     // Entry authorized this save before it entered the host queue. Unload
     // drains accepted saves while rejecting all later calls at the entry.
     const basePath = (this.app.vault.adapter as any).basePath;
@@ -3901,7 +3900,7 @@ export default class AutoOCPlugin extends Plugin {
     this.settingsLoadRevision++;
     let savedSettings:ReturnType<typeof captureJsonStructure>|undefined;
     if (file) {
-      await this.settingsWriter.save(file, () => {savedSettings=captureJsonStructure(this.settings);return this.settings;},validate);
+      await this.settingsWriter.save(file, () => {savedSettings=captureJsonStructure(this.settings);return this.settings;},validate,timing);
       this.settingsWritableCatalog = {file,version:this.settingsWriter.confirmedVersion(file)};
     } else {
       await this.saveData(this.settings);

@@ -5,6 +5,7 @@ import { StringDecoder } from "string_decoder";
 import { performance } from "perf_hooks";
 import { setImmediate } from "timers";
 import { execFile } from "child_process";
+import {startPhaseTiming,type TimingContext} from "./execution-timing";
 import { captureJsonStructure, cloneCapturedJson, cloneJsonStructure, encodeCapturedJson, hashJsonCooperatively, hashTextCooperatively, parseCooperatively } from "./cooperative-json";
 
 export type ObservedVersion = {textHash: string | null; valueHash: string | null};
@@ -239,9 +240,12 @@ export class SettingsWriter {
     return tracked;
   }
 
-  save(file: string, snapshot: () => unknown, validate?: () => void): Promise<void> {
+  save(file: string, snapshot: () => unknown, validate?: () => void, timing?:TimingContext): Promise<void> {
+    const queued=startPhaseTiming("settingsQueue",undefined,timing);
+    let saved: (()=>void)|undefined;
     this.pending++;
     const operation = this.tail.then(async () => {
+      queued();saved=startPhaseTiming("settingsSave",undefined,timing);
       file = path.resolve(file);
       await fs.promises.mkdir(path.dirname(file), {recursive:true});
       assertNoSettingsRecovery(path.dirname(file));
@@ -311,6 +315,7 @@ export class SettingsWriter {
       }
     });
     const tracked = operation.finally(() => { this.pending--; });
+    void tracked.then(()=>saved?.(),()=>saved?.());
     this.tail = tracked.catch(error => { this.writeFailure = error; });
     return tracked;
   }
@@ -452,10 +457,13 @@ function parseSettings(text: string | null): unknown {
   catch { throw new Error("Cannot read valid AutoOC configuration"); }
 }
 
-export async function atomicSettingsWrite(file: string, data: unknown, io = fs.promises, beforeReplace?:()=>Promise<void>): Promise<void> {
+export async function atomicSettingsWrite(file: string, data: unknown, io = fs.promises, beforeReplace?:()=>Promise<void>,timing?:TimingContext): Promise<void> {
+  const finished=startPhaseTiming("settingsSave",undefined,timing);
+  try {
   const text = JSON.stringify(data, null, 2);
   if (text === undefined) throw new Error("Settings are not serializable");
   await atomicSettingsTextWrite(file, text, io, beforeReplace);
+  } finally {finished();}
 }
 
 // The snapshot has already been serialized once; keep those bytes immutable

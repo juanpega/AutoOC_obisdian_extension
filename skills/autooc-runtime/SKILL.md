@@ -5,6 +5,68 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Cola, reconexión y diagnóstico (candidato 1.7.26)
+
+Consultar `version` y `help` del paquete instalado: las nuevas consultas requieren
+`requestInspection:1`; `phaseTimings:1` anuncia diagnóstico numérico. Los paquetes
+anteriores pueden consultarse con una CLI compatible, pero no adquieren nuevas
+capacidades de recepción por ejecutar la CLI del candidato.
+
+El plugin atiende el buzón con temporizadores Node y notificaciones de archivos.
+Conserva la aceptación durable antes de efectos y la caducidad de 30 segundos.
+Suspender el proceso o bloquear su event loop sigue pudiendo impedir la atención;
+no confundir una pérdida de heartbeat con ejecución ausente ni repetir el trabajo.
+
+`run` delegado emite por stderr un evento JSON `submitted` con el `requestId` UUID
+antes de esperar progreso. Conservar ese ID y el `runId` cuando aparezca. Los eventos
+`progress` mantienen su formato; los consumidores deben distinguir el campo `event`.
+
+```text
+node CLI inspect-request --vault ROOT --request-id REQUEST_UUID
+node CLI follow --vault ROOT --request-id REQUEST_UUID --timeout-ms 30000
+node CLI inspect-request --vault ROOT --run RUN_ID
+node CLI follow --vault ROOT --run RUN_ID --include-output true
+```
+
+Son operaciones de solo lectura: no lanzan, reanudan, reconcilian, cancelan ni
+recuperan reservas. SIGINT en `follow` solo interrumpe la observación. Un timeout
+devuelve `waitTimedOut:true`: se puede volver a **consultar la misma identidad**.
+El `requestId` de este buzón es distinto del ID funcional de `create-page`, que se
+consulta con `inspect-page-request`.
+
+- `not-accepted`: rechazo durable, sin efectos de esa solicitud.
+- `running`: recibo aceptado y propietario accesible; no acredita que el proveedor
+  esté produciendo salida en ese instante.
+- `finished`: recibo terminal o resultado terminal del journal confirmado; revisar
+  `checkpoint.phase`, `receiptStatus` y `resultAvailable`, no asumir éxito.
+- `unknown`: petición pendiente sin aceptación demostrada, propietario perdido,
+  falta de evidencia o efectos inciertos. Nunca es permiso para lanzar otra vez.
+
+`acceptance` distingue pending/rejected/accepted/unknown. La CLI de consulta devuelve
+código 2 ante incertidumbre o timeout, 1 ante rechazo/fallo, 130 al interrumpir el
+seguimiento y 0 en las demás consultas. `--include-output true` entrega únicamente
+resultados de pasos ya guardados en un journal terminal sin efectos inciertos;
+tratarlos como contenido privado. Por defecto solo se devuelven identidades y estado.
+
+`diagnostics` contiene intentos medidos en `runtime/timings/`: espera de cola,
+`settingsQueue`, `settingsSave`, `code`, `provider` y `evaluation`. Cada fase tiene
+count/totalMs/maxMs/active. `spans` identifica cada ejecución de paso Code o llamada
+al proveedor por stepId, índice, inicio y durationMs, sin su contenido. Conserva
+hasta 256 entradas por intento; droppedSpans informa de las omitidas y los totales
+siguen incluyendo todas. `finished:false` o active>0 son mediciones parciales,
+no prueba de actividad actual tras perder al propietario. Las fases pueden solaparse
+(p. ej., guardar identidad durante el proveedor): no sumar sus tiempos como total.
+Los intentos de reanudación quedan separados; los paquetes anteriores no tienen
+estos datos. La telemetría es auxiliar, no un journal ni una fuente de decisiones;
+un fallo de escritura de métricas no autoriza repetir efectos. Una lectura no
+disponible devuelve diagnosticsUnavailable sin ocultar el estado del recibo.
+
+No registra prompts, scripts, rutas, nombres, resultados ni mensajes del proveedor.
+El tiempo de proveedor incluye la espera del adaptador y sus aprobaciones; Code
+incluye su reconciliación de archivos. Los guardados incluyen la preparación,
+validación y escritura; settingsQueue mide la cola del SettingsWriter.
+
+
 ## Alta de páginas por CLI (candidato de desarrollo)
 
 Requiere `pageCreation:1` en CLI y propietario. Consultar primero `version` y `help`

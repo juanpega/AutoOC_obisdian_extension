@@ -267,6 +267,9 @@ test('the actual shipped creator prompt contains a valid example for each engine
     const prompt=h.buildDraftPrompt(h.AUTOOC_WORKFLOW_PROMPT,kind,'Actual creator request',engine,version);
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
     assert.match(prompt,/compatible hosts advertise pageCreation:1/);
+    assert.match(prompt,/hosts advertising requestInspection:1/);
+    assert.match(prompt,/observe that same identity rather than launching again/);
+    assert.match(prompt,/interrupting follow does not cancel the run/);
     assert.match(prompt,/queued with created:false/);
     assert.match(prompt,/CLI request fields, not new task\/workflow schema fields/);
     assert.match(prompt,/macOS Intel\/Apple Silicon/);assert.match(prompt,/Linux integrated PTY is not available/);
