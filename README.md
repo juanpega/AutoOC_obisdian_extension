@@ -6,6 +6,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Automation and agents:** [complete CLI reference: commands, parameters, and examples](#complete-autooc-cli-reference).
 
+**CLI 1.7.26 (candidato):** [cola en segundo plano, reconexión por requestId/runId y tiempos por fase](Docs/cli-reliability.md). `inspect-request` y `follow` consultan la misma ejecución tras perder el heartbeat; no la relanzan. La validación real con Obsidian visible, inactivo y minimizado sigue pendiente.
+
 **Update blocked?** [Install the new version while keeping your tasks, workflows, and history](#update-blocked-install-without-losing-your-data).
 
 **Development tracking:** [1.7.13 delivery record: changes, flows, contracts, limitations, and release preparation](docs/autoOC/04_Desarrollo/entrega-1.7.13-20261101/README.md) (in Spanish).

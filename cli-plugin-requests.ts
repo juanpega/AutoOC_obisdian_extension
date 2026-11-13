@@ -3,12 +3,14 @@ import * as fs from "fs";
 import * as path from "path";
 import {randomUUID} from "crypto";
 import {performance} from "perf_hooks";
+import {setInterval as nodeSetInterval, clearInterval as nodeClearInterval, setImmediate as nodeSetImmediate, clearImmediate as nodeClearImmediate, setTimeout} from "timers";
 import {readExecutionLeaseOwner, type ExecutionLease} from "./execution-lease";
-import type {RunCheckpoint} from "./execution-journal";
+import {readExecutionCheckpoint, checkpointUncertainties, type RunCheckpoint} from "./execution-journal";
 import {validWorkflowEdit, type WorkflowEditCommand, type WorkflowEditResult} from "./workflow-edit";
 import {executionAdmissionDiagnostic} from "./execution-coordinator";
 import {concurrencySettings} from "./execution-concurrency-settings";
 import {pageExecutionId, normalizePageSelection} from "./work-pages";
+import {withExecutionTiming,bindTimingRun,readExecutionTimings,type ExecutionTiming,type TimingContext} from "./execution-timing";
 import {validPageCreationRequest, type PageCreationRequest, type PageCreationResult, type createPageCreationService} from "./page-creation";
 
 interface PageCreationCommand {
@@ -28,6 +30,21 @@ export type ExecutionSummary = Pick<RunCheckpoint,"runId"|"workflowId"|"phase"|"
 export function executionSummary(state: ExecutionSummary, presentation: Partial<ExecutionPresentation> = state): ExecutionSummary {
   const {runId,workflowId,phase,revision,nextStepId}=state;
   return {runId,workflowId,phase,revision,nextStepId,...presentationFields(presentation)};
+}
+
+// Node timers and filesystem notifications do not depend on DOM visibility.
+// The timer remains the fallback because filesystem notifications can coalesce.
+export function startPluginRequestPump(host:ReturnType<typeof createPluginRequestHost>, onFailure:()=>void) {
+  let stopped=false, wake:NodeJS.Immediate|undefined, watcher:fs.FSWatcher|undefined;
+  const tick=()=>{if(!stopped)void host.poll().catch(()=>{stop();onFailure();});};
+  const schedule=()=>{if(!stopped && !wake)wake=nodeSetImmediate(()=>{wake=undefined;tick();});};
+  const timer=nodeSetInterval(tick,200);timer.unref?.();
+  const stop=()=>{if(stopped)return;stopped=true;nodeClearInterval(timer);if(wake)nodeClearImmediate(wake);watcher?.close();};
+  try {
+    watcher=fs.watch(host.directory,{persistent:false},(_event,file)=>{if(!file || /\.(request|cancel)$/.test(String(file)))schedule();});
+    watcher.on('error',()=>{watcher?.close();watcher=undefined;});
+  } catch { /* Timer fallback; no change to execution ownership. */ }
+  schedule();return stop;
 }
 const uuid=/^[a-f0-9-]{36}$/;
 function regularDirectory(directory:string):void {
@@ -98,17 +115,17 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // The files carry only IDs/progress, never executable payloads or configuration.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {pageSelection?: boolean;pages?:ReturnType<typeof createPageCreationService>} = {}) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>,timing?:TimingContext)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {pageSelection?: boolean;pages?:ReturnType<typeof createPageCreationService>} = {}) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
   let publishedLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,workflowEditing:!!edit,concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1} : {})});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,workflowEditing:!!edit,concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1} : {})});
   write(descriptor,hostDescriptor());
   let closed=false;
-  let failure:Error|undefined,polling:Promise<void>|undefined;
+  let failure:Error|undefined,polling:Promise<void>|undefined,pagePolling:Promise<void>|undefined;
   const active=new Map<string,{id:string;controller:AbortController;editing:boolean;definition:string;done?:Promise<void>}>();
   const seen=new Set<string>();
   const check=()=>{regularDirectory(directory);lease.assertOwned();};
@@ -133,7 +150,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
     check();if(fs.existsSync(descriptor)){checkDescriptor();fs.unlinkSync(descriptor);}
   };
   const fail=()=>{
-    failure ||= new Error("CLI receipt publication failed; inspect status and receipt before retrying");
+    failure ||= new Error("CLI receipt publication failed; inspect status and receipt; do not launch again");
     // If removing the descriptor also fails, its heartbeat expires. The client
     // reports uncertainty instead of waiting forever or starting another run.
     try {close();} catch { /* Drain still fails and retains the owner's lease. */ }
@@ -141,7 +158,6 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
   const pollOnce=async()=>{
     if(closed)return;
     check();
-    await capabilities.pages?.poll();
     const nextLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
     if(Date.now()-heartbeatAt>=1000 || publishedLimit!==nextLimit){
       heartbeatAt=Date.now();
@@ -174,46 +190,58 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
       if(busy){await receipt(id,{status:"rejected",error:busy});continue;}
       const execution={id,controller:new AbortController(),editing:request.command==="edit-workflow",definition,done:undefined as Promise<void>|undefined};active.set(id,execution);
       let checkpoint:ExecutionSummary|undefined;
-      const accepted=receipt(id,{status:"accepted"});
+      const receivedAt=Date.now();
+      const submittedAt=Number.isFinite(request.submittedAt) && request.submittedAt<=receivedAt && request.submittedAt>=request.expiresAt-60000 ? request.submittedAt : request.expiresAt-30000;
+      const timing={submittedAt,receivedAt,queueMs:Math.max(0,receivedAt-submittedAt)};
+      const publish=(value:object)=>receipt(id,{timing,...value,updatedAt:Date.now()});
+      const accepted=publish({status:"accepted"});
       execution.done=(async()=>{
         let publications=Promise.resolve();
         let acceptingProgress=true;
         try {
           await accepted; // durable before invoking any workflow effects
           if(closed)throw new Error("CLI host closed before execution");
+          // fsync can itself exceed the admission deadline. Reject without effects.
+          if(Date.now()>=request.expiresAt || fs.existsSync(path.join(directory,id+".cancel"))) {
+            await publish({status:"rejected",error:"Expired or cancelled before execution"});return;
+          }
           if(request.command==="create-page"){
             const result=await capabilities.pages!.submit(request.request);
-            await receipt(id,{status:"completed",pageResult:result});return;
+            await publish({status:"completed",pageResult:result});return;
           }
           if(request.command==="edit-workflow") {
             if(!edit)throw new Error("Workflow editing unsupported");
             const result=await edit(request);
-            await receipt(id,{status:"completed",editResult:result});
+            await publish({status:"completed",editResult:result});
             return;
           }
-          const result=await execute(request,execution.controller.signal,(state,presentation)=>{
+          const result=await withExecutionTiming(root,{requestId:id,runId:request.runId,queueMs:timing.queueMs},context=>execute(request,execution.controller.signal,(state,presentation)=>{
             if(!acceptingProgress)return Promise.resolve();
-            const next=executionSummary(state,presentation);checkpoint=next;
-            publications=publications.then(()=>receipt(id,{status:"running",checkpoint:next}));
+            const next=executionSummary(state,presentation);checkpoint=next;bindTimingRun(next.runId,context);
+            publications=publications.then(()=>publish({status:"running",checkpoint:next}));
             // Old consumers may not await the callback. Keep it in the ordered
             // chain and observe rejection now, then propagate it at the barrier.
             void publications.catch(()=>{});
             return publications;
-          });
+          },context));
           acceptingProgress=false;
           await publications;
-          await receipt(id,{status:"completed",checkpoint:executionSummary(result)});
+          await publish({status:"completed",checkpoint:executionSummary(result)});
         } catch (error) {
           acceptingProgress=false;
           await publications.catch(()=>{});
           // Raw provider/filesystem errors can contain secrets. Details stay in the existing runtime evidence.
-          try {await receipt(id,{status:"failed",checkpoint,error:request.command==="edit-workflow"?"Workflow edit failed; keep Obsidian open. Export the current definition, check active execution and inspect this receipt before retrying":executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect AutoOC and the recorded run before retrying"});}
+          try {await publish({status:"failed",checkpoint,error:request.command==="edit-workflow"?"Workflow edit failed; keep Obsidian open and inspect this request":executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again"});}
           catch {fail();} // An uncertain receipt never authorizes replay.
         } finally {if(active.get(id)===execution)active.delete(id);}
       })();
       // poll completes only after acceptance has either failed or invoked the
       // executor. Terminal work is tracked separately and must drain on close.
       await accepted.catch(()=>{});
+    }
+    // Page preparation may wait on settings or Git. It must not hold up reception.
+    if(!closed && capabilities.pages && !pagePolling) {
+      pagePolling=capabilities.pages.poll().catch(()=>{fail();}).finally(()=>{pagePolling=undefined;});
     }
   };
   const poll=():Promise<void>=>{
@@ -222,8 +250,9 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
     polling=pollOnce().catch(()=>{fail();throw failure;}).finally(()=>{polling=undefined;});
     return polling;
   };
-  return {poll,close, get hasPendingWork(){return !!polling || active.size>0 || !!failure || !!capabilities.pages?.hasPendingWork;},async drain(){
+  return {directory,poll,close, get hasPendingWork(){return !!polling || !!pagePolling || active.size>0 || !!failure || !!capabilities.pages?.hasPendingWork;},async drain(){
     await polling;
+    await pagePolling;
     await Promise.all([...active.values()].map(e=>e.done));
     await capabilities.pages?.drain();
     if(failure)throw failure;
@@ -232,8 +261,8 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
 
 // Undefined means there was no owner BEFORE submission. Once submitted, never
 // fall back to autonomous execution, even if the plugin exits or a reply is lost.
-export async function requestPluginExecution(runtime:string,command:PluginCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void):Promise<ExecutionSummary|undefined> {
-  return requestPluginCommand(runtime,command,signal,onProgress) as Promise<ExecutionSummary|undefined>;
+export async function requestPluginExecution(runtime:string,command:PluginCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<ExecutionSummary|undefined> {
+  return requestPluginCommand(runtime,command,signal,onProgress,onSubmitted) as Promise<ExecutionSummary|undefined>;
 }
 export async function requestPluginWorkflowEdit(runtime:string,command:WorkflowEditCommand):Promise<WorkflowEditResult> {
   const result=await requestPluginCommand(runtime,command);
@@ -243,7 +272,7 @@ export async function requestPluginWorkflowEdit(runtime:string,command:WorkflowE
 export async function requestPluginPageCreation(runtime:string,request:PageCreationRequest):Promise<PageCreationResult|undefined> {
   return requestPluginCommand(runtime,{command:"create-page",request}) as Promise<PageCreationResult|undefined>;
 }
-async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|PageCreationCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void):Promise<ExecutionSummary|WorkflowEditResult|PageCreationResult|undefined> {
+async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|PageCreationCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<ExecutionSummary|WorkflowEditResult|PageCreationResult|undefined> {
   if(!fs.existsSync(path.join(runtime,"execution.lock")))return undefined;
   const root=fs.realpathSync(runtime);regularDirectory(root);
   const owner=readExecutionLeaseOwner(root),directory=path.join(root,"cli-"+owner.token);
@@ -268,13 +297,16 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
     process.kill(owner.pid,0);
   };
   check();if(signal?.aborted)throw new Error("CLI request cancelled before submission");
-  const id=randomUUID(),expiresAt=Date.now()+30000;
+  const id=randomUUID(),submittedAt=Date.now(),expiresAt=submittedAt+30000;
   const file=path.join(directory,id+".request"),resultFile=path.join(directory,id+".receipt");
   if(!validCommand(command))throw new Error("Invalid CLI command");
   if(Buffer.byteLength(JSON.stringify(command),'utf8')>60000)throw new Error("Workflow edit payload exceeds 60KB; split the edit into smaller patches");
-  await replace(file,{protocol:1,owner:owner.token,id,expiresAt,...command},check,false);
+  try {await replace(file,{protocol:1,owner:owner.token,id,submittedAt,expiresAt,...command},check,false);}
+  catch {throw new PluginRequestError("CLI submission outcome is uncertain; inspect this requestId; do not launch again",id);}
+  onSubmitted?.(id);
   let observedPresentation:string|undefined;
   let accepted=false,lastProgress="",runId="runId" in command?command.runId:undefined;
+  let outcome:"not-accepted"|"unknown"="unknown";
   for(;;){
     try {
       regularDirectory(directory);
@@ -282,6 +314,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
         const result=read(resultFile);
         if(result.protocol!==1 || result.owner!==owner.token || result.id!==id)throw new Error("CLI receipt identity changed");
         if(!["accepted","running","completed","rejected","failed"].includes(result.status))throw new Error("Invalid CLI receipt status");
+        if(result.status==="rejected")outcome="not-accepted";
         const checkpoint=result.checkpoint;
         if(command.command==="create-page"){
           if(result.status==="completed"){
@@ -333,8 +366,120 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
       if(!accepted && Date.now()>expiresAt)throw new Error("CLI request expired before acceptance");
     } catch(error) {
       const reason=error instanceof Error && !(error as NodeJS.ErrnoException).code ? error.message : "CLI request host is unavailable";
-      throw new Error(`${reason}. Request ${id}${runId ? `, run ${runId}` : ""}; inspect status and receipt before any retry`);
+      throw new PluginRequestError(`${reason}. Request ${id}${runId ? `, run ${runId}` : ""}; inspect status and receipt using inspect-request or follow with this identity; do not launch again`,id,runId,outcome);
     }
     await new Promise(resolve=>setTimeout(resolve,100));
+  }
+}
+
+export class PluginRequestError extends Error {
+  constructor(message:string,readonly requestId:string,readonly runId?:string,readonly state:"not-accepted"|"unknown"="unknown"){super(message);this.name="PluginRequestError";}
+}
+
+export interface RequestInspection {
+  state:"not-accepted"|"running"|"finished"|"unknown";
+  requestId?:string;runId?:string;requestIds?:string[];
+  acceptance:"pending"|"rejected"|"accepted"|"unknown";
+  hostAvailable:boolean;receiptStatus?:string;
+  checkpoint?:ExecutionSummary;
+  resultAvailable?:boolean;
+  result?:{phase:RunCheckpoint["phase"];steps:Array<{stepId:string;output?:string;succeeded?:boolean}>};
+  timing?:{submittedAt:number;receivedAt:number;queueMs:number};
+  diagnostics?:ExecutionTiming[];
+  diagnosticsUnavailable?:boolean;
+  waitTimedOut?:boolean;interrupted?:boolean;
+}
+export interface RequestSelector {requestId?:string;runId?:string;includeOutput?:boolean}
+
+function availableHost(root:string,directory:string,owner:string):boolean {
+  try {
+    const lease=readExecutionLeaseOwner(root),host=read(path.join(directory,"host"));
+    if(lease.token!==owner || host.protocol!==1 || host.owner!==owner || host.pid!==lease.pid ||
+       !Number.isFinite(host.heartbeatAt) || host.heartbeatAt>Date.now()+60000 || Date.now()-host.heartbeatAt>30000)return false;
+    process.kill(lease.pid,0);return true;
+  } catch {return false;}
+}
+
+// Read every identity from durable evidence, without requiring the old lease to
+// remain live. Never repair a receipt, acquire ownership or invoke an executor.
+export function inspectPluginRequest(runtime:string,selector:RequestSelector):RequestInspection {
+  if(!!selector.requestId===!!selector.runId || selector.requestId!==undefined && !uuid.test(selector.requestId) ||
+     selector.runId!==undefined && !/^[a-zA-Z0-9-]{1,256}$/.test(selector.runId))throw new Error("Select exactly one valid requestId or runId");
+  const unknown:RequestInspection={state:"unknown",acceptance:"unknown",hostAvailable:false,...(selector.requestId?{requestId:selector.requestId}:{runId:selector.runId})};
+  if(!fs.existsSync(runtime))return unknown;
+  const root=fs.realpathSync(runtime);regularDirectory(root);
+  const matches:Array<{directory:string;owner:string;id:string;request:any;receipt:any}>=[];
+  for(const name of fs.readdirSync(root)) {
+    if(!name.startsWith("cli-") || !uuid.test(name.slice(4)))continue;
+    const directory=path.join(root,name),owner=name.slice(4);regularDirectory(directory);
+    const names=selector.requestId ? [selector.requestId+".request"] : fs.readdirSync(directory).filter(n=>n.endsWith(".receipt") && uuid.test(n.slice(0,-8))).map(n=>n.slice(0,-8)+".request");
+    for(const file of names) {
+      const id=file.slice(0,-8),requestPath=path.join(directory,file),receiptPath=path.join(directory,id+".receipt");
+      if(!fs.existsSync(requestPath)) {
+        if(selector.requestId && fs.existsSync(receiptPath))throw new Error("CLI receipt has no matching request");
+        continue;
+      }
+      const request=read(requestPath),receipt=fs.existsSync(receiptPath)?read(receiptPath):undefined;
+      if(request?.protocol!==1 || request.owner!==owner || request.id!==id || !validCommand(request) || !Number.isFinite(request.expiresAt))throw new Error("Invalid CLI request identity");
+      if(receipt && (receipt.protocol!==1 || receipt.owner!==owner || receipt.id!==id || !["accepted","running","completed","rejected","failed"].includes(receipt.status)))throw new Error("Invalid CLI receipt identity");
+      const checkpoint=receipt?.checkpoint;
+      if(checkpoint) {
+        const workflowId=request.pageId ? pageExecutionId(request.pageId,request.taskId || request.workflowId,!!request.taskId) : request.taskId ? "@task:"+request.taskId : request.workflowId;
+        if(typeof checkpoint.runId!=="string" || !/^[a-zA-Z0-9-]{1,256}$/.test(checkpoint.runId) || checkpoint.workflowId!==workflowId ||
+           request.runId && checkpoint.runId!==request.runId || !Number.isSafeInteger(checkpoint.revision) || checkpoint.revision<0 ||
+           !["ready","in_flight","completed","failed","abandoned"].includes(checkpoint.phase) || !(checkpoint.nextStepId===null || typeof checkpoint.nextStepId==="string"))throw new Error("Invalid CLI receipt checkpoint");
+        const presentation=presentationFields(checkpoint);
+        if(presentation.executionKind!==undefined && presentation.executionKind!==(request.taskId?"task":"workflow") || presentation.stepId!==request.stepId)throw new Error("CLI receipt presentation mismatch");
+      }
+      if(selector.requestId || (checkpoint?.runId || request.runId)===selector.runId)matches.push({directory,owner,id,request,receipt});
+    }
+  }
+  if(selector.requestId && matches.length>1)throw new Error("Ambiguous CLI request identity");
+  // Multiple continuation requests can refer to one run. Prefer the newest
+  // request, not the last file enumerated or a historical completed receipt.
+  matches.sort((a,b)=>(b.request.submittedAt ?? b.request.expiresAt ?? 0)-(a.request.submittedAt ?? a.request.expiresAt ?? 0));
+  const selected=matches[0];
+  let result:RequestInspection={...unknown};
+  if(selected) {
+    const {directory,owner,id,request,receipt}=selected;
+    result.requestId=id;result.runId=receipt?.checkpoint?.runId || request.runId;
+    if(selector.runId)result.requestIds=matches.map(m=>m.id);
+    result.hostAvailable=availableHost(root,directory,owner);
+    result.receiptStatus=receipt?.status;
+    result.acceptance=!receipt?"pending":receipt.status==="rejected"?"rejected":"accepted";
+    result.state=receipt?.status==="rejected"?"not-accepted":receipt?.status==="completed"?"finished":
+      receipt && receipt.status!=="failed" && result.hostAvailable?"running":"unknown";
+    if(receipt?.checkpoint)result.checkpoint=executionSummary(receipt.checkpoint);
+    const timing=receipt?.timing;
+    if(timing && [timing.submittedAt,timing.receivedAt,timing.queueMs].every(n=>Number.isFinite(n)&&n>=0))result.timing={submittedAt:timing.submittedAt,receivedAt:timing.receivedAt,queueMs:timing.queueMs};
+  }
+  if(result.runId && fs.existsSync(path.join(root,result.runId+".json"))) {
+    const state=readExecutionCheckpoint(root,result.runId);
+    if(result.checkpoint && (state.workflowId!==result.checkpoint.workflowId || state.revision<result.checkpoint.revision))throw new Error("CLI receipt and journal disagree");
+    result.checkpoint=executionSummary(state,result.checkpoint);
+    const terminal=["completed","failed"].includes(state.phase) && checkpointUncertainties(state).length===0;
+    result.resultAvailable=terminal;
+    // A journal can recover a terminal result even when receipt publication or
+    // its host was lost. An uncertain/abandoned journal never means success.
+    if(terminal && (selector.runId || result.acceptance!=="rejected"))result.state="finished";
+    else if(!(selector.requestId && result.acceptance==="rejected") && (checkpointUncertainties(state).length>0 || !result.hostAvailable || state.phase==="abandoned"))result.state="unknown";
+    if(selector.includeOutput && terminal)result.result={phase:state.phase,steps:state.steps.map(s=>({stepId:s.stepId,output:s.result?.output ?? s.output,succeeded:s.result?.succeeded}))};
+  }
+  try {result.diagnostics=readExecutionTimings(root,selector);}
+  catch {result.diagnosticsUnavailable=true;} // Auxiliary diagnostics cannot hide a durable outcome.
+  return result;
+}
+
+export async function followPluginRequest(runtime:string,selector:RequestSelector,options:{timeoutMs?:number;signal?:AbortSignal;onProgress?:(result:RequestInspection)=>void}={}):Promise<RequestInspection> {
+  const timeout=options.timeoutMs ?? 30000;
+  if(!Number.isSafeInteger(timeout) || timeout<0 || timeout>86400000)throw new Error("Follow timeout must be between 0 and 86400000 ms");
+  const deadline=performance.now()+timeout;let previous="";
+  for(;;) {
+    const result=inspectPluginRequest(runtime,selector),serialized=JSON.stringify(result);
+    if(serialized!==previous){previous=serialized;options.onProgress?.(result);}
+    if(["finished","not-accepted"].includes(result.state))return result;
+    if(options.signal?.aborted)return {...result,interrupted:true};
+    if(performance.now()>=deadline)return {...result,waitTimedOut:true};
+    await new Promise(resolve=>setTimeout(resolve,Math.min(200,Math.max(1,deadline-performance.now()))));
   }
 }

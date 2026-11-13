@@ -5,6 +5,7 @@ import { physicalPath } from "./path-identity";
 import { isDeepStrictEqual } from "util";
 import { atomicSettingsWrite } from "./settings-writer";
 import type { ExecutionLease } from "./execution-lease";
+import type { TimingContext } from "./execution-timing";
 
 type Phase = "ready" | "in_flight" | "completed" | "failed" | "abandoned";
 const writes = new Map<string, Promise<unknown>>();
@@ -152,27 +153,27 @@ export function readExecutionCheckpoint(directory:string,runId:string):RunCheckp
 }
 
 export class ExecutionJournal {
-  private constructor(private lease: ExecutionLease, private file: string, private state: RunCheckpoint) {}
+  private constructor(private lease: ExecutionLease, private file: string, private state: RunCheckpoint,private timing?:TimingContext) {}
 
-  static async create(lease: ExecutionLease, workflowId: string, definitionHash: string, entryStep: string) {
+  static async create(lease: ExecutionLease, workflowId: string, definitionHash: string, entryStep: string,timing?:TimingContext) {
     lease.assertOwned();
     const state: RunCheckpoint = {schemaVersion:1,runId:randomUUID(),workflowId,definitionHash,revision:0,createdAt:new Date().toISOString(),phase:"ready",nextStepId:entryStep,steps:[]};
     validateExecutionCheckpoint(state);
     const file = path.join(lease.directory, state.runId + ".json");
     if (fs.existsSync(file)) throw new Error("Execution identity already exists");
-    await atomicSettingsWrite(file, state);
+    await atomicSettingsWrite(file, state,fs.promises,undefined,timing);
     lease.assertOwned();
-    return new ExecutionJournal(lease, file, state);
+    return new ExecutionJournal(lease, file, state,timing);
   }
 
-  static open(lease: ExecutionLease, runId: string, definitionHash: string) {
+  static open(lease: ExecutionLease, runId: string, definitionHash: string,timing?:TimingContext) {
     lease.assertOwned();
     if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
     const file = path.join(lease.directory, runId + ".json");
     if (fs.lstatSync(file).isSymbolicLink()) throw new Error("Execution checkpoint cannot be a link");
     const state = readExecutionCheckpoint(lease.directory,runId);
     if (state.runId !== runId || state.definitionHash !== definitionHash) throw new Error("Execution identity or definition changed");
-    return new ExecutionJournal(lease, file, state);
+    return new ExecutionJournal(lease, file, state,timing);
   }
 
   snapshot(): RunCheckpoint { return JSON.parse(JSON.stringify(this.state)); }
@@ -241,7 +242,7 @@ export class ExecutionJournal {
           const snapshot=path.join(this.lease.directory,d.snapshot),stat=fs.lstatSync(snapshot);
           if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || fs.readFileSync(snapshot,'utf8')!==previous)throw new Error("Disposition snapshot changed before publication");
         }
-      });
+      },this.timing);
       this.lease.assertOwned();
       this.state = next;
     });

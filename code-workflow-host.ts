@@ -18,6 +18,7 @@ import type { CodexApprovalRequest } from "./codex-client";
 import { prepareTaskBranch, verifyWorkflowBranch } from "./workflow-branch";
 import { awaitWorkflowApproval } from "./workflow-approval";
 import { workflowExecutionPlan, workflowStepContext } from "./workflow-nesting";
+import {withExecutionTiming,bindTimingRun,startPhaseTiming,type TimingContext} from "./execution-timing";
 
 
 // Transient display snapshot, never a durable result or a routing input.
@@ -58,12 +59,17 @@ export async function runCodeWorkflowHost(options: {
   tasks?: WorkflowTaskAdapter;
   evaluate?: WorkflowSessionHost["evaluate"];
   redact: (text: string) => string;
-  onCheckpoint?: (checkpoint:RunCheckpoint) => Promise<void>;
+  onCheckpoint?: (checkpoint:RunCheckpoint,timing?:TimingContext) => Promise<void>;
+  timing?:TimingContext;
   onTaskOutput?: (event:WorkflowTaskOutput) => void;
   lease?: ExecutionLease;
   admission?: ExecutionAdmission;
   vaultMutations?: VaultMutationBatchFactory;
 }): Promise<RunCheckpoint> {
+  return withExecutionTiming(options.runtimeDirectory,{runId:options.resumeRunId},timing=>executeTimedWorkflow({...options,timing,onCheckpoint:checkpoint=>options.onCheckpoint?.(checkpoint,timing) || Promise.resolve()}),options.timing);
+}
+
+async function executeTimedWorkflow(options:Parameters<typeof runCodeWorkflowHost>[0]):Promise<RunCheckpoint> {
   if (!options.reconcile) assertWorkflowEnabled(options.definition.workflow, options.definition.tasks, options.definition.workflows);
   assertWorkflowDependencies(options.definition.workflow, options.definition.tasks, options.definition.workflows);
   const definition = prepareWorkflowDefinition(options.definition.workflow, options.definition.tasks as Array<{id:string}>, {...options.definition.settings,workflows:options.definition.workflows});
@@ -92,7 +98,8 @@ export async function runCodeWorkflowHost(options: {
       const publish=options.onCheckpoint;
       options={...options,onCheckpoint:async checkpoint=>{admission.bind(checkpoint);await publish?.(checkpoint);admission.confirm(checkpoint);}};
     }
-    const resumed = options.resumeRunId === undefined ? undefined : ExecutionJournal.open(lease, options.resumeRunId, definition.hash);
+    const resumed = options.resumeRunId === undefined ? undefined : ExecutionJournal.open(lease, options.resumeRunId, definition.hash,options.timing);
+    if(resumed)bindTimingRun(resumed.snapshot().runId,options.timing);
     if (resumed?.snapshot().phase === "abandoned") throw new Error("Abandoned execution cannot be resumed; inspect its unknown outcome before starting new work");
     if (resumed && resumed.snapshot().workflowId !== definition.workflow.id) throw new Error("Execution belongs to another workflow");
     if(resumed)admission.bind(resumed.snapshot());
@@ -138,10 +145,11 @@ export async function runCodeWorkflowHost(options: {
         throw new Error(`Previous execution requires continuation or reconciliation (run ${prior.runId}, workflow ${prior.workflowId}, step ${prior.nextStepId}). No new task was started.`);
       }
     }
-    const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id);
+    const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id,options.timing);
     admission.bind(journal.snapshot());
     return journal;
     });
+    bindTimingRun(journal.snapshot().runId,options.timing);
     return await advanceWorkflowSession(journal, definition, {
       async execute(step:any, input, outputs, signal) {
         admission.assertOwned(lease,definition);
@@ -155,6 +163,7 @@ export async function runCodeWorkflowHost(options: {
           await prepareTaskBranch(journal,task,task.workingDirectory || definition.settings.workingDirectory || options.vaultBase,options.vaultBase,context.scope.handoffBranch);
           const prompt = workflowTaskPrompt(task.prompt || "", workflow, context.previous);
           let observing = true;
+          const providerFinished=startPhaseTiming(task.taskKind==="code"?"code":"provider",step.id,options.timing);
           try {
             return await options.tasks.execute(task, prompt, signal, async(threadId,turnId) => {
               await journal.recordCodexThread(step.id, threadId,turnId,stepIndex);
@@ -169,7 +178,7 @@ export async function runCodeWorkflowHost(options: {
                 options.onTaskOutput!({runId:state.runId,workflowId:state.workflowId,taskId:task.id,stepId:step.id,stepIndex,output:options.redact(output)});
               } : undefined,
             });
-          } finally { observing = false; }
+          } finally { observing = false;providerFinished(); }
         }
         if (step.stepKind === "delay") {
           const spec = workflowDelay(step.delayValue, step.delayUnit);
@@ -182,6 +191,7 @@ export async function runCodeWorkflowHost(options: {
           }
           return {succeeded:true, output:spec.output};
         }
+        const codeFinished=startPhaseTiming("code",step.id,options.timing);
         try {
           let liveLog = "";
           const output = await runWithVaultMutations(options.vaultMutations, onVaultMutation => executeCodeAsync({...step,code:step.code || "",vaultBase:options.vaultBase,cwd:definition.settings.workingDirectory || options.vaultBase,input,outputs,onVaultMutation,
@@ -192,8 +202,9 @@ export async function runCodeWorkflowHost(options: {
             }}, signal));
           return {succeeded:true,output};
         } catch (error) { return {succeeded:false,cancelled:signal?.aborted || undefined,output:`[code error: ${String(error)}]`}; }
+        finally {codeFinished();}
       },
-      evaluate:options.evaluate || (async()=>{throw new Error("Model evaluation is not supported by this host");}),
+      evaluate:async (...args)=>{const finished=startPhaseTiming("evaluation",undefined,options.timing);try{if(!options.evaluate)throw new Error("Model evaluation is not supported by this host");return await options.evaluate(...args);}finally{finished();}},
       redact:options.redact,
       onTransitionError:()=>{},
       onCheckpoint:options.onCheckpoint,

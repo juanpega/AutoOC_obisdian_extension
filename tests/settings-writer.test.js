@@ -12,7 +12,10 @@ const codecFile=path.resolve(__dirname,'../cooperative-json.ts');
 const codec=new Module(codecFile,module);codec.filename=codecFile;codec.paths=mod.paths;
 codec._compile(ts.transpileModule(fs.readFileSync(codecFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,codecFile);
 const originalRequire=mod.require.bind(mod);
-mod.require=name=>name==='./cooperative-json'?codec.exports:originalRequire(name);
+const timingFile=path.resolve(__dirname,'../execution-timing.ts');
+const timing=new Module(timingFile,module);timing.filename=timingFile;timing.paths=mod.paths;
+timing._compile(ts.transpileModule(fs.readFileSync(timingFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,timingFile);
+mod.require=name=>name==='./cooperative-json'?codec.exports:name==='./execution-timing'?timing.exports:originalRequire(name);
 mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText, file);
 const { atomicSettingsWrite, SettingsWriter } = mod.exports;
 
