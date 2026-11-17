@@ -168,7 +168,7 @@ test('old loaded host and oversized edit reject before publishing a request',asy
  await assert.rejects(requestPluginWorkflowEdit(f.runtime,command),/reload the updated plugin once/);
  assert.equal(fs.readdirSync(f.directory).some(n=>n.endsWith('.request')),false);
  const g=fixture(t,async()=>state,async()=>({workflowId:'w',definitionHash:'a'.repeat(64)}));
- await assert.rejects(requestPluginWorkflowEdit(g.runtime,{...command,changes:{description:'x'.repeat(70000)}}),/Invalid CLI command|payload/);
+ await assert.rejects(requestPluginWorkflowEdit(g.runtime,{...command,changes:{description:'x'.repeat(3*1024*1024)}}),/limit|maximum/);
  assert.equal(fs.readdirSync(g.directory).some(n=>n.endsWith('.request')),false);
 });
 test('mailbox heartbeat and acceptance flush asynchronously and recheck temporary identity before publication',async t=>{
@@ -372,4 +372,28 @@ test('heartbeat renewal never overwrites or removes a descriptor with changed id
   const now=Date.now();t.mock.method(Date,'now',()=>now+2000);
   await assert.rejects(f.host.poll(),/publication failed/);
   assert.equal(fs.readFileSync(file,'utf8'),changed);await assert.rejects(f.host.drain());
+});
+
+test('large edit travels through mailbox intact and keeps receipts small',async t=>{
+ const {applyWorkflowEdit,workflowEditHash}=load('workflow-edit');const workflow={id:'w',steps:[{id:'s',stepKind:'code',code:'old',codeAllowFiles:false}],output:'history'};
+ let saved;const f=fixture(t,async()=>{throw Error('must not execute');},c=>applyWorkflowEdit({settings:{workflows:[workflow]},assertIdle(){},async save(validate){validate();saved=JSON.parse(JSON.stringify(workflow));}},c));
+ const code='á😀\n"\\'.repeat(40000),command={command:'edit-workflow',workflowId:'w',expectedHash:workflowEditHash(workflow),changes:{stepChanges:[{id:'s',code}]}};
+ const pending=requestPluginWorkflowEdit(f.runtime,command);await f.host.poll();const result=await pending;
+ assert.equal(saved.steps[0].code,code);assert.equal(saved.output,'history');assert.equal(saved.steps[0].codeAllowFiles,false);assert.equal(result.definitionHash,workflowEditHash(workflow));
+ for(const file of fs.readdirSync(f.directory).filter(n=>n.endsWith('.receipt')))assert.ok(fs.statSync(path.join(f.directory,file)).size<65536);
+});
+test('large edit rejects an older host before publishing any request',async t=>{
+ const f=fixture(t,async()=>state,async()=>({workflowId:'w',definitionHash:'a'.repeat(64)}));const file=path.join(f.directory,'host'),descriptor=JSON.parse(fs.readFileSync(file));delete descriptor.workflowEditMaxChangesBytes;fs.writeFileSync(file,JSON.stringify(descriptor));
+ await assert.rejects(requestPluginWorkflowEdit(f.runtime,{command:'edit-workflow',workflowId:'w',expectedHash:'a'.repeat(64),changes:{description:'x'.repeat(307200)}}),/58000.*307218/);
+ assert.equal(fs.readdirSync(f.directory).some(n=>n.endsWith('.request')),false);
+});
+test('oversized non-edit requests still reject at the original transport limit',async t=>{
+ let effects=0;const f=fixture(t,async()=>{effects++;return state;});const id=f.request({extra:'x'.repeat(70000)});await f.host.poll();assert.equal(f.receipt(id).status,'rejected');assert.equal(effects,0);
+});
+
+test('edit envelope exact maximum is accepted and excess rejects with numeric diagnostic',async t=>{
+ const {WORKFLOW_EDIT_MAX_REQUEST_BYTES:max}=load('workflow-edit');let edits=0;const f=fixture(t,async()=>state,async()=>{edits++;return {workflowId:'w',definitionHash:'a'.repeat(64)};});
+ const writeSized=(size)=>{const id=randomUUID(),data={protocol:1,owner:f.lease.token,id,command:'edit-workflow',workflowId:'w',expectedHash:'b'.repeat(64),changes:{description:'small'},expiresAt:Date.now()+30000,padding:''};data.padding='x'.repeat(size-Buffer.byteLength(JSON.stringify(data)));const text=JSON.stringify(data);assert.equal(Buffer.byteLength(text),size);fs.writeFileSync(path.join(f.directory,id+'.request'),text);return id;};
+ const valid=writeSized(max);await f.host.poll();await f.host.drain();assert.equal(f.receipt(valid).status,'completed');assert.equal(edits,1);
+ const excessive=writeSized(max+1);await f.host.poll();assert.equal(f.receipt(excessive).status,'rejected');assert.match(f.receipt(excessive).error,new RegExp((max+1)+'.*'+max));assert.equal(edits,1);
 });
