@@ -21,6 +21,63 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// task-edit.ts
+var import_crypto2 = require("crypto");
+
+// workflow-edit.ts
+var import_crypto = require("crypto");
+var WORKFLOW_EDIT_MAX_CHANGES_BYTES = 2 * 1024 * 1024;
+var WORKFLOW_EDIT_MAX_REQUEST_BYTES = WORKFLOW_EDIT_MAX_CHANGES_BYTES + 16 * 1024;
+var WORKFLOW_EDIT_MAX_PATCH_BYTES = 3 * 1024 * 1024;
+function workflowEditSizeError(value) {
+  if (value?.changes === void 0) return void 0;
+  const bytes = Buffer.byteLength(JSON.stringify(value.changes), "utf8");
+  return bytes > WORKFLOW_EDIT_MAX_CHANGES_BYTES ? `Workflow edit changes size ${bytes} exceeds maximum ${WORKFLOW_EDIT_MAX_CHANGES_BYTES} UTF-8 bytes` : void 0;
+}
+var object = (value) => value && typeof value === "object" && !Array.isArray(value);
+var only = (value, keys) => object(value) && Object.keys(value).every((key) => keys.includes(key));
+function validWorkflowEdit(value) {
+  if (!object(value) || value.command !== "edit-workflow" || typeof value.workflowId !== "string" || !value.workflowId.length || value.workflowId.length > 256 || /[\0\r\n]/.test(value.workflowId) || typeof value.expectedHash !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedHash) || value.taskId !== void 0 || value.runId !== void 0) return false;
+  const c = value.changes;
+  if (!only(c, ["name", "description", "stepChanges"]) || !Object.keys(c).length) return false;
+  if (["name", "description"].some((key) => c[key] !== void 0 && typeof c[key] !== "string")) return false;
+  if (c.name !== void 0 && !c.name.trim()) return false;
+  if (c.stepChanges !== void 0) {
+    if (!Array.isArray(c.stepChanges) || !c.stepChanges.length || c.stepChanges.length > 1e3) return false;
+    const ids = /* @__PURE__ */ new Set();
+    for (const step of c.stepChanges) {
+      if (!only(step, ["id", "name", "code", "evaluatePrompt"]) || typeof step.id !== "string" || !step.id || ids.has(step.id) || Object.keys(step).length < 2) return false;
+      if (["name", "code", "evaluatePrompt"].some((key) => step[key] !== void 0 && typeof step[key] !== "string")) return false;
+      ids.add(step.id);
+    }
+  }
+  return !workflowEditSizeError(value);
+}
+function workflowEditDefinition(workflow) {
+  return {
+    id: workflow.id,
+    name: workflow.name,
+    description: workflow.description,
+    steps: (workflow.steps || []).map((step) => ({ id: step.id, name: step.name, code: step.code, evaluatePrompt: step.evaluatePrompt }))
+  };
+}
+function workflowEditHash(workflow) {
+  return (0, import_crypto.createHash)("sha256").update(JSON.stringify(workflowEditDefinition(workflow))).digest("hex");
+}
+
+// task-edit.ts
+function validTaskEdit(value) {
+  if (!value || value.command !== "edit-task" || typeof value.taskId !== "string" || !value.taskId.length || value.taskId.length > 256 || /[\0\r\n]/.test(value.taskId) || typeof value.expectedHash !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedHash) || ["workflowId", "runId", "stepId", "pageId"].some((key) => value[key] !== void 0)) return false;
+  const c = value.changes;
+  return !!c && typeof c === "object" && !Array.isArray(c) && Object.keys(c).length > 0 && Object.keys(c).every((key) => ["name", "prompt"].includes(key) && typeof c[key] === "string") && (c.name === void 0 || !!c.name.trim()) && !workflowEditSizeError(value);
+}
+function taskEditDefinition(task) {
+  return { id: task.id, name: task.name, prompt: task.prompt };
+}
+function taskEditHash(task) {
+  return (0, import_crypto2.createHash)("sha256").update(JSON.stringify(taskEditDefinition(task))).digest("hex");
+}
+
 // autooc-cli.ts
 var fs33 = __toESM(require("fs"));
 var path33 = __toESM(require("path"));
@@ -28,7 +85,7 @@ var path33 = __toESM(require("path"));
 // execution-journal.ts
 var fs4 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
-var import_crypto4 = require("crypto");
+var import_crypto6 = require("crypto");
 
 // path-identity.ts
 var fs = __toESM(require("fs"));
@@ -50,7 +107,7 @@ var import_util2 = require("util");
 // settings-writer.ts
 var fs3 = __toESM(require("fs"));
 var path3 = __toESM(require("path"));
-var import_crypto3 = require("crypto");
+var import_crypto5 = require("crypto");
 var import_string_decoder = require("string_decoder");
 var import_perf_hooks3 = require("perf_hooks");
 var import_timers2 = require("timers");
@@ -59,7 +116,7 @@ var import_child_process = require("child_process");
 // execution-timing.ts
 var fs2 = __toESM(require("fs"));
 var path2 = __toESM(require("path"));
-var import_crypto = require("crypto");
+var import_crypto3 = require("crypto");
 var import_perf_hooks = require("perf_hooks");
 var phases = ["queue", "settingsQueue", "settingsSave", "code", "provider", "evaluation"];
 var idPattern = /^[a-zA-Z0-9-]{1,256}$/;
@@ -91,7 +148,7 @@ function publish(context) {
       }
       const directoryStat = fs2.lstatSync(directory2);
       if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || fs2.realpathSync(directory2) !== directory2) throw new Error("Unsafe timing directory");
-      const file = path2.join(directory2, "timing-" + context.value.attemptId + ".json"), temp = file + "." + (0, import_crypto.randomUUID)() + ".tmp";
+      const file = path2.join(directory2, "timing-" + context.value.attemptId + ".json"), temp = file + "." + (0, import_crypto3.randomUUID)() + ".tmp";
       safeFile(file);
       try {
         await fs2.promises.writeFile(temp, bytes, { flag: "wx", mode: 384 });
@@ -153,7 +210,7 @@ function bindTimingRun(runId, context) {
 async function withExecutionTiming(runtime, identity2, operation, existing) {
   runtime = fs2.existsSync(runtime) ? fs2.realpathSync(runtime) : path2.resolve(runtime);
   if (existing?.runtime === runtime) return operation(existing);
-  const now = Date.now(), value = { schemaVersion: 1, attemptId: (0, import_crypto.randomUUID)(), requestId: identity2.requestId, runId: identity2.runId, startedAt: now, updatedAt: now, finished: false, phases: {}, spans: [], droppedSpans: 0 };
+  const now = Date.now(), value = { schemaVersion: 1, attemptId: (0, import_crypto3.randomUUID)(), requestId: identity2.requestId, runId: identity2.runId, startedAt: now, updatedAt: now, finished: false, phases: {}, spans: [], droppedSpans: 0 };
   if (identity2.queueMs !== void 0 && Number.isFinite(identity2.queueMs) && identity2.queueMs >= 0) value.phases.queue = { count: 1, totalMs: identity2.queueMs, maxMs: identity2.queueMs, active: 0 };
   const context = { runtime, value, tail: Promise.resolve(), failed: false, writing: false };
   publish(context);
@@ -198,7 +255,7 @@ function readExecutionTimings(runtime, selector) {
 }
 
 // cooperative-json.ts
-var import_crypto2 = require("crypto");
+var import_crypto4 = require("crypto");
 var import_timers = require("timers");
 var import_perf_hooks2 = require("perf_hooks");
 var import_util = require("util");
@@ -403,14 +460,14 @@ async function consume(parts, accept) {
   }());
 }
 async function hashJsonCooperatively(value) {
-  const source = encodeCapturedJson(captureJsonStructure(value)), hash3 = (0, import_crypto2.createHash)("sha256");
+  const source = encodeCapturedJson(captureJsonStructure(value)), hash3 = (0, import_crypto4.createHash)("sha256");
   await consume(source, (part) => {
     hash3.update(part, "utf8");
   });
   return hash3.digest("hex");
 }
 async function hashTextCooperatively(text2) {
-  const hash3 = (0, import_crypto2.createHash)("sha256");
+  const hash3 = (0, import_crypto4.createHash)("sha256");
   await consume(function* () {
     for (let start = 0; start < text2.length; ) {
       let end = Math.min(start + CHUNK, text2.length);
@@ -567,7 +624,7 @@ async function beginSettingsWriteIntent(file, token, originalHash) {
     assertOwned();
     if (!initial) await replaceMetadata(updateFile, intentFile);
     published = text2;
-    await publishOwnerAnchor((0, import_crypto3.createHash)("sha256").update(text2, "utf8").digest("hex"));
+    await publishOwnerAnchor((0, import_crypto5.createHash)("sha256").update(text2, "utf8").digest("hex"));
   };
   await publish2(true);
   return {
@@ -649,7 +706,7 @@ var SettingsWriter = class _SettingsWriter {
   load(file) {
     const text2 = readSettingsText(file);
     const value = parseSettings(text2);
-    const hash3 = (source) => (0, import_crypto3.createHash)("sha256").update(source, "utf8").digest("hex");
+    const hash3 = (source) => (0, import_crypto5.createHash)("sha256").update(source, "utf8").digest("hex");
     this.observed.set(path3.resolve(file), {
       textHash: text2 === null ? null : hash3(text2),
       valueHash: text2 === null ? null : hash3(JSON.stringify(value, null, 2))
@@ -699,11 +756,11 @@ var SettingsWriter = class _SettingsWriter {
       const processStart = await ownProcessStart();
       assertNoSettingsRecovery(path3.dirname(file));
       const lock = file + ".write-lock";
-      const token = (0, import_crypto3.randomUUID)();
+      const token = (0, import_crypto5.randomUUID)();
       const lockText = JSON.stringify({
         schemaVersion: 1,
         token,
-        transactionId: (0, import_crypto3.randomUUID)(),
+        transactionId: (0, import_crypto5.randomUUID)(),
         pid: process.pid,
         processStart,
         directoryIdentity: settingsDirectoryIdentity(path3.dirname(file))
@@ -795,7 +852,7 @@ async function settingsFingerprint(file) {
     handle = await fs3.promises.open(file, "r");
     const opened = await handle.stat();
     if (!sameSettingsFile(stat, opened)) throw new Error("Configuration identity changed while reading");
-    const buffer = Buffer.allocUnsafe(256 * 1024), hash3 = (0, import_crypto3.createHash)("sha256"), budget = ioBudget();
+    const buffer = Buffer.allocUnsafe(256 * 1024), hash3 = (0, import_crypto5.createHash)("sha256"), budget = ioBudget();
     let total = 0;
     for (; ; ) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
@@ -918,7 +975,7 @@ async function atomicSettingsTextWrite(file, text2, io = fs3.promises, beforeRep
   const temp = `${file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
   await io.mkdir(path3.dirname(file), { recursive: true });
   let handle;
-  const hash3 = (0, import_crypto3.createHash)("sha256");
+  const hash3 = (0, import_crypto5.createHash)("sha256");
   try {
     await prepared?.(temp);
     handle = await io.open(temp, "wx", 384);
@@ -1062,7 +1119,7 @@ function readExecutionCheckpoint(directory2, runId) {
     const snapshot = path4.join(directory2, d.snapshot), stat2 = fs4.lstatSync(snapshot);
     if (!stat2.isFile() || stat2.isSymbolicLink() || stat2.nlink !== 1) throw new Error("Unsafe disposition snapshot");
     const original = fs4.readFileSync(snapshot);
-    if ((0, import_crypto4.createHash)("sha256").update(original).digest("hex") !== d.snapshotHash) throw new Error("Disposition snapshot changed");
+    if ((0, import_crypto6.createHash)("sha256").update(original).digest("hex") !== d.snapshotHash) throw new Error("Disposition snapshot changed");
     const prior = JSON.parse(original.toString("utf8"));
     validateExecutionCheckpoint(prior);
     const { disposition, ...expected } = state;
@@ -1080,7 +1137,7 @@ var ExecutionJournal = class _ExecutionJournal {
   }
   static async create(lease, workflowId, definitionHash, entryStep, timing) {
     lease.assertOwned();
-    const state = { schemaVersion: 1, runId: (0, import_crypto4.randomUUID)(), workflowId, definitionHash, revision: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), phase: "ready", nextStepId: entryStep, steps: [] };
+    const state = { schemaVersion: 1, runId: (0, import_crypto6.randomUUID)(), workflowId, definitionHash, revision: 0, createdAt: (/* @__PURE__ */ new Date()).toISOString(), phase: "ready", nextStepId: entryStep, steps: [] };
     validateExecutionCheckpoint(state);
     const file = path4.join(lease.directory, state.runId + ".json");
     if (fs4.existsSync(file)) throw new Error("Execution identity already exists");
@@ -1131,7 +1188,7 @@ var ExecutionJournal = class _ExecutionJournal {
         acknowledgedUnknownEffects: true,
         previousRevision: state.revision,
         snapshot,
-        snapshotHash: (0, import_crypto4.createHash)("sha256").update(original).digest("hex"),
+        snapshotHash: (0, import_crypto6.createHash)("sha256").update(original).digest("hex"),
         workflowId: state.workflowId,
         runId: state.runId,
         definitionHash: state.definitionHash,
@@ -1349,7 +1406,7 @@ function ensureInstalledWorkflowRuntime(location) {
 // execution-lease.ts
 var fs6 = __toESM(require("fs"));
 var path6 = __toESM(require("path"));
-var import_crypto5 = require("crypto");
+var import_crypto7 = require("crypto");
 function acquireExecutionLease(runtimeDirectory) {
   const root = fs6.realpathSync(runtimeDirectory);
   if (fs6.existsSync(path6.join(root, "update-pending.json"))) throw new Error("Incomplete plugin update requires recovery before execution");
@@ -1357,7 +1414,7 @@ function acquireExecutionLease(runtimeDirectory) {
   if (fs6.existsSync(recovery)) throw new Error("Execution lease recovery is in progress");
   const lock = path6.join(root, "execution.lock");
   const ownerPath = path6.join(lock, "owner.json");
-  const token = (0, import_crypto5.randomUUID)();
+  const token = (0, import_crypto7.randomUUID)();
   fs6.mkdirSync(lock);
   if (fs6.existsSync(recovery)) {
     fs6.rmdirSync(lock);
@@ -1499,7 +1556,7 @@ async function abandonInstalledExecution(options) {
 // workflow-stop.ts
 var fs8 = __toESM(require("fs"));
 var path7 = __toESM(require("path"));
-var import_crypto6 = require("crypto");
+var import_crypto8 = require("crypto");
 function readStopRequest(directory2, runId) {
   if (!/^[a-zA-Z0-9-]+$/.test(runId)) throw new Error("Invalid execution identity");
   const file = path7.join(directory2, runId + ".stop.json");
@@ -1525,13 +1582,13 @@ async function requestWorkflowStop(directory2, runId) {
   const state = readExecutionCheckpoint(directory2, runId);
   if (["completed", "failed", "abandoned"].includes(state.phase)) return { runId, requested: false, phase: state.phase };
   readStopRequest(directory2, runId);
-  const requestId2 = (0, import_crypto6.randomUUID)();
+  const requestId2 = (0, import_crypto8.randomUUID)();
   await atomicSettingsWrite(path7.join(directory2, runId + ".stop.json"), { schemaVersion: 1, runId, requestId: requestId2 });
   return { runId, requestId: requestId2, requested: true, phase: state.phase };
 }
 
 // workflow-definition.ts
-var import_crypto7 = require("crypto");
+var import_crypto9 = require("crypto");
 
 // opencode-profile.ts
 var OPENCODE2_DEFAULTS = Object.freeze({
@@ -1821,7 +1878,7 @@ function withAvailability(payload, workflow, tasks, catalog = []) {
 }
 function prepareWorkflowDefinition(workflow, tasks, settings) {
   const payload = definitionPayload(workflow, tasks, settings);
-  const digest = (0, import_crypto7.createHash)("sha256");
+  const digest = (0, import_crypto9.createHash)("sha256");
   for (const part of encodeCapturedJson(captureJsonStructure(payload, 0))) digest.update(part, "utf8");
   const hash3 = digest.digest("hex");
   return freeze({ ...withAvailability(payload, workflow, tasks, settings.workflows), hash: hash3, admissionSettings: concurrencySettings(settings) });
@@ -1875,7 +1932,7 @@ function standaloneTaskWorkflow(taskId) {
 // workflow-approval.ts
 var fs9 = __toESM(require("fs"));
 var path8 = __toESM(require("path"));
-var import_crypto8 = require("crypto");
+var import_crypto10 = require("crypto");
 function responseFile(directory2, runId, token) {
   if (!/^[a-f0-9-]+$/.test(token)) throw new Error("Invalid approval identity");
   return path8.join(directory2, `${runId}-${token}.approval.json`);
@@ -1895,7 +1952,7 @@ function answerWorkflowApproval(directory2, runId, token, approved) {
   return { runId, approval: token, decision: approved ? "approve" : "deny", recorded: true };
 }
 async function awaitWorkflowApproval(journal, directory2, request, redact, signal, onCheckpoint) {
-  const token = (0, import_crypto8.randomUUID)(), runId = journal.snapshot().runId;
+  const token = (0, import_crypto10.randomUUID)(), runId = journal.snapshot().runId;
   const ownerToken = readExecutionLeaseOwner(directory2).token;
   await journal.recordApproval({ token, ownerToken, requestId: request.requestId, kind: request.kind, summary: redact(request.summary) });
   await onCheckpoint?.(journal.snapshot());
@@ -1956,42 +2013,9 @@ function presentationFields(value) {
 // cli-plugin-requests.ts
 var fs13 = __toESM(require("fs"));
 var path14 = __toESM(require("path"));
-var import_crypto12 = require("crypto");
+var import_crypto13 = require("crypto");
 var import_perf_hooks4 = require("perf_hooks");
 var import_timers3 = require("timers");
-
-// workflow-edit.ts
-var import_crypto9 = require("crypto");
-var object = (value) => value && typeof value === "object" && !Array.isArray(value);
-var only = (value, keys) => object(value) && Object.keys(value).every((key) => keys.includes(key));
-function validWorkflowEdit(value) {
-  if (!object(value) || value.command !== "edit-workflow" || typeof value.workflowId !== "string" || !value.workflowId.length || value.workflowId.length > 256 || /[\0\r\n]/.test(value.workflowId) || typeof value.expectedHash !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedHash) || value.taskId !== void 0 || value.runId !== void 0) return false;
-  const c = value.changes;
-  if (!only(c, ["name", "description", "stepChanges"]) || !Object.keys(c).length) return false;
-  if (["name", "description"].some((key) => c[key] !== void 0 && typeof c[key] !== "string")) return false;
-  if (c.name !== void 0 && !c.name.trim()) return false;
-  if (c.stepChanges !== void 0) {
-    if (!Array.isArray(c.stepChanges) || !c.stepChanges.length || c.stepChanges.length > 1e3) return false;
-    const ids = /* @__PURE__ */ new Set();
-    for (const step of c.stepChanges) {
-      if (!only(step, ["id", "name", "code", "evaluatePrompt"]) || typeof step.id !== "string" || !step.id || ids.has(step.id) || Object.keys(step).length < 2) return false;
-      if (["name", "code", "evaluatePrompt"].some((key) => step[key] !== void 0 && typeof step[key] !== "string")) return false;
-      ids.add(step.id);
-    }
-  }
-  return Buffer.byteLength(JSON.stringify(value.changes), "utf8") <= 58e3;
-}
-function workflowEditDefinition(workflow) {
-  return {
-    id: workflow.id,
-    name: workflow.name,
-    description: workflow.description,
-    steps: (workflow.steps || []).map((step) => ({ id: step.id, name: step.name, code: step.code, evaluatePrompt: step.evaluatePrompt }))
-  };
-}
-function workflowEditHash(workflow) {
-  return (0, import_crypto9.createHash)("sha256").update(JSON.stringify(workflowEditDefinition(workflow))).digest("hex");
-}
 
 // execution-coordinator.ts
 var fs10 = __toESM(require("fs"));
@@ -2196,7 +2220,7 @@ var ExecutionCoordinator = class {
 // work-pages.ts
 var fs11 = __toESM(require("fs"));
 var path12 = __toESM(require("path"));
-var import_crypto10 = require("crypto");
+var import_crypto11 = require("crypto");
 var import_child_process4 = require("child_process");
 
 // catalog-transaction.ts
@@ -2349,7 +2373,7 @@ async function prepareWorktreeIgnore(observed) {
     const before = exists ? fs11.readFileSync(current.ignoreFile) : Buffer.alloc(0);
     const text2 = before.toString("utf8"), newline = text2.includes("\r\n") ? "\r\n" : "\n";
     const addition = (before.length && !text2.endsWith("\n") ? newline : "") + WORKTREE_IGNORE + newline;
-    const temporary = current.ignoreFile + ".autooc-" + (0, import_crypto10.randomUUID)() + ".tmp";
+    const temporary = current.ignoreFile + ".autooc-" + (0, import_crypto11.randomUUID)() + ".tmp";
     const bytes = Buffer.concat([before, Buffer.from(addition, "utf8")]);
     fs11.writeFileSync(temporary, bytes, { flag: "wx", mode: exists ? fs11.statSync(current.ignoreFile).mode : 384 });
     regularPath(current.repository, ".gitignore");
@@ -2403,7 +2427,7 @@ async function verifyWorkPageEnvironment(page) {
     validateWorkPages({ workPages: [page] });
     regularPath(page.directory, ".autooc/requirement.md");
     const file = path12.join(page.directory, page.requirementFile.path), stat = fs11.lstatSync(file);
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16e4 || (0, import_crypto10.createHash)("sha256").update(fs11.readFileSync(file)).digest("hex") !== page.requirementFile.sha256) throw new Error("Page requirement snapshot changed; preserve its original contents before running");
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 16e4 || (0, import_crypto11.createHash)("sha256").update(fs11.readFileSync(file)).digest("hex") !== page.requirementFile.sha256) throw new Error("Page requirement snapshot changed; preserve its original contents before running");
   }
   if (page.kind !== "worktree") return;
   if (!page.repository || !page.branch) throw new Error("Worktree identity is incomplete");
@@ -2416,15 +2440,15 @@ async function verifyWorkPageEnvironment(page) {
 function pageIdentityHash(page) {
   const identity2 = [page.id, physicalPath(page.directory), page.kind, page.repository, page.branch];
   if (page.requirementId !== void 0 || page.requirementFile !== void 0) identity2.push({ requirementId: page.requirementId, requirementFile: page.requirementFile });
-  return (0, import_crypto10.createHash)("sha256").update(JSON.stringify(identity2)).digest("hex");
+  return (0, import_crypto11.createHash)("sha256").update(JSON.stringify(identity2)).digest("hex");
 }
 
 // page-creation.ts
 var fs12 = __toESM(require("fs"));
 var path13 = __toESM(require("path"));
-var import_crypto11 = require("crypto");
+var import_crypto12 = require("crypto");
 var requestId = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/;
-var hash = (text2) => (0, import_crypto11.createHash)("sha256").update(text2).digest("hex");
+var hash = (text2) => (0, import_crypto12.createHash)("sha256").update(text2).digest("hex");
 var ownKeys = (value, keys) => value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key));
 var text = (value, max, empty = false) => typeof value === "string" && value.length <= max && !value.includes("\0") && (empty || !!value.trim());
 function validPageCreationRequest(value) {
@@ -2559,7 +2583,7 @@ function createPageCreationService(host) {
         schemaVersion: 1,
         requestId: request.requestId,
         requestHash,
-        pageId: (0, import_crypto11.randomUUID)(),
+        pageId: (0, import_crypto12.randomUUID)(),
         owner: host.lease.token,
         request,
         stage: "queued",
@@ -2758,8 +2782,14 @@ function regularDirectory2(directory2) {
 }
 function read(file) {
   const stat = fs13.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) throw new Error("Unsafe CLI request file");
-  return JSON.parse(fs13.readFileSync(file, "utf8"));
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe CLI request file");
+  const fileMax = file.endsWith(".request") ? WORKFLOW_EDIT_MAX_REQUEST_BYTES : 65536;
+  if (stat.size > fileMax) throw Object.assign(new Error(`CLI request size ${stat.size} exceeds maximum ${fileMax} UTF-8 bytes`), { code: "CLI_SIZE" });
+  const bytes = fs13.readFileSync(file);
+  const value = JSON.parse(bytes.toString("utf8"));
+  const max = file.endsWith(".request") && (value?.command === "edit-workflow" || value?.command === "edit-task") ? WORKFLOW_EDIT_MAX_REQUEST_BYTES : 65536;
+  if (bytes.length > max) throw Object.assign(new Error(`CLI request size ${bytes.length} exceeds maximum ${max} UTF-8 bytes`), { code: "CLI_SIZE" });
+  return value;
 }
 function write(file, value) {
   const fd = fs13.openSync(file, "wx", 384);
@@ -2771,7 +2801,7 @@ function write(file, value) {
   }
 }
 async function replace(file, value, check, asyncFlush = true) {
-  const temp = file + "." + (0, import_crypto12.randomUUID)() + ".tmp";
+  const temp = file + "." + (0, import_crypto13.randomUUID)() + ".tmp";
   check();
   const deadline = import_perf_hooks4.performance.now() + 2e3;
   let lastError;
@@ -2812,6 +2842,7 @@ async function replace(file, value, check, asyncFlush = true) {
 }
 function validCommand(value) {
   if (value?.command === "create-page") return validPageCreationRequest(value.request) && ["workflowId", "taskId", "stepId", "pageId", "runId"].every((key) => value[key] === void 0);
+  if (value?.command === "edit-task") return validTaskEdit(value);
   if (value?.command === "edit-workflow") return value.pageId === void 0 && validWorkflowEdit(value);
   try {
     if (value?.pageId !== void 0 && (normalizePageSelection(value.pageId) !== value.pageId || value.stepId !== void 0)) return false;
@@ -2829,7 +2860,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
   const descriptor = path14.join(directory2, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1 } : {} });
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, taskEditing: capabilities.editTask ? 1 : 0, workflowEditing: !!edit, ...edit || capabilities.editTask ? { workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES } : {}, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1 } : {} });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling, pagePolling;
@@ -2903,9 +2934,16 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
       let request;
       try {
         request = read(path14.join(directory2, name));
-      } catch {
-        await receipt(id, { status: "rejected", error: "Invalid CLI request" });
+      } catch (error) {
+        await receipt(id, { status: "rejected", error: error?.code === "CLI_SIZE" ? error.message : "Invalid CLI request" });
         continue;
+      }
+      if (request?.command === "edit-workflow" || request?.command === "edit-task") {
+        const error = workflowEditSizeError(request);
+        if (error) {
+          await receipt(id, { status: "rejected", error });
+          continue;
+        }
       }
       if (!request || request.protocol !== 1 || request.owner !== lease.token || request.id !== id || !validCommand(request) || !Number.isFinite(request.expiresAt) || request.expiresAt < Date.now() || request.expiresAt > Date.now() + 6e4 || fs13.existsSync(path14.join(directory2, id + ".cancel"))) {
         await receipt(id, { status: "rejected", error: "Expired, cancelled or invalid CLI request" });
@@ -2923,12 +2961,12 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
       const definition = JSON.stringify(request.command === "create-page" ? ["create-page", request.request.requestId] : [request.pageId || "main", request.taskId ? "task" : "workflow", request.taskId || request.workflowId]);
       const duplicate = [...active.values()].some((e) => e.definition === definition);
       const limit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-      const busy = duplicate && request.command !== "create-page" ? "AutoOC is already executing this CLI definition" : request.command !== "create-page" && limit > 0 && active.size >= limit ? `Concurrent execution limit reached (${limit})` : [...active.values()].some((e) => e.editing) || request.command === "edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : void 0;
+      const busy = duplicate && request.command !== "create-page" ? "AutoOC is already executing this CLI definition" : request.command !== "create-page" && limit > 0 && active.size >= limit ? `Concurrent execution limit reached (${limit})` : [...active.values()].some((e) => e.editing) || (request.command === "edit-workflow" || request.command === "edit-task") && active.size ? "Workflow editing requires exclusive execution" : void 0;
       if (busy) {
         await receipt(id, { status: "rejected", error: busy });
         continue;
       }
-      const execution = { id, controller: new AbortController(), editing: request.command === "edit-workflow", definition, done: void 0 };
+      const execution = { id, controller: new AbortController(), editing: request.command === "edit-workflow" || request.command === "edit-task", definition, done: void 0 };
       active.set(id, execution);
       let checkpoint;
       const receivedAt = Date.now();
@@ -2951,9 +2989,10 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
             await publish2({ status: "completed", pageResult: result2 });
             return;
           }
-          if (request.command === "edit-workflow") {
-            if (!edit) throw new Error("Workflow editing unsupported");
-            const result2 = await edit(request);
+          if (request.command === "edit-workflow" || request.command === "edit-task") {
+            const handler = request.command === "edit-task" ? capabilities.editTask : edit;
+            if (!handler) throw new Error("Definition editing unsupported");
+            const result2 = await handler(request);
             await publish2({ status: "completed", editResult: result2 });
             return;
           }
@@ -2975,7 +3014,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
           await publications.catch(() => {
           });
           try {
-            await publish2({ status: "failed", checkpoint, error: request.command === "edit-workflow" ? "Workflow edit failed; keep Obsidian open and inspect this request" : executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again" });
+            await publish2({ status: "failed", checkpoint, error: request.command === "edit-workflow" || request.command === "edit-task" ? "Workflow edit failed; keep Obsidian open and inspect this request" : executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again" });
           } catch {
             fail();
           }
@@ -3023,6 +3062,11 @@ async function requestPluginWorkflowEdit(runtime, command) {
   if (!result) throw new Error("Enable AutoOC in Obsidian to edit workflows through its owner; do not edit data.json directly");
   return result;
 }
+async function requestPluginTaskEdit(runtime, command) {
+  const result = await requestPluginCommand(runtime, command);
+  if (!result) throw new Error("Enable AutoOC in Obsidian to edit tasks through its owner; do not edit data.json directly");
+  return result;
+}
 async function requestPluginPageCreation(runtime, request) {
   return requestPluginCommand(runtime, { command: "create-page", request });
 }
@@ -3040,7 +3084,13 @@ async function requestPluginCommand(runtime, command, signal, onProgress, onSubm
     const host = read(path14.join(directory2, "host"));
     if (host.protocol !== 1 || host.owner !== owner.token || host.pid !== owner.pid) throw new Error("Invalid CLI request host");
     if (command.command === "create-page" && host.pageCreation !== 1) throw new Error("Loaded AutoOC does not support page creation; reload a compatible plugin");
+    if (command.command === "edit-task" && host.taskEditing !== 1) throw new Error("Loaded AutoOC does not support task editing; reload a compatible plugin before submission");
     if (command.command === "edit-workflow" && host.workflowEditing !== true) throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");
+    if (command.command === "edit-workflow" || command.command === "edit-task") {
+      const bytes2 = Buffer.byteLength(JSON.stringify(command.changes), "utf8");
+      const max2 = Number.isSafeInteger(host.workflowEditMaxChangesBytes) ? host.workflowEditMaxChangesBytes : 58e3;
+      if (bytes2 > max2) throw new Error(`Loaded AutoOC edit limit is ${max2} UTF-8 bytes; requested ${bytes2}. Reload a compatible updated plugin before submission`);
+    }
     if ("stepId" in command && command.stepId !== void 0 && host.codeStepSelection !== true) throw new Error("Loaded AutoOC does not support code step selection; reload the updated plugin before running this step");
     if ("pageId" in command && command.pageId !== void 0 && host.pageSelection !== 1) throw new Error("Loaded AutoOC does not support page selection; reload the updated plugin before running this page");
     if (host.heartbeatAt !== void 0) {
@@ -3051,12 +3101,19 @@ async function requestPluginCommand(runtime, command, signal, onProgress, onSubm
   };
   check();
   if (signal?.aborted) throw new Error("CLI request cancelled before submission");
-  const id = (0, import_crypto12.randomUUID)(), submittedAt = Date.now(), expiresAt = submittedAt + 3e4;
+  const id = (0, import_crypto13.randomUUID)(), submittedAt = Date.now(), expiresAt = submittedAt + 3e4;
   const file = path14.join(directory2, id + ".request"), resultFile = path14.join(directory2, id + ".receipt");
+  if (command.command === "edit-workflow" || command.command === "edit-task") {
+    const error = workflowEditSizeError(command);
+    if (error) throw new Error(error);
+  }
   if (!validCommand(command)) throw new Error("Invalid CLI command");
-  if (Buffer.byteLength(JSON.stringify(command), "utf8") > 6e4) throw new Error("Workflow edit payload exceeds 60KB; split the edit into smaller patches");
+  const payload = { protocol: 1, owner: owner.token, id, submittedAt, expiresAt, ...command };
+  const bytes = Buffer.byteLength(JSON.stringify(command.command === "edit-workflow" || command.command === "edit-task" ? payload : command), "utf8");
+  const max = command.command === "edit-workflow" || command.command === "edit-task" ? WORKFLOW_EDIT_MAX_REQUEST_BYTES : 6e4;
+  if (bytes > max) throw new Error(`CLI request size ${bytes} exceeds maximum ${max} UTF-8 bytes`);
   try {
-    await replace(file, { protocol: 1, owner: owner.token, id, submittedAt, expiresAt, ...command }, check, false);
+    await replace(file, payload, check, false);
   } catch {
     throw new PluginRequestError("CLI submission outcome is uncertain; inspect this requestId; do not launch again", id);
   }
@@ -3080,9 +3137,9 @@ async function requestPluginCommand(runtime, command, signal, onProgress, onSubm
           }
           if (result.status === "rejected" || result.status === "failed") throw new Error(result.error);
         }
-        if (command.command === "edit-workflow") {
+        if (command.command === "edit-workflow" || command.command === "edit-task") {
           if (result.status === "completed") {
-            if (result.editResult?.workflowId !== command.workflowId || !/^[a-f0-9]{64}$/.test(result.editResult?.definitionHash)) throw new Error("Invalid workflow edit receipt");
+            if ((command.command === "edit-task" ? result.editResult?.taskId !== command.taskId : result.editResult?.workflowId !== command.workflowId) || !/^[a-f0-9]{64}$/.test(result.editResult?.definitionHash)) throw new Error("Invalid workflow edit receipt");
             return result.editResult;
           }
           if (result.status === "rejected" || result.status === "failed") throw new Error(result.error);
@@ -6793,8 +6850,8 @@ async function createStandalonePage(vault, request) {
 // settings-write-inspection.ts
 var fs29 = __toESM(require("fs"));
 var path29 = __toESM(require("path"));
-var import_crypto13 = require("crypto");
-var hash2 = (text2) => (0, import_crypto13.createHash)("sha256").update(text2).digest("hex");
+var import_crypto14 = require("crypto");
+var hash2 = (text2) => (0, import_crypto14.createHash)("sha256").update(text2).digest("hex");
 var identity = (s) => `${s.dev}:${s.ino}:${s.birthtimeMs}:${s.size}:${s.mtimeMs}:${s.ctimeMs}`;
 var present = (file) => {
   try {
@@ -6840,7 +6897,7 @@ async function record(root, name) {
   const before = identity(regular(file)), handle = await fs29.promises.open(file, "r");
   try {
     if (identity(await handle.stat()) !== before) throw new Error("Settings evidence changed before reading");
-    const digest = (0, import_crypto13.createHash)("sha256"), buffer = Buffer.alloc(256 * 1024);
+    const digest = (0, import_crypto14.createHash)("sha256"), buffer = Buffer.alloc(256 * 1024);
     for (; ; ) {
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (!bytesRead) break;
@@ -7042,7 +7099,7 @@ async function recoverSettingsWrite(vault, decision) {
     };
     verify();
     stage = "archive";
-    const targetArchive = path29.join(location.runtimeDirectory, "settings-write-explicit-" + (0, import_crypto13.randomUUID)());
+    const targetArchive = path29.join(location.runtimeDirectory, "settings-write-explicit-" + (0, import_crypto14.randomUUID)());
     fs29.mkdirSync(targetArchive, { mode: 448 });
     archive = targetArchive;
     syncDirectory(location.runtimeDirectory);
@@ -7100,7 +7157,7 @@ async function recoverSettingsWrite(vault, decision) {
 // release-maintenance.ts
 var fs32 = __toESM(require("fs"));
 var path32 = __toESM(require("path"));
-var import_crypto15 = require("crypto");
+var import_crypto16 = require("crypto");
 
 // package-maintenance.ts
 var fs30 = __toESM(require("fs"));
@@ -7116,7 +7173,7 @@ function assertPackageMaintenanceSafe(directory2) {
 // release-update.ts
 var fs31 = __toESM(require("fs"));
 var path31 = __toESM(require("path"));
-var import_crypto14 = require("crypto");
+var import_crypto15 = require("crypto");
 var RELEASE_FILES = ["main.js", "manifest.json", "styles.css", "autooc-cli.cjs", "autooc-runtime.cjs", "skills/autooc-runtime/SKILL.md"];
 var RELEASE_DESCRIPTOR = "release-integrity.json";
 function verifyRelease(files2, expectedVersion) {
@@ -7125,7 +7182,7 @@ function verifyRelease(files2, expectedVersion) {
     throw new Error("Incomplete or incompatible AutoOC release");
   }
   for (const file of RELEASE_FILES) {
-    if (!Buffer.isBuffer(files2[file]) || (0, import_crypto14.createHash)("sha256").update(files2[file]).digest("hex") !== descriptor.sha256[file]) {
+    if (!Buffer.isBuffer(files2[file]) || (0, import_crypto15.createHash)("sha256").update(files2[file]).digest("hex") !== descriptor.sha256[file]) {
       throw new Error(`Release integrity mismatch: ${file}`);
     }
   }
@@ -7161,7 +7218,7 @@ function installRelease(options) {
   assertPackageMaintenanceSafe(directory2);
   const names2 = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   for (const name of names2) regularPath2(directory2, name);
-  const backup = path31.join(lease.directory, `update-backup-${(0, import_crypto14.randomUUID)()}`);
+  const backup = path31.join(lease.directory, `update-backup-${(0, import_crypto15.randomUUID)()}`);
   fs31.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
   for (const name of names2) {
@@ -7278,7 +7335,7 @@ async function maintainRelease(options) {
   try {
     lease.assertOwned();
     assertContext();
-    backup = path32.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto15.randomUUID)());
+    backup = path32.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto16.randomUUID)());
     fs32.mkdirSync(backup, { mode: 448 });
     const hashes = {};
     const save = (relative7, bytes) => {
@@ -7292,7 +7349,7 @@ async function maintainRelease(options) {
       } finally {
         fs32.closeSync(fd);
       }
-      const digest = (b) => (0, import_crypto15.createHash)("sha256").update(b).digest("hex");
+      const digest = (b) => (0, import_crypto16.createHash)("sha256").update(b).digest("hex");
       if (digest(regular2(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
       hashes[relative7] = digest(bytes);
     };
@@ -7368,7 +7425,7 @@ function summarizeCliCatalog(config, includeStatus) {
 }
 
 // autooc-cli.ts
-var version = "1.7.26";
+var version = "1.7.27";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "inspect-request" || command === "follow") {
@@ -7450,7 +7507,8 @@ async function main(args) {
       return { version, workflowId: workflow.id, expectedHash: workflowEditHash(workflow), exported: true };
     }
     const stat = fs33.lstatSync(rest[5]);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 6e4) throw new Error("Patch must be a regular JSON file of at most 60KB");
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Patch must be a regular JSON file");
+    if (stat.size > WORKFLOW_EDIT_MAX_PATCH_BYTES) throw new Error(`Workflow patch size ${stat.size} exceeds maximum ${WORKFLOW_EDIT_MAX_PATCH_BYTES} UTF-8 bytes`);
     let patch;
     try {
       patch = JSON.parse(fs33.readFileSync(rest[5], "utf8"));
@@ -7458,8 +7516,42 @@ async function main(args) {
       throw new Error("Invalid workflow patch JSON");
     }
     const edit = { command: "edit-workflow", workflowId: rest[3], expectedHash: patch?.expectedHash, changes: patch?.changes };
+    const sizeError = workflowEditSizeError(edit);
+    if (sizeError) throw new Error(sizeError);
     if (!validWorkflowEdit(edit)) throw new Error("Invalid workflow patch; export current definition and use expectedHash plus supported changes");
     return { version, ...await requestPluginWorkflowEdit(location2.runtimeDirectory, edit) };
+  }
+  if (command === "export-task" || command === "edit-task") {
+    const last = command === "export-task" ? "--out" : "--patch";
+    if (rest.length !== 6 || rest[0] !== "--vault" || rest[2] !== "--task" || rest[4] !== last || !path33.isAbsolute(rest[1]) || !path33.isAbsolute(rest[5])) throw new Error("Use --vault <absolute path> --task <id> " + last + " <absolute JSON file>, in that order");
+    const location2 = resolveInstalledWorkflowLocation(rest[1]);
+    if (command === "export-task") {
+      let catalog;
+      try {
+        catalog = JSON.parse(fs33.readFileSync(location2.configurationFile, "utf8"));
+      } catch {
+        throw new Error("Cannot read valid AutoOC configuration");
+      }
+      const tasks = catalog.tasks?.filter((w) => w.id === rest[3]);
+      if (tasks?.length !== 1) throw new Error("Task identity is missing or ambiguous");
+      const task = tasks[0];
+      fs33.writeFileSync(rest[5], JSON.stringify({ taskId: task.id, expectedHash: taskEditHash(task), definition: taskEditDefinition(task) }, null, 2), { flag: "wx", mode: 384 });
+      return { version, taskId: task.id, expectedHash: taskEditHash(task), exported: true };
+    }
+    const stat = fs33.lstatSync(rest[5]);
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Patch must be a regular JSON file");
+    if (stat.size > WORKFLOW_EDIT_MAX_PATCH_BYTES) throw new Error(`Task patch size ${stat.size} exceeds maximum ${WORKFLOW_EDIT_MAX_PATCH_BYTES} UTF-8 bytes`);
+    let patch;
+    try {
+      patch = JSON.parse(fs33.readFileSync(rest[5], "utf8"));
+    } catch {
+      throw new Error("Invalid task patch JSON");
+    }
+    const edit = { command: "edit-task", taskId: rest[3], expectedHash: patch?.expectedHash, changes: patch?.changes };
+    const sizeError = workflowEditSizeError(edit);
+    if (sizeError) throw new Error(sizeError);
+    if (!validTaskEdit(edit)) throw new Error("Invalid task patch; export current definition and use expectedHash plus supported changes");
+    return { version, ...await requestPluginTaskEdit(location2.runtimeDirectory, edit) };
   }
   if (command === "abandon") {
     const keys = ["--vault", "--workflow", "--run", "--revision", "--reason", "--acknowledge-unknown-effects"];
@@ -7489,8 +7581,8 @@ async function main(args) {
     }
     return { version, ...recoverExecutionLease(directory2, rest[3]) };
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["inspect-request", "follow", "list", "status", "pages", "create-page", "inspect-page-request", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow"], taskSelection: true, codeStepSelection: true, nestedWorkflows: 1, catalogAvailability: 1, pageSelection: 1, pageCreation: 1, pluginRequests: 1, requestInspection: 1, phaseTimings: 1, workflowEditing: 1 };
-  if (command === "help" && !rest.length) return { requestInspection: "inspect-request|follow --vault ROOT <--request-id UUID|--run ID> [--include-output true]; follow also accepts --timeout-ms (0..86400000, default 30000). Read-only; never executes or cancels work. States: not-accepted, running, finished, unknown. Exit 2 means uncertainty or wait timeout; retain the same identity and do not launch again. Stored output is opt-in; diagnostics contain numeric phase timings only.", pageCreation: pageCreationHelp, usage: "node autooc-cli.cjs <list|status|pages> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id [--step code-step-id]|--task id> [--run <run-id> for resume/reconcile/stop] [--page <id|main>]", nestedWorkflows: "Workflow steps reference workflowId in the catalog; exports use workflowExportId and schema 1.7.0. Run, stop, reconcile and resume select the parent workflow/run. Child schedules are ignored; cycles and more than 16 levels are rejected.", pages: "pages --vault <absolute path> lists page IDs without creating folders. Omit --page or use --page main for legacy Main workspace behavior, including task-specific folders. Custom --page selects an existing page for run/resume/reconcile/stop; status --vault <absolute path> --page <id> shows its runs. --step is Main workspace only. The current shell folder never selects a page. Plugin delegation requires pageSelection:1; a loaded older plugin is rejected before submission. Standalone execution keeps one owner per installation and requires compatible non-GUI tasks.", catalog: "list/status include disabled, blockedByDisabled, disabledReason and codeSteps; these are availability gates, not proof of readiness or live activity.", codeSteps: "--step selects one Code step with empty input/outputs and preserves the full workflow result. Requires codeStepSelection:true in CLI and loaded host. run/resume reject disabled items; reconcile/stop remain available for the exact recorded execution.", settingsWriteRecovery: "inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only.", experimental: true, foreground: true };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["inspect-request", "follow", "list", "status", "pages", "create-page", "inspect-page-request", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow", "export-task", "edit-task"], taskSelection: true, codeStepSelection: true, nestedWorkflows: 1, catalogAvailability: 1, pageSelection: 1, pageCreation: 1, pluginRequests: 1, requestInspection: 1, phaseTimings: 1, taskEditing: 1, workflowEditing: 1, workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES };
+  if (command === "help" && !rest.length) return { requestInspection: "inspect-request|follow --vault ROOT <--request-id UUID|--run ID> [--include-output true]; follow also accepts --timeout-ms (0..86400000, default 30000). Read-only; never executes or cancels work. States: not-accepted, running, finished, unknown. Exit 2 means uncertainty or wait timeout; retain the same identity and do not launch again. Stored output is opt-in; diagnostics contain numeric phase timings only.", pageCreation: pageCreationHelp, usage: "node autooc-cli.cjs <list|status|pages> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id [--step code-step-id]|--task id> [--run <run-id> for resume/reconcile/stop] [--page <id|main>]", nestedWorkflows: "Workflow steps reference workflowId in the catalog; exports use workflowExportId and schema 1.7.0. Run, stop, reconcile and resume select the parent workflow/run. Child schedules are ignored; cycles and more than 16 levels are rejected.", pages: "pages --vault <absolute path> lists page IDs without creating folders. Omit --page or use --page main for legacy Main workspace behavior, including task-specific folders. Custom --page selects an existing page for run/resume/reconcile/stop; status --vault <absolute path> --page <id> shows its runs. --step is Main workspace only. The current shell folder never selects a page. Plugin delegation requires pageSelection:1; a loaded older plugin is rejected before submission. Standalone execution keeps one owner per installation and requires compatible non-GUI tasks.", catalog: "list/status include disabled, blockedByDisabled, disabledReason and codeSteps; these are availability gates, not proof of readiness or live activity.", codeSteps: "--step selects one Code step with empty input/outputs and preserves the full workflow result. Requires codeStepSelection:true in CLI and loaded host. run/resume reject disabled items; reconcile/stop remain available for the exact recorded execution.", settingsWriteRecovery: "inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", taskEditing: "export-task --vault <absolute-path> --task ID --out <new absolute JSON file>; edit-task --vault <absolute-path> --task ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name and prompt only. Shared task changes affect every referencing workflow. Maximum changes 2 MiB; patch 3 MiB. Requires taskEditing:1 on loaded host.", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only. Serialized changes: maximum 2097152 UTF-8 bytes (2 MiB), including JSON escapes; patch file: 3145728 bytes (3 MiB). Large edits require a host advertising workflowEditMaxChangesBytes.", experimental: true, foreground: true };
   if (["run", "resume", "reconcile", "stop"].includes(command)) {
     const values = /* @__PURE__ */ new Map();
     const target = rest.includes("--task") ? "--task" : "--workflow";

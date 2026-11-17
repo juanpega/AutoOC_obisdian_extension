@@ -5,6 +5,30 @@ description: Consultar y ejecutar AutoOC desde un agente y editar workflows comp
 
 # AutoOC desde un agente
 
+## Editar tareas existentes por CLI
+
+El candidato anuncia `taskEditing:1`, `export-task` y `edit-task`. Verificar también
+la capacidad del propietario cargado; una CLI nueva no actualiza el plugin abierto.
+Con AutoOC activo e inactivo en ejecución:
+
+```text
+node CLI export-task --vault ABS_VAULT --task ID --out ABS_NEW_JSON
+node CLI edit-task --vault ABS_VAULT --task ID --patch ABS_PATCH_JSON
+```
+
+El export contiene `taskId`, `expectedHash` y `definition` (id, name, prompt).
+El patch contiene el hash exportado y `changes`, por ejemplo
+`{"expectedHash":"HASH_DEL_EXPORT","changes":{"name":"Revisión","prompt":"Revisa los cambios."}}`.
+Solo se admiten `name` y `prompt`; no modifica motor, modelos, permisos, horarios,
+identidades ni historial. Modifica la tarea compartida en todos los workflows
+que la referencian. Los pasos Code se editan con `edit-workflow`.
+Los cambios serializados tienen límite de 2 MiB UTF-8; el archivo patch, 3 MiB.
+Ante conflicto volver a exportar; ante actividad esperar; ante respuesta incierta
+inspeccionar el recibo de la petición, sin reenviar por inferencia.
+No escribir directamente data.json. La exportación lee el catálogo persistido;
+un cambio aún no guardado en la interfaz puede causar un conflicto legítimo.
+
+
 ## Cola, reconexión y diagnóstico (candidato 1.7.26)
 
 Consultar `version` y `help` del paquete instalado: las nuevas consultas requieren
@@ -744,3 +768,7 @@ Import está disponible también en Overview: abre la importación habitual al c
 CLI abre Choose CLI workspace. Hay que pulsar Use workspace en Main workspace o una página activa; se muestran nombre, ruta y rama registrada cuando corresponde. Las páginas archivadas o con retirada pendiente/completada no se ofrecen. Abrir el selector o cancelar no inicia procesos ni guarda preferencias. Si la página o carpeta cambió mientras el selector estaba abierto, se pide cerrarlo y elegir de nuevo.
 
 La elección abre el lanzador CLI existente o recupera su terminal viva. Se conservan identidad de página, carpeta y reservas; Overview permanece como vista seleccionada. Main conserva su lanzador y su selección de carpeta habituales. Las comprobaciones del motor/propietario se siguen haciendo al lanzar la sesión. No cambia el esquema JSON ni los workflows programados.
+
+## Límites de edición
+
+El candidato admite 2 MiB de changes serializado y 3 MiB de archivo patch. Los escapes JSON cuentan. Comprobar workflowEditMaxChangesBytes en CLI y propietario; los propietarios antiguos mantienen 58.000 bytes. No truncar ni repetir peticiones inciertas.

@@ -4,7 +4,7 @@ Realiza la edición solicitada en la bóveda autorizada conservando identidad, h
 
 Si anuncia `export-workflow` y `edit-workflow`, mantén Obsidian y AutoOC abiertos. Exporta únicamente el workflow seleccionado a un archivo JSON nuevo y privado. Prepara `expectedHash` y `changes` con los campos solicitados, aplica el patch y vuelve a exportar para comprobar el texto. Usa el hash devuelto para una edición posterior. Guardar una definición no autoriza ejecutarla.
 
-Esta vía admite nombre/descripción del workflow y nombre/código/prompt de evaluación de pasos existentes. No modifica tareas asociadas, conexiones, permisos, programación ni estados. `code` exige un paso Code. Mantén `changes` por debajo de58.000 bytes UTF-8 y el patch como máximo en60.000 bytes. Divide ediciones mayores sin truncar contenido.
+Esta vía admite nombre/descripción del workflow y nombre/código/prompt de evaluación de pasos existentes. No modifica tareas asociadas, conexiones, permisos, programación ni estados. `code` exige un paso Code. Comprueba `workflowEditMaxChangesBytes`: el candidato admite 2.097.152 bytes UTF-8 de `changes` serializado (incluidos escapes JSON) y un patch de 3.145.728 bytes. Requiere un propietario compatible cargado. No truncar ni dividir la operación para eludir el límite.
 
 Ante conflicto, compara con una exportación nueva. Ante ejecución activa, espera manteniendo Obsidian abierto. Ante resultado incierto, inspecciona el recibo y la definición antes de reintentar; no repitas a ciegas. No escribas `data.json` directamente con el plugin cargado ni retires su reserva.
 

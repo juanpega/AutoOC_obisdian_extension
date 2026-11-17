@@ -6440,14 +6440,15 @@ var pageCreationHelp = {
   preparation: `Worktrees must already be enabled. New worktrees live in ${WORKTREE_FOLDER}/<pageId>; adding ${WORKTREE_IGNORE} to .gitignore requires explicit request consent or that project's saved preference. Approval errors require a reviewed new request; no branch, staging or commit is changed implicitly.`
 };
 
-// cli-plugin-requests.ts
-var fs30 = __toESM(require("fs"));
-var path31 = __toESM(require("path"));
-var import_crypto13 = require("crypto");
-var import_perf_hooks4 = require("perf_hooks");
-var import_timers3 = require("timers");
-
 // workflow-edit.ts
+var WORKFLOW_EDIT_MAX_CHANGES_BYTES = 2 * 1024 * 1024;
+var WORKFLOW_EDIT_MAX_REQUEST_BYTES = WORKFLOW_EDIT_MAX_CHANGES_BYTES + 16 * 1024;
+var WORKFLOW_EDIT_MAX_PATCH_BYTES = 3 * 1024 * 1024;
+function workflowEditSizeError(value) {
+  if (value?.changes === void 0) return void 0;
+  const bytes = Buffer.byteLength(JSON.stringify(value.changes), "utf8");
+  return bytes > WORKFLOW_EDIT_MAX_CHANGES_BYTES ? `Workflow edit changes size ${bytes} exceeds maximum ${WORKFLOW_EDIT_MAX_CHANGES_BYTES} UTF-8 bytes` : void 0;
+}
 var object = (value) => value && typeof value === "object" && !Array.isArray(value);
 var only = (value, keys) => object(value) && Object.keys(value).every((key) => keys.includes(key));
 function validWorkflowEdit(value) {
@@ -6465,10 +6466,22 @@ function validWorkflowEdit(value) {
       ids.add(step.id);
     }
   }
-  return Buffer.byteLength(JSON.stringify(value.changes), "utf8") <= 58e3;
+  return !workflowEditSizeError(value);
+}
+
+// task-edit.ts
+function validTaskEdit(value) {
+  if (!value || value.command !== "edit-task" || typeof value.taskId !== "string" || !value.taskId.length || value.taskId.length > 256 || /[\0\r\n]/.test(value.taskId) || typeof value.expectedHash !== "string" || !/^[a-f0-9]{64}$/.test(value.expectedHash) || ["workflowId", "runId", "stepId", "pageId"].some((key) => value[key] !== void 0)) return false;
+  const c = value.changes;
+  return !!c && typeof c === "object" && !Array.isArray(c) && Object.keys(c).length > 0 && Object.keys(c).every((key) => ["name", "prompt"].includes(key) && typeof c[key] === "string") && (c.name === void 0 || !!c.name.trim()) && !workflowEditSizeError(value);
 }
 
 // cli-plugin-requests.ts
+var fs30 = __toESM(require("fs"));
+var path31 = __toESM(require("path"));
+var import_crypto13 = require("crypto");
+var import_perf_hooks4 = require("perf_hooks");
+var import_timers3 = require("timers");
 function executionSummary(state, presentation = state) {
   const { runId, workflowId, phase, revision, nextStepId } = state;
   return { runId, workflowId, phase, revision, nextStepId, ...presentationFields(presentation) };
@@ -6516,8 +6529,14 @@ function regularDirectory3(directory2) {
 }
 function read(file) {
   const stat = fs30.lstatSync(file);
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 65536) throw new Error("Unsafe CLI request file");
-  return JSON.parse(fs30.readFileSync(file, "utf8"));
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe CLI request file");
+  const fileMax = file.endsWith(".request") ? WORKFLOW_EDIT_MAX_REQUEST_BYTES : 65536;
+  if (stat.size > fileMax) throw Object.assign(new Error(`CLI request size ${stat.size} exceeds maximum ${fileMax} UTF-8 bytes`), { code: "CLI_SIZE" });
+  const bytes = fs30.readFileSync(file);
+  const value = JSON.parse(bytes.toString("utf8"));
+  const max = file.endsWith(".request") && (value?.command === "edit-workflow" || value?.command === "edit-task") ? WORKFLOW_EDIT_MAX_REQUEST_BYTES : 65536;
+  if (bytes.length > max) throw Object.assign(new Error(`CLI request size ${bytes.length} exceeds maximum ${max} UTF-8 bytes`), { code: "CLI_SIZE" });
+  return value;
 }
 function write(file, value) {
   const fd = fs30.openSync(file, "wx", 384);
@@ -6570,6 +6589,7 @@ async function replace(file, value, check, asyncFlush = true) {
 }
 function validCommand(value) {
   if (value?.command === "create-page") return validPageCreationRequest(value.request) && ["workflowId", "taskId", "stepId", "pageId", "runId"].every((key) => value[key] === void 0);
+  if (value?.command === "edit-task") return validTaskEdit(value);
   if (value?.command === "edit-workflow") return value.pageId === void 0 && validWorkflowEdit(value);
   try {
     if (value?.pageId !== void 0 && (normalizePageSelection(value.pageId) !== value.pageId || value.stepId !== void 0)) return false;
@@ -6587,7 +6607,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
   const descriptor = path31.join(directory2, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, workflowEditing: !!edit, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1 } : {} });
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, taskEditing: capabilities.editTask ? 1 : 0, workflowEditing: !!edit, ...edit || capabilities.editTask ? { workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES } : {}, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1 } : {} });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling, pagePolling;
@@ -6661,9 +6681,16 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
       let request;
       try {
         request = read(path31.join(directory2, name));
-      } catch {
-        await receipt(id, { status: "rejected", error: "Invalid CLI request" });
+      } catch (error) {
+        await receipt(id, { status: "rejected", error: error?.code === "CLI_SIZE" ? error.message : "Invalid CLI request" });
         continue;
+      }
+      if (request?.command === "edit-workflow" || request?.command === "edit-task") {
+        const error = workflowEditSizeError(request);
+        if (error) {
+          await receipt(id, { status: "rejected", error });
+          continue;
+        }
       }
       if (!request || request.protocol !== 1 || request.owner !== lease.token || request.id !== id || !validCommand(request) || !Number.isFinite(request.expiresAt) || request.expiresAt < Date.now() || request.expiresAt > Date.now() + 6e4 || fs30.existsSync(path31.join(directory2, id + ".cancel"))) {
         await receipt(id, { status: "rejected", error: "Expired, cancelled or invalid CLI request" });
@@ -6681,12 +6708,12 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
       const definition = JSON.stringify(request.command === "create-page" ? ["create-page", request.request.requestId] : [request.pageId || "main", request.taskId ? "task" : "workflow", request.taskId || request.workflowId]);
       const duplicate = [...active.values()].some((e) => e.definition === definition);
       const limit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-      const busy = duplicate && request.command !== "create-page" ? "AutoOC is already executing this CLI definition" : request.command !== "create-page" && limit > 0 && active.size >= limit ? `Concurrent execution limit reached (${limit})` : [...active.values()].some((e) => e.editing) || request.command === "edit-workflow" && active.size ? "Workflow editing requires exclusive execution" : void 0;
+      const busy = duplicate && request.command !== "create-page" ? "AutoOC is already executing this CLI definition" : request.command !== "create-page" && limit > 0 && active.size >= limit ? `Concurrent execution limit reached (${limit})` : [...active.values()].some((e) => e.editing) || (request.command === "edit-workflow" || request.command === "edit-task") && active.size ? "Workflow editing requires exclusive execution" : void 0;
       if (busy) {
         await receipt(id, { status: "rejected", error: busy });
         continue;
       }
-      const execution = { id, controller: new AbortController(), editing: request.command === "edit-workflow", definition, done: void 0 };
+      const execution = { id, controller: new AbortController(), editing: request.command === "edit-workflow" || request.command === "edit-task", definition, done: void 0 };
       active.set(id, execution);
       let checkpoint;
       const receivedAt = Date.now();
@@ -6709,9 +6736,10 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
             await publish2({ status: "completed", pageResult: result2 });
             return;
           }
-          if (request.command === "edit-workflow") {
-            if (!edit) throw new Error("Workflow editing unsupported");
-            const result2 = await edit(request);
+          if (request.command === "edit-workflow" || request.command === "edit-task") {
+            const handler = request.command === "edit-task" ? capabilities.editTask : edit;
+            if (!handler) throw new Error("Definition editing unsupported");
+            const result2 = await handler(request);
             await publish2({ status: "completed", editResult: result2 });
             return;
           }
@@ -6733,7 +6761,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
           await publications.catch(() => {
           });
           try {
-            await publish2({ status: "failed", checkpoint, error: request.command === "edit-workflow" ? "Workflow edit failed; keep Obsidian open and inspect this request" : executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again" });
+            await publish2({ status: "failed", checkpoint, error: request.command === "edit-workflow" || request.command === "edit-task" ? "Workflow edit failed; keep Obsidian open and inspect this request" : executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again" });
           } catch {
             fail();
           }

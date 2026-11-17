@@ -1,5 +1,15 @@
 import {createHash} from "crypto";
 
+// Limits count serialized UTF-8 bytes, including JSON escapes.
+export const WORKFLOW_EDIT_MAX_CHANGES_BYTES=2*1024*1024;
+export const WORKFLOW_EDIT_MAX_REQUEST_BYTES=WORKFLOW_EDIT_MAX_CHANGES_BYTES+16*1024;
+export const WORKFLOW_EDIT_MAX_PATCH_BYTES=3*1024*1024;
+export function workflowEditSizeError(value:any):string|undefined {
+  if(value?.changes===undefined)return undefined;
+  const bytes=Buffer.byteLength(JSON.stringify(value.changes),"utf8");
+  return bytes>WORKFLOW_EDIT_MAX_CHANGES_BYTES ? `Workflow edit changes size ${bytes} exceeds maximum ${WORKFLOW_EDIT_MAX_CHANGES_BYTES} UTF-8 bytes` : undefined;
+}
+
 export interface WorkflowEditCommand {
   command:"edit-workflow";
   workflowId:string;
@@ -27,7 +37,7 @@ export function validWorkflowEdit(value:any):value is WorkflowEditCommand {
       ids.add(step.id);
     }
   }
-  return Buffer.byteLength(JSON.stringify(value.changes),"utf8")<=58000;
+  return !workflowEditSizeError(value);
 }
 // Deliberately exclude outputs, credentials, runtime bindings and permissions.
 // Export only the fields this first editing increment can change.
@@ -39,6 +49,7 @@ export function workflowEditHash(workflow:any):string {
   return createHash("sha256").update(JSON.stringify(workflowEditDefinition(workflow))).digest("hex");
 }
 export async function applyWorkflowEdit(host:{settings:any;assertIdle:()=>void;save:(validate:()=>void)=>Promise<void>},command:WorkflowEditCommand):Promise<WorkflowEditResult> {
+  const sizeError=workflowEditSizeError(command);if(sizeError)throw new Error(sizeError);
   if(!validWorkflowEdit(command))throw new Error("Invalid workflow edit; only name, description and existing step text are supported");
   host.assertIdle();
   const matches=host.settings.workflows.filter((w:any)=>w.id===command.workflowId);
