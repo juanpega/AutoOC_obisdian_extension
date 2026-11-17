@@ -6,6 +6,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 
 **Automation and agents:** [complete CLI reference: commands, parameters, and examples](#complete-autooc-cli-reference).
 
+**CLI 1.7.26 (candidato):** [cola en segundo plano, reconexión por requestId/runId y tiempos por fase](Docs/cli-reliability.md). `inspect-request` y `follow` consultan la misma ejecución tras perder el heartbeat; no la relanzan. La validación real con Obsidian visible, inactivo y minimizado sigue pendiente.
+
 **Update blocked?** [Install the new version while keeping your tasks, workflows, and history](#update-blocked-install-without-losing-your-data).
 
 **Development tracking:** [1.7.13 delivery record: changes, flows, contracts, limitations, and release preparation](docs/autoOC/04_Desarrollo/entrega-1.7.13-20261101/README.md) (in Spanish).
@@ -15,6 +17,8 @@ AutoOC is a desktop-only Obsidian plugin for scheduling and running OpenCode, Co
 **Páginas y worktrees (candidato):** [recorrido para desarrollar, usar la CLI y cerrar el trabajo](docs/work-pages.md).
 
 ## Area dashboard
+
+**Nombres de tareas (1.7.24):** al renombrar una tarea, WorkFlows y Dashboard muestran el nombre actual en sus referencias. Los alias de paso se conservan y se muestran junto al nombre de la tarea. [Comportamiento y compatibilidad](docs/workflow-task-names.md).
 
 Since 1.7.12, **Dashboard** groups workflows and tasks by their **Area** field, with a **No area** group for unassigned items. To reorganize them, change their area in the editor or through the selection actions. Positions from the previous map remain saved in the settings.
 
@@ -261,6 +265,42 @@ node $cliPath status --vault $vaultPath
 Requires Node.js 18 or later. In the table, `CLI` is the absolute path to that file and `VAULT` is the vault's absolute path. **Prefix every call with `node CLI`** and quote paths containing spaces. The CLI selects `<VAULT>/.obsidian/plugins/auto-oc`; it neither searches alternative configuration folders nor provides a parameter to select them.
 
 ### All available commands
+
+#### Crear páginas desde tareas y workflows (candidato 1.7.25)
+
+La capacidad `pageCreation:1` añade `create-page --vault VAULT --request JSON_FILE`
+e `inspect-page-request --vault VAULT --request-id ID`. El archivo de petición
+incluye `requestId`, `name` y `mode`: `create` pide `repository`, `branch` y `base`;
+`folder` y `link` piden `directory`. Las rutas son absolutas. `create` y `link`
+requieren worktrees habilitados; `allowGitignoreUpdate:true` autoriza únicamente el ajuste de
+exclusión de ese proyecto, sin staging ni commit.
+
+Una tarea puede incluir `launch:{"workflowId":"ID"}` o `launch:{"taskId":"ID"}`
+para lanzar trabajo después del alta. Con un propietario activo, la CLI devuelve
+`status:"queued"`, `created:false` y el `pageId` reservado: el padre puede continuar.
+El propietario espera a que las ejecuciones actuales terminen correctamente y a
+que se liberen los recursos antes de crear y lanzar. No esperar al hijo dentro
+del padre ni llamar a `run --page` mientras el alta siga pendiente.
+
+Sin propietario, la CLI atiende la petición en primer plano. Un workflow autónomo
+también admite peticiones de sus tareas y procesa la cola al terminar. Un reinicio
+no relanza solicitudes pendientes: consultar el recibo y reenviar la misma petición
+solo para completar estados recuperables (`queued`, `environment` o `created`).
+`preparing`, `launching` o `needs-review` requieren revisar los efectos conservados;
+no usar un ID nuevo como reintento. El `launchRunId` permite consultar la ejecución
+exacta con los comandos existentes.
+
+`requirementId` y `requirementText` permiten entregar un requisito aún no incluido
+en el commit base. Su snapshot queda en `.autooc/requirement.md` de la página, con
+hash comprobado antes de ejecutar; Code lo lee con su permiso de bóveda explícito.
+El archivo queda local y puede aparecer como no versionado: no se confirma ni se
+elimina automáticamente. La petición no copia archivos, secretos o dependencias
+del proyecto original. Los errores y recibos no exponen el texto del requisito.
+
+Comprobar `version` y `help` del paquete instalado; compilar este candidato no
+actualiza por sí solo una instalación existente.
+
+Contrato completo, ejemplo y límites de verificación: [Creación de páginas por CLI](Docs/cli-page-creation.md).
 
 | Command and parameters | Purpose and requirements |
 | --- | --- |

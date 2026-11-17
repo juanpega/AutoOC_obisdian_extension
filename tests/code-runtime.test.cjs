@@ -1,3 +1,4 @@
+const removeTimingFixtures=require('./fixtures/timing-cleanup.cjs');
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -250,7 +251,7 @@ test('built plugin projects durable progress without replacing configuration or 
     p.settings.workflows=[workflow];await p.applyWorkflowCheckpoint(active,active.runId);
     assert.equal(p.settings.workflows[0].status,'pending');assert.equal(p.settings.workflows[0].runtimeExecution.requiresReconciliation,true);
   } finally {
-    for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);
+    removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);
   }
 });
 
@@ -296,7 +297,7 @@ test('plugin startup recovers a bound checkpoint read-only and blocks legacy rep
     assert.equal(fs.readFileSync(path.join(runtime,checkpoint.runId+'.json'),'utf8'),before);
     assert.equal(fs.readFileSync(file,'utf8'),JSON.stringify(stored));
   } finally {
-    for(const file of fs.readdirSync(runtime)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,file));}
+    removeTimingFixtures(runtime);for(const file of fs.readdirSync(runtime)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,file));}
     fs.rmdirSync(runtime);fs.unlinkSync(path.join(path.dirname(runtime),'data.json'));fs.rmdirSync(path.dirname(runtime));fs.rmdirSync(path.join(dir,'.obsidian','plugins'));fs.rmdirSync(path.join(dir,'.obsidian'));fs.rmdirSync(dir);
   }
 });
@@ -342,7 +343,7 @@ test('plugin reopens a minimal catalog written by the external host with identic
     assert.notEqual(prepareWorkflowDefinition(wf,[],{defaultCodexModel:'explicit-model'}).hash,definition.hash);
     assert.equal(prepareWorkflowDefinition(wf,[],{...definition.settings}).hash,definition.hash);
   } finally {
-    for(const file of fs.readdirSync(runtime)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,file));}
+    removeTimingFixtures(runtime);for(const file of fs.readdirSync(runtime)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,file));}
     fs.rmdirSync(runtime);fs.unlinkSync(target);fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(dir,'.obsidian'));fs.rmdirSync(dir);
   }
 });
@@ -373,7 +374,7 @@ test('plugin lifetime reservation excludes the installed host in both directions
     assert.equal((await runInstalledWorkflow({...options,resumeRunId:result.runId})).phase,'completed');
   } finally {
     p.releasePluginExecution(false);
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(file);fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(root,'.obsidian'));fs.rmdirSync(root);
   }
 });
@@ -411,7 +412,7 @@ test('plugin shared entry runs the installed motor while retaining its lifetime 
     assert.equal((await runInstalledWorkflow({vault:root,workflowId:'shared',resumeRunId:result.runId,redact:s=>s})).phase,'completed');
   } finally {
     p.releasePluginExecution(false);
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(file);fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(root,'.obsidian'));fs.rmdirSync(root);
   }
 });
@@ -447,7 +448,7 @@ test('plugin stop controls follow the owned session and cancellation prevents th
     if(p.isWorkflowExecuting('stop')) await p.killWorkflow('stop');
     if(pending) await pending;
     p.releasePluginExecution(false);
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(file);fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(root,'.obsidian'));fs.rmdirSync(root);
   }
 });
@@ -472,7 +473,7 @@ test('plugin recovery continues the exact saved execution without repeating its 
     await assert.rejects(p.recoverSharedWorkflow('recover',partial.runId),/does not require recovery/);
   } finally {
     p.releasePluginExecution(false);
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(file);fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(root,'.obsidian'));fs.rmdirSync(root);
   }
 });

@@ -38,7 +38,8 @@ export function preparePageDefinition(config: any, page: WorkPage, sourceId: str
     if (t.workingDirectory && !isWithinPhysicalPath(directory, t.workingDirectory)) throw new Error("Task '" + t.name + "' has a fixed folder outside this page. Edit its global folder explicitly to inherit the page.");
     if (t.branch || t.createBranch) throw new Error("This task changes Git branches. Use a workflow that works on the page's existing branch.");
     return { ...clean(t), id: mappedId(t.id), workingDirectory: t.workingDirectory || directory,
-      prompt: page.objective ? "Page objective:\n" + page.objective + "\n\n" + (t.prompt || "") : t.prompt };
+      prompt: page.objective || page.requirementFile ? (page.objective ? "Page objective:\n" + page.objective + "\n\n" : "") +
+        (page.requirementFile ? "Requirement " + page.requirementId + ": read " + page.requirementFile.path + " (SHA256 " + page.requirementFile.sha256 + ").\n\n" : "") + (t.prompt || "") : t.prompt };
   });
   const mapped = workflows.map(w => {
     if (w.handoffBranch) throw new Error("Branch handoff is not supported in page runs yet. The worktree already owns its branch.");
@@ -128,16 +129,16 @@ export async function runPageWorkflow(options: InstalledWorkflowOptions) {
       catch (error) { stopError = error; abort(); }
     }, 100); timer.unref?.();
     const result = await runCodeWorkflowHost({
-      definition, runtimeDirectory: location.runtimeDirectory, vaultBase: page.directory, lease, admission,
+      definition, runtimeDirectory: location.runtimeDirectory, vaultBase: page.directory, lease, admission,timing:options.timing,
       resumeRunId: options.resumeRunId, reconcile: options.reconcile, maxSteps: options.maxSteps,
       signal: controller.signal, redact: options.redact, onTaskOutput: options.onTaskOutput,
       tasks: createWorkflowTaskAdapter(definition, page.directory, undefined, terminal),
       evaluate: createWorkflowEvaluator(definition, page.directory, controller.signal),
-      onCheckpoint: async checkpoint => {
+      onCheckpoint: async (checkpoint,timing) => {
         admission!.bind(checkpoint); activeRunId = checkpoint.runId;
         const snapshotPath = path.join(definitions, checkpoint.runId + ".json");
         if (!fs.existsSync(snapshotPath)) {
-          await atomicSettingsWrite(snapshotPath, { pageId: page.id, sourceId, task, pageIdentity: pageIdentityHash(page), definition });
+          await atomicSettingsWrite(snapshotPath, { pageId: page.id, sourceId, task, pageIdentity: pageIdentityHash(page), definition },fs.promises,undefined,timing);
         }
         await catalogTransaction(location.configurationFile, async transaction => {
           lease.assertOwned();
@@ -158,7 +159,7 @@ export async function runPageWorkflow(options: InstalledWorkflowOptions) {
               next.pageTerminalClaims = [...(current.pageTerminalClaims || []),{id,pageId:page.id,directory:page.directory,createdAt:new Date().toISOString(),exclusive:admission!.resources.exclusive}];
             }
           }
-          await reader.save(location.configurationFile, () => next);
+          await reader.save(location.configurationFile, () => next,undefined,timing);
           const version = reader.confirmedVersion(location.configurationFile); coordinator.catalogVersion = version;
           await options.onCheckpoint?.(checkpoint, { catalog: next, version, runId: row.runId, workflowId: row.workflowId, revision: row.revision }, undefined, transaction);
           admission!.confirm(checkpoint);

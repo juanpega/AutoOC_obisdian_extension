@@ -65,6 +65,7 @@ test('real plugin host reports the selected workflow before its first step and k
   const timer=setInterval(()=>plugin.cliRequestHost.poll(),10);t.after(()=>clearInterval(timer));
   let first,existsAtFirst;
   const result=await cliObserved(vault,event=>{
+    if(event.event==='submitted'){assert.match(event.requestId,/^[a-f0-9-]{36}$/);return;}
     if(!first){first=event;existsAtFirst=fs.existsSync(path.join(vault,'effects.txt'));release();}
   },'run','--workflow','named');
   assert.equal(result.code,0,result.stderr);assert.equal(existsAtFirst,false);assert.equal(first.phase,'ready');

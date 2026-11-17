@@ -6,6 +6,7 @@ import { standaloneTaskWorkflow } from "./standalone-task";
 import { persistTaskHistory } from "./task-history";
 import { selectCodeStep } from "./workflow-code-step";
 import { workflowExecutionPlan, workflowClosure } from "./workflow-nesting";
+import type { TimingContext } from "./execution-timing";
 
 export interface PersistedWorkflowCatalog {
   catalog: any;
@@ -19,6 +20,7 @@ export interface PersistedWorkflowCatalog {
 // Read the current catalog on every boundary so unrelated edits are retained;
 // the writer rejects a concurrent change between that read and replacement.
 export async function persistWorkflowProgress(options: {
+  timing?:TimingContext;
   configurationFile: string;
   runtimeDirectory: string;
   checkpoint: RunCheckpoint;
@@ -112,7 +114,7 @@ export async function persistWorkflowProgress(options: {
       output:projected.steps[0].output, lastRun:projected.steps[0].lastRun || durable.createdAt},
   } : step)} : projected;
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? replacement : workflow)};
-  await writer.save(options.configurationFile, () => next);
+  await writer.save(options.configurationFile, () => next,undefined,options.timing);
   if (options.vaultBase) persistTaskHistory(options.vaultBase, {...workflow,steps:executionSteps}, durable, config);
   const confirmed={catalog:next,version:writer.confirmedVersion(options.configurationFile),
     runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};

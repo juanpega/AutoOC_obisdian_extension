@@ -1,3 +1,4 @@
+const removeTimingFixtures=require('./fixtures/timing-cleanup.cjs');
 const test=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),Module=require('node:module'),ts=require('typescript');
 // Compile only the runtime modules used by this fixture, without a plugin host.
@@ -87,7 +88,7 @@ test('terminal recovery still rejects identity, malformed checkpoints and stale 
 });
 async function fixture(fn){
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-journal-')),lease=acquireExecutionLease(dir);
-  try {await fn(lease,dir);} finally {lease.release();for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  try {await fn(lease,dir);} finally {lease.release();removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 }
 test('checkpoint survives reopening with full output and next step',async()=>fixture(async lease=>{
   const run=await J.create(lease,'workflow',hash,'first');await run.begin('first');await run.finish('first',true,'x'.repeat(24000),'second');
@@ -176,7 +177,7 @@ test('Code host runs without Obsidian and retains complete durable output',async
     const result=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,redact:s=>s});
     assert.equal(result.phase,'completed');assert.equal(result.steps[1].output,'24000');assert.equal(fs.existsSync(path.join(dir,'execution.lock')),false);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,result.runId+'.json'))),result);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 test('Code host refuses unsupported steps before creating execution artifacts',async()=>{
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-host-'));
@@ -235,11 +236,11 @@ test('headless delay cancellation records observed failure and never follows for
     let timer;
     const pending=runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,signal:abort.signal,redact:s=>s,onCheckpoint:async state=>{if(state.phase==='in_flight')timer=setTimeout(()=>abort.abort(),30);}});
     try {assert.equal((await pending).phase,'failed');} finally {clearTimeout(timer);}
-    const files=fs.readdirSync(dir);assert.equal(files.length,1);
+    const files=fs.readdirSync(dir).filter(name=>name!=="timings");assert.equal(files.length,1);
     const saved=JSON.parse(fs.readFileSync(path.join(dir,files[0]),'utf8'));
     assert.equal(saved.phase,'failed');assert.equal(saved.steps.length,1);assert.equal(saved.steps[0].stepId,'wait');assert.match(saved.steps[0].output,/cancelled/);
     assert.equal((await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,redact:s=>s,resumeRunId:saved.runId})).phase,'failed');
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('host resumes the same ready run and never repeats a completed effect',async()=>{
@@ -263,7 +264,7 @@ test('host resumes the same ready run and never repeats a completed effect',asyn
     assert.deepEqual(replay,done);assert.equal(fs.readFileSync(effect,'utf8'),'ab');
     const changed=prepare({...definition.workflow,steps:[{id:'a',stepKind:'code',code:'output = "changed";'}]},[],{});
     await assert.rejects(runCodeWorkflowHost({...options,definition:changed,resumeRunId:first.runId}),/definition changed/);
-  } finally {for(const file of fs.readdirSync(dir)){assert.ok(file==='effects.txt'||/^[a-f0-9-]+\.json$/.test(file));fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.ok(file==='effects.txt'||/^[a-f0-9-]+\.json$/.test(file));fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('host refuses explicit resume of an uncertain effect without rewriting its checkpoint',async()=>{
@@ -275,7 +276,7 @@ test('host refuses explicit resume of an uncertain effect without rewriting its 
     const before=journal.snapshot();
     await assert.rejects(runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,redact:s=>s,resumeRunId:before.runId}),/reconciliation/);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir,before.runId+'.json'),'utf8')),before);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('mixed Code to Codex to Code workflow shares handoff and waits for task completion',async()=>{
@@ -298,7 +299,7 @@ test('mixed Code to Codex to Code workflow shares handoff and waits for task com
     const tasks=combineWorkflowTaskAdapters([createCodeWorkflowAdapter(dir),codex]);
     const result=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,tasks,redact:s=>s});
     assert.equal(result.phase,'completed');assert.equal(result.steps[1].codexThreadId,'fixture-thread');assert.equal(result.steps[3].output,'[running code task...]\ncode done:24000');assert.equal(calls,1);assert.equal(disposed,1);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('UTF-8 Codex bytes survive the real adapter, journal reopen and next Code input',async()=>fixture(async(lease,dir)=>{
@@ -395,7 +396,7 @@ test('host reconciliation finishes observed task then continues the same run wit
     assert.equal(reconciled.phase,'ready');assert.equal(reconciled.steps.length,1);
     const done=await runCodeWorkflowHost(options);assert.equal(done.runId,reconciled.runId);assert.equal(done.steps[1].output,'done-next');
     await assert.rejects(runCodeWorkflowHost({...options,reconcile:true,resumeRunId:undefined}),/existing run identity/);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('adapter selection rejects ambiguity and never retries effects in another executor',async()=>{
@@ -423,12 +424,12 @@ test('unfinished execution reserves the vault across different workflows until r
     const before=fs.readFileSync(path.join(dir,pending.runId+'.json'),'utf8');
     await assert.rejects(runCodeWorkflowHost({...options,definition:second}),/Previous execution requires/);
     assert.equal(fs.readFileSync(path.join(dir,pending.runId+'.json'),'utf8'),before);
-    assert.deepEqual(fs.readdirSync(dir),[pending.runId+'.json']);
+    assert.deepEqual(fs.readdirSync(dir).filter(name=>name!=="timings"),[pending.runId+'.json']);
     const done=await runCodeWorkflowHost({...options,definition:first,resumeRunId:pending.runId});
     assert.equal(done.phase,'completed');assert.equal(done.steps.length,2);
     const next=await runCodeWorkflowHost({...options,definition:second});
     assert.equal(next.phase,'completed');assert.notEqual(next.runId,pending.runId);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('progress observer sees persisted boundaries and cannot mutate or race execution state',async()=>{
@@ -443,7 +444,7 @@ test('progress observer sees persisted boundaries and cannot mutate or race exec
         await new Promise(resolve=>setImmediate(resolve));
       }});
     assert.deepEqual(seen,['ready','in_flight','completed']);assert.equal(result.phase,'completed');
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('failed publication before step effects records a known failure and never replays that step',async()=>{
@@ -460,7 +461,7 @@ test('failed publication before step effects records a known failure and never r
     assert.equal(fs.existsSync(path.join(dir,'unexpected.txt')),false);
     const resumed=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,redact:s=>s,resumeRunId:id});
     assert.deepEqual(resumed,saved);assert.equal(fs.existsSync(path.join(dir,'unexpected.txt')),false);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
 
 test('failed progress persistence stops advancement while retaining completed effects',async()=>{
@@ -474,5 +475,5 @@ test('failed progress persistence stops advancement while retaining completed ef
     assert.equal(saved.phase,'ready');assert.equal(saved.steps.length,1);assert.equal(saved.nextStepId,'b');
     const done=await runCodeWorkflowHost({definition,runtimeDirectory:dir,vaultBase:dir,redact:s=>s,resumeRunId:id});
     assert.equal(done.phase,'completed');assert.equal(done.steps.length,2);assert.equal(done.runId,id);
-  } finally {for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
+  } finally {removeTimingFixtures(dir);for(const file of fs.readdirSync(dir)){assert.match(file,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(dir,file));}fs.rmdirSync(dir);}
 });
