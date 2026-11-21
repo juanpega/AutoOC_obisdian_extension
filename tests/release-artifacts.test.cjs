@@ -15,6 +15,20 @@ const removeFixture = dir => {
   fs.rmSync(dir, {recursive:true, force:true});
 };
 
+test('portable ZIP round trips binary, empty and UTF-8 entries through a native reader',async t=>{
+  const {zipArchive}=await import(pathToFileURL(path.join(root,'scripts/zip-archive.mjs')).href);
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-release-crlf-'));t.after(()=>removeFixture(dir));
+  const entries=[{name:'nested/á日本.txt',data:Buffer.from('línea\r\nnext\n')},{name:'empty',data:Buffer.alloc(0)},{name:'binary',data:Buffer.from(Array.from({length:256},(_,i)=>i))}];
+  const bytes=zipArchive(entries);assert.deepEqual(zipArchive(entries),bytes);
+  const zip=path.join(dir,'sample.zip'),destination=path.join(dir,'extracted');fs.writeFileSync(zip,bytes);
+  const result=require('./helpers/extract-zip.cjs')(zip,destination);assert.equal(result.status,0,result.stderr);
+  for(const entry of entries)assert.deepEqual(fs.readFileSync(path.join(destination,entry.name)),entry.data);
+  for(const name of ['/root','../escape','a/../b','a//b','a\\b','C:/bad','a\0b',''])assert.throws(()=>zipArchive([{name,data:''}]),/Unsafe/);
+  assert.throws(()=>zipArchive([{name:'same',data:''},{name:'same',data:''}]),/duplicate/);
+  assert.throws(()=>zipArchive([]),/entry count/);
+  assert.throws(()=>zipArchive([{name:'x'.repeat(65536),data:''}]),/ZIP64/);
+});
+
 test('release descriptor matches the actual Git blobs with Windows normalization enabled', async t => {
   const {releaseArtifacts, writeReleaseIntegrity, validateReleaseArtifacts} = await tools;
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-release-git-'));

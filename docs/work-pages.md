@@ -77,31 +77,45 @@ paralelismo entre varios propietarios autónomos de la misma instalación.
 
 ## Terminar el trabajo
 
-Revisa, prueba y guarda tus cambios en Git. Integra la rama con tus herramientas
-Git cuando corresponda: **Finish work no hace merge**.
+Revisa, prueba y guarda tus cambios en Git. Integra la rama desde **Merge review** o con tus herramientas
+Git cuando corresponda: **Archive page no hace merge**.
 
-Cierra la CLI y sus servicios, y pulsa **Finish work**. **Archive page** conserva
-la carpeta y permite restaurarla desde Overview. **Remove worktree folder**
-retira opcionalmente la carpeta y conserva la rama, sus commits y el historial.
+Cierra las sesiones y servicios que usan esa Page y pulsa **Archive page**. Conserva
+la carpeta y permite restaurarla desde Overview. Después, la página archivada ofrece
+**Remove worktree**: abre una revisión y confirmación separadas para retirar la carpeta
+limpia. Conserva la rama, sus commits y el historial. Para eliminar carpeta y rama juntas,
+elige **Discard work** en lugar de retirar únicamente la carpeta.
 Los archivos modificados, sin seguimiento o ignorados bloquean la retirada:
 guarda lo necesario y retira expresamente los archivos prescindibles antes de
 volver a revisar. Archivar sigue disponible aunque haya cambios locales.
 
-Para cerrar una página de **Existing folder**, usa **Finish work → Archive page**:
+Para cerrar una página de **Existing folder**, usa **Archive page**:
 solo desaparece de las pestañas habituales; la carpeta y sus archivos se conservan.
 El botón de confirmación permanece visible debajo de la revisión. Si está desactivado,
-el texto contiguo explica el bloqueo; termina las sesiones indicadas y pulsa
-**Refresh review**. El mensaje final confirma el cierre; puedes restaurar la página
+el texto contiguo explica el bloqueo. Cada sesión indica página, carpeta e identidad,
+con acceso directo para abrirla o solicitar su cierre. Una sesión externa o sin observación
+requiere confirmar su finalización; esa confirmación no mata procesos.
+El diálogo se actualiza al cambiar sesiones/actividad y al volver de herramientas externas.
+Mientras está bloqueado también vuelve a comprobar periódicamente el estado de Git;
+**Refresh review** sigue disponible. El mensaje final confirma el cierre; puedes restaurar la página
 desde **Overview** mientras conserves su carpeta.
 
 **Changes** es una vista previa, no una confirmación de cierre. Usa **Close preview**
-para volver. Tanto allí como en **Finish work** el diff muestra adiciones en verde,
+para volver. Tanto allí como en **Archive page** el diff muestra adiciones en verde,
 eliminaciones en rojo y rangos en azul. Incluye cambios preparados y sin preparar;
 el contenido de archivos sin seguimiento no se muestra. Un diff grande se acorta
 con aviso para revisar el contenido completo con tu herramienta Git.
 
-Crear, modificar o cerrar páginas exige las condiciones de inactividad del
-plugin; una sesión o ejecución pendiente en otra página puede bloquearlo.
+El helper de Main puede seguir abierto al archivar, retirar o descartar una Page con
+worktree independiente verificado. Bloquean las sesiones de esa Page y las carpetas
+solapadas cuya independencia no se pueda comprobar. Las ejecuciones y publicaciones
+pendientes conservan sus controles de inactividad; un merge que modifica Main también
+comprueba sus sesiones. Crear o modificar páginas conserva sus requisitos anteriores.
+
+Las revisiones muestran los archivos pendientes concretos, separados entre archivos
+del producto/proyecto y configuración local conocida (`.obsidian` y `.env` locales).
+Es una clasificación informativa por ruta: no excluye archivos de las comprobaciones
+ni autoriza guardarlos, descartarlos o ignorarlos automáticamente.
 Una retirada interrumpida queda pendiente de **Check removal**, que comprueba el
 resultado sin repetir el borrado. No elimines reservas ni journals manualmente.
 
@@ -126,8 +140,7 @@ desplazable de revisión, con los botones visibles en el pie.
 
 ## Descartar una funcionalidad
 
-En una página de worktree, pulsa **Discard work**, disponible también desde
-**Finish work → Discard work…**. Es distinto de archivar: elimina la carpeta del
+En una página de worktree, pulsa **Discard work**. Es distinto de archivar: elimina la carpeta del
 worktree, todos sus archivos —también los ignorados y sin seguimiento— y su rama
 local. El historial de la página se conserva; AutoOC no permite restaurar esos archivos.
 
@@ -146,21 +159,21 @@ ya se eliminó pero queda la rama, **Discard work** ofrece **Discard remaining b
 tras una nueva revisión y confirmación. No borres reservas o marcadores para desbloquearlo.
 
 
-## Merge review (candidato de desarrollo)
+## Merge review (candidato 1.7.28)
 
-En una página de worktree disponible, **Merge review** permite seleccionar como destino otra rama local ya abierta en un worktree del mismo repositorio. No cambia de rama. Muestra rama, commit y carpeta de origen y destino; distingue conflictos previstos de conflictos reales de un merge en curso.
+En una página de worktree disponible, **Merge review** permite elegir como destino otra rama local ya abierta en un worktree del mismo repositorio. Muestra rama, commit y carpeta de ambos lados. AutoOC ejecuta Git desde los botones; no hay que copiar órdenes a una terminal.
 
-- **Ready to merge**: no se prevén conflictos con esos commits. **Copy merge command** copia un bloque para PowerShell en Windows o un shell POSIX en macOS/Linux. El desarrollador lo revisa y ejecuta; se detiene antes del commit incluso si sería fast-forward. No sobrescribe archivos ignorados ni hace autostash.
-- **Conflicts found**: muestra archivos y detalles de Git. **Open target in VS Code** abre la carpeta de destino (requiere VS Code); **Copy target path** permite usar otro editor. Los archivos previstos todavía no tienen marcadores. Durante un merge real, resolver en el destino, revisar y preparar los archivos resueltos y ejecutar las pruebas. Current corresponde al destino; Incoming, al origen.
-- **Recheck conflicts** vuelve a inspeccionar Git. Sin entradas sin resolver, **Copy complete command** copia el commit con el mensaje de merge predeterminado. **Copy abort command** copia la cancelación; puede perder las ediciones realizadas al resolver conflictos. Cerrar el diálogo no cancela Git.
-- **Integration verified** comprueba que el commit origen es ancestro del destino. Solo entonces esta revisión ofrece **Finish work**, que mantiene sus confirmaciones habituales. Squash/rebase no se acreditan automáticamente. Esta comprobación no certifica pruebas ni corrección del código.
+1. **Start merge** aplica el commit de origen en la carpeta de destino y se detiene antes del commit, incluso si sería fast-forward. Requiere ambos árboles limpios y sin actividad conocida. No hace autostash ni sobrescribe archivos ignorados.
+2. Si hay conflictos, muestra los archivos reales sin declarar éxito. **Open target in VS Code** abre el destino; **Copy target path** permite utilizar otro editor. Resuelve, revisa y prepara los archivos en ese editor y ejecuta tus pruebas. Current es el destino; Incoming, el origen. AutoOC no elige resoluciones ni prepara archivos automáticamente.
+3. **Recheck conflicts** inspecciona de nuevo Git. **Complete merge** crea el commit con el mensaje de merge predeterminado cuando no quedan conflictos ni ediciones rastreadas sin preparar. Conserva los hooks y la configuración de firma de Git; un error se muestra y no provoca un reintento automático.
+4. **Abort merge** cancela el merge después de marcar la aceptación de pérdida de las ediciones de resolución. La confirmación se reinicia al volver a revisar. Cerrar el diálogo no aborta Git.
+5. **Already integrated / Integration verified** comprueba primero que el commit de origen es ancestro del destino, aunque haya sesiones o archivos locales pendientes. No hace falta repetir el merge ni commitear configuración del plugin para acreditarlo. **Review archiving** lleva a la revisión independiente de archivo; **Remove worktree** se ofrece después de archivar y conserva rama e historial. Squash/rebase no se acreditan automáticamente; la ascendencia no certifica las pruebas.
 
-AutoOC no ejecuta merge, commit, abort ni resolución automática. Hay que pausar schedules y escritores externos y cerrar tareas/CLI/servicios en ambas carpetas durante la integración: los comandos externos no adquieren la reserva del plugin. La revisión bloquea la preparación de comandos con actividad conocida, cambios pendientes o una operación Git ajena; vuelve a revisar al copiar. Los bloques comprueban rama/commits y, al iniciar, limpieza de archivos. No garantizan exclusión frente a procesos externos concurrentes.
+Cada operación vuelve a comprobar la revisión, las ramas, los commits, el contenido del índice y los cambios rastreados durante un merge. Si han cambiado, exige revisar otra vez. Las acciones de la interfaz quedan desactivadas mientras Git trabaja; el propietario mantiene su reserva e impide nuevos trabajos AutoOC hasta obtener el resultado. El diálogo se actualiza con la salida de Git. Ante un fallo o interrupción, revisa el estado existente antes de otra acción; no borres locks ni repitas órdenes por inferencia.
 
-La previsualización usa git merge-tree --write-tree y puede crear objetos Git sin referencia; no modifica ramas, índice ni archivos de trabajo. Requiere un Git compatible e historias relacionadas. Con drivers de merge personalizados o merge.renormalize se indica Preview unavailable para no ejecutar filtros/driver durante una consulta; se puede inspeccionar después un merge iniciado manualmente. Las listas se limitan a 150 archivos en pantalla y los detalles a 12 000 caracteres. La revisión es efímera, no modifica el esquema del catálogo ni añade campos al JSON de tareas/workflows.
+Mantén pausadas las programaciones y detenidos los escritores externos, tareas, CLI y servicios de ambas carpetas hasta completar o abortar. La reserva de AutoOC no excluye procesos Git externos. Entre operaciones se libera la preparación de página para permitir revisar y probar; la siguiente acción revalida la actividad.
 
-Referencias de implementación: https://git-scm.com/docs/git-merge-tree , https://git-scm.com/docs/git-merge y https://code.visualstudio.com/docs/configure/command-line .
-
+La previsualización usa `git merge-tree --write-tree`: puede crear objetos sin referencia, pero no modifica ramas, índice ni archivos. Con drivers personalizados o `merge.renormalize`, o sin un Git compatible, indica **Preview unavailable**; permite inspeccionar después un merge iniciado con otra herramienta. Muestra hasta 150 archivos y 12 000 caracteres de detalles. No cambia el esquema del catálogo ni el JSON de tareas/workflows.
 
 ## Import y CLI desde Overview
 
@@ -169,3 +182,9 @@ Import está disponible también en Overview: abre la importación habitual al c
 CLI abre Choose CLI workspace. Hay que pulsar Use workspace en Main workspace o una página activa; se muestran nombre, ruta y rama registrada cuando corresponde. Las páginas archivadas o con retirada pendiente/completada no se ofrecen. Abrir el selector o cancelar no inicia procesos ni guarda preferencias. Si la página o carpeta cambió mientras el selector estaba abierto, se pide cerrarlo y elegir de nuevo.
 
 La elección abre el lanzador CLI existente o recupera su terminal viva. Se conservan identidad de página, carpeta y reservas; Overview permanece como vista seleccionada. Main conserva su lanzador y su selección de carpeta habituales. Las comprobaciones del motor/propietario se siguen haciendo al lanzar la sesión. No cambia el esquema JSON ni los workflows programados.
+
+## Tareas CLI interactivas dentro de una página (candidato 1.7.28)
+
+Para abrir un agente sin una tarea guardada, utiliza **CLI in this page**: la carpeta del worktree se conserva aunque cambies de pestaña. Para ejecutar una tarea guardada, abre sus controles y usa **Run task here**. Si la seleccionaste dentro de un workflow, **Run this task only** ejecuta únicamente esa tarea interactiva como ejecución independiente de la página, con su carpeta y objetivo; no ejecuta los pasos anteriores ni posteriores. Los historiales de ambas ejecuciones se muestran separados.
+
+Los workflows de varios pasos con una CLI interactiva siguen bloqueados: abrir una terminal no demuestra que el agente haya terminado. Una tarea con carpeta fija fuera de la página, cambios de rama configurados, una sesión pendiente o un ejecutable no disponible también puede rechazarse. Deja la carpeta de la tarea sin configurar si debe heredar la página; esto se decide en su definición compartida, no se cambia automáticamente. Los errores de lanzamiento quedan visibles en el diálogo para poder consultarlos. El botón de CLI manual no transmite el prompt de una tarea: para recibirlo, utiliza la tarea guardada.

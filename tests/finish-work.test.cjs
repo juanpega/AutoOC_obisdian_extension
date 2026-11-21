@@ -29,18 +29,46 @@ async function fixture(t){
   return {vault,repo,worktree,dir,file,page,p,open,read:()=>JSON.parse(fs.readFileSync(file,'utf8')),review:()=>p.reviewPageFinish('page')};
 }
 
+async function archive(f){const review=await f.review();await f.p.finishWorkPage('page',review.hash,false,false);return f;}
+async function archivedFixture(t){return archive(await fixture(t));}
+
 test('merge review checks the installed owner and terminal activity without saving page settings',async t=>{
   const f=await fixture(t),before=fs.readFileSync(f.file,'utf8');
   let review=await f.p.reviewPageMerge('page');assert.equal(review.state,'integrated');assert.equal(review.source.branch,'feat/finish');
   f.p.settings.pageTerminalClaims=[{id:'terminal',pageId:'page',directory:f.worktree,createdAt:new Date().toISOString()}];
-  review=await f.p.reviewPageMerge('page');assert.equal(review.state,'blocked');assert.match(review.blockers.join(),/Close active terminals/);
+  review=await f.p.reviewPageMerge('page');assert.equal(review.state,'integrated');assert.equal(review.integration,'verified');assert.match(review.blockers.join(),/terminals/);
   f.p.settings.pageTerminalClaims=[];f.p.releasePluginExecution(false);
-  review=await f.p.reviewPageMerge('page');assert.equal(review.state,'blocked');assert.match(review.blockers.join(),/own execution/);
+  review=await f.p.reviewPageMerge('page');assert.equal(review.state,'integrated');assert.match(review.blockers.join(),/own execution/);
   assert.equal(fs.readFileSync(f.file,'utf8'),before);assert.ok(fs.existsSync(f.worktree));
+});
+
+test('plugin executes merge under its reservation, blocks concurrent starts, then completes and can archive',async t=>{
+  const f=await fixture(t),before=fs.readFileSync(f.file,'utf8');
+  fs.writeFileSync(path.join(f.worktree,'feature.txt'),'feature');git(f.worktree,'add','feature.txt');git(f.worktree,'commit','-m','feature');
+  let review=await f.p.reviewPageMerge('page');assert.equal(review.state,'ready');
+  const operation=f.p.executePageMerge('page',review.target.directory,review.hash,'start');
+  assert.equal(f.p.pagePreparation,true);assert.ok(f.p.sharedCompletions.size);
+  assert.throws(()=>f.p.reservePagePreparation(),/preparation/);
+  assert.throws(()=>f.p.beginExecutionEffects(),/preparation/);
+  await assert.rejects(f.p.executePageMerge('page',review.target.directory,review.hash,'start'),/preparation/);
+  assert.equal(f.p.pagePreparation,true);
+  await operation;assert.equal(f.p.pagePreparation,false);assert.equal(f.p.sharedCompletions.size,0);
+  review=await f.p.reviewPageMerge('page');assert.equal(review.state,'resolved');
+  f.p.settings.pageTerminalClaims=[{id:'terminal',pageId:'page',directory:f.worktree,createdAt:new Date().toISOString()}];
+  await assert.rejects(f.p.executePageMerge('page',review.target.directory,review.hash,'complete'),/terminals/);
+  f.p.settings.pageTerminalClaims=[];
+  const completed=await f.p.executePageMerge('page',review.target.directory,review.hash,'complete');
+  assert.equal(completed.review.state,'integrated');assert.equal(fs.readFileSync(f.file,'utf8'),before);
+  assert.equal(fs.readFileSync(path.join(f.repo,'feature.txt'),'utf8'),'feature');
+  const finish=await f.review();await f.p.finishWorkPage('page',finish.hash,false,false);
+  assert.equal(f.read().workPages[0].archived,true);assert.ok(fs.existsSync(f.worktree));
 });
 
 test('explicit discard removes dirty, untracked and ignored worktree files and its local branch, preserving Main and history',async t=>{
   const f=await fixture(t);await f.p.runWorkPage('page','w',false);
+  const claim={id:'main-discard-helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString(),exclusive:true};
+  const session={id:72,label:'Coordinator',cwd:f.repo,exited:false,page:{pageId:'main',claimId:claim.id}};
+  f.p.settings.pageTerminalClaims=[claim];f.p.cliTerminals={sessions:[session]};
   fs.writeFileSync(path.join(f.worktree,'tracked.txt'),'committed feature');git(f.worktree,'add','tracked.txt');git(f.worktree,'commit','-m','feature commit');
   fs.appendFileSync(path.join(f.worktree,'tracked.txt'),'dirty');fs.writeFileSync(path.join(f.worktree,'.env'),'private local');
   const mainHead=git(f.repo,'rev-parse','HEAD'),index=fs.readFileSync(path.join(f.repo,'.git/index')),before=f.read();
@@ -53,6 +81,7 @@ test('explicit discard removes dirty, untracked and ignored worktree files and i
   assert.equal(fs.existsSync(f.worktree),false);assert.equal(git(f.repo,'branch','--list','feat/finish'),'');
   assert.equal(git(f.repo,'rev-parse','HEAD'),mainHead);assert.deepEqual(fs.readFileSync(path.join(f.repo,'.git/index')),index);
   assert.equal(fs.readFileSync(path.join(f.repo,'tracked.txt'),'utf8'),'base');assert.deepEqual(after.workflows,before.workflows);assert.deepEqual(after.pageRuns,before.pageRuns);
+  assert.deepEqual(after.pageTerminalClaims,[claim]);assert.equal(session.exited,false);f.p.cliTerminals=undefined;
   await assert.rejects(runtime.runInstalledWorkflow({vault:f.vault,workflowId:'w',pageId:'page',lease:f.p.pluginExecutionLease,redact:s=>s}),/removed/);
 });
 
@@ -185,8 +214,59 @@ test('page deletion retains execution history and worktree removal evidence',asy
   const f=await fixture(t);await f.p.runWorkPage('page','w',false);
   let review=await f.review();await f.p.finishWorkPage('page',review.hash,false,false);
   const before=f.read();await assert.rejects(f.p.deleteWorkPage({...f.p.settings.workPages[0]}),/run history/);assert.deepEqual(f.read(),before);
-  const g=await fixture(t);review=await g.review();await g.p.finishWorkPage('page',review.hash,true,true);
+  const g=await archivedFixture(t);review=await g.review();await g.p.finishWorkPage('page',review.hash,true,true);
   const retained=g.read();await assert.rejects(g.p.deleteWorkPage({...g.p.settings.workPages[0]}),/removal evidence/);assert.deepEqual(g.read(),retained);
+});
+
+test('Main helper stays open through separate archive and clean worktree removal',async t=>{
+  const f=await fixture(t),claim={id:'main-helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString(),exclusive:true};
+  const session={id:71,label:'Coordinator',cwd:f.repo,exited:false,page:{pageId:'main',claimId:claim.id}};
+  f.p.settings.pageTerminalClaims=[claim];f.p.cliTerminals={sessions:[session]};
+  const head=git(f.repo,'rev-parse','HEAD'),index=fs.readFileSync(path.join(f.repo,'.git/index'));
+  let review=await f.review();assert.equal(review.archiveBlockers.length,0);assert.equal(f.p.pageBlockingSessions('page').length,0);
+  await assert.rejects(f.p.finishWorkPage('page',review.hash,true,true),/Archive the page before/);
+  assert.ok(fs.existsSync(f.worktree));assert.equal(f.read().workPages[0].archived,undefined);
+  await f.p.finishWorkPage('page',review.hash,false,false);
+  review=await f.review();await f.p.finishWorkPage('page',review.hash,true,true);
+  assert.equal(fs.existsSync(f.worktree),false);assert.equal(f.read().workPages[0].worktreeRemoval.status,'removed');
+  assert.deepEqual(f.read().pageTerminalClaims,[claim]);assert.equal(session.exited,false);
+  assert.equal(git(f.repo,'rev-parse','HEAD'),head);assert.deepEqual(fs.readFileSync(path.join(f.repo,'.git/index')),index);
+  assert.equal(git(f.repo,'branch','--list','feat/finish'),'feat/finish');f.p.cliTerminals=undefined;
+});
+
+test('closure still blocks same-page, overlapping and unverifiable sessions; Main merge retains its guard',async t=>{
+  const f=await fixture(t),claim={id:'main-helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString()};
+  f.p.settings.pageTerminalClaims=[claim];
+  const merge=await f.p.reviewPageMerge('page');assert.equal(merge.integration,'verified');assert.ok(merge.blockers.length);
+  await assert.rejects(f.p.executePageMerge('page',merge.target.directory,merge.hash,'start'),/terminals/);
+  claim.directory=f.worktree;assert.equal(f.p.pageBlockingSessions('page').length,1);assert.ok((await f.review()).archiveBlockers.length);
+  claim.directory=f.repo;fs.writeFileSync(path.join(f.repo,'.gitignore'),'.env\n');
+  assert.equal(f.p.pageBlockingSessions('page').length,1);assert.ok((await f.review()).archiveBlockers.length);
+  f.p.settings.pageTerminalClaims=[];f.p.cliTerminals={sessions:[{id:9,exited:false}]};assert.equal(f.p.pageBlockingSessions('page').length,1);f.p.cliTerminals=undefined;
+});
+
+test('blocking session navigation selects the exact observed terminal and delegates closure confirmation',async t=>{
+  const f=await fixture(t),calls=[];
+  const claim={id:'other-claim',pageId:'another',directory:f.worktree,createdAt:new Date().toISOString()};
+  f.p.settings.pageTerminalClaims=[claim];f.p.cliTerminals={sessions:[{id:8,label:'Agent',cwd:f.worktree,exited:false,page:{pageId:'another',claimId:claim.id}},
+    {id:9,label:'Main helper',cwd:f.repo,exited:false}],select:id=>calls.push(['select',id]),show:async()=>calls.push(['show']),requestClose:async id=>calls.push(['confirm-close',id])};
+  const rows=f.p.pageBlockingSessions('page');assert.equal(rows.length,1);assert.equal(rows[0].sessionId,8);
+  await f.p.openBlockingPageSession(rows[0].id,true);assert.deepEqual(calls,[['select',8],['show'],['confirm-close',8]]);
+  f.p.cliTerminals.sessions=[];await assert.rejects(f.p.openBlockingPageSession(rows[0].id,true),/no longer observed/);
+  assert.equal(f.p.settings.pageTerminalClaims.length,1);f.p.cliTerminals=undefined;
+});
+
+test('open reviews receive native exit and saved reservation changes and release subscriptions on close',()=>{
+  const p=plugin(process.cwd()),listeners=new Set(),session={id:5,cwd:process.cwd(),exited:false};
+  p.settings={workPages:[],pageRuns:[],pageTerminalClaims:[{id:'claim',pageId:'main',directory:process.cwd()}]};
+  p.cliTerminals={sessions:[session],subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn);}};
+  let changes=0;const unsubscribe=p.subscribePageReview(()=>changes++);
+  for(const listener of listeners)listener();assert.equal(changes,0);
+  session.exited=true;for(const listener of listeners)listener();assert.equal(changes,1);
+  p.settings.pageTerminalClaims=[];Object.getPrototypeOf(p).refreshOpenViews.call(p);assert.equal(changes,2);
+  Object.getPrototypeOf(p).refreshOpenViews.call(p);assert.equal(changes,2);
+  unsubscribe();assert.equal(listeners.size,0);session.exited=false;
+  Object.getPrototypeOf(p).refreshOpenViews.call(p);assert.equal(changes,2);
 });
 
 test('archive preserves dirty and ignored files, branch and global definitions',async t=>{
@@ -201,7 +281,7 @@ test('archive preserves dirty and ignored files, branch and global definitions',
 test('clean worktree removal keeps unmerged commits, history and Main workspace; runtime cannot reuse the removed page',async t=>{
   const f=await fixture(t);await f.p.runWorkPage('page','w',false);
   fs.writeFileSync(path.join(f.worktree,'tracked.txt'),'feature');git(f.worktree,'add','.');git(f.worktree,'commit','-m','unmerged');
-  const head=git(f.worktree,'rev-parse','HEAD'),before=f.read(),review=await f.review();assert.equal(review.removalBlockers.length,0);
+  await archive(f);const head=git(f.worktree,'rev-parse','HEAD'),before=f.read(),review=await f.review();assert.equal(review.removalBlockers.length,0);
   const index=fs.readFileSync(path.join(f.repo,'.git/index')),mainHead=git(f.repo,'rev-parse','HEAD');
   await f.p.finishWorkPage('page',review.hash,true,true);
   const after=f.read();assert.equal(after.workPages[0].worktreeRemoval.status,'removed');assert.equal(after.workPages[0].archived,true);
@@ -214,7 +294,7 @@ test('clean worktree removal keeps unmerged commits, history and Main workspace;
 });
 
 test('stale review, ignored files and locked worktrees never trigger removal',async t=>{
-  const f=await fixture(t),review=await f.review();
+  const f=await archivedFixture(t),review=await f.review();
   fs.writeFileSync(path.join(f.worktree,'.env'),'keep');
   await assert.rejects(f.p.finishWorkPage('page',review.hash,true,true),/changed/);assert.ok(fs.existsSync(f.worktree));
   assert.equal(f.read().workPages[0].worktreeRemoval,undefined);
@@ -237,7 +317,7 @@ test('main folder, nested page, protected default folder and hidden index flags 
 });
 
 test('pending write failure preserves the worktree and releases only preparation ownership',async t=>{
-  const f=await fixture(t),review=await f.review(),before=fs.readFileSync(f.file),save=f.p.saveSettings.bind(f.p);
+  const f=await archivedFixture(t),review=await f.review(),before=fs.readFileSync(f.file),save=f.p.saveSettings.bind(f.p);
   f.p.saveSettings=async()=>{throw Error('save rejected');};
   await assert.rejects(f.p.finishWorkPage('page',review.hash,true,true),/save rejected/);
   assert.deepEqual(fs.readFileSync(f.file),before);assert.ok(fs.existsSync(f.worktree));assert.equal(f.p.pagePreparation,false);
@@ -245,7 +325,7 @@ test('pending write failure preserves the worktree and releases only preparation
 });
 
 test('final save failure keeps a durable pending record; a new owner can verify completed removal without replay',async t=>{
-  const f=await fixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
+  const f=await archivedFixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
   f.p.saveSettings=async(...args)=>{if(f.p.settings.workPages[0].worktreeRemoval?.status==='removed')throw Error('final save rejected');return save(...args);};
   await assert.rejects(f.p.finishWorkPage('page',review.hash,true,true),/final save rejected/);
   assert.equal(f.read().workPages[0].worktreeRemoval.status,'pending');assert.equal(fs.existsSync(f.worktree),false);
@@ -254,7 +334,7 @@ test('final save failure keeps a durable pending record; a new owner can verify 
 });
 
 test('a late write is caught after pending publication; checking the same owner keeps the folder without retrying',async t=>{
-  const f=await fixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
+  const f=await archivedFixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
   f.p.saveSettings=async(...args)=>{await save(...args);if(f.p.settings.workPages[0].worktreeRemoval?.status==='pending')fs.writeFileSync(path.join(f.worktree,'late.txt'),'keep');};
   await assert.rejects(f.p.finishWorkPage('page',review.hash,true,true),/modified, untracked or ignored/);
   assert.equal(f.read().workPages[0].worktreeRemoval.status,'pending');f.p.saveSettings=save;
@@ -264,7 +344,7 @@ test('a late write is caught after pending publication; checking the same owner 
 });
 
 test('a new owner needs explicit review before keeping an intact worktree and never repeats removal',async t=>{
-  const f=await fixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
+  const f=await archivedFixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
   f.p.saveSettings=async(...args)=>{await save(...args);if(f.p.settings.workPages[0].worktreeRemoval?.status==='pending')fs.writeFileSync(path.join(f.worktree,'late.txt'),'keep');};
   await assert.rejects(f.p.finishWorkPage('page',review.hash,true,true));f.p.releasePluginExecution(false);
   const next=await f.open();await assert.rejects(next.finishWorkPage('page','check-removal',false,false),/previous owner/);
@@ -285,7 +365,7 @@ test('tracked terminals, uncertain sessions and missing execution evidence block
 });
 
 test('plugin unload during pending publication retains ownership until the operation drains and never starts removal',async t=>{
-  const f=await fixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
+  const f=await archivedFixture(t),review=await f.review(),save=f.p.saveSettings.bind(f.p);
   let entered,release;const reached=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
   f.p.saveSettings=async(...args)=>{await save(...args);entered();await gate;};
   const operation=f.p.finishWorkPage('page',review.hash,true,true),failed=assert.rejects(operation,/closed|stopped/i);

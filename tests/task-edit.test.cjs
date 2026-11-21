@@ -17,7 +17,7 @@ test('older owner rejects task editing before publishing a request',async t=>{
  const owner=createPluginRequestHost(lease,async()=>{throw Error('must not execute');},async()=>({workflowId:'w',definitionHash:'a'.repeat(64)}));
  t.after(async()=>{owner.close();await owner.drain();lease.release();fs.rmSync(root,{recursive:true,force:true});});
  const {task}=fixture();await assert.rejects(requestPluginTaskEdit(root,command(task)),/does not support task editing/);
- assert.equal(fs.readdirSync(path.join(root,'cli-'+lease.token)).some(file=>file.endsWith('.request')),false);
+ assert.equal(fs.readdirSync(owner.directory).some(file=>file.endsWith('.request')),false);
 });
 test('packaged CLI exports and edits a 300 KiB step through a live owner',async t=>{
  const os=require('node:os'),{spawn,spawnSync}=require('node:child_process');

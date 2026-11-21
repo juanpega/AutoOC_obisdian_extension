@@ -1,13 +1,16 @@
 import {applyTaskEdit,type TaskEditCommand} from "./task-edit";
 import { AreaDashboard, createAreaDashboardState, dashboardItems, workPageDashboardItems, type PageRunProgress, type DashboardItem } from "./dashboard-areas";
 import { setupCodeTextarea, renderCodePreview } from "./code-editor";
+import { workflowStepDisplayName, bindWorkflowLabel, refreshWorkflowLabels } from "./workflow-labels";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import { INTERACTIVE_CLIS, launchInteractiveCli, type InteractiveCliProvider } from "./interactive-cli";
 import { addWorkPageSettings, renderWorkPages, openPageItemControls, showPageItemHistory, openCliWorkspaceSelector } from "./work-pages-ui";
-import { reviewPageMerge, type MergeReview } from "./merge-review";
+import { reviewPageMerge, executePageMerge, type MergeReview, type MergeCommand } from "./merge-review";
 import { assertNoPageTerminal, selectWorkPage, pageExecutionId, validateWorkPages, verifyWorkPageEnvironment, type WorkPageSettings, type PageRun, type WorkPage } from "./work-pages";
 import { reviewWorkPage, workPageRevision, removeReviewedWorktree, inspectRemovalOutcome, assertRemovalScope, type FinishWorkReview } from "./finish-work";
+import {independentGitWorkspaces} from "./workspace-conflicts";
+import {directoriesOverlap} from "./work-pages";
 import {reviewWorkPageDiscard, removeDiscardedWorktree, deleteDiscardedBranch, inspectDiscardOutcome, type DiscardWorkReview} from "./discard-work";
 import { prepareCliTask, launchExternalCliTask, getCliTaskValidationError as getInteractiveCliTaskValidationError } from "./interactive-cli-task";
 import { IntegratedTerminals } from "./integrated-terminal";
@@ -28,7 +31,9 @@ import { LegacyOutputRedaction } from "./legacy-output-redaction";
 import { LegacyCredentialNoticeModal } from "./legacy-credential-notice";
 import { samePhysicalPath } from "./path-identity";
 import {recoverInterruptedSettingsWrite} from "./settings-write-recovery";
-import {createPluginRequestHost} from "./cli-plugin-requests";
+import {createPluginRequestHost, startPluginRequestPump} from "./cli-plugin-requests";
+import type { TimingContext } from "./execution-timing";
+import {withFailureStage} from "./execution-failure";
 import {applyWorkflowEdit} from "./workflow-edit";
 import { buildOpenCodeScript } from "./opencode-script";
 import { isOpenCodeTask, openCodeRunArgs, openCodeInteractiveArgs } from "./opencode-profile";
@@ -66,6 +71,8 @@ import * as os from "os";
 import * as fs from "fs";
 import * as path from "path";
 import * as crypto from "crypto";
+import {createPageCreationService} from "./page-creation";
+import {registerWorkPage} from "./work-pages";
 import * as http from "http";
 import {
   CodexAppServerClient,
@@ -112,7 +119,11 @@ const AUTOOC_WORKFLOW_PROMPT = `You are an expert AutoOC assistant. AutoOC is an
 
 Always output only one valid JSON object. Do not write explanations outside the final JSON.
 
-CLI export-task/edit-task edit existing shared task name and prompt using an expectedHash and a compatible loaded owner; these patches are not import packages and must not appear in creator JSON. Work pages are local execution environments, not exported task/workflow fields. Tasks and workflows remain global definitions. Do not generate page IDs, pageRuns, terminal reservations or worktree settings in JSON. Every page automatically shows all global tasks, workflows and steps in the same area Dashboard as Main workspace, including newly created definitions. There is no linking or copy/import step. Page run state, logs and history remain separate from Main and other pages. Open controls runs a task or the complete owning workflow in the selected page; single-step runs remain Main-only. Editing a definition changes the shared catalog. Existing folder creates only a page pointing to that folder, never a new branch or isolated worktree. For reusable page tasks, leave workingDirectory unset so it inherits the selected page; a fixed folder outside that page is rejected before execution. In page runs, Code vault/files capabilities are rooted in the page folder, with the same explicit permissions. Page objectives are added to AI task prompts; do not hardcode host-vault paths or perform Git branch switching/handoff in a page workflow. Worktree creation requires the developer setting and the project's preparation flow; generating or importing a workflow never creates a worktree. Overview opens from the small O button next to Dashboard; Dashboard returns to the last work page. Overview is for viewing activity/logs and navigating to a workspace; it also offers Delete page for archived pages with no run history or worktree removal evidence. Import stays available in Overview because it updates the shared task/workflow catalog. CLI in Overview requires an explicit workspace selection (Main workspace or an active page); it never silently selects a folder. Archived/removed pages are excluded and the selected context is rechecked before opening the existing CLI launcher or reusing its live terminal. Delete page removes only page configuration and keeps folders, branches and shared definitions. It requires confirmation and checks ownership, inactivity and unchanged page identity. Execution controls remain in Main workspace or the selected page. Main workspace displays the current Git branch of its default folder; this does not override task-specific folders. Schedules and CLI requests without page selection still target Main workspace. Finish work reviews activity and changes, then archives the page; keeping its folder is the default. Archive page, Refresh review and Cancel remain visible beside the readiness or blocking reason. The workspace name and full folder path stay in the fixed header of Finish work, Discard work and Delete page. Existing folder pages explain why Discard work is unavailable even with no changes. Changes is a read-only preview with Close preview, not a close-workflow confirmation. Diff previews use text-only colored added/removed/hunk lines, include staged and unstaged changes and explicitly indicate truncation; untracked file contents are not included. Optional removal of a clean linked worktree requires explicit confirmation and keeps the branch, commits and history. Modified, untracked or ignored files, submodules, hidden index changes, active or uncertain sessions and changed identities block removal. A pending removal stays blocked until Check removal verifies its outcome; removed pages cannot be restored or executed. Never generate worktreeRemoval in task/workflow JSON. Discard work is a separate explicit operation for independent worktrees: it reviews all local files (including ignored/untracked files) and commits, requires the exact branch name plus confirmation of data loss and closed sessions/processes, then removes the worktree and local branch. It keeps page history but cannot restore discarded files. Main/shared folders, protected branches, branches used elsewhere and unsafe or oversized reviews are blocked. Check discard only inspects an interrupted outcome; if only the branch remains, deleting it requires a new review and confirmation. No remote branch is deleted. Never generate discard evidence or cleanup commands in task/workflow JSON. Merge review previews conflicts between committed source and checked-out target branches, inspects actual unresolved files during a merge, opens the target in VS Code and copies guarded commands for the developer; it never executes merge, commit or abort. Pause schedules and all writers for external Git work. Finish work is offered from this review only after source ancestry is verified in the target; squash/rebase integration is not automatically verified. This does not change the independent archive/discard contracts. Never generate merge review state or cleanup commands in task/workflow JSON. Integration queues and parallel parent orchestration are not available in this candidate.
+CLI reconnection: hosts advertising requestInspection:1 support inspect-request and follow with exactly one --request-id or --run selector. Capture the submitted requestId and subsequent runId; after a lost heartbeat, observe that same identity rather than launching again. States are not-accepted, running, finished and unknown; finished does not imply success. Following is read-only, and interrupting follow does not cancel the run. Phase timings are auxiliary diagnostics, not evidence that work completed. These are CLI capabilities, not task/workflow schema fields. Do not synchronously follow child work that waits for its parent to finish.
+
+Page preparation CLI: compatible hosts advertise pageCreation:1. A trusted task with explicit terminal permission can submit create-page --vault ROOT --request FILE. The request uses a stable requestId and may include a launch object selecting exactly one existing workflowId or taskId. During active work, submission returns queued with created:false and a reserved pageId; it does not mean the page or child run has completed. The owner waits for current runs to complete successfully before creating and launching; never synchronously wait for that child inside its parent or recursively call run on a not-yet-created page. Inspect with inspect-page-request --vault ROOT --request-id ID. Reuse the same request ID after a lost response; never generate a new ID as a transport retry. Worktrees must already be enabled and any gitignore change authorized. Optional requirementId/requirementText writes a hash-checked snapshot at .autooc/requirement.md; Code needs explicit vault permission to read it. These are CLI request fields, not new task/workflow schema fields. Do not grant permissions, create pages merely by importing JSON, or embed private requirement text in examples.
+
+CLI export-task/edit-task edit existing shared task name and prompt using an expectedHash and a compatible loaded owner; these patches are not import packages and must not appear in creator JSON. Work pages are local execution environments, not exported task/workflow fields. Tasks and workflows remain global definitions. Do not generate page IDs, pageRuns, terminal reservations or worktree settings in JSON. Every page automatically shows all global tasks, workflows and steps in the same area Dashboard as Main workspace, including newly created definitions. There is no linking or copy/import step. Page run state, logs and history remain separate from Main and other pages. Open controls runs a task or the complete owning workflow in the selected page. For an interactive task selected within a workflow, Run this task only launches that shared task as a standalone page run with the page folder and objective, without preceding or subsequent workflow steps; other single-step runs remain Main-only. Page launch errors remain visible in the dialog. Editing a definition changes the shared catalog. Existing folder creates only a page pointing to that folder, never a new branch or isolated worktree. For reusable page tasks, leave workingDirectory unset so it inherits the selected page; a fixed folder outside that page is rejected before execution. In page runs, Code vault/files capabilities are rooted in the page folder, with the same explicit permissions. Page objectives are added to AI task prompts; do not hardcode host-vault paths or perform Git branch switching/handoff in a page workflow. Worktree creation requires the developer setting and the project's preparation flow; generating or importing a workflow never creates a worktree. Overview opens from the small O button next to Dashboard; Dashboard returns to the last work page. Overview is for viewing activity/logs and navigating to a workspace; it also offers Delete page for archived pages with no run history or worktree removal evidence. Import stays available in Overview because it updates the shared task/workflow catalog. CLI in Overview requires an explicit workspace selection (Main workspace or an active page); it never silently selects a folder. Archived/removed pages are excluded and the selected context is rechecked before opening the existing CLI launcher or reusing its live terminal. Delete page removes only page configuration and keeps folders, branches and shared definitions. It requires confirmation and checks ownership, inactivity and unchanged page identity. Execution controls remain in Main workspace or the selected page. Main workspace displays the current Git branch of its default folder; this does not override task-specific folders. Schedules and CLI requests without page selection still target Main workspace. Archive page reviews activity and changes, then archives the page while keeping all files and branches. Archive page, Refresh review and Cancel remain visible beside the readiness or blocking reason. The workspace name and full folder path stay in the fixed header of Archive page, Remove worktree, Discard work and Delete page. Existing folder pages explain why Discard work is unavailable even with no changes. Changes is a read-only preview with Close preview, not a close-workflow confirmation. Diff previews use text-only colored added/removed/hunk lines, include staged and unstaged changes and explicitly indicate truncation; untracked file contents are not included. After archiving, Remove worktree opens a separate review and explicit confirmation to remove only the clean linked worktree folder, keeping the branch, commits and history. Main helpers may stay open during archive/removal/discard when workspace independence is verified; sessions in the affected page or unverifiable overlapping folders still block closure, as do pending executions/publications. Blocking sessions show their exact identity and directory with direct terminal controls. Reviews refresh on session/activity changes and window focus, and periodically while blocked, without repeating mutations. Pending files distinguish project files from known local configuration paths; this classification never exempts files from safety checks. Modified, untracked or ignored files, submodules, hidden index changes, active or uncertain sessions and changed identities block removal. A pending removal stays blocked until Check removal verifies its outcome; removed pages cannot be restored or executed. Never generate worktreeRemoval in task/workflow JSON. Discard work is a separate explicit operation for independent worktrees: it reviews all local files (including ignored/untracked files) and commits, requires the exact branch name plus confirmation of data loss and closed sessions/processes, then removes the worktree and local branch. It keeps page history but cannot restore discarded files. Main/shared folders, protected branches, branches used elsewhere and unsafe or oversized reviews are blocked. Check discard only inspects an interrupted outcome; if only the branch remains, deleting it requires a new review and confirmation. No remote branch is deleted. Never generate discard evidence or cleanup commands in task/workflow JSON. Merge review previews conflicts between committed source and checked-out target branches, inspects actual unresolved files during a merge, opens the target in VS Code and executes Start merge, Complete merge and Abort merge in the reviewed target under the owner reservation. Start stops before committing; completion requires resolved, staged edits; abort requires explicit acceptance of losing resolution edits. Each action rechecks the reviewed Git state and activity; failures are never retried automatically. Pause schedules and external writers until integration is complete or aborted. Committed integration is checked before dirty-file or session blockers and shown as Already integrated when source ancestry is verified. No repeated merge or local plugin configuration commit is needed to establish it. Review archiving is independent of integration; removing the worktree and discarding its branch are separate confirmed actions. Actual merges still check Main sessions. Squash/rebase integration is not automatically verified; ancestry does not verify tests. Never generate merge review state or cleanup commands in task/workflow JSON. Integration queues and parallel parent orchestration are not available in this candidate.
 
 Integrated page terminals reuse their live session. Their reservation is released only after confirmed native exit/stop and a successful save; external or unobserved sessions require manual confirmation. Interactive page tasks must be standalone or the only step of a workflow; terminal launch is not evidence that the requested work finished. Parallel page work still obeys exclusive policies and verified workspace boundaries. Do not generate cleanup scripts that remove terminal claims or execution locks.
 
@@ -288,6 +299,7 @@ Task step example:
 }
 
 taskExportId must match an existing task exportId.
+The task name belongs to the referenced task. A task step's optional name is a workflow-local alias, not its identity or a cached task name. Omit the step name unless a distinct alias is useful. WorkFlows shows a distinct alias alongside the current task name; renaming the task keeps IDs, transitions and aliases unchanged. Code and delay steps keep their own names. Workflow steps likewise show a distinct alias alongside the referenced workflow's current name.
 
 Transitions:
 The transitions array is the recommended canonical form. Include it on every generated workflow step, using [] for a terminal step that must remain terminal after export and import. The importer validates transitions when provided. The UI importer also accepts a single transition object only for legacy compatibility.
@@ -1637,6 +1649,19 @@ export default class AutoOCPlugin extends Plugin {
     if (claim) await this.releasePageTerminal(claim.id);
   }
   private pagePreparation = false;
+  private pageReviewListeners = new Set<()=>void>();
+  subscribePageReview(listener:()=>void):()=>void {
+    const stamp=()=>JSON.stringify([this.settings.workPages,this.settings.pageTerminalClaims,
+      this.settings.pageRuns?.map(run=>[run.runId,run.phase,run.uncertain]),
+      this.cliTerminals?.sessions?.map(session=>[session.id,session.exited,session.cwd,session.page]),
+      this.sharedWorkflowExecutions.size,this.runningProcesses.size,this.runningCodexClients.size,this.legacyAttempts.size,
+      this.updateInProgress,this.bulkCatalogMutationInProgress,this.workflowEditPending]);
+    let previous=stamp();
+    const changed=()=>{const next=stamp();if(next!==previous){previous=next;listener();}};
+    this.pageReviewListeners.add(changed);
+    const terminalSubscription=this.cliTerminals?.subscribe?.(changed);
+    return ()=>{this.pageReviewListeners.delete(changed);terminalSubscription?.();};
+  }
   private terminalCloseDrain?: Promise<void>;
 
   async openIntegratedCli(provider: InteractiveCliProvider, cwd: string): Promise<void> {
@@ -1660,7 +1685,14 @@ export default class AutoOCPlugin extends Plugin {
     return () => {this.pagePreparation = false;};
   }
 
-  private pageFinishBlockers(pageId:string): string[] {
+  private reservePageFinish(pageId:string):()=>void {
+    this.assertPagesEditable();
+    const blockers=this.pageFinishBlockers(pageId);
+    if(blockers.length)throw new Error(blockers.join("\n"));
+    this.pagePreparation=true;
+    return ()=>{this.pagePreparation=false;};
+  }
+  private pageFinishBlockers(pageId:string,allTerminals=false): string[] {
     const blockers: string[] = [];
     try {
       this.assertLifecycleOpen();
@@ -1668,7 +1700,7 @@ export default class AutoOCPlugin extends Plugin {
       this.pluginExecutionLease.assertOwned();
       if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.workflowEditPending || this.sharedWorkflowExecutions.size ||
           this.definitionStarts?.size || this.runningProcesses.size || this.runningCodexClients.size || this.legacyAttempts.size || this.workflowDelayControllers.size) throw new Error("Wait for active work and catalog changes before finishing.");
-      if (this.settings.pageTerminalClaims?.length || this.cliTerminals?.sessions?.some(session=>!session.exited)) throw new Error("Close active terminals and confirm unobserved sessions on their pages before finishing.");
+      if (this.pageBlockingSessions(allTerminals?undefined:pageId).length) throw new Error("Close the listed active terminals or confirm their unobserved sessions before continuing.");
       const checkpoints = assertIdleJournals(this.selectedExecutionLocation().runtimeDirectory);
       assertIdleCatalog(this.settings,checkpoints);
       for (const run of (this.settings.pageRuns || []).filter(run=>run.pageId === pageId)) {
@@ -1677,6 +1709,47 @@ export default class AutoOCPlugin extends Plugin {
       }
     } catch (error) { blockers.push(this.redactSecrets(String((error as Error).message || error))); }
     return blockers;
+  }
+  pageBlockingSessions(pageId?:string):import("./finish-work").BlockingPageSession[] {
+    const sessions=this.cliTerminals?.sessions || [],claims=this.settings.pageTerminalClaims || [];
+    const pageName=(id:string)=>id==="main"?"Main workspace":this.settings.workPages?.find(p=>p.id===id)?.name || id;
+    const rows:import("./finish-work").BlockingPageSession[]=claims.map(claim=>{
+      const session=sessions.find(s=>s.page?.claimId===claim.id && s.page.pageId===claim.pageId && s.cwd===claim.directory);
+      return {id:"claim:"+claim.id,claimId:claim.id,sessionId:session?.id,pageId:claim.pageId,pageName:pageName(claim.pageId),
+        label:session?.label || "CLI session",directory:claim.directory,state:this.pageTerminalState(claim.id),createdAt:claim.createdAt};
+    });
+    for(const session of sessions)if(!session.exited && !rows.some(row=>row.sessionId===session.id)) {
+      const sessionPage=session.page?.pageId || "main";
+      rows.push({id:"terminal:"+session.id,sessionId:session.id,pageId:sessionPage,pageName:pageName(sessionPage),label:session.label,directory:session.cwd,state:"tracked"});
+    }
+    if(!pageId)return rows;
+    const page=selectWorkPage(this.settings,pageId);
+    return rows.filter(row=>{
+      if(row.pageId===pageId || !row.directory)return true;
+      try {
+        const proof=page.worktreeRemoval?.proof;
+        if(proof && proof.directory===page.directory && !fs.existsSync(page.directory)) {
+          if(samePhysicalPath(row.directory,proof.repository))return false;
+          const relative=path.relative(fs.realpathSync(row.directory),proof.directory);
+          if(relative===".." || relative.startsWith(".."+path.sep) || path.isAbsolute(relative))return false;
+        }
+        // Keep Main's helper and other independent workspaces open during page closure.
+        if(!directoriesOverlap(row.directory,page.directory))return false;
+        if(page.kind==="worktree" && independentGitWorkspaces(row.directory,page.directory))return false;
+      }catch { /* Unverifiable or aliased directories keep their reservation. */ }
+      return true;
+    });
+  }
+  async openBlockingPageSession(id:string,close=false):Promise<void> {
+    this.assertLifecycleOpen();
+    const observed=this.pageBlockingSessions().find(row=>row.id===id);
+    if(observed?.sessionId===undefined || !this.cliTerminals)throw new Error("This session is no longer observed. Refresh the review; do not assume it ended.");
+    // Select the exact native session, never a different terminal belonging to the same page.
+    this.cliTerminals.select(observed.sessionId);
+    await this.cliTerminals.show();
+    const current=this.pageBlockingSessions().find(row=>row.id===id);
+    if(current?.sessionId!==observed.sessionId || current.directory!==observed.directory)throw new Error("The terminal session changed. Refresh the review.");
+    if(close)await this.cliTerminals.requestClose(observed.sessionId);
   }
   private pageProtectedDirectories(): string[] {
     const location = this.selectedExecutionLocation();
@@ -1689,13 +1762,29 @@ export default class AutoOCPlugin extends Plugin {
   async reviewPageMerge(pageId:string,targetDirectory?:string):Promise<MergeReview> {
     this.assertLifecycleOpen();
     const page:WorkPage=JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
-    const review=await reviewPageMerge(page,targetDirectory,this.pageFinishBlockers(pageId));
+    const review=await reviewPageMerge(page,targetDirectory,this.pageFinishBlockers(pageId,true));
     this.assertLifecycleOpen();
     if(workPageRevision(page)!==workPageRevision(selectWorkPage(this.settings,pageId)))throw new Error("Page changed during merge review. Reopen the review.");
-    // Readiness is advisory; external Git commands do not acquire AutoOC's execution lease.
-    const blockers=this.pageFinishBlockers(pageId);
-    if(blockers.length){review.blockers=[...new Set([...review.blockers,...blockers])];review.state="blocked";}
+    // Readiness is advisory; execution rechecks it under the page preparation reservation.
+    const blockers=this.pageFinishBlockers(pageId,true);
+    if(blockers.length){review.blockers=[...new Set([...review.blockers,...blockers])];if(review.state!=="integrated")review.state="blocked";}
     return review;
+  }
+  async executePageMerge(pageId:string,targetDirectory:string,reviewHash:string,action:MergeCommand,abortConfirmed=false):Promise<{review:MergeReview;output:string}> {
+    const operation=this.performPageMerge(pageId,targetDirectory,reviewHash,action,abortConfirmed);
+    this.sharedCompletions.add(operation);
+    try{return await operation;}finally{this.sharedCompletions.delete(operation);}
+  }
+  private async performPageMerge(pageId:string,targetDirectory:string,reviewHash:string,action:MergeCommand,abortConfirmed:boolean):Promise<{review:MergeReview;output:string}> {
+    const page:WorkPage=JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
+    const release=this.reservePagePreparation();
+    const assertCurrent=()=>{
+      this.assertLifecycleOpen();this.pluginExecutionLease!.assertOwned();
+      if(workPageRevision(page)!==workPageRevision(selectWorkPage(this.settings,pageId)))throw new Error("Page changed during merge. Reopen the review.");
+      const blockers=this.pageFinishBlockers(pageId,true);if(blockers.length)throw new Error(blockers.join("\n"));
+    };
+    try{return await executePageMerge(page,targetDirectory,reviewHash,action,assertCurrent,abortConfirmed);}
+    finally{release();}
   }
   async deleteWorkPage(page:WorkPage):Promise<void> {
     const operation=this.performPageDeletion(JSON.parse(JSON.stringify(page)));
@@ -1703,7 +1792,7 @@ export default class AutoOCPlugin extends Plugin {
     try{await operation;}finally{this.sharedCompletions.delete(operation);}
   }
   private async performPageDeletion(expected:WorkPage):Promise<void> {
-    const release=this.reservePagePreparation();
+    const release=this.reservePageFinish(expected.id);
     try{
       const current=selectWorkPage(this.settings,expected.id);
       if(workPageRevision(current)!==workPageRevision(expected))throw new Error("Page changed after confirmation was opened. Review it again.");
@@ -1734,7 +1823,7 @@ export default class AutoOCPlugin extends Plugin {
   private async performPageDiscard(pageId:string,reviewHash:string,branchName:string,confirmed:boolean):Promise<void> {
     let current:WorkPage=JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
     if(current.kind!=="worktree" || branchName!==current.branch || !confirmed)throw new Error("Type the exact branch name and confirm data loss and closed processes before discarding.");
-    const release=this.reservePagePreparation();
+    const release=this.reservePageFinish(pageId);
     const assertCurrent=()=>{
       this.assertLifecycleOpen();this.pluginExecutionLease!.assertOwned();
       if(workPageRevision(selectWorkPage(this.settings,pageId))!==workPageRevision(current))throw new Error("Page changed during discard. Review it again.");
@@ -1759,7 +1848,7 @@ export default class AutoOCPlugin extends Plugin {
   }
   private async performPageFinish(pageId:string, reviewHash:string, removeWorktree:boolean, sessionsClosed:boolean): Promise<void> {
     let current: WorkPage = JSON.parse(JSON.stringify(selectWorkPage(this.settings,pageId)));
-    const release = this.reservePagePreparation();
+    const release = this.reservePageFinish(pageId);
     const assertCurrent = () => {
       this.assertLifecycleOpen(); this.pluginExecutionLease!.assertOwned();
       if (workPageRevision(selectWorkPage(this.settings,pageId)) !== workPageRevision(current)) throw new Error("Page changed while finishing; review it again.");
@@ -1789,6 +1878,7 @@ export default class AutoOCPlugin extends Plugin {
       if (review.hash !== reviewHash) throw new Error("The reviewed page or Git state changed. Refresh the review before finishing.");
       if (review.archiveBlockers.length) throw new Error(review.archiveBlockers.join("\n"));
       if (!removeWorktree) { await save({...current,archived:true}); return; }
+      if (!current.archived) throw new Error("Archive the page before removing its worktree. These are separate actions.");
       if (!sessionsClosed) throw new Error("Confirm that external sessions and services have ended before removal.");
       if (review.removalBlockers.length || !review.proof) throw new Error(review.removalBlockers.join("\n") || "Worktree removal is unavailable.");
       const proof = review.proof;
@@ -2012,7 +2102,7 @@ export default class AutoOCPlugin extends Plugin {
   private pluginExecutionLease?: ExecutionLease;
   private cliRequestHost?: ReturnType<typeof createPluginRequestHost>;
   private workflowEditPending = false;
-  private cliRequestTimer?: number;
+  private cliRequestTimer?: () => void;
   private pluginExecutionLocation?: InstalledWorkflowLocation;
   private sharedWorkflowExecutions = new Map<string, {workflowId:string;taskId?:string;runId?:string;controller:AbortController;checkpoint?:RunCheckpoint;liveOutput?:WorkflowTaskOutput}>();
   // Compatibility for exclusive maintenance reservations and existing observers.
@@ -2406,15 +2496,11 @@ export default class AutoOCPlugin extends Plugin {
       // Pending writes/effects still retain their reservation if not drained.
       this.ready = true;
       this.startCliRequests();
-      this.cliRequestTimer = window.setInterval(() => {
-        void this.cliRequestHost?.poll().catch(() => {
-          if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
-          this.cliRequestTimer = undefined;
-          try { this.cliRequestHost?.close(); } catch { /* Preserve unresolved ownership. */ }
-          console.warn("AutoOC CLI request reception stopped; inspect execution ownership before retrying");
-        });
-      }, 200);
-      this.registerInterval(this.cliRequestTimer);
+      this.cliRequestTimer = startPluginRequestPump(this.cliRequestHost!, () => {
+        this.cliRequestTimer = undefined;
+        try { this.cliRequestHost?.close(); } catch { /* Preserve unresolved ownership. */ }
+        console.warn("AutoOC CLI reception stopped; inspect the existing request and run");
+      });
     } catch (error) {
       this.startupPending = false;
       await this.onunload().catch(cleanup => console.warn("AutoOC startup cleanup retained reservation", cleanup));
@@ -2479,7 +2565,7 @@ export default class AutoOCPlugin extends Plugin {
     this.stopStartupWait();
     this.lifecycleStopped = true;
     this.ready = false;
-    if (this.cliRequestTimer !== undefined) window.clearInterval(this.cliRequestTimer);
+    this.cliRequestTimer?.();
     this.cliRequestTimer = undefined;
     const closingRequestHost = this.cliRequestHost;
     try { closingRequestHost?.close(); }
@@ -2754,11 +2840,24 @@ export default class AutoOCPlugin extends Plugin {
 
   private startCliRequests(): void {
     this.assertLifecycleOpen();
-    this.cliRequestHost = createPluginRequestHost(this.pluginExecutionLease!, async (request, signal, progress) => {
+    const pages=createPageCreationService({lease:this.pluginExecutionLease!,location:this.selectedExecutionLocation(),
+      assertOpen:()=>{
+        this.assertLifecycleOpen();
+        if(this.updateInProgress || this.bulkCatalogMutationInProgress || this.workflowEditPending || this.legacyAttempts.size || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size)throw new Error("Wait for maintenance or legacy work before submitting page creation");
+        if([...this.sharedWorkflowExecutions.values()].some(execution=>!execution.runId))throw new Error("Wait for the starting execution to publish its identity before submitting page creation");
+      },
+      activeRuns:()=>[...this.sharedWorkflowExecutions.values()].flatMap(execution=>execution.runId ? [execution.runId] : []),
+      busy:()=>!!(this.pagePreparation || this.sharedWorkflowExecutions.size || this.definitionStarts?.size || this.updateInProgress || this.bulkCatalogMutationInProgress || this.workflowEditPending || this.runningProcesses.size || this.runningCodexClients.size || this.legacyAttempts.size || this.workflowDelayControllers.size || this.settingsWriter.hasPendingWrites),
+      reserve:()=>this.reservePagePreparation(),
+      catalog:async()=>{await this.saveSettings(false);return this.settings;},
+      register:async page=>{await registerWorkPage(this.settings,page,()=>this.saveSettings());this.refreshOpenViews();},
+      launch:async(selection,pageId,signal,progress)=>this.runSharedWorkflow(selection.taskId ? standaloneTaskWorkflow(selection.taskId).id : selection.workflowId!,undefined,false,true,selection.taskId,{signal,progress},undefined,pageId),
+    });
+    this.cliRequestHost = createPluginRequestHost(this.pluginExecutionLease!, async (request, signal, progress,timing) => {
       this.assertLifecycleOpen();
       try {
         return await this.runSharedWorkflow(request.taskId ? standaloneTaskWorkflow(request.taskId).id : request.workflowId!,
-          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress}, request.stepId, request.pageId);
+          request.runId, request.command === "reconcile", request.command === "run", request.taskId, {signal,progress,timing}, request.stepId, request.pageId);
       } catch (error) {
         if (!this.lifecycleStopped) new Notice(`AutoOC: CLI request failed — ${this.redactSecrets(String(error))}`);
         throw error;
@@ -2774,7 +2873,7 @@ export default class AutoOCPlugin extends Plugin {
         const result=await applyWorkflowEdit({settings:this.settings,assertIdle,save:validate=>this.saveSettings(false,validate)},request);
         this.refreshOpenViews();return result;
       } finally {this.workflowEditPending=false;}
-    },()=>this.settings,{pageSelection:true,editTask:async (request:TaskEditCommand)=>{
+    },()=>this.settings,{pageSelection:true,pages,editTask:async (request:TaskEditCommand)=>{
       const assertIdle=()=>{
         this.assertLifecycleOpen();this.pluginExecutionLease!.assertOwned();
         if(this.pagePreparation || this.definitionStarts.size || this.sharedWorkflowExecutions.size || this.updateInProgress || this.bulkCatalogMutationInProgress || this.sharedWorkflowExecution || this.runningProcesses.size || this.runningCodexClients.size || this.workflowDelayControllers.size || this.legacyAttempts.size)throw new Error("Execution active; wait for AutoOC to finish, keeping Obsidian open");
@@ -2790,7 +2889,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   async runSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, stepId?:string, pageId?:string) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>;timing?:TimingContext}, stepId?:string, pageId?:string) {
     if(pageId === "main")pageId = undefined;
     const kind = taskId ? "task" : "workflow", id = pageId ? pageExecutionId(pageId,taskId || workflowId,!!taskId) : taskId || workflowId;
     if (this.definitionStarts?.has(`${kind}:${id}`)) throw new Error("A shared workflow is already executing; definition is already starting");
@@ -2802,7 +2901,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private async executeSharedWorkflow(workflowId:string, resumeRunId?:string, reconcile=false, newExecution=false, taskId?:string,
-      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>}, releaseStart?: () => void, stepId?:string, pageId?:string) {
+      external?: {signal:AbortSignal;progress:(checkpoint:RunCheckpoint,presentation?:ExecutionPresentation)=>void|Promise<void>;timing?:TimingContext}, releaseStart?: () => void, stepId?:string, pageId?:string) {
     if(taskId && workflowId!==standaloneTaskWorkflow(taskId).id)throw new Error("Standalone task identity mismatch");
     let selected = taskId ? standaloneTaskWorkflow(taskId) : this.settings.workflows.find(w => w.id === workflowId);
     if (stepId && selected) selected = selectCodeStep(selected, stepId);
@@ -2830,13 +2929,13 @@ export default class AutoOCPlugin extends Plugin {
     let expectedSettings: ReturnType<typeof captureJsonStructure> | undefined;
     let lastCatalog: PersistedWorkflowCatalog | undefined, executionFailed = false;
     try {
-      await this.saveSettings(false);
+      await this.saveSettings(false,undefined,undefined,external?.timing);
       if(this.sharedSettingsBaseline && !matchesJsonStructure(this.settings,this.sharedSettingsBaseline))throw new Error("AutoOC settings changed during save; local edits preserved; reload before continuing");
       expectedSettings = captureJsonStructure(this.settings);
       this.sharedSettingsBaseline = expectedSettings;
       return await runInstalledWorkflow({
         vault:location.vault, installationDirectory:location.installationDirectory, workflowId:taskId ? undefined : sourceWorkflowId,taskId,stepId,resumeRunId,reconcile,newExecution,pageId,
-        lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,
+        lease:this.pluginExecutionLease, signal:execution.controller.signal,includePresentation:!!external,timing:external?.timing,
         catalogWriter:this.settingsWriter.fork(),
         catalogVersion:()=>this.settingsWriter.confirmedVersion(location.configurationFile),
         vaultMutations:()=>this.createVaultMutationBatch(),
@@ -2865,15 +2964,17 @@ export default class AutoOCPlugin extends Plugin {
           }
           execution.runId = checkpoint.runId;
           execution.checkpoint = JSON.parse(JSON.stringify(checkpoint));
-          if (catalog) await this.loadSettingsSnapshot(catalog,transaction);
-          else await this.loadSettings(transaction);
+          await withFailureStage("host-adoption",async()=>{
+            if (catalog) await this.loadSettingsSnapshot(catalog,transaction);
+            else await this.loadSettings(transaction);
+          });
           lastCatalog = catalog;
           expectedSettings = captureJsonStructure(this.settings);
           this.sharedSettingsBaseline = expectedSettings;
           releaseStart?.();
           if (this.sharedWorkflowExecutions.get(workflowId) !== execution) return;
-          this.refreshOpenViews();
-          await external?.progress(checkpoint,presentation);
+          await withFailureStage("host-render",()=>this.refreshOpenViews());
+          await withFailureStage("receipt-publication",()=>external?.progress(checkpoint,presentation));
         },
       });
     } catch (error) { executionFailed = true; throw error; }
@@ -3066,6 +3167,7 @@ export default class AutoOCPlugin extends Plugin {
   }
 
   private refreshOpenViews():void {
+    for(const listener of this.pageReviewListeners)try{listener();}catch { /* A closed review must not fail catalog publication. */ }
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
       if (leaf.view instanceof AutoOCView) leaf.view.refresh();
     }
@@ -3869,16 +3971,16 @@ export default class AutoOCPlugin extends Plugin {
     return { changed, configPath, mcpPath };
   }
 
-  async saveSettings(refreshView = true, validate?:()=>void, transaction?:CatalogTransaction) {
+  async saveSettings(refreshView = true, validate?:()=>void, transaction?:CatalogTransaction,timing?:TimingContext) {
     this.assertLifecycleOpen();
     const basePath=(this.app.vault.adapter as any).basePath;
-    if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate);
+    if(!basePath)return this.saveSettingsWithinTransaction(refreshView,validate,timing);
     return this.settingsWriter.trackTransaction(catalogTransaction(this.selectedExecutionLocation().configurationFile,async()=>{
-      await this.saveSettingsWithinTransaction(refreshView,validate);
+      await this.saveSettingsWithinTransaction(refreshView,validate,timing);
     },transaction));
   }
 
-  private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void) {
+  private async saveSettingsWithinTransaction(refreshView = true, validate?:()=>void,timing?:TimingContext) {
     // Entry authorized this save before it entered the host queue. Unload
     // drains accepted saves while rejecting all later calls at the entry.
     const basePath = (this.app.vault.adapter as any).basePath;
@@ -3895,7 +3997,7 @@ export default class AutoOCPlugin extends Plugin {
     this.settingsLoadRevision++;
     let savedSettings:ReturnType<typeof captureJsonStructure>|undefined;
     if (file) {
-      await this.settingsWriter.save(file, () => {savedSettings=captureJsonStructure(this.settings);return this.settings;},validate);
+      await this.settingsWriter.save(file, () => {savedSettings=captureJsonStructure(this.settings);return this.settings;},validate,timing);
       this.settingsWritableCatalog = {file,version:this.settingsWriter.confirmedVersion(file)};
     } else {
       await this.saveData(this.settings);
@@ -6417,6 +6519,7 @@ class AutoOCView extends ItemView {
   }
 
   private updateTaskNameDom(task: ScheduledTask) {
+    refreshWorkflowLabels(this.containerEl, { taskId: task.id });
     this.areaDashboard?.update();
     const usageCount = this.plugin.settings.workflows.reduce((count, workflow) => {
       return count + workflow.steps.filter((step) => step.taskId === task.id).length;
@@ -6432,6 +6535,7 @@ class AutoOCView extends ItemView {
   }
 
   private updateWorkflowNameDom(workflow: Workflow) {
+    refreshWorkflowLabels(this.containerEl, { workflowId: workflow.id });
     this.areaDashboard?.update();
     const area = workflow.area?.trim() || "No area";
     this.containerEl.querySelectorAll<HTMLElement>(`[data-auto-oc-workflow-id="${workflow.id}"]`).forEach((el) => {
@@ -7892,14 +7996,7 @@ class AutoOCView extends ItemView {
 
     // Steps list with task details/actions
     const stepsDiv = details.createDiv("auto-oc-workflow-steps-mini");
-    const stepLabel = (step: WorkflowStep): string => {
-      if (step.name?.trim()) return step.name.trim();
-      if (step.stepKind === "workflow") return `Workflow: ${this.plugin.settings.workflows.find(w=>w.id===step.workflowId)?.name || "Missing workflow"}`;
-    if (step.stepKind === "code") return "{ } Code";
-      if (step.stepKind === "delay") return `⏱ ${step.delayValue ?? 5} ${step.delayUnit ?? "minutes"}`;
-      const t = this.plugin.settings.tasks.find((task) => task.id === step.taskId);
-      return t ? t.name : "(deleted task)";
-    };
+    const stepLabel = (step: WorkflowStep): string => workflowStepDisplayName(step, this.plugin.settings.tasks, this.plugin.settings.workflows);
     const transitionModeLabel = (mode?: TransitionMode): string => {
       if (mode === "force") return "force";
       if (mode === "eval") return "AI";
@@ -7922,10 +8019,11 @@ class AutoOCView extends ItemView {
       const icon = isDone ? "✅" : isCurrent ? "⏳" : "⬜";
 
       const stepHeader = stepItem.createDiv("auto-oc-workflow-task-header");
-      stepHeader.createSpan({
+      const stepTitle = stepHeader.createSpan({
         text: `${icon} Step ${i + 1}: ${stepName}`,
         cls: "auto-oc-workflow-task-title",
       });
+      bindWorkflowLabel(stepTitle, [step], () => stepTitle.setText(`${icon} Step ${i + 1}: ${stepLabel(step)}`));
       if (step.stepKind !== "task" && step.status) {
         stepHeader.createSpan({
           text: step.status,
@@ -7952,16 +8050,18 @@ class AutoOCView extends ItemView {
             ? [{ toStepId: workflow.steps[i + 1].id, mode: (step.transitionMode as TransitionMode) || "default" }]
             : []);
       if (transitions.length > 0) {
-        const transitionSummary = transitions
+        const transitionSummary = () => transitions
           .map((transition) => {
             const target = workflow.steps.find((candidate) => candidate.id === transition.toStepId);
             return `→ ${target ? stepLabel(target) : "missing step"} [${transitionModeLabel(transition.mode)}]`;
           })
           .join(" · ");
-        stepHeader.createSpan({
-          text: ` ${transitionSummary}`,
+        const transitionLabel = stepHeader.createSpan({
           cls: "auto-oc-workflow-transition-label",
         });
+        const targets = transitions.map(transition => workflow.steps.find(candidate => candidate.id === transition.toStepId))
+          .filter((target): target is WorkflowStep => !!target);
+        bindWorkflowLabel(transitionLabel, targets, () => transitionLabel.setText(` ${transitionSummary()}`));
       }
 
       if (!task) {
@@ -8349,6 +8449,8 @@ class CreateTaskModal extends Modal {
   constructor(app: App, plugin: AutoOCPlugin, editTask?: ScheduledTask, private readonly saveDraft?: (task: ScheduledTask) => void) {
     super(app);
     this.plugin = plugin;
+    // Cards can outlive a catalog object replaced by a previous save.
+    if (editTask && !saveDraft) editTask = plugin.settings.tasks.find(task => task.id === editTask!.id) || editTask;
     this.editTask = editTask;
     this.draft = editTask
       ? (saveDraft ? JSON.parse(JSON.stringify(editTask)) : { ...editTask })
@@ -9244,6 +9346,8 @@ class EditWorkflowStepModal extends Modal {
 }
 
 class CreateWorkflowModal extends Modal {
+  private unsubscribeTaskUpdated?: () => void;
+  private unsubscribeWorkflowUpdated?: () => void;
   private draftTasks: ScheduledTask[] = [];
   private generatedDraft = false;
   private savingGeneratedDraft = false;
@@ -9252,6 +9356,13 @@ class CreateWorkflowModal extends Modal {
   private draftTaskModal?: CreateTaskModal;
 
   private availableTasks(): ScheduledTask[] { return [...this.plugin.settings.tasks, ...this.draftTasks]; }
+
+  private subscribeNameUpdates(): void {
+    this.unsubscribeTaskUpdated?.();
+    this.unsubscribeWorkflowUpdated?.();
+    this.unsubscribeTaskUpdated = this.plugin.onTaskUpdated(task => refreshWorkflowLabels(this.contentEl, { taskId: task.id }));
+    this.unsubscribeWorkflowUpdated = this.plugin.onWorkflowUpdated(workflow => refreshWorkflowLabels(this.contentEl, { workflowId: workflow.id }));
+  }
   private plugin: AutoOCPlugin;
   private editWorkflow?: Workflow;
   private draft: Partial<Workflow>;
@@ -9294,6 +9405,7 @@ class CreateWorkflowModal extends Modal {
     if (dependencyError) contentEl.createEl("p", {text: dependencyError, cls: "mod-warning"});
     contentEl.addClass("auto-oc-modal");
     setAutoOCModalSize(this, 1100);
+    this.subscribeNameUpdates();
     preventBackdropClose(this);
 
     // Header with X button
@@ -9678,8 +9790,7 @@ class CreateWorkflowModal extends Modal {
   }
 
   private workflowStepLabel(step: WorkflowStep): string {
-    if (step.name?.trim()) return step.name.trim();
-    return this.defaultWorkflowStepName(step);
+    return workflowStepDisplayName(step, this.availableTasks(), this.plugin.settings.workflows);
   }
 
   private defaultWorkflowStepName(step: WorkflowStep, index?: number): string {
@@ -9727,10 +9838,10 @@ class CreateWorkflowModal extends Modal {
         text: `Step ${i + 1}`,
         cls: "auto-oc-workflow-step-num",
       });
-      header.createEl("span", {
-        text: this.workflowStepLabel(step),
+      const stepTitle = header.createEl("span", {
         cls: step.stepKind === "task" && !task ? "auto-oc-workflow-step-err" : "",
       });
+      bindWorkflowLabel(stepTitle, [step], () => stepTitle.setText(this.workflowStepLabel(step)));
 
       if (!isLast) {
         header.createEl("span", { text: "→", cls: "auto-oc-workflow-step-arrow" });
@@ -9738,7 +9849,8 @@ class CreateWorkflowModal extends Modal {
           text: `Step ${i + 2}`,
           cls: "auto-oc-workflow-step-num",
         });
-        header.createEl("span", { text: this.workflowStepLabel(this.selectedSteps[i + 1]) });
+        const nextStep = this.selectedSteps[i + 1], nextTitle = header.createEl("span");
+        bindWorkflowLabel(nextTitle, [nextStep], () => nextTitle.setText(this.workflowStepLabel(nextStep)));
       }
 
       // Remove button
@@ -9755,14 +9867,18 @@ class CreateWorkflowModal extends Modal {
 
       new Setting(stepEl)
         .setName("Step name")
-        .setDesc("Optional label used in this workflow")
+        .setDesc(step.stepKind === "task" || step.stepKind === "workflow"
+          ? "Optional alias for this step. The current referenced name is also shown; leave blank to follow it."
+          : "Optional label used in this workflow")
         .addText((text) => {
           text.inputEl.addClass("auto-oc-modal-input");
+          bindWorkflowLabel(text.inputEl, [step], () => { text.inputEl.placeholder = this.defaultWorkflowStepName(step, i); });
           text
             .setPlaceholder(this.defaultWorkflowStepName(step, i))
             .setValue(step.name || "")
             .onChange((v) => {
               step.name = v.trim();
+              refreshWorkflowLabels(this.contentEl);
             });
         });
 
@@ -9861,10 +9977,11 @@ class CreateWorkflowModal extends Modal {
           text: `Transition: Step ${i + 1} → Step ${i + 2}`,
           cls: "auto-oc-workflow-transition-title",
         });
-        transitionHeader.createSpan({
-          text: `After «${this.workflowStepLabel(step)}» finishes, decide whether «${this.workflowStepLabel(nextStep)}» starts.`,
+        const transitionHelp = transitionHeader.createSpan({
           cls: "auto-oc-workflow-transition-help",
         });
+        bindWorkflowLabel(transitionHelp, [step, nextStep], () => transitionHelp.setText(
+          `After «${this.workflowStepLabel(step)}» finishes, decide whether «${this.workflowStepLabel(nextStep)}» starts.`));
 
         // Mode selector: force, evaluate, or stop-on-fail (default)
         const modeDiv = transConfig.createDiv("auto-oc-workflow-mode");
@@ -10136,6 +10253,10 @@ class CreateWorkflowModal extends Modal {
     this.editorClosed = true;
     this.aiDraftModal?.close();
     this.draftTaskModal?.close();
+    this.unsubscribeTaskUpdated?.();
+    this.unsubscribeWorkflowUpdated?.();
+    this.unsubscribeTaskUpdated = undefined;
+    this.unsubscribeWorkflowUpdated = undefined;
     this.contentEl.empty();
   }
 }

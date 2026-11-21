@@ -5,7 +5,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const cli = path.resolve(__dirname, '../autooc-cli.cjs');
-const call = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+const call = (...args) => spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', timeout:45000, windowsHide:true });
+
+test('CLI event reader keeps progress separate from runtime diagnostics',()=>{
+  const {cliEvents}=require('./helpers/cli-events.cjs');
+  assert.deepEqual(cliEvents('(node:1) Warning: fixture\n{"event":"progress","runId":"r"}\r\n'),[{event:'progress',runId:'r'}]);
+  assert.throws(()=>cliEvents('{broken event\n'),SyntaxError);
+});
 
 function availabilityFixture(t, config) {
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-cli-availability-'));
@@ -96,7 +102,7 @@ test('workflow name arrives before a retained Code step finishes and stays out o
       stderr+=s;pending+=s;
       while(pending.includes('\n')) {
         const index=pending.indexOf('\n'),line=pending.slice(0,index);pending=pending.slice(index+1);
-        const event=JSON.parse(line);
+        const event=require('./helpers/cli-events.cjs').cliEvent(line);if(!event)continue;
         if(!early) {
           early=event;
           assert.equal(ended,false);assert.equal(stdout,'');
@@ -109,7 +115,7 @@ test('workflow name arrives before a retained Code step finishes and stays out o
       assert.equal(early.phase,'ready');assert.equal(early.workflowName,name);assert.equal(early.host,'standalone');
       const result=JSON.parse(stdout);assert.equal(result.workflowName,name);assert.equal(result.executionKind,'workflow');
       assert.equal(result.workflowId,id);assert.equal(result.runId,early.runId);identities.push(result.runId);
-      for(const event of stderr.trim().split('\n').map(JSON.parse)) {
+      for(const event of require('./helpers/cli-events.cjs').cliEvents(stderr)) {
         assert.equal(event.workflowId,id);assert.equal(event.runId,result.runId);assert.equal(event.workflowName,name);
         assert.deepEqual(Object.keys(event).sort(),['event','executionKind','host','nextStepId','phase','revision','runId','workflowId','workflowName'].sort());
       }
@@ -147,7 +153,8 @@ test('every CLI command keeps the default installation and never discovers a cus
     fs.mkdirSync(normal,{recursive:true});fs.writeFileSync(path.join(normal,'data.json'),JSON.stringify(catalog('DEFAULT')));
     const executed=call('run','--vault',root,'--workflow','w');assert.equal(executed.status,0,executed.stderr);
     assert.equal(JSON.parse(executed.stdout).workflowName,"DEFAULT");
-    assert.ok(executed.stderr.trim().split("\n").every(line=>JSON.parse(line).workflowName==="DEFAULT"));
+    const events=require('./helpers/cli-events.cjs').cliEvents(executed.stderr);
+    assert.ok(events.length>0);assert.ok(events.every(event=>event.workflowName==="DEFAULT"));
     const runId=JSON.parse(executed.stdout).runId;
     for(const [command,...raw] of commands) {
       if(command==='run')continue; // Already executed above; preserve its binding for recovery.

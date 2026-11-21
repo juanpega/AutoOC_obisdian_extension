@@ -1,3 +1,4 @@
+const removeTimingFixtures=require('./fixtures/timing-cleanup.cjs');
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs');
@@ -114,10 +115,10 @@ test('public host preserves uncertain durable evidence and blocks a fresh call a
     {id:'effect',stepKind:'code',codeAllowVault:true,code:'vault.append("effects.txt","once");output="done";',transitions:[{mode:'eval',toStepId:'last'}]},
     {id:'last',stepKind:'code',code:'output="last";'}]},[],{});
   await assert.rejects(f.run(definition,{evaluate:async()=>{throw Error('evaluation uncertain fixture');}}),/evaluation uncertain fixture/);
-  const files=fs.readdirSync(f.runtimeDirectory);assert.equal(files.length,1);assert.match(files[0],/\.json$/);
+  const files=fs.readdirSync(f.runtimeDirectory).filter(file=>file!=='timings');assert.equal(files.length,1);assert.match(files[0],/\.json$/);
   const journal=path.join(f.runtimeDirectory,files[0]),before=fs.readFileSync(journal);
   await assert.rejects(f.run(),/continuation or reconciliation/);
-  assert.deepEqual(fs.readFileSync(journal),before);assert.deepEqual(fs.readdirSync(f.runtimeDirectory),files);
+  assert.deepEqual(fs.readFileSync(journal),before);assert.deepEqual(fs.readdirSync(f.runtimeDirectory).filter(file=>file!=='timings'),files);
   assert.equal(fs.readFileSync(path.join(f.root,'effects.txt'),'utf8'),'once');assert.equal(f.effects(),0);
 });
 
@@ -291,7 +292,7 @@ test('durable progress updates the current catalog and preserves unrelated edits
     await assert.rejects(observe(final),/definition mismatch/);
     assert.equal(JSON.parse(fs.readFileSync(file,'utf8')).workflows[0].steps[0].code,'output="edited";');
   } finally {
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(file);if(fs.existsSync(path.join(root,'effect.txt')))fs.unlinkSync(path.join(root,'effect.txt'));fs.rmdirSync(root);
   }
 });
@@ -330,7 +331,7 @@ test('installed catalog host persists results, excludes another caller and resum
     await assert.rejects(runInstalledWorkflow({...options,resumeRunId:first.runId}),/unresolved running/);
   } finally {
     const runtime=path.join(install,'runtime');
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(file);fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(root,'.obsidian'));
     if(fs.existsSync(path.join(root,'effects.txt')))fs.unlinkSync(path.join(root,'effects.txt'));fs.rmdirSync(root);
   }
@@ -357,7 +358,7 @@ test('stop request interrupts an installed delay without executing the following
     assert.equal((await runInstalledWorkflow({vault:root,workflowId:'stop',resumeRunId:runId,redact:s=>s})).phase,'failed');
     assert.equal((await requestWorkflowStop(runtime,runId)).requested,false);
   } finally {
-    for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+(\.stop)?\.json$/);fs.unlinkSync(path.join(runtime,entry));}
+    removeTimingFixtures(runtime);for(const entry of fs.readdirSync(runtime)){assert.match(entry,/^[a-f0-9-]+(\.stop)?\.json$/);fs.unlinkSync(path.join(runtime,entry));}
     fs.rmdirSync(runtime);fs.unlinkSync(path.join(install,'data.json'));fs.rmdirSync(install);fs.rmdirSync(path.dirname(install));fs.rmdirSync(path.join(root,'.obsidian'));fs.rmdirSync(root);
   }
 });

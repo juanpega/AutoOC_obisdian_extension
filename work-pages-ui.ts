@@ -1,14 +1,15 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { randomUUID } from "crypto";
-import type { FinishWorkReview } from "./finish-work";
+import type { FinishWorkReview, BlockingPageSession } from "./finish-work";
+import type { WorktreeFile } from "./worktree-changes";
 import type { DiscardWorkReview } from "./discard-work";
 import type { DashboardItem } from "./dashboard-areas";
-import { mergeReviewCommand, mergeEditorUri, type MergeReview, type MergeCommand } from "./merge-review";
-import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState,
+import { mergeEditorUri, type MergeReview, type MergeCommand } from "./merge-review";
+import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage,
   type WorkPage, type WorkPageSettings, type WorktreePreparation, type PageRun } from "./work-pages";
 
 export interface WorkPagesHost {
-  settings: WorkPageSettings & {workingDirectory: string; tasks: {id:string;name:string;disabled?:boolean}[]; workflows:{id:string;name:string;disabled?:boolean}[]};
+  settings: WorkPageSettings & {workingDirectory: string; tasks: {id:string;name:string;disabled?:boolean;taskKind?:string;interactiveTerminal?:boolean;workingDirectory?:string}[]; workflows:{id:string;name:string;disabled?:boolean}[]};
   saveSettings(refreshView?: boolean): Promise<void>;
   isLifecycleStopped(): boolean;
   assertPagesEditable(): void;
@@ -21,8 +22,12 @@ export interface WorkPagesHost {
   pageTerminalState?(claimId: string): "tracked" | "exited" | "unknown";
   hasPageTerminal?(pageId: string): boolean;
   showPageTerminal?(pageId: string): Promise<void>;
+  pageBlockingSessions?(pageId?:string):BlockingPageSession[];
+  subscribePageReview?(listener:()=>void):()=>void;
+  openBlockingPageSession?(id:string,close?:boolean):Promise<void>;
   reviewPageFinish(pageId: string): Promise<FinishWorkReview>;
   reviewPageMerge(pageId:string,targetDirectory?:string):Promise<MergeReview>;
+  executePageMerge(pageId:string,targetDirectory:string,reviewHash:string,action:MergeCommand,abortConfirmed?:boolean):Promise<{review:MergeReview;output:string}>;
   finishWorkPage(pageId: string, reviewHash: string, removeWorktree: boolean, sessionsClosed: boolean): Promise<void>;
   reviewPageDiscard(pageId:string):Promise<DiscardWorkReview>;
   discardWorkPage(pageId:string,reviewHash:string,branchName:string,confirmed:boolean):Promise<void>;
@@ -31,6 +36,72 @@ export interface WorkPagesHost {
 }
 
 function errorText(host: WorkPagesHost, error: unknown) { return host.redactSecrets(error instanceof Error ? error.message : String(error)); }
+/** Refresh live dialogs after saved state/native terminal changes and returning from external Git tools. */
+function watchPageReview(host:WorkPagesHost,refresh:()=>Promise<void>,busy:()=>boolean,blocked:()=>boolean):()=>void {
+  let closed=false,timer:ReturnType<typeof setTimeout>|undefined,poll:ReturnType<typeof setTimeout>|undefined;
+  const schedule=()=>{
+    if(closed || host.isLifecycleStopped())return;
+    if(timer)clearTimeout(timer);
+    timer=setTimeout(()=>{timer=undefined;if(closed || host.isLifecycleStopped())return;if(busy()){schedule();return;}void refresh();},150);
+  };
+  const unsubscribe=host.subscribePageReview?.(schedule);
+  const currentWindow=typeof window!=="undefined"?window:undefined;
+  currentWindow?.addEventListener?.("focus",schedule);
+  // External writers (including a helper in Main) do not emit plugin events.
+  // Recheck blocked reviews only; never reset an actionable confirmation on a timer.
+  const check=()=>{if(closed || host.isLifecycleStopped())return;if(blocked()&&!busy())void refresh();poll=setTimeout(check,5000);};
+  poll=setTimeout(check,5000);
+  return ()=>{closed=true;if(timer)clearTimeout(timer);if(poll)clearTimeout(poll);unsubscribe?.();currentWindow?.removeEventListener?.("focus",schedule);};
+}
+function integrationSummary(parent:HTMLElement,review:MergeReview) {
+  const verified=review.integration==="verified" || review.integration===undefined && review.state==="integrated";
+  parent.createEl("p",{text:verified?"Already integrated":"Integration not verified",cls:"auto-oc-merge-state auto-oc-merge-"+(verified?"integrated":"blocked")}).setAttr("role","status");
+  if(verified)parent.createEl("p",{text:`${review.source.branch} (${review.source.head.slice(0,8)}) is already included in ${review.target?.branch} (${review.target?.head.slice(0,8)}). No repeated merge or commit of local plugin configuration is needed. Pending files and session closure are separate checks; this does not verify your tests.`});
+  return verified;
+}
+
+export function renderPendingFiles(parent:HTMLElement,host:Pick<WorkPagesHost,"redactSecrets">,files:WorktreeFile[],title:string) {
+  parent.createEl("h4",{text:title+" ("+files.length+")"});
+  if(!files.length){parent.createEl("p",{text:"No pending files reported by Git."});return;}
+  parent.createEl("p",{text:"Local configuration is identified by known paths (.obsidian and local .env files). This is informational: files are preserved and still count when checking merge or removal safety.",cls:"setting-item-description"});
+  for(const category of ["project","local-configuration"] as const) {
+    const group=files.filter(file=>file.category===category);if(!group.length)continue;
+    parent.createEl("h5",{text:(category==="project"?"Product / other project files":"Local configuration")+" ("+group.length+")"});
+    for(const file of group.slice(0,100)) {
+      const row=parent.createDiv("auto-oc-merge-file");
+      row.createEl("code",{text:host.redactSecrets(file.originalPath?file.originalPath+" → "+file.path:file.path)});
+      row.createEl("span",{text:file.indexStatus==="?"?" — Untracked":file.indexStatus==="!"?" — Ignored":` — Index: ${file.indexStatus.trim() || "unchanged"}; working tree: ${file.worktreeStatus.trim() || "unchanged"}`});
+    }
+    if(group.length>100)parent.createEl("p",{text:`Showing 100 of ${group.length} files in this group. Review the complete status in your Git tool.`,cls:"mod-warning"});
+  }
+}
+
+function blockingSessions(parent:HTMLElement,app:App,host:WorkPagesHost,navigate:()=>void,refresh:()=>Promise<void>,pageId?:string) {
+  const sessions=host.pageBlockingSessions?.(pageId) || (host.settings.pageTerminalClaims || []).filter(claim=>!pageId || claim.pageId===pageId).map(claim=>({
+    id:"claim:"+claim.id,claimId:claim.id,pageId:claim.pageId,pageName:claim.pageId==="main"?"Main workspace":host.settings.workPages?.find(page=>page.id===claim.pageId)?.name || claim.pageId,
+    label:"CLI session",directory:claim.directory,state:host.pageTerminalState?.(claim.id) || "unknown",createdAt:claim.createdAt} as BlockingPageSession));
+  if(!sessions.length)return;
+  parent.createEl("h4",{text:pageId?"Sessions blocking this page":"Sessions blocking Git operations"});
+  for(const session of sessions) {
+    const row=parent.createDiv("auto-oc-page-row");
+    row.createEl("strong",{text:host.redactSecrets(session.pageName+" — "+session.label)});
+    row.createEl("p",{text:host.redactSecrets(session.directory),cls:"auto-oc-cli-path"});
+    row.createEl("small",{text:session.id+(session.createdAt?" — "+session.createdAt:"")});
+    row.createEl("p",{text:session.state==="tracked"?"Session still observed / opening":session.state==="exited"?"Process ended; reservation still pending":"External or unobserved session; completion unconfirmed"});
+    if(session.sessionId!==undefined && host.openBlockingPageSession) {
+      action(row,"Open this terminal",host,async()=>{await host.openBlockingPageSession!(session.id);navigate();});
+      action(row,"Close this session…",host,async()=>{await host.openBlockingPageSession!(session.id,true);});
+    }
+    if(session.claimId && session.state!=="tracked")action(row,"Confirm this session ended…",host,async()=>{
+      const modal=new Modal(app);
+      modal.contentEl.createEl("h3",{text:host.redactSecrets(session.pageName+" — "+session.label)});
+      modal.contentEl.createEl("p",{text:session.claimId+" — "+host.redactSecrets(session.directory)});
+      modal.contentEl.createEl("p",{text:"Close this CLI and any processes it started, including external windows and services. Confirmation releases only this reservation; it does not stop a process."});
+      action(modal.contentEl,"I closed this session — release reservation",host,async()=>{await host.confirmPageTerminal(session.claimId!);modal.close();await refresh();});
+      modal.contentEl.createEl("button",{text:"Cancel"}).onclick=()=>modal.close();modal.open();
+    });
+  }
+}
 function action(parent: HTMLElement, label: string, host: WorkPagesHost, perform: () => Promise<unknown>, disabled = false) {
   const button = parent.createEl("button", {text:label}); button.disabled = disabled;
   button.onclick = async () => {
@@ -177,7 +248,7 @@ class NewPageModal extends Modal {
         } else environment = await describePageFolder(directory,mode === "link");
         if (host.isLifecycleStopped()) throw new Error("AutoOC closed during preparation.");
         const page: WorkPage = {id,name:name.trim(),objective,...environment,workflowIds:[],taskIds:[]};
-        await saveField(host,"workPages",[...(host.settings.workPages || []),page]);
+        await registerWorkPage(host.settings,page,()=>host.saveSettings());
         this.select(page.id); this.close();
       } catch (error) {
         feedback.setText(errorText(host,error) + (createdDirectory ? " Worktree retained at " + createdDirectory + ". Link this existing worktree after resolving the error." : preparedIgnore ? " The confirmed .gitignore preparation is retained." : ""));
@@ -190,11 +261,14 @@ class NewPageModal extends Modal {
 
 class MergeReviewModal extends Modal {
   private busy=false;
+  private blocked=false;
   private closed=false;
+  private stopWatching?:()=>void;
   private target?:string;
+  private feedback="";
   constructor(app:App,private host:WorkPagesHost,private pageId:string,private finished:()=>void){super(app);}
-  onOpen(){void this.refresh();}
-  private async refresh() {
+  onOpen(){this.stopWatching=watchPageReview(this.host,()=>this.refresh(),()=>this.busy,()=>this.blocked);void this.refresh();}
+  private async refresh(observed?:MergeReview) {
     if(this.busy||this.closed||this.host.isLifecycleStopped())return;
     this.busy=true;
     const root=this.contentEl,host=this.host;
@@ -202,7 +276,7 @@ class MergeReviewModal extends Modal {
     const header=root.createDiv("auto-oc-finish-header");header.createEl("h3",{text:"Merge review"});
     const loading=header.createEl("p",{text:"Checking branches and conflicts...",cls:"auto-oc-finish-context"});
     try {
-      const review=await host.reviewPageMerge(this.pageId,this.target);
+      const review=observed || await host.reviewPageMerge(this.pageId,this.target);
       if(this.closed||host.isLifecycleStopped())return;
       this.target=review.target?.directory;
       loading.setText("Source: "+review.source.branch+" · "+review.source.head.slice(0,8));
@@ -211,14 +285,21 @@ class MergeReviewModal extends Modal {
       new Setting(body).setName("Target branch").setDesc("Choose a checked-out local branch in this repository. AutoOC does not switch branches.").addDropdown(dropdown=>{
         review.targets.forEach(t=>dropdown.addOption(t.directory,t.branch+" · "+t.directory));
         if(this.target)dropdown.setValue(this.target);
-        dropdown.onChange(value=>{this.target=value;void this.refresh();});
+        dropdown.onChange(value=>{if(this.busy)return;this.target=value;this.feedback="";void this.refresh();});
       });
       if(review.target)body.createEl("p",{text:"Target folder: "+review.target.directory+" · "+review.target.head.slice(0,8),cls:"auto-oc-finish-path"});
-      const labels:Record<MergeReview["state"],string>={blocked:"Review blocked",ready:"Ready to merge",conflicts:"Conflicts found",resolved:"Ready to complete merge",integrated:"Integration verified",unavailable:"Preview unavailable"};
+      const integrated=integrationSummary(body,review);
+      this.blocked=!integrated && (!!review.blockers.length || review.state==="blocked" || review.state==="unavailable");
+      const labels:Record<MergeReview["state"],string>={blocked:"Action blocked",ready:"Ready to merge",conflicts:"Conflicts found",resolved:"Ready to complete merge",integrated:"Integration verified",unavailable:"Preview unavailable"};
       const badge=body.createEl("p",{text:labels[review.state],cls:"auto-oc-merge-state auto-oc-merge-"+review.state});badge.setAttr("role","status");
-      body.createEl("p",{text:review.inProgress?"Actual merge in progress in the target folder.":"Pre-merge review. Working files and branches have not been changed by this review."});
-      for(const blocker of review.blockers)body.createEl("p",{text:host.redactSecrets(blocker),cls:"mod-warning"});
+      body.createEl("p",{text:review.inProgress?"Actual merge in progress in the target folder.":integrated?"Committed integration is verified. No Git operation is needed to establish it.":"Pre-merge review. Working files and branches have not been changed by this review."});
+      if(!integrated)for(const blocker of review.blockers)body.createEl("p",{text:host.redactSecrets(blocker),cls:"mod-warning"});
+      for(const blocker of review.completionBlockers || [])body.createEl("p",{text:host.redactSecrets(blocker),cls:"mod-warning"});
+      if(this.feedback)body.createEl("pre",{text:host.redactSecrets(this.feedback),cls:"auto-oc-merge-details"}).setAttr("role","status");
       if(review.details)body.createEl("pre",{text:host.redactSecrets(review.details),cls:"auto-oc-merge-details"});
+      blockingSessions(body,this.app,host,()=>this.close(),()=>this.refresh(),integrated?this.pageId:undefined);
+      renderPendingFiles(body,host,review.sourceFiles || [],"Pending files in source");
+      renderPendingFiles(body,host,review.targetFiles || [],"Pending files in target");
       if(review.target) {
         const target=review.target;
         const tools=body.createDiv("auto-oc-page-actions");
@@ -237,41 +318,53 @@ class MergeReviewModal extends Modal {
       }
       body.createEl("h4",{text:"Next step"});
       body.createEl("p",{text:review.state==="integrated"
-        ? "Review your tests, then use Finish work to archive the page and optionally remove the clean worktree. The branch and history are kept. Squash and rebased integrations cannot be verified automatically."
+        ? "You can review archiving independently of integration. Archiving preserves files and branches. Removing a worktree is a separate action after archiving; discarding its branch has its own loss confirmation."
         : review.inProgress ? "Resolve each conflict in the target folder, review the result, stage the resolved files and run your tests. Recheck conflicts before completing the merge. Closing this dialog leaves the Git merge in progress."
-        : "Pause schedules and close running tasks, CLIs and services in both folders. Copy the command into your own terminal to start the merge. It stops before creating the merge commit, even for a fast-forward. Return here and recheck conflicts."});
-      body.createEl("p",{text:"Commands are copied, never executed by AutoOC. External Git work does not reserve AutoOC execution; keep schedules and other writers paused until the merge is finished or aborted.",cls:"setting-item-description"});
-      const commands=body.createDiv("auto-oc-page-actions");
-      const fresh=async()=>{
-        const current=await host.reviewPageMerge(this.pageId,review.target?.directory);
-        if(this.closed||host.isLifecycleStopped())throw new Error("Merge review closed. Reopen it before continuing.");
-        if(this.target!==review.target?.directory)throw new Error("Target selection changed. Review the selected target before continuing.");
-        if(current.hash!==review.hash||current.blockers.length) {await this.refresh();throw new Error("Workspace or activity changed. Read the updated review before continuing.");}
-        return current;
+        : "Start merge applies the source commit in the target folder and stops before creating the merge commit, even for a fast-forward. Review the result and run your tests, then choose Complete merge."});
+      body.createEl("p",{text:"AutoOC runs Git and prevents new AutoOC work during each operation. Keep schedules paused and external tasks, CLIs and services stopped in both folders until the merge is complete or aborted.",cls:"setting-item-description"});
+      const footer=root.createDiv("auto-oc-finish-footer");
+      const progress=footer.createEl("p",{cls:"auto-oc-finish-status"});progress.setAttr("role","status");
+      const commands=footer.createDiv("auto-oc-page-actions");
+      const execute=(label:string,operation:MergeCommand,confirmed=()=>false)=>{
+        const button=commands.createEl("button",{text:label,cls:operation==="abort"?"mod-warning":"mod-cta"});
+        button.onclick=async()=>{
+          if(this.busy||this.closed||host.isLifecycleStopped()||button.disabled)return;
+          this.busy=true;
+          root.querySelectorAll<HTMLButtonElement|HTMLSelectElement|HTMLInputElement>("button, select, input").forEach(control=>{control.disabled=true;});
+          progress.setText(label+" in progress. Wait for Git to finish.");
+          let updated:MergeReview|undefined;
+          try {
+            const result=await host.executePageMerge(this.pageId,review.target!.directory,review.hash,operation,confirmed());
+            updated=result.review;
+            const message=operation==="abort"?"Merge aborted.":result.review.state==="integrated"?"Merge completed. Integration verified."
+              :result.review.state==="conflicts"?"Merge started. Resolve the conflicts in the target folder.":"Merge started. Review the result before completing it.";
+            this.feedback=message+(result.output?"\n\n"+result.output:"");new Notice(message);
+          } catch(error) {this.feedback=errorText(host,error);new Notice(this.feedback);}
+          finally {this.busy=false;if(!this.closed&&!host.isLifecycleStopped())await this.refresh(updated);}
+        };
+        return button;
       };
-      const copy=(label:string,operation:MergeCommand)=>action(commands,label,host,async()=>{
-        const command=mergeReviewCommand(await fresh(),operation);
-        require("electron").clipboard.writeText(command);new Notice("Command copied for "+(process.platform==="win32"?"PowerShell":"a POSIX shell")+". Review it before running.");
-      });
       if(!review.blockers.length) {
-        if(!review.inProgress&&["ready","conflicts"].includes(review.state))copy("Copy merge command","start");
-        if(review.state==="resolved")copy("Copy complete command","complete");
+        if(!review.inProgress&&["ready","conflicts"].includes(review.state))execute("Start merge","start");
+        if(review.state==="resolved")execute("Complete merge","complete").disabled=!!review.completionBlockers?.length;
         if(review.inProgress&&["resolved","conflicts"].includes(review.state)) {
-          copy("Copy abort command","abort");
-          body.createEl("p",{text:"Abort cancels this Git merge and can discard conflict-resolution edits. Save anything you want to keep before running it.",cls:"setting-item-description"});
+          let confirmed=false;
+          const abort=execute("Abort merge","abort",()=>confirmed);abort.disabled=true;
+          new Setting(body).setName("I accept discarding conflict-resolution edits when aborting")
+            .setDesc("Save any resolution edits you want to keep before aborting this merge.")
+            .addToggle(toggle=>toggle.setValue(false).onChange(value=>{if(this.busy)return;confirmed=value;abort.disabled=!value;}));
         }
       }
-      const footer=root.createDiv("auto-oc-finish-footer"),buttons=footer.createDiv("auto-oc-page-actions");
-      if(review.state==="integrated"&&!review.blockers.length)action(buttons,"Finish work",host,async()=>{
-        const current=await fresh();if(current.state!=="integrated")throw new Error("Integration is no longer verified.");
+      const buttons=footer.createDiv("auto-oc-page-actions");
+      if(!selectWorkPage(host.settings,this.pageId).archived)action(buttons,"Review archiving",host,async()=>{
         this.close();new FinishWorkModal(this.app,host,this.pageId,this.finished).open();
       });
       buttons.createEl("button",{text:"Recheck conflicts"}).onclick=()=>this.refresh();
-      buttons.createEl("button",{text:"Close"}).onclick=()=>this.close();
+      buttons.createEl("button",{text:"Close"}).onclick=()=>{if(!this.busy)this.close();};
     } catch(error) {if(!this.closed){loading.setText(errorText(host,error));root.createEl("button",{text:"Retry review"}).onclick=()=>{this.target=undefined;return this.refresh();};root.createEl("button",{text:"Close"}).onclick=()=>this.close();}}
     finally{this.busy=false;}
   }
-  onClose(){this.closed=true;this.contentEl.empty();}
+  onClose(){this.closed=true;this.stopWatching?.();this.contentEl.empty();}
 }
 
 class TextModal extends Modal {
@@ -299,7 +392,7 @@ class ChangesModal extends Modal {
   constructor(app:App, private title:string, private text:string) {super(app);}
   onOpen() {
     this.contentEl.createEl("h3",{text:this.title});
-    this.contentEl.createEl("p",{text:"This is a read-only preview. To close this page, return to it and choose Finish work → Archive page. No merge is performed here."});
+    this.contentEl.createEl("p",{text:"This is a read-only preview. To close this page, return to it and choose Archive page. No merge is performed here."});
     renderPageDiff(this.contentEl,this.text);
     this.contentEl.createEl("button",{text:"Close preview",cls:"mod-cta"}).onclick = ()=>this.close();
   }
@@ -341,9 +434,11 @@ class DeletePageModal extends Modal {
 
 class DiscardWorkModal extends Modal {
   private busy=false;
+  private blocked=false;
   private closed=false;
+  private stopWatching?:()=>void;
   constructor(app:App,private host:WorkPagesHost,private pageId:string,private finished:()=>void){super(app);}
-  onOpen(){void this.refresh();}
+  onOpen(){this.stopWatching=watchPageReview(this.host,()=>this.refresh(),()=>this.busy,()=>this.blocked);void this.refresh();}
   private async refresh(){
     if(this.busy || this.closed)return;
     this.busy=true;const root=this.contentEl,host=this.host;
@@ -355,15 +450,17 @@ class DiscardWorkModal extends Modal {
     try{
       const review=await host.reviewPageDiscard(this.pageId);
       if(this.closed || host.isLifecycleStopped())return;
+      this.blocked=!!review.blockers.length;
       const page=selectWorkPage(host.settings,this.pageId);
       loading.setText(page.name+" · "+page.branch);
       header.createEl("p",{text:page.directory,cls:"auto-oc-finish-path"});
       const body=root.createDiv("auto-oc-finish-body");
+      blockingSessions(body,this.app,host,()=>this.close(),()=>this.refresh(),page.id);
       body.createEl("p",{text:review.stage==="branch-only"
         ? "The folder is already gone. Confirm to delete only the reviewed local branch."
         : "This deletes the worktree folder, ALL its files (including untracked and ignored files such as .env), and its local branch. Unlike Archive page, this cannot be restored from AutoOC.",cls:"mod-warning"});
       body.createEl("p",{text:"Page history is kept. No merge or remote branch deletion is performed. Preserve anything you need before continuing."});
-      if(page.worktreeRemoval)body.createEl("p",{text:"An earlier discard was interrupted. Close its Git process and all sessions first. This is a new explicit confirmation, not an automatic retry.",cls:"mod-warning"});
+      if(page.worktreeRemoval)body.createEl("p",{text:"An earlier discard was interrupted. Close its Git process and sessions using this worktree first. This is a new explicit confirmation, not an automatic retry.",cls:"mod-warning"});
       body.createEl("p",{text:`${review.fileCount} files in the folder · ${review.commitCount} commits since the comparison base.`});
       body.createEl("p",{text:"Deleting this local branch may leave commits without a local branch reference. Other local or remote copies are not removed."});
       const commits=body.createEl("details");commits.createEl("summary",{text:"Review commits"});
@@ -381,7 +478,7 @@ class DiscardWorkModal extends Modal {
       };
       new Setting(body).setName("Type the branch name to discard").setDesc(page.branch || "")
         .addText(input=>input.setPlaceholder(page.branch || "").onChange(value=>{typed=value;update();}));
-      new Setting(body).setName("I accept losing these files and the local branch, and have closed all sessions, services and previous Git processes")
+      new Setting(body).setName("I accept losing these files and the local branch, and have closed sessions, services and Git processes using this worktree")
         .addToggle(toggle=>toggle.setValue(false).onChange(value=>{confirmed=value;update();}));
       const footer=root.createDiv("auto-oc-finish-footer");
       status=footer.createEl("p",{cls:"auto-oc-finish-status"});status.setAttr("role","status");
@@ -404,102 +501,103 @@ class DiscardWorkModal extends Modal {
       root.createEl("button",{text:"Cancel"}).onclick=()=>this.close();
     }}finally{this.busy=false;}
   }
-  onClose(){this.closed=true;this.contentEl.empty();}
+  onClose(){this.closed=true;this.stopWatching?.();this.contentEl.empty();}
 }
 
 class FinishWorkModal extends Modal {
-  private busy = false;
-  private closed = false;
-  constructor(app:App, private host:WorkPagesHost, private pageId:string, private finished:()=>void) { super(app); }
-  onOpen() { void this.refresh(); }
-  private async refresh() {
-    if (this.busy || this.closed) return;
-    this.busy = true;
-    const root = this.contentEl, host = this.host;
-    this.modalEl.addClass("auto-oc-work-page-dialog");
-    root.empty(); root.addClass("auto-oc-finish-modal");
+  private busy=false;
+  private blocked=false;
+  private closed=false;
+  private stopWatching?:()=>void;
+  constructor(app:App,private host:WorkPagesHost,private pageId:string,private finished:()=>void,private removeOnly=false){super(app);}
+  onOpen(){this.stopWatching=watchPageReview(this.host,()=>this.refresh(),()=>this.busy,()=>this.blocked);void this.refresh();}
+  private async refresh(){
+    if(this.busy || this.closed)return;
+    this.busy=true;
+    const root=this.contentEl,host=this.host;
+    this.modalEl.addClass("auto-oc-work-page-dialog");root.empty();root.addClass("auto-oc-finish-modal");
     const header=root.createDiv("auto-oc-finish-header");
-    header.createEl("h3",{text:"Finish work"});
-    const loading = header.createEl("p",{text:"Checking activity and changes…",cls:"auto-oc-finish-context"});
-    try {
-      const review = await host.reviewPageFinish(this.pageId);
-      if (this.closed || host.isLifecycleStopped()) return;
-      const page = selectWorkPage(host.settings,this.pageId);
-      loading.setText(page.name + " · " + (page.kind === "worktree" ? page.branch : "Existing folder"));
+    header.createEl("h3",{text:this.removeOnly?"Remove worktree folder":"Archive page"});
+    const loading=header.createEl("p",{text:"Checking integration, activity and files.",cls:"auto-oc-finish-context"});
+    try{
+      const page=selectWorkPage(host.settings,this.pageId);
+      let integration:MergeReview|undefined,integrationError="";
+      if(page.kind==="worktree" && !page.worktreeRemoval && host.reviewPageMerge){
+        try{integration=await host.reviewPageMerge(page.id);}catch(error){integrationError=errorText(host,error);}
+      }
+      const review=await host.reviewPageFinish(page.id);
+      if(this.closed || host.isLifecycleStopped())return;
+      this.blocked=!!review.archiveBlockers.length || this.removeOnly && !!review.removalBlockers.length;
+      loading.setText(page.name+" — "+(page.kind==="worktree"?page.branch:"Existing folder"));
       header.createEl("p",{text:page.directory,cls:"auto-oc-finish-path"});
-      const body = root.createDiv("auto-oc-finish-body");
-      body.createEl("p",{text:page.kind === "folder"
-        ? "This page uses an existing folder. Archive page closes the page and keeps all files. It does not delete or merge any Git branch."
-        : "Archive page closes this workspace and keeps its folder, branch, commits and history. Use Merge review for guided integration in your Git tool. Removing the folder is optional."});
-      if(page.kind==="worktree"&&!page.worktreeRemoval)action(body,"Merge review",host,async()=>{this.close();new MergeReviewModal(this.app,host,page.id,this.finished).open();});
-      if(page.kind === "folder") {
-        const guidance=body.createDiv("auto-oc-finish-guidance");
-        guidance.createEl("strong",{text:"Discard work is unavailable for this page."});
-        guidance.createEl("p",{text:"No independent worktree was created. This applies even if you have not made any changes."});
-        guidance.createEl("p",{text:host.settings.worktreesEnabled === true
-          ? "For a separate folder and branch, choose New Git worktree when creating a page."
-          : "For a separate folder and branch, enable Settings → Execution → Git worktrees (developers), then create a New Git worktree page."});
+      const body=root.createDiv("auto-oc-finish-body");
+      if(integration)integrationSummary(body,integration);
+      else if(integrationError)body.createEl("p",{text:"Integration could not be checked: "+integrationError+" Archiving does not certify integration.",cls:"mod-warning"});
+      body.createEl("p",{text:this.removeOnly
+        ? "Remove only this archived page's clean worktree folder. Its branch, commits and page history remain. This does not perform a merge or delete the branch."
+        : page.kind==="folder"?"This page uses an existing folder. Archive page closes the page and keeps all files. It does not delete or merge any Git branch."
+        : "Archive page preserves the folder, branch, commits and history, including pending local configuration. Integration and worktree/branch removal are separate actions."});
+      if(page.kind==="worktree" && !page.worktreeRemoval)action(body,"Merge review",host,async()=>{this.close();new MergeReviewModal(this.app,host,page.id,this.finished).open();});
+      if(page.kind==="folder"){
+        body.createEl("strong",{text:"Discard work is unavailable for this page."});
+        body.createEl("p",{text:"No independent worktree was created. This applies even if you have not made any changes."});
+        body.createEl("p",{text:"For a separate folder and branch, enable Settings > Execution > Git worktrees (developers), then create a New Git worktree page."});
       }
-      body.createEl("h4",{text:"1. End sessions and runs"});
-      body.createEl("p",{text:review.archiveBlockers.length ? review.archiveBlockers.join("\n") : "Ready to archive. No reserved sessions or pending executions were found.",cls:review.archiveBlockers.length ? "mod-warning" : ""});
-      if (review.archiveBlockers.length) body.createEl("p",{text:"Close the listed terminals, stop active runs and review unconfirmed sessions on their pages, then click Refresh review. Activity in another page can also block closing."});
-      const active = (host.settings.pageRuns || []).filter(run=>run.pageId === page.id && host.ownsExecution(run.workflowId,run.runId));
-      for (const run of active) action(body,"Stop " + run.name,host,async()=>{await host.stopWorkPage(run);await this.refresh();});
-      terminalClaims(body,this.app,host,page.id);
-      if (host.hasPageTerminal?.(page.id) && !host.settings.pageTerminalClaims?.some(c=>c.pageId===page.id)) action(body,"Open terminal",host,()=>host.showPageTerminal!(page.id));
-      body.createEl("h4",{text:"2. Review changes"});
-      const changes = body.createEl("details",{cls:"auto-oc-finish-changes"});
-      changes.createEl("summary",{text:"Show diff · optional when keeping the folder"});
+      body.createEl("h4",{text:"Sessions and runs"});
+      body.createEl("p",{text:review.archiveBlockers.length?review.archiveBlockers.join("\n"):"No blocking sessions or pending executions were found. Independent Main helpers may stay open.",cls:review.archiveBlockers.length?"mod-warning":""});
+      blockingSessions(body,this.app,host,()=>this.close(),()=>this.refresh(),page.id);
+      const active=(host.settings.pageRuns || []).filter(run=>host.ownsExecution(run.workflowId,run.runId));
+      for(const run of active){
+        const pageName=host.settings.workPages?.find(p=>p.id===run.pageId)?.name || run.pageId;
+        body.createEl("p",{text:host.redactSecrets(pageName+" — "+run.name+" — "+run.runId)});
+        action(body,"Stop "+run.name,host,async()=>{await host.stopWorkPage(run);await this.refresh();});
+      }
+      renderPendingFiles(body,host,review.files || [],"Pending files in this page");
+      const changes=body.createEl("details",{cls:"auto-oc-finish-changes"});
+      changes.createEl("summary",{text:"Show diff — optional when keeping the folder"});
       renderPageDiff(changes,host.redactSecrets(review.changes));
-      body.createEl("h4",{text:"3. Choose what to keep"});
-      body.createEl("p",{text:"Default: keep the folder. The page moves to Overview, where you can restore it. Local changes do not prevent archiving."});
-      let remove = false, sessionsClosed = false;
-      let confirm: HTMLButtonElement, status:HTMLElement;
-      const update = () => {
-        if (!confirm) return;
-        confirm.setText(remove ? "Archive and remove worktree" : "Archive page");
-        confirm.disabled = this.busy || !!review.archiveBlockers.length || remove && (!sessionsClosed || !!review.removalBlockers.length);
-        status.setText(this.busy ? "Saving — wait for confirmation." : review.archiveBlockers.length
-          ? "Cannot archive yet: " + review.archiveBlockers.join(" ")
-          : remove && !sessionsClosed ? "Confirm that external sessions and services have ended to remove the folder."
-          : remove && review.removalBlockers.length ? review.removalBlockers.join(" ")
-          : remove ? "Ready: archive the page and remove its clean worktree folder. Branch and history stay."
-          : "Ready: archive this page and keep all files. No merge or deletion.");
+      if(this.removeOnly && review.removalBlockers.length)body.createEl("p",{text:"Folder removal is unavailable: "+review.removalBlockers.join("\n"),cls:"mod-warning"});
+      if(!this.removeOnly)body.createEl("p",{text:"Local changes do not prevent archiving. The page moves to Overview and can be restored. Remove worktree becomes available as a separate action on the archived page."});
+      let sessionsClosed=false,confirm:HTMLButtonElement,status:HTMLElement;
+      const update=()=>{
+        if(!confirm)return;
+        const modeBlock=this.removeOnly?(!page.archived || page.kind!=="worktree" || !!page.worktreeRemoval || !!review.removalBlockers.length || !sessionsClosed):!!page.archived;
+        confirm.disabled=this.busy || !!review.archiveBlockers.length || modeBlock;
+        status.setText(this.busy?"Saving — wait for confirmation.":review.archiveBlockers.length?"Cannot continue yet: "+review.archiveBlockers.join(" ")
+          :this.removeOnly&&!page.archived?"Archive the page first. No files have been removed."
+          :this.removeOnly&&review.removalBlockers.length?review.removalBlockers.join(" ")
+          :this.removeOnly&&!sessionsClosed?"Confirm that external sessions and services have ended before removing the folder."
+          :this.removeOnly?"Ready to remove the clean worktree folder. Branch and history stay."
+          :page.archived?"This page is already archived.":"Ready to archive. All files and branches stay; no merge or deletion.");
       };
-      if (page.kind === "worktree") {
-        new Setting(body).setName("Remove worktree folder").setDesc("Optional. Keeps the branch, commits and page history. The folder cannot be restored from this page after removal.")
-          .addToggle(toggle=>toggle.setValue(false).setDisabled(!!review.removalBlockers.length).onChange(value=>{remove=value;update();}));
-        if (review.removalBlockers.length) body.createEl("p",{text:"Folder removal is unavailable: " + review.removalBlockers.join("\n") + " You can still archive and keep the folder once sessions have ended.",cls:"setting-item-description"});
-        new Setting(body).setName("I closed external sessions and services using this worktree")
-          .addToggle(toggle=>toggle.setValue(false).onChange(value=>{sessionsClosed=value;update();}));
-      }
-      const footer = root.createDiv("auto-oc-finish-footer");
-      status = footer.createEl("p",{cls:"auto-oc-finish-status"}); status.setAttr("role","status");
-      const feedback = footer.createEl("p"); feedback.setAttr("role","alert");
-      const buttons = footer.createDiv("auto-oc-page-actions");
-      confirm = buttons.createEl("button",{text:"Archive page",cls:"mod-cta"});
-      confirm.onclick = async () => {
-        if (this.busy || confirm.disabled || this.closed || host.isLifecycleStopped()) return;
-        this.busy = true; update();
-        try { await host.finishWorkPage(page.id,review.hash,remove,sessionsClosed); this.close(); this.finished(); new Notice(remove ? "Page archived. Worktree folder removed; branch and history kept." : "Page archived. All files kept. Restore it from Overview."); }
-        catch (error) { feedback.setText(errorText(host,error) + " Refresh the review. If removal is pending, use Check removal on the page."); }
-        finally { this.busy = false; update(); }
+      if(this.removeOnly)new Setting(body).setName("I closed external sessions and services using this worktree")
+        .addToggle(toggle=>toggle.setValue(false).onChange(value=>{sessionsClosed=value;update();}));
+      const footer=root.createDiv("auto-oc-finish-footer");
+      status=footer.createEl("p",{cls:"auto-oc-finish-status"});status.setAttr("role","status");
+      const feedback=footer.createEl("p");feedback.setAttr("role","alert");
+      const buttons=footer.createDiv("auto-oc-page-actions");
+      confirm=buttons.createEl("button",{text:this.removeOnly?"Remove worktree folder":"Archive page",cls:this.removeOnly?"mod-warning":"mod-cta"});
+      confirm.onclick=async()=>{
+        if(this.busy || confirm.disabled || this.closed || host.isLifecycleStopped())return;
+        this.busy=true;update();
+        try{
+          await host.finishWorkPage(page.id,review.hash,this.removeOnly,this.removeOnly&&sessionsClosed);
+          this.close();this.finished();new Notice(this.removeOnly?"Worktree folder removed. Branch and page history kept.":"Page archived. All files kept. Restore it from Overview.");
+        }catch(error){feedback.setText(errorText(host,error)+" Refresh the review. If removal is pending, use Check removal on the page.");}
+        finally{this.busy=false;update();}
       };
-      buttons.createEl("button",{text:"Refresh review"}).onclick = () => this.refresh();
-      buttons.createEl("button",{text:"Cancel"}).onclick = () => {if (!this.busy) this.close();};
-      if(page.kind === "worktree") buttons.createEl("button",{text:"Discard work…",cls:"mod-warning"}).onclick=()=>{
-        if(this.busy)return;this.close();new DiscardWorkModal(this.app,host,page.id,this.finished).open();
-      };
-      this.busy = false; update();
-    } catch (error) { if (!this.closed) {
-      loading.setText("Could not check this page: " + errorText(host,error));
-      root.createEl("button",{text:"Retry review"}).onclick = ()=>this.refresh();
-      root.createEl("button",{text:"Cancel"}).onclick = ()=>this.close();
-    } }
-    finally {this.busy = false;}
+      buttons.createEl("button",{text:"Refresh review"}).onclick=()=>this.refresh();
+      buttons.createEl("button",{text:"Cancel"}).onclick=()=>{if(!this.busy)this.close();};
+      this.busy=false;update();
+    }catch(error){if(!this.closed){
+      loading.setText("Could not check this page: "+errorText(host,error));
+      root.createEl("button",{text:"Retry review"}).onclick=()=>this.refresh();
+      root.createEl("button",{text:"Cancel"}).onclick=()=>this.close();
+    }}finally{this.busy=false;}
   }
-  onClose() {this.closed = true;this.contentEl.empty();}
+  onClose(){this.closed=true;this.stopWatching?.();this.contentEl.empty();}
 }
+
 function terminalClaims(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?:string, openPage?:(id:string)=>void) {
   for (const claim of (host.settings.pageTerminalClaims || []).filter(item => !pageId || item.pageId === pageId)) {
     const row = parent.createDiv("auto-oc-page-row");
@@ -566,12 +664,26 @@ export function openPageItemControls(app:App,host:WorkPagesHost,pageId:string,it
   modal.contentEl.createEl("h3",{text:definition?.name || item.name});
   modal.contentEl.createEl("p",{text:"Run in " + page.name + " · " + page.directory});
   modal.contentEl.createEl("p",{text:"All tasks and workflows are available automatically. This page keeps its own runs and results. Editing a definition updates the shared catalog; schedules still run in Main workspace."});
-  if (item.workflowId) modal.contentEl.createEl("p",{text:"This selection is a workflow step. Run the complete workflow here; running a single step is available only in Main workspace."});
+  const selectedTask=host.settings.tasks.find(task=>task.id===(item.taskId || (source.task?source.id:undefined)));
+  const standaloneInteractive=!!item.workflowId && item.kind==="task" && !!selectedTask && (selectedTask.taskKind==="cli" || selectedTask.interactiveTerminal===true);
+  if (item.workflowId) modal.contentEl.createEl("p",{text:standaloneInteractive
+    ? "Run this interactive task on its own to open its agent in this page folder. Other workflow steps will not run; the session must end before more work starts here."
+    : "This selection is a workflow step. Run the complete workflow here; running a single step is available only in Main workspace."});
+  if(selectedTask?.workingDirectory)modal.contentEl.createEl("p",{text:"Fixed task folder: "+selectedTask.workingDirectory+". If it is outside this page, execution is blocked. Leave the shared task folder empty when it should inherit the selected page."});
+  const feedback=modal.contentEl.createEl("p");feedback.setAttr("role","alert");
+  const run=async(id:string,task:boolean)=>{
+    feedback.setText("");
+    try {await host.runWorkPage(pageId,id,task);modal.close();}
+    catch(error){feedback.setText(errorText(host,error));throw error;}
+  };
+  if(standaloneInteractive)action(modal.contentEl,"Run this task only",host,()=>run(selectedTask!.id,true),
+    !!page.archived || !!page.worktreeRemoval || !!item.disabled || !definition || !!definition.disabled || !!selectedTask!.disabled);
   action(modal.contentEl,source.task ? "Run task here" : "Run workflow here",host,async()=>{
-    await host.runWorkPage(pageId,source.id,source.task);modal.close();
+    await run(source.id,source.task);
   },!!page.archived || !!page.worktreeRemoval || !definition || !!definition.disabled);
   modal.contentEl.createEl("button",{text:"Edit shared definition"}).onclick = ()=>{modal.close();edit();};
   runs(modal.contentEl,app,host,pageId,undefined,source);
+  if(standaloneInteractive){modal.contentEl.createEl("h4",{text:"Standalone task runs in this page"});runs(modal.contentEl,app,host,pageId,undefined,{id:selectedTask!.id,task:true});}
   modal.contentEl.createEl("button",{text:"Close"}).onclick = ()=>modal.close();modal.open();
 }
 
@@ -678,7 +790,8 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
       });
     }
   } else {
-    action(controls,"Finish work",host,async()=>new FinishWorkModal(app,host,page.id,()=>select("main")).open());
+    if(!page.archived)action(controls,"Archive page",host,async()=>new FinishWorkModal(app,host,page.id,()=>select("main")).open());
+    if(page.archived && page.kind==="worktree")action(controls,"Remove worktree",host,async()=>new FinishWorkModal(app,host,page.id,()=>select("main"),true).open());
     if (page.archived) action(controls,"Restore page",host,async()=>{
       host.assertPagesEditable();
       const current = selectWorkPage(host.settings,page.id);

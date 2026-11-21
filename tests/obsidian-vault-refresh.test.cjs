@@ -67,7 +67,7 @@ test('Windows 8.3 refresh reconciles real long and short paths without replaying
   const outside=path.join(temporary,'outside');fs.mkdirSync(outside);fs.writeFileSync(path.join(outside,'note.md'),'unchanged');
   const inside=path.join(root,'Long notes folder');
   for (const target of [inside,outside]) {
-    const link=path.join(root,target===inside?'inside-link':'outside-link');fs.symlinkSync(target,link,'junction');
+    const link=path.join(root,target===inside?'inside-link':'outside-link');if(!require('./helpers/native-capabilities.cjs').directoryLink(t,target,link,'junction'))return;
     const seen=[], refresh=new ObsidianVaultRefresh(short,adapter(short,async rel=>seen.push(rel)));
     for (const file of [path.join(short,path.basename(link),'note.md'),short+'\\'+path.basename(link)+'\\..\\Long notes folder\\note 0.md',path.join(outside,'note.md')]) {
       const batch=refresh.createBatch();batch.record({path:file,operation:'write'});
@@ -94,7 +94,7 @@ test('write/append/mkdir failures and rejected outside or linked paths never not
   fs.mkdirSync(path.join(root,'directory')); fs.writeFileSync(path.join(root,'file'),'block');
   const outside = path.join(root,'outside'), vault = path.join(root,'vault');
   fs.mkdirSync(outside); fs.mkdirSync(vault);
-  fs.symlinkSync(outside,path.join(vault,'link'),process.platform==='win32'?'junction':'dir');
+  if(!require('./helpers/native-capabilities.cjs').directoryLink(t,outside,path.join(vault,'link'),process.platform==='win32'?'junction':'dir'))return;
   for (const method of ['write','append']) {
     for (const file of ['directory','file/child.md','../escape.md',path.join(os.tmpdir(),'escape-refresh.md')]) {
       assert.throws(() => execute(root, `vault.${method}(${JSON.stringify(file)}, "bad");`, m => mutations.push(m)));
@@ -159,7 +159,7 @@ test('refresh rechecks links at flush and leaves hidden paths to normal Obsidian
   const external=path.join(root,'external'), folder=path.join(root,'notes'); fs.mkdirSync(external);
   const next=refresh.createBatch(); execute(root,'vault.write("notes/note.md", "saved");',next.record);
   fs.unlinkSync(path.join(folder,'note.md')); fs.rmdirSync(folder);
-  fs.symlinkSync(external,folder,process.platform==='win32'?'junction':'dir');
+  if(!require('./helpers/native-capabilities.cjs').directoryLink(t,external,folder,process.platform==='win32'?'junction':'dir'))return;
   await assert.rejects(next.flush(),/Linked refresh/); assert.deepEqual(calls,[]);
 });
 
@@ -263,7 +263,7 @@ test('built plugin shared hosts refresh direct steps, referenced tasks and stand
   }
 });
 
-test('shared step next effect waits, and refresh failure is terminal without replay', async t => {
+test('shared step next effect waits, and unconfirmed refresh requires reconciliation without replay', async t => {
   for(const fails of [false,true]) {
     const root=fixture(t), dir=path.join(root,'runtime');fs.mkdirSync(dir);
     const definition=runtime.prepareWorkflowDefinition({id:'wf',steps:[
@@ -276,9 +276,14 @@ test('shared step next effect waits, and refresh failure is terminal without rep
     const pending=runtime.runCodeWorkflowHost(options);
     for(let i=0;i<200&&!release;i++)await new Promise(r=>setTimeout(r,5));
     assert.equal(typeof release,'function');assert.equal(fs.existsSync(path.join(root,'second.md')),false);
-    release();const result=await pending;assert.equal(result.phase,fails?'failed':'completed');
+    release();
+    if(fails){
+      await assert.rejects(pending,/persisted.*refresh rejected/);
+      const checkpoint=JSON.parse(fs.readFileSync(path.join(dir,fs.readdirSync(dir).find(name=>/^[a-f0-9-]+\.json$/.test(name))),'utf8'));
+      assert.equal(checkpoint.phase,'in_flight');assert.equal(checkpoint.steps[0].result,undefined);
+      await assert.rejects(runtime.runCodeWorkflowHost({...options,resumeRunId:checkpoint.runId}),/reconcil|uncertain|in.flight/i);
+    } else assert.equal((await pending).phase,'completed');
     assert.equal(fs.existsSync(path.join(root,'second.md')),!fails);
-    if(fails){assert.match(result.steps[0].output,/persisted.*refresh rejected/);await runtime.runCodeWorkflowHost({...options,resumeRunId:result.runId});}
     assert.equal(fs.readFileSync(path.join(root,'first.md'),'utf8'),'once');
   }
 });

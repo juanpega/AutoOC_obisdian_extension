@@ -24,12 +24,14 @@ import type { VaultMutationBatchFactory } from "./code-vault-mutations";
 import type { InteractiveTaskTerminalOptions, InteractiveTaskTerminalRequest } from "./interactive-task-terminal";
 import { isOpenCodeTask } from "./opencode-profile";
 import { resolveInstalledWorkflowLocation, ensureInstalledWorkflowRuntime } from "./installed-workflow-location";
+import type { TimingContext } from "./execution-timing";
 
 const preparingInstallations = new Set<string>();
 
 // Shared installed-catalog entry point. The caller must authorize this vault
 // and its trusted Code capabilities. No discovery by name or implicit retry.
 export interface InstalledWorkflowOptions {
+  timing?:TimingContext;
   vault: string;
   installationDirectory?: string;
   workflowId?: string;
@@ -37,6 +39,7 @@ export interface InstalledWorkflowOptions {
   stepId?: string;
   pageId?: string;
   resumeRunId?: string;
+  publicationRecovery?: {revision:number;journalHash:string;definitionHash:string};
   newExecution?: boolean;
   reconcile?: boolean;
   signal?: AbortSignal;
@@ -96,6 +99,10 @@ export async function runInstalledWorkflow(options: InstalledWorkflowOptions) {
     assertNoPageTerminal(config, definition.settings.workingDirectory || vault);
     for (const task of definition.tasks) assertNoPageTerminal(config, task.workingDirectory || definition.settings.workingDirectory || vault);
   }
+  if (options.publicationRecovery) {
+    if (!options.resumeRunId || matches[0].runtimeExecution?.runId!==options.resumeRunId) throw new Error("Recovery requires the original catalog binding");
+    validateProgressBinding(matches[0],readExecutionCheckpoint(runtimeDirectory,options.resumeRunId),options.resumeRunId);
+  }
   preflightInstalledWorkflow(definition,vault);
   // Terminal placement is a host preference, not part of historical fingerprints.
   const terminal:InteractiveTaskTerminalOptions = {destination:config.cliTerminalDestination === 'integrated' ? 'integrated' : 'external',launch:options.launchInteractiveTerminal};
@@ -143,19 +150,19 @@ export async function runInstalledWorkflow(options: InstalledWorkflowOptions) {
   timer.unref?.();
   try {
   const result = await runCodeWorkflowHost({
-    definition, runtimeDirectory, vaultBase:vault, admission,
-    resumeRunId:options.resumeRunId, reconcile:options.reconcile,
+    definition, runtimeDirectory, vaultBase:vault, admission,timing:options.timing,
+    publicationRecovery:options.publicationRecovery, resumeRunId:options.resumeRunId, reconcile:options.reconcile,
     maxSteps:options.maxSteps, signal:controller.signal, redact:options.redact,
     lease:options.lease || ownedLease,
     vaultMutations:options.vaultMutations,
     onTaskOutput:options.onTaskOutput,
     tasks:createWorkflowTaskAdapter(definition,vault,options.vaultMutations,terminal),
     evaluate:createWorkflowEvaluator(definition,vault,controller.signal),
-    onCheckpoint:async checkpoint=>{
+    onCheckpoint:async (checkpoint,timing)=>{
       admission?.bind(checkpoint);
       activeRunId=checkpoint.runId;
       checkStop();
-      const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,stepId:options.stepId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
+      const catalog = await persistWorkflowProgress({configurationFile,runtimeDirectory,checkpoint,timing,expectedRunId:checkpoint.runId,replaceCompletedRunId,taskId:options.taskId,stepId:options.stepId,vaultBase:vault,writer:reader,baseline:options.catalogVersion || (()=>admission?.coordinator.catalogVersion || reader.confirmedVersion(configurationFile)),
         onCommitted:async (catalog,transaction)=>{if(admission)admission.coordinator.catalogVersion=catalog.version;await options.onCheckpoint?.(checkpoint,catalog,{...presentation},transaction);admission?.confirm(checkpoint);}});
     },
   });

@@ -31,7 +31,8 @@ test('CLI delegates isolated Code to the real plugin host and explains disabled 
   const rejected=await cli(vault,'run','--workflow','w');assert.equal(rejected.code,1);assert.match(rejected.stderr,/disabled/);
   const run=await cli(vault,'run','--workflow','w','--step','code');assert.equal(run.code,0,run.stderr);
   const result=JSON.parse(run.stdout);assert.equal(result.stepId,'code');assert.equal(result.workflowId,'w');
-  assert.ok(run.stderr.trim().split('\n').every(line=>JSON.parse(line).host==='obsidian'));
+  const events=require('./helpers/cli-events.cjs').cliEvents(run.stderr);
+  assert.ok(events.length>0);assert.ok(events.every(event=>event.host==='obsidian'));
   const continued=await cli(vault,'resume','--workflow','w','--step','code','--run',result.runId);assert.equal(continued.code,0,continued.stderr);
   assert.equal(fs.readFileSync(path.join(vault,'effects.txt'),'utf8'),'once');
   assert.equal(plugin.settings.workflows[0].status,'pending');
@@ -44,7 +45,7 @@ function cliObserved(vault,onProgress,...args){return new Promise((resolve,rejec
   let pending='';
   child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>{
     stderr+=s;pending+=s;
-    while(pending.includes('\n')) {const end=pending.indexOf('\n'),line=pending.slice(0,end);pending=pending.slice(end+1);onProgress?.(JSON.parse(line));}
+    while(pending.includes('\n')) {const end=pending.indexOf('\n'),line=pending.slice(0,end);pending=pending.slice(end+1);const event=require('./helpers/cli-events.cjs').cliEvent(line);if(event)onProgress?.(event);}
   });
   child.on('error',error=>{clearTimeout(watchdog);reject(error);});
   child.on('exit',code=>{clearTimeout(watchdog);if(timedOut)reject(new Error(`Synthetic CLI watchdog expired after 45000ms; stdout=${stdout}; stderr=${stderr}`));else resolve({code,stdout,stderr});});
@@ -65,6 +66,7 @@ test('real plugin host reports the selected workflow before its first step and k
   const timer=setInterval(()=>plugin.cliRequestHost.poll(),10);t.after(()=>clearInterval(timer));
   let first,existsAtFirst;
   const result=await cliObserved(vault,event=>{
+    if(event.event==='submitted'){assert.match(event.requestId,/^[a-f0-9-]{36}$/);return;}
     if(!first){first=event;existsAtFirst=fs.existsSync(path.join(vault,'effects.txt'));release();}
   },'run','--workflow','named');
   assert.equal(result.code,0,result.stderr);assert.equal(existsAtFirst,false);assert.equal(first.phase,'ready');

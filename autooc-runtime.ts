@@ -24,8 +24,12 @@ export type { PreparedWorkflow } from "./workflow-definition";
 export type { RunCheckpoint } from "./execution-journal";
 
 export { executionCoordinator, validateConcurrency } from "./execution-coordinator";
+export { createPageCreationService, inspectPageCreation, readPageCreationRequest } from "./page-creation";
+export { createStandalonePage, runStandaloneWorkflowWithPages } from "./standalone-pages";
 export type { ConcurrencyPolicy } from "./execution-coordinator";
 
 // Private terminal host entry point; importing the runtime never starts a host.
 import { startTerminalSessionHost } from "./terminal-session-host";
 if (require.main === module && process.argv[2] === "--autooc-terminal-host") startTerminalSessionHost();
+export {inspectPluginRequest,followPluginRequest,startPluginRequestPump} from "./cli-plugin-requests";
+export {readExecutionTimings} from "./execution-timing";

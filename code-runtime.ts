@@ -120,6 +120,9 @@ export function executeCode(options: CodeExecutionOptions): string {
   return String(result == null ? "" : result);
 }
 
+/** Only an error reported by the script is a confirmed execution failure. */
+export class CodeExecutionError extends Error {}
+
 function codeNodeExecutable(): string {
   if (!process.versions.electron) return process.execPath;
   const fs = require("fs") as typeof import("fs");
@@ -176,8 +179,8 @@ export async function executeCodeAsync(options: CodeExecutionOptions, signal?: A
         if (process.connected) process.send(message, () => process.exit(0)); else process.exit(1);
       };
       worker.on('message', message => message.type === 'result' || message.type === 'error' ? finish(message) : send(message));
-      worker.once('error', error => finish({type:'error',text:String(error),name:error.name,message:error.message}));
-      worker.once('exit', code => { if (!finished) finish({type:'error',text:'Code runner exited without a result ('+code+')',name:'Error',message:'Code runner exited without a result'}); });
+      worker.once('error', () => finish({type:'runner-error'}));
+      worker.once('exit', () => { if (!finished) finish({type:'runner-error'}); });
     });
     send({type:'ready'});
   `;
@@ -188,51 +191,83 @@ export async function executeCodeAsync(options: CodeExecutionOptions, signal?: A
     stdio:["ignore", "ignore", "pipe", "ipc"], serialization:"json",
   });
   let closed = false, diagnostic = "", startupTimer: ReturnType<typeof setTimeout> | undefined;
+  let resultTimer: ReturnType<typeof setTimeout> | undefined;
+  let resultTimedOut = false;
+  let dispatched = false, observedResult = false;
+  let killTimer: ReturnType<typeof setTimeout> | undefined;
+  let killer: import("child_process").ChildProcess | undefined;
   const closedPromise = new Promise<void>(resolve => child.once("close", () => {closed=true;resolve();}));
   child.stderr?.on("data", chunk => {diagnostic=(diagnostic+String(chunk)).slice(-2000);});
   const stop = () => {
     if (!child.pid || closed || child.exitCode !== null || child.signalCode !== null) return;
-    if (signal?.aborted && process.platform === "win32") {
+    const fallback = () => {try {if (!closed) child.kill("SIGKILL");} catch { /* The bounded close wait below retains uncertainty. */ }};
+    const terminateTree = signal?.aborted || resultTimedOut || (dispatched && !observedResult);
+    if (terminateTree && process.platform === "win32") {
       const path = require("path") as typeof import("path");
       const system = process.env.SystemRoot || "C:\\Windows";
-      const killer = spawn(path.join(system,"System32","taskkill.exe"), ["/PID",String(child.pid),"/T","/F"], {windowsHide:true,stdio:"ignore"});
-      const fallback = () => {if (!closed) child.kill("SIGKILL");};
-      const timer = setTimeout(fallback,2000);
-      killer.once("error", () => {clearTimeout(timer);fallback();});
-      killer.once("close", () => {clearTimeout(timer);fallback();});
-    } else if (signal?.aborted && process.platform !== "win32") {
-      try {process.kill(-child.pid,"SIGKILL");} catch {child.kill("SIGKILL");}
-    } else child.kill("SIGKILL");
+      killer = spawn(path.join(system,"System32","taskkill.exe"), ["/PID",String(child.pid),"/T","/F"], {windowsHide:true,stdio:"ignore"});
+      killTimer = setTimeout(fallback,2000);
+      killer.on("error", () => {clearTimeout(killTimer);fallback();});
+      killer.once("close", () => {clearTimeout(killTimer);fallback();});
+    } else if (terminateTree && process.platform !== "win32") {
+      try {process.kill(-child.pid,"SIGKILL");} catch {fallback();}
+    } else fallback();
   };
   let abort: (()=>void) | undefined;
   try {
     return await new Promise<string>((resolve, reject) => {
-      abort = () => reject(new Error("Code execution stopped; commands already started may still have effects"));
+      let settled = false;
+      const fail = (error:unknown) => {if (!settled) {settled=true;reject(error);}};
+      abort = () => fail(new Error("Code execution stopped; commands already started may still have effects"));
       signal?.addEventListener("abort", abort, {once:true});
-      child.once("error", reject);
-      child.once("close", code => reject(new Error(`Code runner exited without a result (${code}). ${diagnostic}`)));
-      startupTimer = setTimeout(() => reject(new Error("The code runner did not start. Check your Node.js installation.")),30000);
+      child.on("error", fail);
+      child.once("disconnect", () => fail(new Error("Code runner disconnected without a result; effects may be unconfirmed")));
+      child.once("close", code => fail(new Error(`Code runner exited without a result (${code}). ${diagnostic}`)));
+      startupTimer = setTimeout(() => fail(new Error("The code runner did not start. Check your Node.js installation.")),30000);
       child.on("message", (message:any) => {
+        if (settled) return;
         try {
-          if (message.type === "ready") {clearTimeout(startupTimer);child.send(data, error => {if (error) reject(error);});}
+          if (message.type === "ready") {
+            if (dispatched) return;
+            dispatched=true;clearTimeout(startupTimer);
+            // The VM allows 15 minutes; also cover worker setup and IPC delivery.
+            resultTimer=setTimeout(() => {resultTimedOut=true;fail(new Error("Code runner result timed out; effects may be unconfirmed"));},930000);
+            child.send(data, error => {if (error) fail(error);});
+          }
           else if (message.type === "log") log?.(message.text);
           else if (message.type === "mutation") onVaultMutation?.(message.mutation);
-          else if (message.type === "result") resolve(message.output);
+          else if (message.type === "result") {observedResult=true;settled=true;resolve(message.output);}
+          else if (message.type === "runner-error") fail(new Error("Code worker ended without a result; effects may be unconfirmed"));
           else if (message.type === "error") {
-            const error = new Error(message.message);
+            observedResult=true;
+            const error = new CodeExecutionError(message.message);
             error.name = message.name;
             // Preserve the original display, including non-Error thrown values.
             error.toString = () => message.text;
-            reject(error);
+            fail(error);
           }
-        } catch(error) { reject(error); }
+        } catch(error) { fail(error); }
       });
       if (signal?.aborted) abort();
     });
   } finally {
     clearTimeout(startupTimer);
+    clearTimeout(resultTimer);
     if (abort) signal?.removeEventListener("abort",abort);
-    stop();
-    await closedPromise;
+    try {stop();} catch { /* Failed termination is handled by the close deadline. */ }
+    let closeTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([closedPromise,new Promise<void>(resolve=>{closeTimer=setTimeout(resolve,3000);})]);
+    } finally {
+      clearTimeout(closeTimer);clearTimeout(killTimer);
+      if (killer) {try {killer.kill();} catch {} killer.unref();}
+    }
+    if (!closed) {
+      // Release observation handles, not the unresolved execution checkpoint.
+      // A successful kill request alone does not prove the effects stopped.
+      try {if (child.connected) child.disconnect();} catch {}
+      child.stderr?.destroy();child.unref();
+      throw new Error("Code runner termination is unconfirmed; inspect the existing run before continuing");
+    }
   }
 }

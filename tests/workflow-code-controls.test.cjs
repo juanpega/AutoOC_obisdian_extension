@@ -96,11 +96,14 @@ test('background code allows Stop during a loop, keeps effects unknown, and neve
     const controller=new AbortController();let ticks=0, seen=false;
     const timer=setInterval(()=>ticks++,10);
     try {
-      const result=await runInstalledWorkflow({vault:f.root,workflowId:'workflow',stepId:'chosen',newExecution:true,redact:s=>s,signal:controller.signal,
-        onTaskOutput:event=>{assert.equal(event.stepId,'chosen');seen=true;controller.abort();}});
-      assert.ok(seen);assert.ok(ticks>0);assert.equal(result.phase,'failed');assert.equal(result.steps.length,1);
-      assert.equal(result.steps[0].result.cancelled,true);assert.equal(fs.existsSync(path.join(f.root,'effects.txt')),false);
-      assert.equal(f.read().workflows[0].steps[1].codeExecution.runtimeExecution.terminalUncertainty,true);
+      await assert.rejects(runInstalledWorkflow({vault:f.root,workflowId:'workflow',stepId:'chosen',newExecution:true,redact:s=>s,signal:controller.signal,
+        onTaskOutput:event=>{assert.equal(event.stepId,'chosen');seen=true;controller.abort();}}),/Code execution stopped/);
+      assert.ok(seen);assert.ok(ticks>0);assert.equal(fs.existsSync(path.join(f.root,'effects.txt')),false);
+      const binding=f.read().workflows[0].steps[1].codeExecution.runtimeExecution;
+      const checkpoint=JSON.parse(fs.readFileSync(path.join(f.directory,'runtime',binding.runId+'.json'),'utf8'));
+      assert.equal(checkpoint.phase,'in_flight');assert.equal(checkpoint.steps.length,1);assert.equal(checkpoint.steps[0].result,undefined);
+      await assert.rejects(runInstalledWorkflow({vault:f.root,workflowId:'workflow',stepId:'chosen',resumeRunId:binding.runId,redact:s=>s}),/reconcil|uncertain|in.flight/i);
+      assert.equal(fs.existsSync(path.join(f.root,'effects.txt')),false);
     } finally {clearInterval(timer);}
   });
 });

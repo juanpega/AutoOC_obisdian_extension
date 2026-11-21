@@ -1363,7 +1363,7 @@ test('a workflow containing its uncertain stopped legacy task cannot restart fro
   assert.equal(launches,0); assert.equal(h.workflow.status,'failed');
 });
 
-for (const mode of ['ended', 'active', 'host alive', 'foreign file', 'redirected']) test(`Windows observer auxiliary cleanup: ${mode}`, {skip:process.platform !== 'win32'}, () => {
+for (const mode of ['ended', 'active', 'host alive', 'foreign file', 'redirected']) test(`Windows observer auxiliary cleanup: ${mode}`, {skip:process.platform !== 'win32'}, t => {
   const os=require('node:os'),cp=require('node:child_process');
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-observer-cleanup-'));
   try {
@@ -1379,7 +1379,7 @@ for (const mode of ['ended', 'active', 'host alive', 'foreign file', 'redirected
     fs.writeFileSync(path.join(directory,'state.json'),'fixture');
     if(mode==='foreign file')fs.writeFileSync(path.join(directory,'keep.md'),'preserve');
     if(mode==='redirected'){
-      const target=path.join(root,'moved');fs.renameSync(directory,target);fs.symlinkSync(target,directory,'junction');
+      const target=path.join(root,'moved');fs.renameSync(directory,target);if(!require('./helpers/native-capabilities.cjs').directoryLink(t,target,directory,'junction'))return;
     }
     const script=`${checkDirectory}\n$session = @{HasExited = ${mode==='active'?'$false':'$true'}}; function Get-Process { param($Id) ${mode==='host alive'?'return @{Id=$Id}':'return $null'} };\n${finalizer}`;
     const result=cp.spawnSync('powershell.exe',['-NoProfile','-EncodedCommand',Buffer.from(script,'utf16le').toString('base64')],{encoding:'utf8',windowsHide:true});

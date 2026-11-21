@@ -1,11 +1,14 @@
-const {test}=require('node:test'),assert=require('node:assert/strict');
+const {test,afterEach}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
+const cleanups=[];
+afterEach(()=>{for(const cleanup of cleanups.splice(0))cleanup();});
 function harness(failPrepare=false) {
   class Element {
     constructor(options={}){this.children=[];this.text=options.text||'';this.style={};this.attrs={};this.classes=new Set((typeof options==='string'?options:options.cls||'').split(' '));}
     createEl(tag,options={}){const child=new Element(options);child.tag=tag;this.children.push(child);return child;}
     createDiv(options={}){return this.createEl('div',options);} empty(){this.children=[];} setText(v){this.text=v;} setAttr(k,v){this.attrs[k]=v;} addClass(c){this.classes.add(c);}
     all(){return [this,...this.children.flatMap(c=>c.all())];}
+    querySelectorAll(selector){return this.all().filter(e=>selector.split(',').map(t=>t.trim()).includes(e.tag));}
   }
   class Control {
     constructor(e){this.e=e;this.options=[];} setValue(v){this.e.value=v;return this;} setDisabled(v){this.e.disabled=v;return this;}
@@ -20,11 +23,13 @@ function harness(failPrepare=false) {
     addDropdown(fn){return this.add('select',fn);} addButton(fn){return this.add('button',fn);}
   }
   const opened=[],effects=[],notices=[],module={exports:{}};
+  cleanups.push(()=>opened.forEach(modal=>modal.close()));
   class Modal {
     constructor(app){this.app=app;this.modalEl=new Element();this.contentEl=new Element();}
     open(){opened.push(this);this.onOpen?.();} close(){this.onClose?.();}
   }
   const helper={
+    registerWorkPage:async(settings,page,save)=>{settings.workPages=[...(settings.workPages||[]),page];await save();},
     readWorkspaceGitState:async()=>({kind:'branch',branch:'feat/current'}),
     inspectWorktreePreparation:async()=>{effects.push('inspect');return {directory:'/repo/.autooc/worktrees',ignoreFile:'/repo/.gitignore',preferenceKey:'repo-key',excluded:false};},
     prepareWorktreeIgnore:async prep=>{effects.push('prepare');if(failPrepare)throw Error('write failed');return prep;},
@@ -35,7 +40,7 @@ function harness(failPrepare=false) {
   const source=fs.readFileSync(path.join(__dirname,'../work-pages-ui.ts'),'utf8');
   const js=ts.transpileModule(source,{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText;
   vm.runInNewContext(js+'\nmodule.exports.testing={NewPageModal,PreparationModal};',{
-    module,exports:module.exports,require:id=>id==='obsidian'?{Modal,Setting,Notice:class{constructor(s){notices.push(s);}}}:id==='./work-pages'?helper:id==='./merge-review'?{mergeReviewCommand:(_review,action)=>'command:'+action,mergeEditorUri:dir=>'vscode://file/'+dir}:id==='electron'?{clipboard:{writeText:text=>effects.push(text)},shell:{openExternal:async uri=>effects.push(uri)}}:require(id),console,process
+    module,exports:module.exports,require:id=>id==='obsidian'?{Modal,Setting,Notice:class{constructor(s){notices.push(s);}}}:id==='./work-pages'?helper:id==='./merge-review'?{mergeEditorUri:dir=>'vscode://file/'+dir}:id==='electron'?{clipboard:{writeText:text=>effects.push(text)},shell:{openExternal:async uri=>effects.push(uri)}}:require(id),console,process,setTimeout,clearTimeout
   });
   const host={settings:{tasks:[],workflows:[],workingDirectory:'/repo'},saveSettings:async()=>effects.push('save'),
     isLifecycleStopped:()=>false,assertPagesEditable(){},reservePagePreparation(){effects.push('reserve');return()=>effects.push('release');},
@@ -74,35 +79,57 @@ function mergeHarness(state='conflicts',inProgress=false) {
   const h=harness(),page={id:'p',name:'Feature',directory:'/repo/p',kind:'worktree',branch:'feat/p',taskIds:[],workflowIds:[]};
   h.host.settings.workPages=[page];
   const source={directory:page.directory,branch:page.branch,head:'a'.repeat(40)},target={directory:'/repo',branch:'main',head:'b'.repeat(40)};
-  let review={source,target,targets:[target],state,inProgress,conflicts:state==='conflicts'?['file.ts']:[],blockers:[],details:'Review details',hash:'one'};
+  let review={source,target,targets:[target],state,inProgress,conflicts:state==='conflicts'?['file.ts']:[],blockers:[],completionBlockers:[],details:'Review details',hash:'one'};
   h.host.reviewPageMerge=async()=>review;
+  h.host.executePageMerge=async(id,directory,hash,action,confirmed)=>{
+    if(hash!==review.hash||review.blockers.length)throw Error('Workspace or activity changed');
+    h.effects.push({id,directory,hash,action,confirmed});return {review,output:'Git output'};
+  };
   h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
   return {...h,setReview(value){review={...review,...value};},async open(){await h.root.all().find(e=>e.text==='Merge review').onclick();await tick();return h.opened.at(-1);}};
 }
-test('Merge review distinguishes predicted conflicts, copies a command and never runs it',async()=>{
+test('Merge review executes Start merge for the displayed target and refreshes the outcome',async()=>{
   const h=mergeHarness(),modal=await h.open();
   assert.ok(modal.contentEl.all().some(e=>e.text==='Predicted conflict files (1)'));
-  assert.equal(modal.contentEl.all().some(e=>e.text==='Copy complete command'),false);
-  assert.equal(modal.contentEl.all().some(e=>e.text==='Finish work'),false);
-  await h.button(modal,'Copy merge command').onclick();assert.deepEqual(h.effects,['command:start']);
+  assert.equal(modal.contentEl.all().some(e=>e.text==='Complete merge'),false);
+  assert.equal(modal.contentEl.all().some(e=>e.text==='Archive page'),false);
+  await h.button(modal,'Start merge').onclick();assert.deepEqual(h.effects,[{id:'p',directory:'/repo',hash:'one',action:'start',confirmed:false}]);
+  assert.ok(modal.contentEl.all().some(e=>/Git output/.test(e.text)));
   await h.button(modal,'Open target in VS Code').onclick();assert.ok(h.effects.some(e=>e==='vscode://file//repo'));
   assert.ok(modal.modalEl.classes.has('auto-oc-work-page-dialog'));
 });
-test('Merge review gates completion on actual resolved state, preserves a merge on close and refreshes stale commands',async()=>{
+test('Merge review gates completion on actual resolved state, preserves a merge on close and refreshes stale actions',async()=>{
   const h=mergeHarness('conflicts',true),modal=await h.open();
   assert.ok(modal.contentEl.all().some(e=>e.text==='Unresolved files (1)'));
-  assert.equal(modal.contentEl.all().some(e=>e.text==='Copy complete command'),false);
+  assert.equal(modal.contentEl.all().some(e=>e.text==='Complete merge'),false);
   h.setReview({state:'resolved',conflicts:[],hash:'two'});await h.button(modal,'Recheck conflicts').onclick();
-  await h.button(modal,'Copy complete command').onclick();assert.deepEqual(h.effects,['command:complete']);
-  h.setReview({state:'blocked',blockers:['Session active'],hash:'three'});await h.button(modal,'Copy abort command').onclick();
-  assert.deepEqual(h.effects,['command:complete']);assert.ok(h.notices.some(s=>/Workspace or activity changed/.test(s)));
-  assert.equal(modal.contentEl.all().some(e=>e.text==='Copy abort command'),false);
-  h.button(modal,'Close').onclick();assert.deepEqual(h.effects,['command:complete']);
+  await h.button(modal,'Complete merge').onclick();assert.equal(h.effects[0].action,'complete');
+  h.field(modal,'I accept discarding conflict-resolution edits when aborting','toggle').change(true);
+  h.setReview({state:'blocked',blockers:['Session active'],hash:'three'});await h.button(modal,'Abort merge').onclick();
+  assert.equal(h.effects.length,1);assert.ok(h.notices.some(s=>/Workspace or activity changed/.test(s)));
+  assert.equal(modal.contentEl.all().some(e=>e.text==='Abort merge'),false);
+  h.button(modal,'Close').onclick();assert.equal(h.effects.length,1);
 });
-test('Merge review offers Finish work only after rechecking verified integration',async()=>{
-  const h=mergeHarness('integrated'),modal=await h.open();
-  h.setReview({state:'ready',hash:'changed'});await h.button(modal,'Finish work').onclick();
-  assert.equal(h.opened.length,1);assert.equal(modal.contentEl.all().some(e=>e.text==='Finish work'),false);
+
+test('merge actions prevent double submission and abort requires confirmation after every review',async()=>{
+  const h=mergeHarness('resolved',true),modal=await h.open();
+  const abort=h.button(modal,'Abort merge');await abort.onclick();assert.equal(h.effects.length,0);
+  h.field(modal,'I accept discarding conflict-resolution edits when aborting','toggle').change(true);
+  let release;h.host.executePageMerge=async(...args)=>{h.effects.push(args);await new Promise(r=>{release=r;});return {review:await h.host.reviewPageMerge(),output:''};};
+  const first=abort.onclick();await abort.onclick();assert.equal(h.effects.length,1);assert.equal(h.effects[0][4],true);
+  h.button(modal,'Close').onclick();assert.ok(modal.contentEl.children.length);
+  release();await first;assert.equal(h.button(modal,'Abort merge').disabled,true);
+  h.setReview({completionBlockers:['Stage changes']});await h.button(modal,'Recheck conflicts').onclick();
+  assert.equal(h.button(modal,'Complete merge').disabled,true);
+});
+test('Merge review opens independent archiving even while Git actions have blockers',async()=>{
+  const h=mergeHarness('integrated');h.setReview({integration:'verified',blockers:['Main session running']});
+  h.host.reviewPageFinish=async()=>({hash:'close',changes:'',archiveBlockers:[],removalBlockers:[],files:[]});
+  const modal=await h.open();assert.ok(modal.contentEl.all().some(e=>e.text==='Already integrated'));
+  assert.equal(modal.contentEl.all().some(e=>e.text==='Start merge'),false);
+  await h.button(modal,'Review archiving').onclick();await tick();
+  assert.equal(h.opened.length,2);assert.equal(h.button(h.opened.at(-1),'Archive page').disabled,false);
+  assert.deepEqual(h.effects,[]);
 });
 test('ordinary folders and removed worktrees do not expose Merge review',()=>{
   const h=mergeHarness();h.host.settings.workPages[0].kind='folder';h.root.empty();h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
@@ -120,7 +147,7 @@ test('Discard work requires the exact branch name and explicit loss confirmation
   await h.root.all().find(e=>e.text==='Discard work').onclick();await tick();const modal=h.opened.at(-1);
   const accept=h.button(modal,'Discard worktree and branch');assert.equal(accept.disabled,true);
   h.field(modal,'Type the branch name to discard','input').change('wrong');
-  h.field(modal,'I accept losing these files and the local branch, and have closed all sessions, services and previous Git processes','toggle').change(true);
+  h.field(modal,'I accept losing these files and the local branch, and have closed sessions, services and Git processes using this worktree','toggle').change(true);
   assert.equal(accept.disabled,true);await accept.onclick();assert.deepEqual(h.effects,[]);
   h.field(modal,'Type the branch name to discard','input').change('feat/p');assert.equal(accept.disabled,false);
   await accept.onclick();assert.deepEqual(h.effects,[['p','review','feat/p',true]]);assert.deepEqual(selected,['main']);
@@ -129,15 +156,22 @@ test('Discard work requires the exact branch name and explicit loss confirmation
   assert.equal(h.root.all().some(e=>e.text==='Discard work'),false);
 });
 
-test('discard blockers cannot be bypassed by confirmation and pending discard labels preserve the correct outcome',async()=>{
+test('discard blockers cannot be bypassed; their resolution refreshes the open branch review',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});let blocked=true,notify;
   const h=harness();h.host.settings.workPages=[{id:'p',name:'Feature',directory:'/repo/p',kind:'worktree',branch:'feat/p',taskIds:[],workflowIds:[],archived:true,worktreeRemoval:{mode:'discard',status:'pending'}}];
-  h.host.reviewPageDiscard=async()=>({hash:'review',blockers:['Another worktree uses this branch.'],stage:'branch-only',changes:'',commits:'',fileCount:0,commitCount:0});
+  h.host.subscribePageReview=fn=>{notify=fn;return()=>{notify=undefined;};};
+  h.host.reviewPageDiscard=async()=>({hash:'review',blockers:blocked?['Another worktree uses this branch.']:[],stage:'branch-only',changes:'',commits:'',fileCount:0,commitCount:0});
   h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
   assert.ok(h.root.all().some(e=>e.text==='Check discard'));assert.equal(h.root.all().some(e=>e.text==='Check removal'),false);
   await h.root.all().find(e=>e.text==='Discard work').onclick();await tick();const modal=h.opened.at(-1);
   h.field(modal,'Type the branch name to discard','input').change('feat/p');
-  h.field(modal,'I accept losing these files and the local branch, and have closed all sessions, services and previous Git processes','toggle').change(true);
+  h.field(modal,'I accept losing these files and the local branch, and have closed sessions, services and Git processes using this worktree','toggle').change(true);
   assert.equal(h.button(modal,'Discard remaining branch').disabled,true);
+  blocked=false;notify();t.mock.timers.tick(150);await tick();assert.equal(h.opened.length,1);
+  assert.equal(h.button(modal,'Discard remaining branch').disabled,true,'The new review still requires explicit confirmation');
+  h.field(modal,'Type the branch name to discard','input').change('feat/p');
+  h.field(modal,'I accept losing these files and the local branch, and have closed sessions, services and Git processes using this worktree','toggle').change(true);
+  assert.equal(h.button(modal,'Discard remaining branch').disabled,false);
   h.button(modal,'Cancel').onclick();assert.deepEqual(h.effects,[]);
   h.root.empty();h.host.settings.workPages[0].worktreeRemoval.status='removed';h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
   assert.ok(h.root.all().some(e=>e.text==='Worktree and local branch discarded. Page history kept.'));
@@ -149,14 +183,14 @@ test('existing-folder close has a visible confirmation outside the diff and pres
   h.host.reviewPageFinish=async()=>({hash:'h',changes:'diff --git a/a b/a\n@@ -1 +1 @@\n-old\n+new',archiveBlockers:[],removalBlockers:['Main folder cannot be removed']});
   h.host.finishWorkPage=async(...args)=>h.effects.push(args);
   h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
-  await h.root.all().find(e=>e.text==='Finish work').onclick();await tick();const modal=h.opened.at(-1);
+  await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();const modal=h.opened.at(-1);
   const footer=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-footer'));
   assert.ok(footer.all().some(e=>e.text==='Archive page'));assert.equal(h.button(modal,'Archive page').disabled,false);
   assert.equal(footer.all().some(e=>e.classes.has('auto-oc-page-diff')),false);
   assert.ok(modal.contentEl.all().some(e=>/existing folder/.test(e.text)));
   assert.ok(modal.contentEl.all().some(e=>e.text==='Discard work is unavailable for this page.'));
   assert.ok(modal.contentEl.all().some(e=>/even if you have not made any changes/.test(e.text)));
-  assert.ok(modal.contentEl.all().some(e=>/Settings → Execution → Git worktrees/.test(e.text)));
+  assert.ok(modal.contentEl.all().some(e=>/Settings.*Execution.*Git worktrees/.test(e.text)));
   assert.equal(modal.contentEl.all().some(e=>e.tag==='button'&&/Discard/.test(e.text)),false);
   assert.equal(modal.contentEl.all().some(e=>e.name==='Remove worktree folder'),false);
   await h.button(modal,'Archive page').onclick();assert.deepEqual(h.effects,[['p','h',false,false]]);
@@ -170,7 +204,7 @@ test('finish and discard keep long workspace identity outside the scrolling revi
     h.host.reviewPageFinish=async()=>({hash:'h',changes:'+line\n'.repeat(1600),archiveBlockers:[],removalBlockers:[]});
     h.host.reviewPageDiscard=async()=>({hash:'h',blockers:[],stage:'worktree',changes:'+line\n'.repeat(1600),commits:'',fileCount:1,commitCount:0});
     h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
-    await h.root.all().find(e=>e.text===(discard?'Discard work':'Finish work')).onclick();await tick();const modal=h.opened.at(-1);
+    await h.root.all().find(e=>e.text===(discard?'Discard work':'Archive page')).onclick();await tick();const modal=h.opened.at(-1);
     const header=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-header'));
     const body=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-body'));
     assert.ok(modal.modalEl.classes.has('auto-oc-work-page-dialog'));
@@ -211,21 +245,96 @@ test('blocked close explains the reason next to confirmation and can refresh aft
   h.host.settings.workPages=[{id:'p',name:'Feature',directory:'/repo/p',kind:'worktree',branch:'feat/p',taskIds:[],workflowIds:[]}];
   h.host.reviewPageFinish=async()=>({hash:'h',changes:'',archiveBlockers:blocked?['Close active terminals.']:[],removalBlockers:['Ignored files present.']});
   h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
-  await h.root.all().find(e=>e.text==='Finish work').onclick();await tick();let modal=h.opened.at(-1);
+  await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();let modal=h.opened.at(-1);
   assert.equal(h.button(modal,'Archive page').disabled,true);
-  assert.ok(modal.contentEl.all().some(e=>/Cannot archive yet: Close active terminals/.test(e.text)));
+  assert.ok(modal.contentEl.all().some(e=>/Cannot continue yet: Close active terminals/.test(e.text)));
   blocked=false;await h.button(modal,'Refresh review').onclick();
   assert.equal(h.button(modal,'Archive page').disabled,false);
-  assert.equal(h.field(modal,'Remove worktree folder','toggle').disabled,true);
+  assert.equal(modal.contentEl.all().some(e=>e.name==='Remove worktree folder'),false);
 });
 
 test('a failed close inspection provides retry and cancel without a dead-end modal',async()=>{
   const h=harness();h.host.settings.workPages=[{id:'p',name:'Feature',directory:'/repo',kind:'folder',taskIds:[],workflowIds:[]}];
   h.host.reviewPageFinish=async()=>{throw Error('read failure');};
   h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
-  await h.root.all().find(e=>e.text==='Finish work').onclick();await tick();const modal=h.opened.at(-1);
+  await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();const modal=h.opened.at(-1);
   assert.ok(h.button(modal,'Retry review'));assert.ok(h.button(modal,'Cancel'));
-  assert.equal(modal.contentEl.all().some(e=>e.text==='Archive page'),false);
+  assert.equal(modal.contentEl.all().some(e=>e.tag==='button'&&e.text==='Archive page'),false);
+});
+
+test('pending files are grouped as local configuration or project files without interpreting markup',()=>{
+  const h=harness();h.api.renderPendingFiles(h.root,h.host,[
+    {path:'.obsidian/plugins/auto-oc/data.json',indexStatus:' ',worktreeStatus:'M',category:'local-configuration'},
+    {path:'<img>.ts',originalPath:'old.ts',indexStatus:'R',worktreeStatus:' ',category:'project'}],'Pending');
+  assert.ok(h.root.all().some(e=>e.text==='Local configuration (1)'));assert.ok(h.root.all().some(e=>e.text==='Product / other project files (1)'));
+  assert.ok(h.root.all().some(e=>e.text==='old.ts → <img>.ts'));assert.equal(h.root.all().some(e=>e.tag==='img'),false);
+});
+
+test('archive dialog automatically refreshes after session changes and unsubscribes when closed',async()=>{
+  const h=harness(),listeners=new Set();let blocked=true;
+  h.host.settings.workPages=[{id:'p',name:'Page',directory:'/repo/p',kind:'folder'}];
+  h.host.subscribePageReview=fn=>{listeners.add(fn);return()=>listeners.delete(fn);};
+  h.host.reviewPageFinish=async()=>({hash:'h',changes:'',files:[],archiveBlockers:blocked?['Terminal active']:[],removalBlockers:[]});
+  h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();
+  const modal=h.opened.at(-1);assert.equal(h.button(modal,'Archive page').disabled,true);
+  blocked=false;for(const fn of listeners)fn();await new Promise(r=>setTimeout(r,220));
+  assert.equal(h.opened.length,1);assert.equal(h.button(modal,'Archive page').disabled,false);
+  modal.close();assert.equal(listeners.size,0);
+});
+
+test('worktree removal is a separate action on an archived page, with its own confirmation',async()=>{
+  const h=harness();h.host.settings.workPages=[{id:'p',name:'Archived',directory:'/repo/p',kind:'worktree',archived:true}];
+  h.host.reviewPageFinish=async()=>({hash:'remove',changes:'',files:[],archiveBlockers:[],removalBlockers:[]});
+  h.host.finishWorkPage=async(...args)=>h.effects.push(args);
+  h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
+  assert.equal(h.root.all().some(e=>e.text==='Archive page'),false);
+  await h.root.all().find(e=>e.text==='Remove worktree').onclick();await tick();const modal=h.opened.at(-1);
+  assert.equal(h.button(modal,'Remove worktree folder').disabled,true);
+  h.field(modal,'I closed external sessions and services using this worktree','toggle').change(true);
+  await h.button(modal,'Remove worktree folder').onclick();assert.deepEqual(h.effects,[['p','remove',true,true]]);
+});
+
+test('blocked removal rechecks external Git changes without reopening and stops polling once ready',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=harness();let dirty=true,reviews=0;
+  h.host.settings.workPages=[{id:'p',name:'Archived',directory:'/repo/p',kind:'worktree',archived:true}];
+  h.host.reviewPageFinish=async()=>{reviews++;return {hash:'r'+reviews,changes:'',files:[],archiveBlockers:[],removalBlockers:dirty?['Pending files']:[]};};
+  h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
+  await h.root.all().find(e=>e.text==='Remove worktree').onclick();await tick();const modal=h.opened.at(-1);
+  assert.equal(h.button(modal,'Remove worktree folder').disabled,true);
+  dirty=false;t.mock.timers.tick(5000);t.mock.timers.tick(150);await tick();
+  assert.equal(reviews,2);assert.equal(h.opened.length,1);
+  h.field(modal,'I closed external sessions and services using this worktree','toggle').change(true);
+  assert.equal(h.button(modal,'Remove worktree folder').disabled,false);
+  t.mock.timers.tick(10000);await tick();assert.equal(reviews,2);
+  assert.equal(h.button(modal,'Remove worktree folder').disabled,false);assert.deepEqual(h.effects,[]);
+  modal.close();t.mock.timers.tick(10000);await tick();assert.equal(reviews,2);
+});
+
+test('session refresh waits for an in-flight archive and never repeats the mutation',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=harness();let notify,finish,reviews=0,writes=0;
+  h.host.settings.workPages=[{id:'p',name:'Page',directory:'/repo/p',kind:'folder'}];
+  h.host.subscribePageReview=fn=>{notify=fn;return()=>{notify=undefined;};};
+  h.host.reviewPageFinish=async()=>{reviews++;return {hash:'h',changes:'',files:[],archiveBlockers:[],removalBlockers:[]};};
+  h.host.finishWorkPage=()=>{writes++;return new Promise(resolve=>{finish=resolve;});};
+  h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
+  await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();const modal=h.opened.at(-1);
+  const saving=h.button(modal,'Archive page').onclick();notify();t.mock.timers.tick(6000);await tick();
+  assert.equal(reviews,1);assert.equal(writes,1);assert.equal(h.button(modal,'Archive page').disabled,true);
+  finish();await saving;t.mock.timers.tick(10000);await tick();
+  assert.equal(reviews,1);assert.equal(writes,1);assert.equal(notify,undefined);assert.equal(modal.contentEl.children.length,0);
+});
+
+test('close dialog shows only relevant sessions and closes the selected native session through its confirmation',async()=>{
+  const h=harness();h.host.settings.workPages=[{id:'p',name:'Page',directory:'/repo/p',kind:'folder'}];
+  h.host.reviewPageFinish=async()=>({hash:'h',changes:'',files:[],archiveBlockers:['Terminal active'],removalBlockers:[]});
+  h.host.pageBlockingSessions=id=>{assert.equal(id,'p');return [{id:'claim:busy',claimId:'busy',sessionId:7,pageId:'other',pageName:'Other page',label:'Agent',directory:'/repo/p',state:'tracked'}];};
+  h.host.openBlockingPageSession=async(...args)=>h.effects.push(args);
+  h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();const modal=h.opened.at(-1);
+  assert.ok(modal.contentEl.all().some(e=>e.text==='Other page — Agent'));
+  await h.button(modal,'Close this session…').onclick();assert.deepEqual(h.effects,[['claim:busy',true]]);
+  assert.ok(modal.contentEl.all().some(e=>e.text==='Other page — Agent'),'Closing a session keeps the page review open');
 });
 
 test('diff colors distinguish headers and content, preserve markup as text and limit huge previews',()=>{
@@ -250,24 +359,44 @@ test('page controls route a selected step to its whole page workflow and keep hi
   await h.button(modal,'Run workflow here').onclick();assert.deepEqual(h.effects,[['p','w',false]]);
 });
 
-test('Finish work defaults to keeping the folder and requires explicit removal and session confirmation',async()=>{
+test('interactive workflow task can run on its own in the selected page and retains rejection details',async()=>{
+  const h=harness();h.host.settings.workPages=[{id:'p',name:'Feature',directory:'/repo/p',kind:'worktree',taskIds:[],workflowIds:[]}];
+  h.host.settings.tasks=[{id:'cli',name:'Agent',taskKind:'cli',interactiveTerminal:true,workingDirectory:'/repo'}];
+  h.host.settings.workflows=[{id:'w',name:'Workflow'}];
+  const item={id:'step',taskId:'cli',workflowId:'w',kind:'task',name:'Agent'};
+  h.host.settings.pageRuns=[{pageId:'p',sourceId:'cli',task:true,runId:'own',name:'Own task',phase:'completed'},
+    {pageId:'other',sourceId:'cli',task:true,runId:'other',name:'Other page',phase:'completed'}];
+  h.host.runWorkPage=async()=>{throw Error('Fixed folder outside this page');};
+  h.api.openPageItemControls(h.app,h.host,'p',item,()=>{});let modal=h.opened.at(-1);
+  assert.ok(modal.contentEl.all().some(e=>/Fixed task folder/.test(e.text)));
+  assert.ok(modal.contentEl.all().some(e=>/Own task/.test(e.text)));assert.equal(modal.contentEl.all().some(e=>/Other page/.test(e.text)),false);
+  await h.button(modal,'Run this task only').onclick();
+  assert.ok(modal.contentEl.all().some(e=>e.attrs.role==='alert'&&/Fixed folder/.test(e.text)));
+  h.host.runWorkPage=async(...args)=>h.effects.push(args);
+  await h.button(modal,'Run this task only').onclick();assert.deepEqual(h.effects,[['p','cli',true]]);
+  h.host.settings.tasks[0].disabled=true;h.api.openPageItemControls(h.app,h.host,'p',item,()=>{});modal=h.opened.at(-1);
+  assert.equal(h.button(modal,'Run this task only').disabled,true);
+  h.host.settings.tasks[0].disabled=false;h.host.settings.tasks[0].interactiveTerminal=false;h.host.settings.tasks[0].taskKind='code';
+  h.api.openPageItemControls(h.app,h.host,'p',{...item,kind:'code'},()=>{});
+  assert.equal(h.opened.at(-1).contentEl.all().some(e=>e.text==='Run this task only'),false);
+});
+
+test('archiving always keeps the folder and routes back to Main without implicit removal',async()=>{
   const h=harness();h.host.settings.workPages=[{id:'login',name:'Login',objective:'',directory:'/repo/login',repository:'/repo',kind:'worktree',branch:'feat/login',workflowIds:[],taskIds:[]}];
   h.host.reviewPageFinish=async()=>({pageId:'login',hash:'reviewed',changes:'No changes.',archiveBlockers:[],removalBlockers:[]});
   h.host.finishWorkPage=async(...args)=>h.effects.push(args);
   const selected=[];
-  const open=async()=>{h.root.empty();h.api.renderWorkPages(h.root,h.app,h.host,'login',id=>selected.push(id),()=>{});await h.root.all().find(e=>e.text==='Finish work').onclick();await tick();return h.opened.at(-1);};
-  let modal=await open();assert.equal(h.field(modal,'Remove worktree folder','toggle').value,false);
+  const open=async()=>{h.root.empty();h.api.renderWorkPages(h.root,h.app,h.host,'login',id=>selected.push(id),()=>{});await h.root.all().find(e=>e.text==='Archive page').onclick();await tick();return h.opened.at(-1);};
+  let modal=await open();assert.equal(modal.contentEl.all().some(e=>e.name==='Remove worktree folder'),false);
   h.button(modal,'Cancel').onclick();assert.deepEqual(h.effects,[]);
-  modal=await open();h.field(modal,'Remove worktree folder','toggle').change(true);
-  const confirm=h.button(modal,'Archive and remove worktree');assert.equal(confirm.disabled,true);
-  h.field(modal,'I closed external sessions and services using this worktree','toggle').change(true);assert.equal(confirm.disabled,false);
-  await confirm.onclick();assert.deepEqual(h.effects,[['login','reviewed',true,true]]);assert.deepEqual(selected,['main']);
+  modal=await open();const confirm=h.button(modal,'Archive page');assert.equal(confirm.disabled,false);
+  await confirm.onclick();assert.deepEqual(h.effects,[['login','reviewed',false,false]]);assert.deepEqual(selected,['main']);
 });
 
 test('removed pages keep history but offer no restore or new worktree removal',()=>{
   const h=harness();h.host.settings.workPages=[{id:'gone',name:'Gone',objective:'',directory:'/repo/gone',kind:'worktree',archived:true,worktreeRemoval:{status:'removed'},workflowIds:[],taskIds:[]}];
   h.api.renderWorkPages(h.root,h.app,h.host,'gone',()=>{},()=>{});
-  const buttons=h.root.all().filter(e=>e.tag==='button');assert.equal(buttons.some(e=>['Restore page','Finish work','Check removal'].includes(e.text)),false);
+  const buttons=h.root.all().filter(e=>e.tag==='button');assert.equal(buttons.some(e=>['Restore page','Archive page','Remove worktree','Check removal'].includes(e.text)),false);
   assert.equal(buttons.find(e=>e.text==='CLI in this page').disabled,true);
   assert.ok(h.root.all().some(e=>e.text==='Worktree removed. Branch and page history kept.'));
   h.root.empty();h.api.renderWorkPages(h.root,h.app,h.host,'main',()=>{},()=>{});

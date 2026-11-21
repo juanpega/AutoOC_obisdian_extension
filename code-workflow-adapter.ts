@@ -1,4 +1,4 @@
-import { executeCodeAsync } from "./code-runtime";
+import { executeCodeAsync, CodeExecutionError } from "./code-runtime";
 import type { WorkflowTaskAdapter } from "./code-workflow-host";
 import { runWithVaultMutations, type VaultMutationBatchFactory } from "./code-vault-mutations";
 
@@ -17,6 +17,7 @@ export function createCodeWorkflowAdapter(vaultBase:string,workingDirectory = va
         output += result;
         return {succeeded:true,output};
       } catch (error) {
+        if (!(error instanceof CodeExecutionError)) throw error;
         return {succeeded:false,cancelled:signal?.aborted || undefined,output:output+`[code error: ${String(error)}]`};
       }
     },
