@@ -232,6 +232,8 @@ test("hidden launcher writes VBScript accepted by cscript with a quoted temporar
     fs.writeFileSync(launcherFile, launcherScript, "utf8");
 
     const result = childProcess.spawnSync("cscript.exe", ["//Nologo", launcherFile], { encoding: "utf8", windowsHide: true });
+    const diagnostic=[result.stdout,result.stderr].filter(Boolean).join('\n');
+    if(result.status!==0 && /(?:Error al cargar su configuraci|loading.*settings)/i.test(diagnostic) && /(?:Acceso denegado|Access.*denied)/i.test(diagnostic) && require('./helpers/native-capabilities.cjs').allowUnavailable(t,'CScript configuration access denied'))return;
     assert.equal(result.error, undefined, result.error?.message);
     assert.equal(result.status, 0, [result.stdout,result.stderr].filter(Boolean).join("\n"));
   } finally {

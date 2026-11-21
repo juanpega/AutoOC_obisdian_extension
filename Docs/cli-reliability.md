@@ -1,5 +1,44 @@
 # Cola CLI, reconexión y tiempos de ejecución
 
+## Mantenimiento focal · candidato local1.7.28,17/11/2026
+
+Q32 de Inncrea demostró que un error de publicación podía quedar reducido al
+mensaje público genérico sin diagnóstico durable. Se añade `diagnostics[].failure`
+con etapa, clase/código permitidos, motivo conocido y ubicaciones de código
+saneadas. Los mensajes arbitrarios y rutas privadas se omiten tanto al escribir
+como al consultar. La telemetría existente se mantiene independiente de las
+escrituras de catálogo/recibos y conserva la excepción original aunque falle.
+La publicación del recibo terminal también queda dentro de ese diagnóstico.
+
+[Requisito, autorización y criterios](autoOC/04_Desarrollo/progress-publication-diagnostics/requisito.md).
+No cambia el esquema exportable ni los campos/permisos/modelos de los creadores;
+el prompt de generación no necesita campos nuevos. El candidato no recupera la
+excepción histórica perdida ni demuestra que su causa esté corregida. La
+reconciliación de Q32 y el diagnóstico están separados de la aceptación Stripe.
+
+### Protocolo Code: resultado perdido y cierre incierto
+
+El mantenimiento posterior reproduce con un hijo simulado dos esperas ilimitadas
+del runner y la conversión incorrecta de una pérdida de transporte en un fallo
+confirmado. El candidato conserva el límite de 15 minutos del script; añade 30 s
+para creación del worker y entrega del resultado, y limita a 3 s la espera de
+cierre. Estos límites dependen de que el event loop del host pueda avanzar.
+
+Un error comunicado por el propio script sigue siendo un fallo observado.
+Desconexión, pérdida del worker, cancelación, vencimiento o terminación sin
+confirmar propagan incertidumbre: tanto los pasos como las tareas Code conservan
+su journal `in_flight`, sin resultado inventado ni repetición automática. Dejar
+de observar un hijo no demuestra que sus efectos hayan cesado. Se consulta la
+misma identidad y se sigue el procedimiento de recuperación existente.
+
+Las pruebas deterministas del protocolo no explican el origen del bloqueo nativo
+observado en Windows ni acreditan aceptación de la instalación. No hay campos
+nuevos de workflow ni cambios en permisos o modelos; no requiere modificar los
+prompts de los creadores.
+
+Los resultados inferiores son históricos del candidato1.7.26, no una validación
+del mantenimiento1.7.28. Instalación, carga real y publicación se acreditan aparte.
+
 Entrega en desarrollo: 1.7.26. Orden: cola → reconexión → diagnóstico.
 
 ## Requisitos y alcance

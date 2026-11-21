@@ -26,17 +26,17 @@ function running(f,args,onProgress){
     child.on('error',error=>{clearTimeout(watchdog);reject(error);});
     child.stdout.on('data',s=>stdout+=s);child.stderr.on('data',s=>{
       stderr+=s;pending+=s;
-      while(pending.includes('\n')){const end=pending.indexOf('\n'),line=pending.slice(0,end);pending=pending.slice(end+1);onProgress?.(JSON.parse(line));}
+      while(pending.includes('\n')){const end=pending.indexOf('\n'),line=pending.slice(0,end);pending=pending.slice(end+1);const event=require('./helpers/cli-events.cjs').cliEvent(line);if(event)onProgress?.(event);}
     });
     child.on('close',status=>{clearTimeout(watchdog);resolve({status,stdout,stderr});});
   });
   return {child,done};
 }
-function plugin(f){
+function plugin(f,timers={}){
   const bundle={exports:{}},obsidian=Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab','WorkspaceLeaf'].map(k=>[k,class{}]));
   vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{
     module:bundle,exports:bundle.exports,require:n=>n==='obsidian'?obsidian:require(n),process,Buffer,console,AbortController,
-    setTimeout,clearTimeout,setInterval,clearInterval,window:{setInterval,clearInterval,clearTimeout}
+    setTimeout,clearTimeout,setInterval,clearInterval,window:{setInterval,clearInterval,clearTimeout},...timers
   });
   const p=new bundle.exports.default();p.manifest={id:'auto-oc'};
   p.app={vault:{adapter:{basePath:f.vault},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[],detachLeavesOfType(){}}};
@@ -109,8 +109,18 @@ test('standalone stop validates page and run identity while preserving the one-o
 });
 
 test('real plugin mailbox runs the same workflow in two pages and only cancels the selected run',async t=>{
-  const f=fixture(t);f.config.workflows[0].steps.unshift({id:'wait',stepKind:'delay',delayValue:3,delayUnit:'seconds'});f.write();
-  const p=plugin(f);p.reservePluginExecution();let timer,a,b;
+  const f=fixture(t);f.config.workflows[0].steps.unshift({id:'wait',stepKind:'delay',delayValue:123,delayUnit:'seconds'});f.write();
+  // Hold only these two workflow delays. A three-second real timer can expire
+  // while the second CLI starts, making Stop land between steps instead.
+  const gates=[];let ready;const scheduled=new Promise(resolve=>ready=resolve);
+  const p=plugin(f,{
+    setTimeout(fn,ms,...args){
+      if(ms!==123000)return setTimeout(fn,ms,...args);
+      const gate={active:true,fire(){if(gate.active){gate.active=false;fn(...args);}}};
+      gates.push(gate);if(gates.length===2)ready();return gate;
+    },
+    clearTimeout(handle){if(gates.includes(handle))handle.active=false;else clearTimeout(handle);}
+  });p.reservePluginExecution();let timer,a,b;
   try{
     await p.loadSettings();p.startCliRequests();timer=setInterval(()=>void p.cliRequestHost.poll(),10);
     const start=()=>{let resolve;return {promise:new Promise(r=>resolve=r),resolve:e=>{if(e.phase==='in_flight')resolve(e);}};};
@@ -118,12 +128,18 @@ test('real plugin mailbox runs the same workflow in two pages and only cancels t
     const ra=await Promise.race([sa.promise,a.done.then(r=>{throw Error(r.stderr);})]);
     b=running(f,['run','--workflow','w','--page','b'],sb.resolve);
     const rb=await Promise.race([sb.promise,b.done.then(r=>{throw Error(r.stderr);})]);
+    await Promise.race([scheduled,a.done.then(r=>{throw Error(r.stderr);}),b.done.then(r=>{throw Error(r.stderr);})]);
+    assert.equal(gates.length,2);assert.ok(gates.every(g=>g.active));
     assert.equal(ra.host,'obsidian');assert.equal(rb.host,'obsidian');assert.equal(ra.pageId,'a');assert.equal(rb.pageId,'b');
     assert.equal(ok(f.call('stop','--workflow','w','--page','a','--run',ra.runId)).requested,true);
-    await a.done;const result=ok(await b.done);assert.equal(result.phase,'completed');
+    await a.done;assert.equal(gates[0].active,false);gates[1].fire();
+    const result=ok(await b.done);assert.equal(result.phase,'completed');
     assert.equal(fs.existsSync(path.join(f.a,'effect.txt')),false);assert.equal(fs.readFileSync(path.join(f.b,'effect.txt'),'utf8'),'12');
-    // Stopping A retains its durable reservation. Existing recovery rules still
-    // apply to later commands even though B was allowed to finish independently.
+    // Receipt visibility can precede the host's final cleanup. Wait for that
+    // boundary before checking the retained reservation's admission policy.
+    await p.cliRequestHost.drain();
+    const stopped=JSON.parse(fs.readFileSync(path.join(f.directory,'runtime',ra.runId+'.json'),'utf8'));
+    assert.equal(stopped.phase,'failed');assert.equal(stopped.steps[0].result.cancelled,true);
     const blocked=await running(f,['resume','--workflow','w','--page','b','--run',rb.runId]).done;
     assert.equal(blocked.status,1);assert.match(blocked.stderr,/continuation or reconciliation/);
     // A cancelled in-flight delay keeps its failed outcome on resume; it is not
@@ -133,6 +149,7 @@ test('real plugin mailbox runs the same workflow in two pages and only cancels t
     assert.equal(fs.existsSync(path.join(f.a,'effect.txt')),false);
     assert.equal(fs.readFileSync(path.join(f.b,'effect.txt'),'utf8'),'12');assert.equal(p.settings.workflows[0].runtimeExecution,undefined);
   }finally{
+    for(const gate of gates)gate.fire();
     clearInterval(timer);p.cliRequestHost?.close();await Promise.allSettled([a?.done,b?.done].filter(Boolean));await p.cliRequestHost?.drain();p.releasePluginExecution(false);
   }
 });

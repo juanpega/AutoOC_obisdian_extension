@@ -33,7 +33,7 @@ function release() {
 test('release ZIP preserves a verified manifest with noncanonical whitespace and CRLF',t=>{
   const {root}=fixture(t),repo=path.resolve(__dirname,'..'),source=path.join(root,'source'),out=path.join(root,'zip'),extracted=path.join(root,'extracted');
   const names=[...RELEASE_FILES,RELEASE_DESCRIPTOR];
-  for(const name of [...names,'package.json','scripts/package-release.mjs','scripts/release-artifacts.mjs']){
+  for(const name of [...names,'package.json','scripts/package-release.mjs','scripts/release-artifacts.mjs','scripts/zip-archive.mjs']){
     const target=path.join(source,name);fs.mkdirSync(path.dirname(target),{recursive:true});fs.copyFileSync(path.join(repo,name),target);
   }
   const manifest=path.join(source,'manifest.json'),value=JSON.parse(fs.readFileSync(manifest));
@@ -44,9 +44,7 @@ test('release ZIP preserves a verified manifest with noncanonical whitespace and
   const packaged=spawnSync(process.execPath,[path.join(source,'scripts/package-release.mjs'),'--out',out],{encoding:'utf8',timeout:60000,windowsHide:true});
   assert.equal(packaged.status,0,packaged.stderr);
   const zip=path.join(out,'auto-oc-'+value.version+'.zip');
-  const unpacked=process.platform==='win32'
-    ?spawnSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${zip.replace(/'/g,"''")}' -DestinationPath '${extracted.replace(/'/g,"''")}'`],{encoding:'utf8',timeout:30000,windowsHide:true})
-    :spawnSync('unzip',['-q',zip,'-d',extracted],{encoding:'utf8',timeout:30000});
+  const unpacked=require('./helpers/extract-zip.cjs')(zip,extracted);
   assert.equal(unpacked.status,0,unpacked.stderr);
   const files=Object.fromEntries(names.map(name=>[name,fs.readFileSync(path.join(extracted,name))]));
   verifyRelease(files,value.version);
@@ -127,7 +125,7 @@ test('unfinished history survives package update while linked artifacts remain p
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runtime,'bb.json'))),state);
     fs.rmSync(path.join(directory,'skills'),{recursive:true});
     const outside=path.join(root,'outside');fs.mkdirSync(outside);
-    fs.symlinkSync(outside,path.join(directory,'skills'),process.platform==='win32'?'junction':'dir');
+    if(!require('./helpers/native-capabilities.cjs').directoryLink(t,outside,path.join(directory,'skills'),process.platform==='win32'?'junction':'dir'))return;
     assert.throws(()=>installRelease({directory,version:'1.6.0',files,lease}),/Unsafe release destination/);
     assert.deepEqual(fs.readdirSync(outside),[]);
   } finally {lease.release();}

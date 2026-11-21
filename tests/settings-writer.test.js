@@ -4,19 +4,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Module = require('node:module');
-const ts = require('typescript');
 const file = path.resolve(__dirname, '../settings-writer.ts');
 const mod = new Module(file, module);
 mod.filename = file; mod.paths = Module._nodeModulePaths(path.dirname(file));
-const codecFile=path.resolve(__dirname,'../cooperative-json.ts');
-const codec=new Module(codecFile,module);codec.filename=codecFile;codec.paths=mod.paths;
-codec._compile(ts.transpileModule(fs.readFileSync(codecFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,codecFile);
-const originalRequire=mod.require.bind(mod);
-const timingFile=path.resolve(__dirname,'../execution-timing.ts');
-const timing=new Module(timingFile,module);timing.filename=timingFile;timing.paths=mod.paths;
-timing._compile(ts.transpileModule(fs.readFileSync(timingFile,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText,timingFile);
-mod.require=name=>name==='./cooperative-json'?codec.exports:name==='./execution-timing'?timing.exports:originalRequire(name);
-mod._compile(ts.transpileModule(fs.readFileSync(file, 'utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText, file);
+// Compile the complete dependency graph, including diagnostics imported by timing.
+const bundled=require('esbuild').buildSync({entryPoints:[file],bundle:true,platform:'node',format:'cjs',write:false});
+mod._compile(bundled.outputFiles[0].text,file);
 const { atomicSettingsWrite, SettingsWriter } = mod.exports;
 
 for(const phase of ['create','write','close'])test('early lock '+phase+' failure preserves catalog and incomplete evidence',async t=>{

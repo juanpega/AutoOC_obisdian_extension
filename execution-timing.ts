@@ -2,12 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 import {randomUUID} from "crypto";
 import {performance} from "perf_hooks";
+import {describeExecutionFailure, readExecutionFailure, type ExecutionFailure} from "./execution-failure";
 
 export type TimingPhase="queue"|"settingsQueue"|"settingsSave"|"code"|"provider"|"evaluation";
 const phases:TimingPhase[]=["queue","settingsQueue","settingsSave","code","provider","evaluation"];
 interface Metric {count:number;totalMs:number;maxMs:number;active:number}
 interface TimingSpan {phase:TimingPhase;stepId:string;index:number;startedAt:number;durationMs?:number;active:boolean}
-export interface ExecutionTiming {schemaVersion:1;attemptId:string;requestId?:string;runId?:string;startedAt:number;updatedAt:number;finished:boolean;phases:Partial<Record<TimingPhase,Metric>>;spans:TimingSpan[];droppedSpans:number}
+export interface ExecutionTiming {schemaVersion:1;attemptId:string;requestId?:string;runId?:string;startedAt:number;updatedAt:number;finished:boolean;phases:Partial<Record<TimingPhase,Metric>>;spans:TimingSpan[];droppedSpans:number;failure?:ExecutionFailure}
 export interface TimingContext {runtime:string;value:ExecutionTiming;tail:Promise<void>;failed:boolean;writing:boolean;pending?:string}
 const idPattern=/^[a-zA-Z0-9-]{1,256}$/;
 
@@ -66,7 +67,9 @@ export async function withExecutionTiming<T>(runtime:string,identity:{requestId?
   const now=Date.now(),value:ExecutionTiming={schemaVersion:1,attemptId:randomUUID(),requestId:identity.requestId,runId:identity.runId,startedAt:now,updatedAt:now,finished:false,phases:{},spans:[],droppedSpans:0};
   if(identity.queueMs!==undefined && Number.isFinite(identity.queueMs) && identity.queueMs>=0)value.phases.queue={count:1,totalMs:identity.queueMs,maxMs:identity.queueMs,active:0};
   const context:TimingContext={runtime,value,tail:Promise.resolve(),failed:false,writing:false};
-  publish(context);try{return await operation(context);}finally{
+  publish(context);try{return await operation(context);}catch(error){
+    value.failure=describeExecutionFailure(error);throw error;
+  }finally{
     value.finished=true;publish(context);
     while(context.writing || context.pending!==undefined && !context.failed)await context.tail;
   }
@@ -94,7 +97,8 @@ export function readExecutionTimings(runtime:string,selector:{requestId?:string;
       if(metric && [metric.count,metric.totalMs,metric.maxMs,metric.active].every(n=>Number.isFinite(n)&&n>=0))metrics[phase]={count:metric.count,totalMs:metric.totalMs,maxMs:metric.maxMs,active:metric.active};
     }
     const spans:TimingSpan[]=Array.isArray(value.spans)?value.spans.slice(0,256).filter(s=>s && phases.includes(s.phase) && typeof s.stepId==="string" && s.stepId.length<=256 && Number.isSafeInteger(s.index) && s.index>=0 && Number.isFinite(s.startedAt) && typeof s.active==="boolean" && (s.durationMs===undefined || Number.isFinite(s.durationMs)&&s.durationMs>=0)).map(s=>({phase:s.phase,stepId:s.stepId,index:s.index,startedAt:s.startedAt,active:s.active,...(s.durationMs===undefined?{}:{durationMs:s.durationMs})})):[];
-    result.push({schemaVersion:1,attemptId:value.attemptId,requestId:value.requestId,runId:value.runId,startedAt:value.startedAt,updatedAt:value.updatedAt,finished:value.finished,phases:metrics,spans,droppedSpans:Number.isSafeInteger(value.droppedSpans)&&value.droppedSpans>=0?value.droppedSpans:0});
+    const failure=readExecutionFailure(value.failure);
+    result.push({schemaVersion:1,attemptId:value.attemptId,requestId:value.requestId,runId:value.runId,startedAt:value.startedAt,updatedAt:value.updatedAt,finished:value.finished,phases:metrics,spans,droppedSpans:Number.isSafeInteger(value.droppedSpans)&&value.droppedSpans>=0?value.droppedSpans:0,...(failure?{failure}:{})});
   }
   return result.sort((a,b)=>a.startedAt-b.startedAt);
 }

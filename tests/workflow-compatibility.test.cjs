@@ -97,7 +97,7 @@ test('dirty branch switch is rejected before a run is created, while current-bra
 // Ask Windows for the actual alias; never manufacture a name or use a link.
 function shortWindowsPath(directory) {
   assert.equal(process.platform,'win32');
-  assert.doesNotMatch(directory,/["%\r\n&|<>^!]/);
+  // The directory is passed as cwd, never interpolated into this literal command.
   const short=execFileSync('cmd.exe',['/d','/c','for %I in (.) do @echo %~fsI'],{cwd:directory,encoding:'utf8',windowsHide:true}).trim();
   assert.notEqual(short,directory,'Windows fixture volume must supply real 8.3 aliases');
   assert.equal(fs.realpathSync.native(short),fs.realpathSync.native(directory));
@@ -126,7 +126,7 @@ function pluginFor(root, configDir='.obsidian', pluginId='auto-oc') {
     return plugin;
   } finally {Module._load=original;}
 }
-test('Windows 8.3 installation identity preserves link and lease restrictions', {skip:process.platform!=='win32'},()=>fixture(async root=>{
+test('Windows 8.3 installation identity preserves link and lease restrictions', {skip:process.platform!=='win32'},t=>fixture(async root=>{
   const selected=path.join(root,'Selected long directory/plugins/auto-oc');fs.mkdirSync(selected,{recursive:true});
   const short=shortWindowsPath(root),shortSelected=shortWindowsPath(selected);
   const {resolveInstalledWorkflowLocation:resolve,ensureInstalledWorkflowRuntime:ensure}=load('installed-workflow-location');
@@ -141,7 +141,7 @@ test('Windows 8.3 installation identity preserves link and lease restrictions', 
     const result=await run({definition,runtimeDirectory:expected.runtimeDirectory,vaultBase:root,lease,redact:s=>s});
     assert.equal(result.phase,'completed');lease.assertOwned();
   } finally {lease.release();}
-  const link=path.join(root,'linked');fs.symlinkSync(selected,link,'junction');
+  const link=path.join(root,'linked');if(!require('./helpers/native-capabilities.cjs').directoryLink(t,selected,link,'junction'))return;
   for(const vault of [root,short]) assert.throws(()=>resolve(vault,link),/regular directories/);
 }));
 function branchFixture(root, gate=false) {
@@ -208,6 +208,7 @@ test('Windows 8.3 public CLI stops Code across alias directions without replay a
     try {
       const deadline=Date.now()+15000;
       while(!fs.existsSync(path.join(root,'effects.txt')) && child.exitCode===null && Date.now()<deadline) await new Promise(r=>setTimeout(r,20));
+      assert.ok(fs.existsSync(path.join(root,'effects.txt')),`Code did not reach its first effect (exit=${child.exitCode}): ${stderr}`);
       assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A',stderr);
       const status=call('status','--vault',end),observed=status.executions[0];
       assert.equal(observed.phase,'in_flight');assert.equal(status.executionLockPresent,true);
@@ -215,17 +216,15 @@ test('Windows 8.3 public CLI stops Code across alias directions without replay a
       // Keep the gate closed: Code is interruptible now, so Stop must terminate
       // this attempt rather than wait for the code to finish successfully.
       assert.equal(await finished,1,stderr);
-      const first=JSON.parse(stdout);assert.equal(first.runId,observed.runId);
-      assert.equal(first.phase,'failed');
-      const journal=path.join(data.runtime,first.runId+'.json'),journalBefore=fs.readFileSync(journal,'utf8'),snapshot=JSON.parse(journalBefore);
-      assert.equal(snapshot.steps[0].result.succeeded,false);
-      assert.match(snapshot.steps[0].output,/Code execution stopped/);
-      assert.equal(snapshot.steps[0].result.cancelled,true);
-      assert.equal(JSON.parse(fs.readFileSync(data.file,'utf8')).workflows[0].runtimeExecution.terminalUncertainty,true);
+      assert.equal(stdout,'');assert.match(stderr,/Code execution stopped/);
+      const journal=path.join(data.runtime,observed.runId+'.json'),journalBefore=fs.readFileSync(journal,'utf8'),snapshot=JSON.parse(journalBefore);
+      assert.equal(snapshot.runId,observed.runId);assert.equal(snapshot.phase,'in_flight');
+      assert.equal(snapshot.steps[0].result,undefined,'Cancellation cannot certify a result or absence of effects');
+      assert.equal(JSON.parse(fs.readFileSync(data.file,'utf8')).workflows[0].runtimeExecution.runId,observed.runId);
       assert.equal(snapshot.steps.length,1,'Stop must prevent the next step from starting');
       assert.equal(fs.readFileSync(path.join(root,'effects.txt'),'utf8'),'A','Only the first step may have effects before resume');
       const branch=data.git('branch','--show-current');
-      const resumed=spawnSync(process.execPath,[cli,'resume','--vault',end,'--workflow','w','--run',first.runId],{encoding:'utf8',timeout:15000,windowsHide:true});
+      const resumed=spawnSync(process.execPath,[cli,'resume','--vault',end,'--workflow','w','--run',observed.runId],{encoding:'utf8',timeout:15000,windowsHide:true});
       assert.equal(resumed.status,1,'A cancelled Code attempt must not be replayed automatically');
       assert.equal(fs.readFileSync(journal,'utf8'),journalBefore);
       assert.equal(data.git('branch','--show-current'),branch);
@@ -537,11 +536,11 @@ test('selected installation validation rejects missing, escaped and linked paths
     const physicalInstallation=process.platform==='win32'?fs.realpathSync.native(valid):fs.realpathSync(valid);
     const location=resolve(root);assert.equal(location.installationDirectory,physicalInstallation);assert.equal(fs.existsSync(location.runtimeDirectory),false);
   });
-  for(const component of ['custom','custom/nested','custom/nested/plugins','custom/nested/plugins/auto-oc','custom/nested/plugins/auto-oc/runtime','custom/nested/plugins/auto-oc/data.json']) await t.test(component,()=>fixture(async root=>{
+  for(const component of ['custom','custom/nested','custom/nested/plugins','custom/nested/plugins/auto-oc','custom/nested/plugins/auto-oc/runtime','custom/nested/plugins/auto-oc/data.json']) await t.test(component,t=>fixture(async root=>{
     const selected=path.join(root,'custom/nested/plugins/auto-oc'),link=path.join(root,component),target=path.join(root,'target');
     fs.mkdirSync(path.dirname(link),{recursive:true});fs.mkdirSync(target);
     // A directory junction at data.json also must be rejected before reading.
-    fs.symlinkSync(target,link,process.platform==='win32'?'junction':'dir');
+    if(!require('./helpers/native-capabilities.cjs').directoryLink(t,target,link,process.platform==='win32'?'junction':'dir'))return;
     assert.throws(()=>resolve(root,selected),/regular|runtime/);
     await assert.rejects(load('installed-workflow-host').runInstalledWorkflow({vault:root,installationDirectory:selected,workflowId:'w',redact:s=>s}),/regular|runtime/);
     assert.equal(fs.existsSync(path.join(root,'.obsidian')),false);
@@ -689,7 +688,7 @@ test('autonomous task history survives resume and another run, honors logging, a
   const disabled=cli('run','--task','history');assert.equal(disabled.status,0,disabled.stderr);
   assert.equal(logs().length,2);
 }));
-test('runtime history keeps attempts and failures, applies retention and refuses path escape',()=>fixture(async root=>{
+test('runtime history keeps attempts and failures, applies retention and refuses path escape',t=>fixture(async root=>{
   const {persistTaskHistory,taskElapsedSeconds}=load('task-history');
   const workflow={steps:[{id:'a',taskId:'t'},{id:'b',taskId:'t'}]};
   const startedAt=new Date().toISOString();
@@ -712,7 +711,7 @@ test('runtime history keeps attempts and failures, applies retention and refuses
   persistTaskHistory(root,workflow,old,{logRetentionDays:1,maxLogsPerTask:0});
   assert.equal(logs().length,1);assert.ok(!logs()[0].includes('old-run'));
   const linked=path.join(root,'link-target');fs.mkdirSync(linked);
-  fs.symlinkSync(linked,path.join(root,'.opencode/logs/linked'),'junction');
+  if(!require('./helpers/native-capabilities.cjs').directoryLink(t,linked,path.join(root,'.opencode/logs/linked'),'junction'))return;
   assert.throws(()=>persistTaskHistory(root,{steps:[{id:'a',taskId:'linked'}]},checkpoint,{}),/regular directories/);
   assert.deepEqual(fs.readdirSync(linked),[]);
 }));

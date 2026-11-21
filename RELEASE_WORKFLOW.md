@@ -6,6 +6,10 @@ Keep product development and release preparation on the reviewed work branch. Ma
 
 `npm run build` checks TypeScript and builds the plugin, standalone CLI and shared runtime. The build writes release-integrity.json for the complete package. `npm run pack:release` creates release/auto-oc-<version>.zip and rejects a version mismatch or stale artifact.
 
+El ZIP se genera con Node en las tres plataformas, sin módulos de compresión de PowerShell ni ejecutables externos. Las pruebas lo extraen con un lector nativo independiente y verifican los bytes, incluidos nombres UTF-8 y archivos binarios.
+
+En un entorno local restringido, `AUTOOC_ALLOW_UNAVAILABLE_NATIVE_TESTS=1` permite diagnosticar el resto de la suite cuando el sistema deniega enlaces de directorio o la configuración de CScript. Cada caso se registra como omitido y pendiente; este modo no acredita la aceptación de la release. Sin esa variable, y siempre en CI incluso si está definida, esas comprobaciones siguen siendo obligatorias. No usar esa variable para la validación de publicación.
+
 The package contains exactly these seven artifacts:
 
 - main.js

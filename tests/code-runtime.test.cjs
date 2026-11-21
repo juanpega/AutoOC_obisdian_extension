@@ -64,13 +64,13 @@ test('vault write, append, read and listing use the selected root and reject tra
     assert.throws(()=>run({vaultBase:dir,codeAllowVault:true,code:'vault.read("missing.md");'}),/ENOENT/);
   } finally {fs.unlinkSync(path.join(dir,'note.md'));fs.rmdirSync(dir);}
 });
-test('vault capability rejects linked paths before reading or writing outside the selected vault',()=>{
+test('vault capability rejects linked paths before reading or writing outside the selected vault',t=>{
   const root=fs.mkdtempSync(path.join(os.tmpdir(),'autooc-code-links-'));
   const vault=path.join(root,'vault'),outside=path.join(root,'outside'),link=path.join(vault,'linked');
   fs.mkdirSync(vault);fs.mkdirSync(outside);
   fs.writeFileSync(path.join(outside,'note.md'),'original');
   try {
-    fs.symlinkSync(outside,link,process.platform==='win32'?'junction':'dir');
+    if(!require('./helpers/native-capabilities.cjs').directoryLink(t,outside,link,process.platform==='win32'?'junction':'dir'))return;
     for(const code of [
       'output = vault.read("linked/note.md");',
       'vault.write("linked/note.md", "changed");',

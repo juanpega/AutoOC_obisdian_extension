@@ -6,14 +6,14 @@
 //   node scripts/package-release.mjs              # version from package.json
 //   node scripts/package-release.mjs --version 1.6.0
 //
-// The zip is produced with native tooling (zip on macOS/Linux,
-// Compress-Archive on Windows) so no extra dependencies are required.
+// Node writes the ZIP on every platform; no PowerShell module or zip binary is required.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { copyReleaseArtifacts, validateReleaseArtifacts } from "./release-artifacts.mjs";
+import { copyReleaseArtifacts, validateReleaseArtifacts, releaseArtifacts } from "./release-artifacts.mjs";
+import {zipArchive} from "./zip-archive.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
@@ -50,15 +50,8 @@ try {
   // a verified file here invalidates the distributed integrity descriptor.
   validateReleaseArtifacts(buildDir);
 
-  if (process.platform === "win32") {
-    execFileSync(
-      "powershell.exe",
-      ["-NoProfile", "-Command", `Compress-Archive -Path '${buildDir.replace(/'/g,"''")}\\*' -DestinationPath '${zipPath.replace(/'/g,"''")}' -Force`],
-      { stdio: "inherit" },
-    );
-  } else {
-    execFileSync("zip", ["-rq", zipPath, "."], { cwd: buildDir, stdio: "inherit" });
-  }
+  const archive=zipArchive(releaseArtifacts.map(name=>({name,data:fs.readFileSync(path.join(buildDir,name))})));
+  fs.writeFileSync(zipPath,archive);
 } catch (error) {
   console.error(`Failed to create ${zipPath}: ${error.message}`);
   process.exit(1);

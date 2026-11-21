@@ -3,10 +3,16 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { gitIn, pageChanges, type WorkPage, type WorktreeRemovalProof } from "./work-pages";
 import { physicalPath } from "./path-identity";
+import {parseWorktreeStatus, readWorktreeStatus, type WorktreeFile} from "./worktree-changes";
 
 export interface FinishWorkReview {
   pageId: string; hash: string; changes: string; archiveBlockers: string[];
   removalBlockers: string[]; proof?: WorktreeRemovalProof;
+  files:WorktreeFile[];
+}
+export interface BlockingPageSession {
+  id:string; claimId?:string; sessionId?:number; pageId:string; pageName:string;
+  label:string; directory:string; state:"tracked"|"exited"|"unknown"; createdAt?:string;
 }
 export const workPageRevision = (page: WorkPage) => createHash("sha256").update(JSON.stringify(page)).digest("hex");
 const readGit = (directory: string, args: string[]) => gitIn(directory,["--no-optional-locks",...args]);
@@ -73,7 +79,7 @@ export async function inspectWorktreeRemoval(page: WorkPage, protectedDirectorie
   const blockers: string[] = [];
   if ("locked" in matches[0] || "prunable" in matches[0]) blockers.push("This worktree is locked or needs Git repair. AutoOC will not force removal.");
   if (entries.some(e=>e !== matches[0] && e.worktree && within(root,e.worktree))) blockers.push("Another registered worktree is inside this folder.");
-  const status = await readGit(root,["status","--porcelain=v1","-z","--untracked-files=all","--ignored=matching","--ignore-submodules=none"]);
+  const status = await readWorktreeStatus(root,true);
   if (status && !allowDiscardedChanges) blockers.push("The folder has modified, untracked or ignored files. Preserve or remove them explicitly before removing the worktree.");
   const files = (await readGit(root,["ls-files","--stage","-z"])).split("\0");
   if (files.some(line=>line.startsWith("160000 "))) blockers.push("Worktrees with submodules require manual Git handling.");
@@ -85,7 +91,7 @@ export async function inspectWorktreeRemoval(page: WorkPage, protectedDirectorie
 export async function reviewWorkPage(page: WorkPage, protectedDirectories: string[], pages: WorkPage[], archiveBlockers: string[] = []): Promise<FinishWorkReview> {
   let changes: string;
   try { changes = await pageChanges(page); } catch { changes = "Git changes are unavailable. Archiving keeps the folder and its contents."; }
-  let proof: WorktreeRemovalProof | undefined, removalBlockers: string[] = [];
+  let proof: WorktreeRemovalProof | undefined, removalBlockers: string[] = [], files:WorktreeFile[]=[];
   if (page.worktreeRemoval) {
     archiveBlockers.push("This worktree was removed or its removal needs review.");
     removalBlockers.push("Use Check removal for an interrupted operation; do not repeat removal.");
@@ -93,16 +99,19 @@ export async function reviewWorkPage(page: WorkPage, protectedDirectories: strin
     try {
       const inspected = await inspectWorktreeRemoval(page,protectedDirectories,pages);
       ({proof,blockers:removalBlockers} = inspected);
+      files=parseWorktreeStatus(inspected.status);
       if (inspected.status) {
-        const entries = inspected.status.split("\0").filter(Boolean);
-        changes += "\n\nFiles in worktree (including ignored files):\n" + entries.slice(0,100).map(entry=>JSON.stringify(entry)).join("\n") +
-          (entries.length > 100 ? "\nMore files omitted. Review the folder in your Git tool." : "");
+        changes += "\n\nFiles in worktree (including ignored files):\n" + files.slice(0,100).map(file=>JSON.stringify(file)).join("\n") +
+          (files.length > 100 ? "\nMore files omitted. Review the folder in your Git tool." : "");
       }
     }
-    catch (e) { removalBlockers.push(e instanceof Error ? e.message : String(e)); }
+    catch (e) {
+      removalBlockers.push(e instanceof Error ? e.message : String(e));
+      try {files=parseWorktreeStatus(await readWorktreeStatus(page.directory,true));}catch { /* A non-Git folder can still be archived without deleting it. */ }
+    }
   }
   const hash = createHash("sha256").update(JSON.stringify([workPageRevision(page),proof,changes,removalBlockers])).digest("hex");
-  return {pageId:page.id,hash,changes,archiveBlockers,removalBlockers,proof};
+  return {pageId:page.id,hash,changes,archiveBlockers,removalBlockers,proof,files};
 }
 
 /** Called only after the exact review and a durable pending record, under the host reservation. */

@@ -14,6 +14,8 @@ import {pageExecutionId, normalizePageSelection} from "./work-pages";
 import {withExecutionTiming,bindTimingRun,readExecutionTimings,type ExecutionTiming,type TimingContext} from "./execution-timing";
 import {validPageCreationRequest, type PageCreationRequest, type PageCreationResult, type createPageCreationService} from "./page-creation";
 
+import {withFailureStage} from "./execution-failure";
+
 interface PageCreationCommand {
   command:"create-page"; request:PageCreationRequest;
   workflowId?:never;taskId?:never;stepId?:never;pageId?:never;runId?:never;
@@ -225,22 +227,24 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
             await publish({status:"completed",editResult:result});
             return;
           }
-          const result=await withExecutionTiming(root,{requestId:id,runId:request.runId,queueMs:timing.queueMs},context=>execute(request,execution.controller.signal,(state,presentation)=>{
+          await withExecutionTiming(root,{requestId:id,runId:request.runId,queueMs:timing.queueMs},async context=>{
+          const result=await execute(request,execution.controller.signal,(state,presentation)=>{
             if(!acceptingProgress)return Promise.resolve();
             const next=executionSummary(state,presentation);checkpoint=next;bindTimingRun(next.runId,context);
-            publications=publications.then(()=>publish({status:"running",checkpoint:next}));
+            publications=publications.then(()=>withFailureStage("receipt-publication",()=>publish({status:"running",checkpoint:next})));
             // Old consumers may not await the callback. Keep it in the ordered
             // chain and observe rejection now, then propagate it at the barrier.
             void publications.catch(()=>{});
             return publications;
-          },context));
+          },context);
           acceptingProgress=false;
           await publications;
-          await publish({status:"completed",checkpoint:executionSummary(result)});
+          await withFailureStage("receipt-publication",()=>publish({status:"completed",checkpoint:executionSummary(result)}));
+          });
         } catch (error) {
           acceptingProgress=false;
           await publications.catch(()=>{});
-          // Raw provider/filesystem errors can contain secrets. Details stay in the existing runtime evidence.
+          // Raw error text is private; safe execution failure metadata is in timings.
           try {await publish({status:"failed",checkpoint,error:(request.command==="edit-workflow" || request.command==="edit-task")?"Workflow edit failed; keep Obsidian open and inspect this request":executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again"});}
           catch {fail();} // An uncertain receipt never authorizes replay.
         } finally {if(active.get(id)===execution)active.delete(id);}

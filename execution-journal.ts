@@ -252,6 +252,28 @@ export class ExecutionJournal {
     return operation;
   }
 
+  reopenPublicationFailure(expected:{revision:number;journalHash:string;definitionHash:string}):Promise<void> {
+    return this.update((state,original)=>{
+      const failed=state.steps[state.steps.length-1];
+      const hash=createHash("sha256").update(original).digest("hex");
+      if (state.phase!=="failed" || state.revision!==expected.revision || state.definitionHash!==expected.definitionHash || hash!==expected.journalHash ||
+          failed?.status!=="failed" || failed.output!=="[progress publication failed before step effects]" ||
+          Object.keys(failed).some(key=>!["stepId","status","startedAt","finishedAt","output"].includes(key)))
+        throw new Error("Publication failure evidence changed or step effects cannot be excluded");
+      const archive=path.join(this.lease.directory,`publication-${state.runId}-${state.revision}-${hash}.snapshot`);
+      if (!fs.existsSync(archive)) {
+        const fd=fs.openSync(archive,"wx",0o600);
+        try { fs.writeFileSync(fd,original); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      }
+      const stat=fs.lstatSync(archive);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1 || fs.readFileSync(archive,"utf8")!==original)
+        throw new Error("Historical publication snapshot differs");
+      state.steps.pop();
+      state.phase="ready";
+      state.nextStepId=failed.stepId;
+    });
+  }
+
   begin(stepId: string): Promise<void> {
     return this.update(state => {
       if (state.phase !== "ready" || state.nextStepId !== stepId) throw new Error("Step is not ready; reconcile any interrupted execution first");

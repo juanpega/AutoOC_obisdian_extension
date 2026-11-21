@@ -223,7 +223,9 @@ test('final creator prompts include page scope and their actual examples pass bo
     assert.match(prompt,/Merge review previews conflicts/);
     assert.match(prompt,/Import stays available in Overview/);
     assert.match(prompt,/CLI in Overview requires an explicit workspace selection/);
-    assert.match(prompt,/never executes merge, commit or abort/);
+    assert.match(prompt,/executes Start merge, Complete merge and Abort merge/);
+    assert.match(prompt,/abort requires explicit acceptance/);
+    assert.match(prompt,/Run this task only launches that shared task as a standalone page run/);
     assert.match(prompt,/Integrated page terminals reuse their live session/);
     assert.match(prompt,/External AutoOC CLI commands retain Main workspace behavior/);
     const json=prompt.split('CREATOR EXAMPLE (replace its content with the requested objective):\n')[1].split("\n\nThe following JSON string")[0];
@@ -324,4 +326,25 @@ test('manual page CLI records context before launch and reuses an existing live 
     opened[0].exited=true;await p.pageTerminalExited(opened[0].page);
     assert.equal(p.settings.pageTerminalClaims.length,1);assert.equal(p.settings.pageTerminalClaims[0].pageId,'b');
   } finally {p.releasePluginExecution(false);}
+});
+
+test('standalone interactive CLI inherits a real worktree and objective without executing its parent workflow',async t=>{
+  const f=fixture(t);git(f.a,'init','-b','main');git(f.a,'config','user.name','AutoOC test');git(f.a,'config','user.email','test@example.invalid');
+  fs.writeFileSync(path.join(f.a,'context.txt'),'main context');git(f.a,'add','context.txt');git(f.a,'commit','-m','context');
+  git(f.a,'worktree','add','-b','feat/agent',f.b);
+  f.settings.workPages[1]={...f.workPages[1],kind:'worktree',repository:f.a,branch:'feat/agent'};
+  f.settings.tasks=[{id:'cli',name:'Interactive agent',taskKind:'cli',cliProvider:'codex',interactiveTerminal:true,prompt:'Review this worktree'}];
+  f.settings.workflows=[{id:'w',steps:[{id:'agent',taskId:'cli'},{id:'later',stepKind:'code',codeAllowVault:true,code:'vault.write("parent-effect.txt","must not run");'}]}];
+  f.settings.cliTerminalDestination='integrated';f.settings.codexPath=process.execPath;f.write();
+  const opened=[],launchInteractiveTerminal=async request=>{opened.push(request);assert.equal(git(request.cwd,'branch','--show-current'),'feat/agent');};
+  await assert.rejects(f.run('b',{launchInteractiveTerminal}),/standalone page task/);assert.equal(opened.length,0);
+  f.settings.tasks[0].workingDirectory=f.a;f.write();
+  await assert.rejects(f.run('b',{workflowId:undefined,taskId:'cli',launchInteractiveTerminal}),/fixed folder/);assert.equal(opened.length,0);
+  delete f.settings.tasks[0].workingDirectory;f.write();
+  const result=await f.run('b',{workflowId:undefined,taskId:'cli',launchInteractiveTerminal});
+  assert.equal(result.phase,'completed');assert.equal(opened.length,1);assert.equal(opened[0].cwd,f.b);
+  assert.equal(opened[0].page.pageId,'b');assert.match(opened[0].prompt,/Page objective:\nGoal 1/);
+  assert.match(opened[0].prompt,/Review this worktree/);assert.equal(fs.existsSync(path.join(f.b,'parent-effect.txt')),false);
+  const saved=JSON.parse(fs.readFileSync(f.file));assert.deepEqual(saved.tasks,f.settings.tasks);
+  assert.equal(saved.pageTerminalClaims[0].directory,f.b);assert.equal(saved.pageRuns.at(-1).sourceId,'cli');
 });

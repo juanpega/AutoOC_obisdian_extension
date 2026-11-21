@@ -101,9 +101,9 @@ test('later launch cleans only completed auxiliary receipts and preserves foreig
   assert.equal(fs.readFileSync(path.join(uncertain,'input.txt'),'utf8'),'uncertain');
 }));
 
-test('auxiliary storage refuses redirected parents without touching the destination',()=>auxiliaryFixture((root,api)=>{
+test('auxiliary storage refuses redirected parents without touching the destination',t=>auxiliaryFixture((root,api)=>{
   const target=path.join(root,'external');fs.mkdirSync(target);fs.writeFileSync(path.join(target,'keep.txt'),'keep');
-  fs.symlinkSync(target,path.join(root,'.autooc'),process.platform==='win32'?'junction':'dir');
+  if(!require('./helpers/native-capabilities.cjs').directoryLink(t,target,path.join(root,'.autooc'),process.platform==='win32'?'junction':'dir'))return;
   assert.throws(()=>api.createAuxiliaryDirectory(root,'runtime'),/redirected/);
   assert.deepEqual(fs.readdirSync(target),['keep.txt']);
 }));

@@ -231,7 +231,7 @@ async function historicalFixture(t,phase='ready') {
   h.plugin.settings={tasks:[oldTask,clicked],workflows:[]};
   const file=path.join(directory,'data.json');fs.writeFileSync(file,JSON.stringify(h.plugin.settings));
   const location=h.internals.resolveInstalledWorkflowLocation(vault);
-  Object.setPrototypeOf(h.plugin,h.Plugin.prototype);
+  h.plugin=Object.assign(new h.Plugin(),h.plugin);h.view.plugin=h.plugin;
   Object.assign(h.plugin,{app:{workspace:{getLeavesOfType:()=>[]}},selectedExecutionLocation:()=>location,pluginExecutionLease:lease,
     settingsWriter:{hasPendingWrites:false},runningProcesses:new Map(),runningCodexClients:new Map(),workflowDelayControllers:new Map(),legacyAttempts:new Map()});
   const before=fs.readFileSync(file),state=old.snapshot(),oldFile=path.join(runtime,state.runId+'.json');

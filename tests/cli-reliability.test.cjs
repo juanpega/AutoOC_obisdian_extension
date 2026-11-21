@@ -5,7 +5,7 @@ const {randomUUID}=require('node:crypto');
 const {setTimeout:delay}=require('node:timers/promises');
 const {spawnSync}=require('node:child_process');
 const root=path.resolve(__dirname,'..');
-const compiled=require('esbuild').buildSync({stdin:{contents:['cli-plugin-requests','execution-timing','execution-lease','code-workflow-host','workflow-definition','settings-writer'].map(f=>`export * from './${f}';`).join('\n'),resolveDir:root,loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false});
+const compiled=require('esbuild').buildSync({stdin:{contents:['cli-plugin-requests','execution-timing','execution-failure','execution-lease','code-workflow-host','workflow-definition','workflow-catalog-progress','settings-writer'].map(f=>`export * from './${f}';`).join('\n'),resolveDir:root,loader:'ts'},bundle:true,platform:'node',format:'cjs',write:false});
 const mod=new Module(path.join(root,'reliability-test.cjs'),module);mod.filename=path.join(root,'reliability-test.cjs');mod.paths=module.paths;mod._compile(compiled.outputFiles[0].text,mod.filename);
 const api=mod.exports;
 const state={runId:'run-1',workflowId:'w',phase:'completed',revision:2,nextStepId:null};
@@ -198,4 +198,96 @@ test('CLI advertises inspection and rejects invalid selectors before any effects
   const cli=path.join(root,'autooc-cli.cjs');
   const version=spawnSync(process.execPath,[cli,'version'],{encoding:'utf8',windowsHide:true});assert.equal(version.status,0,version.stderr);assert.equal(JSON.parse(version.stdout).requestInspection,1);
   const help=spawnSync(process.execPath,[cli,'help'],{encoding:'utf8',windowsHide:true});assert.match(JSON.parse(help.stdout).requestInspection,/do not launch again/);
+});
+
+test('publication exceptions retain a safe diagnostic after the generic failed receipt',async t=>{
+  const failure=Object.assign(new Error('PRIVATE_TOKEN sk_test_not_for_logs at C:/private/catalog.json'),{code:'EACCES',syscall:'rename'});
+  failure.stack='Error: PRIVATE_TOKEN\n    at save (C:/private/autooc-runtime.cjs:345:12)\n    at PRIVATE_TOKEN (C:/private/secret.js:1:2)';
+  let effects=0;
+  const f=fixture(t,async(_request,_signal,progress)=>{await progress({...state,phase:'in_flight',revision:1,nextStepId:'c'});effects++;throw failure;});
+  const id=f.submit();await f.host.poll();await f.host.drain();
+  const inspected=api.inspectPluginRequest(f.runtime,{requestId:id});
+  const diagnostic=inspected.diagnostics[0].failure;
+  assert.ok(diagnostic,'the original exception must have a persisted safe diagnostic');
+  assert.equal(diagnostic.stage,'execution');assert.equal(diagnostic.name,'Error');assert.equal(diagnostic.code,'EACCES');
+  assert.equal(diagnostic.reason,'unclassified');assert.deepEqual(diagnostic.frames,[{file:'autooc-runtime.cjs',line:345,column:12}]);
+  assert.equal(f.receipt(id).status,'failed');assert.match(f.receipt(id).error,/do not launch again/);
+  const evidence=JSON.stringify(inspected)+fs.readdirSync(path.join(f.runtime,'timings')).map(n=>fs.readFileSync(path.join(f.runtime,'timings',n),'utf8')).join('');
+  assert.doesNotMatch(evidence,/PRIVATE_TOKEN|sk_test_|C:\/private|secret\.js/);
+  await f.host.poll();await f.host.drain();assert.equal(effects,1);
+});
+
+test('failed terminal receipt publication is diagnosed even after execution returned',async t=>{
+  const f=fixture(t);const original=fs.renameSync;let injected=false;
+  fs.renameSync=function(from,to){
+    if(String(to).endsWith('.receipt') && JSON.parse(fs.readFileSync(from,'utf8')).status==='completed') {
+      injected=true;throw Object.assign(new Error('PRIVATE_RECEIPT'),{code:'EIO'});
+    }
+    return original.apply(this,arguments);
+  };
+  t.after(()=>{fs.renameSync=original;});
+  const id=f.submit();await f.host.poll();await f.host.drain();
+  assert(injected);assert.equal(f.receipt(id).status,'failed');
+  const [diagnostic]=api.inspectPluginRequest(f.runtime,{requestId:id}).diagnostics;
+  assert.equal(diagnostic.failure.stage,'receipt-publication');assert.equal(diagnostic.failure.code,'EIO');
+  assert.doesNotMatch(JSON.stringify(diagnostic),/PRIVATE_RECEIPT/);
+});
+
+for(const stage of ['catalog-read','catalog-projection','catalog-save','host-adoption','host-render','receipt-publication']) test('publication boundary '+stage+' is diagnosed before Code effects',async t=>{
+  const runtime=temp(t),file=path.join(runtime,'data.json');
+  const workflow={id:'w',steps:[{id:'c',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","once");output="done";'}]};
+  const config={tasks:[],workflows:[workflow]};fs.writeFileSync(file,JSON.stringify(config));
+  const definition=api.prepareWorkflowDefinition(workflow,[],config),original=new Error('PRIVATE_BOUNDARY');let caught,runId;
+  const writer=new api.SettingsWriter();
+  const load=writer.loadAsync.bind(writer),save=writer.save.bind(writer);
+  let failing=false;
+  writer.loadAsync=async(...args)=>{if(failing && stage==='catalog-read')throw original;const value=await load(...args);if(failing && stage==='catalog-projection')value.workflows[0].steps[0].code='output="altered";';return value;};
+  writer.save=async(...args)=>{if(failing && stage==='catalog-save')throw original;return save(...args);};
+  try {await api.runCodeWorkflowHost({definition,runtimeDirectory:runtime,vaultBase:runtime,redact:s=>s,
+    onCheckpoint:async(checkpoint,timing)=>{
+      runId=checkpoint.runId;failing=checkpoint.phase==='in_flight';
+      await api.persistWorkflowProgress({configurationFile:file,runtimeDirectory:runtime,checkpoint,expectedRunId:runId,writer,timing,
+        onCommitted:async()=>{if(failing && stage.startsWith('host-') || failing && stage==='receipt-publication')await api.withFailureStage(stage,()=>{throw original;});}});
+    }});
+  } catch(error){caught=error;}
+  assert(caught);if(stage!=='catalog-projection')assert.equal(caught,original);
+  assert.equal(fs.existsSync(path.join(runtime,'effect.txt')),false);
+  const journal=JSON.parse(fs.readFileSync(path.join(runtime,runId+'.json')));assert.equal(journal.phase,'failed');
+  assert.equal(journal.steps[0].output,'[progress publication failed before step effects]');
+  const [timing]=api.readExecutionTimings(runtime,{runId});assert.equal(timing.failure.stage,stage);
+  if(stage==='catalog-projection')assert.equal(timing.failure.reason,'definition_mismatch');
+  assert.doesNotMatch(JSON.stringify(timing),/PRIVATE_BOUNDARY|effect\.txt|altered/);
+  const before=fs.readFileSync(path.join(runtime,runId+'.json'));
+  assert.equal(api.inspectPluginRequest(runtime,{runId}).state,'finished');assert.deepEqual(fs.readFileSync(path.join(runtime,runId+'.json')),before);
+});
+
+test('diagnostic write failure and hostile error accessors cannot replace the original rejection',async t=>{
+  const runtime=temp(t);fs.writeFileSync(path.join(runtime,'timings'),'blocked');
+  const original=Object.create(null,{name:{get(){throw Error('PRIVATE_GETTER');}}});
+  await assert.rejects(api.withExecutionTiming(runtime,{requestId:randomUUID()},async()=>{throw original;}),e=>e===original);
+  assert.equal(fs.readFileSync(path.join(runtime,'timings'),'utf8'),'blocked');
+});
+
+test('diagnostic reader discards unknown fields and private values from stored errors',async t=>{
+  const runtime=temp(t),requestId=randomUUID();
+  await assert.rejects(api.withExecutionTiming(runtime,{requestId},async()=>{throw new Error('PRIVATE_MESSAGE');}));
+  const file=path.join(runtime,'timings',fs.readdirSync(path.join(runtime,'timings'))[0]);
+  const stored=JSON.parse(fs.readFileSync(file));Object.assign(stored.failure,{message:'PRIVATE_MESSAGE',code:'PRIVATE_CODE',frames:[{file:'secret.js',line:1,column:1},{file:'main.js',line:2,column:3,secret:'PRIVATE_FRAME'}]});
+  fs.writeFileSync(file,JSON.stringify(stored));
+  const [result]=api.readExecutionTimings(runtime,{requestId});assert.deepEqual(result.failure.frames,[{file:'main.js',line:2,column:3}]);
+  assert.doesNotMatch(JSON.stringify(result),/PRIVATE|secret\.js/);
+});
+
+test('changing error accessors cannot bypass diagnostic allowlists',async t=>{
+  const runtime=temp(t),requestId=randomUUID(),reads={};
+  const allowed={name:'Error',code:'EIO',message:'Progress identity or definition mismatch',stack:'Error\n    at save (C:/private/main.js:2:3)'};
+  const original={};
+  for(const [field,value] of Object.entries(allowed))Object.defineProperty(original,field,{get(){reads[field]=(reads[field]||0)+1;return reads[field]<=2?value:'PRIVATE_CHANGED_VALUE';}});
+  await assert.rejects(api.withExecutionTiming(runtime,{requestId},async()=>{throw original;}),error=>error===original);
+  const stored=fs.readdirSync(path.join(runtime,'timings')).map(name=>fs.readFileSync(path.join(runtime,'timings',name),'utf8')).join('');
+  assert.doesNotMatch(stored,/PRIVATE_CHANGED_VALUE/);
+  assert.deepEqual(reads,{name:1,code:1,message:1,stack:1});
+  const [result]=api.readExecutionTimings(runtime,{requestId});
+  assert.equal(result.failure.name,'Error');assert.equal(result.failure.code,'EIO');
+  assert.equal(result.failure.reason,'definition_mismatch');
 });

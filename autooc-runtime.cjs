@@ -734,6 +734,78 @@ var fs2 = __toESM(require("fs"));
 var path3 = __toESM(require("path"));
 var import_crypto3 = require("crypto");
 var import_perf_hooks2 = require("perf_hooks");
+
+// execution-failure.ts
+var failureStages = ["execution", "catalog-validation", "catalog-read", "catalog-projection", "catalog-save", "task-history", "host-publication", "host-adoption", "host-render", "receipt-publication"];
+var stages = /* @__PURE__ */ new WeakMap();
+var names = ["Error", "TypeError", "RangeError", "SyntaxError", "ReferenceError", "AbortError"];
+var codes = ["EACCES", "EPERM", "EBUSY", "EIO", "ENOSPC", "ENOENT", "EEXIST", "EMFILE", "EINVAL", "ETIMEDOUT", "EPIPE"];
+var reasons = {
+  "Catalog progress does not match the durable checkpoint": "checkpoint_mismatch",
+  "Progress identity or definition mismatch": "definition_mismatch",
+  "Stale progress cannot replace current execution": "stale_progress",
+  "AutoOC confirmed catalog changed externally; reload before saving": "confirmed_catalog_changed",
+  "AutoOC configuration changed externally; reload before saving": "catalog_changed",
+  "AutoOC configuration changed during preparation; reload before saving": "catalog_changed_during_preparation",
+  "AutoOC configuration changed during replacement; reload before saving": "catalog_changed_during_replacement",
+  "Configuration changed while reading": "catalog_changed_during_read",
+  "Configuration identity changed while reading": "catalog_identity_changed",
+  "Settings write lock ownership changed": "settings_lock_changed",
+  "Settings intent ownership changed": "settings_intent_owner_changed",
+  "Settings write evidence retained for recovery": "settings_recovery_required",
+  "Catalog has no confirmed version": "catalog_version_missing",
+  "AutoOC settings changed while loading; reload before saving": "settings_changed_during_load",
+  "AutoOC settings changed during recovery; reload before saving": "settings_changed_during_recovery",
+  "AutoOC settings changed during execution; local edits preserved; reload before continuing": "settings_changed_during_execution",
+  "Confirmed catalog progress identity mismatch": "host_progress_identity_mismatch",
+  "CLI receipt identity changed": "receipt_identity_changed",
+  "CLI publication temporary identity changed": "receipt_temporary_changed"
+};
+var sourceFiles = ["main.js", "main.ts", "autooc-runtime.cjs", "autooc-cli.cjs", "settings-writer.ts", "workflow-catalog-progress.ts", "cli-plugin-requests.ts", "workflow-session.ts", "installed-workflow-host.ts"];
+function markExecutionFailure(error, stage) {
+  if (error && (typeof error === "object" || typeof error === "function") && !stages.has(error)) stages.set(error, stage);
+}
+async function withFailureStage(stage, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    markExecutionFailure(error, stage);
+    throw error;
+  }
+}
+function describeExecutionFailure(error) {
+  const result = { stage: "execution", name: "Error", reason: "unclassified", frames: [] };
+  try {
+    if (!error || typeof error !== "object") return result;
+    result.stage = stages.get(error) || "execution";
+    const value = error;
+    const name = value.name;
+    if (typeof name === "string" && names.includes(name)) result.name = name;
+    const code = value.code;
+    if (typeof code === "string" && codes.includes(code)) result.code = code;
+    const message = value.message;
+    if (typeof message === "string" && Object.prototype.hasOwnProperty.call(reasons, message)) result.reason = reasons[message];
+    const stack = value.stack;
+    if (typeof stack === "string") for (const line of stack.slice(0, 16384).split("\n").slice(1)) {
+      const match = line.match(/[\\/](main\.(?:js|ts)|autooc-(?:runtime|cli)\.cjs|settings-writer\.ts|workflow-catalog-progress\.ts|cli-plugin-requests\.ts|workflow-session\.ts|installed-workflow-host\.ts):(\d+):(\d+)\)?$/);
+      if (match && result.frames.length < 8) result.frames.push({ file: match[1], line: Number(match[2]), column: Number(match[3]) });
+    }
+  } catch {
+  }
+  return result;
+}
+function readExecutionFailure(value) {
+  if (!value || !failureStages.includes(value.stage) || !names.includes(value.name) || !["unclassified", ...Object.values(reasons)].includes(value.reason)) return void 0;
+  return {
+    stage: value.stage,
+    name: value.name,
+    reason: value.reason,
+    ...codes.includes(value.code) ? { code: value.code } : {},
+    frames: Array.isArray(value.frames) ? value.frames.slice(0, 8).filter((f) => f && sourceFiles.includes(f.file) && Number.isSafeInteger(f.line) && f.line > 0 && Number.isSafeInteger(f.column) && f.column > 0).map((f) => ({ file: f.file, line: f.line, column: f.column })) : []
+  };
+}
+
+// execution-timing.ts
 var phases = ["queue", "settingsQueue", "settingsSave", "code", "provider", "evaluation"];
 var idPattern = /^[a-zA-Z0-9-]{1,256}$/;
 function safeFile(file) {
@@ -832,6 +904,9 @@ async function withExecutionTiming(runtime, identity, operation, existing) {
   publish(context);
   try {
     return await operation(context);
+  } catch (error) {
+    value.failure = describeExecutionFailure(error);
+    throw error;
   } finally {
     value.finished = true;
     publish(context);
@@ -865,7 +940,8 @@ function readExecutionTimings(runtime, selector) {
       if (metric && [metric.count, metric.totalMs, metric.maxMs, metric.active].every((n) => Number.isFinite(n) && n >= 0)) metrics[phase] = { count: metric.count, totalMs: metric.totalMs, maxMs: metric.maxMs, active: metric.active };
     }
     const spans = Array.isArray(value.spans) ? value.spans.slice(0, 256).filter((s) => s && phases.includes(s.phase) && typeof s.stepId === "string" && s.stepId.length <= 256 && Number.isSafeInteger(s.index) && s.index >= 0 && Number.isFinite(s.startedAt) && typeof s.active === "boolean" && (s.durationMs === void 0 || Number.isFinite(s.durationMs) && s.durationMs >= 0)).map((s) => ({ phase: s.phase, stepId: s.stepId, index: s.index, startedAt: s.startedAt, active: s.active, ...s.durationMs === void 0 ? {} : { durationMs: s.durationMs } })) : [];
-    result.push({ schemaVersion: 1, attemptId: value.attemptId, requestId: value.requestId, runId: value.runId, startedAt: value.startedAt, updatedAt: value.updatedAt, finished: value.finished, phases: metrics, spans, droppedSpans: Number.isSafeInteger(value.droppedSpans) && value.droppedSpans >= 0 ? value.droppedSpans : 0 });
+    const failure = readExecutionFailure(value.failure);
+    result.push({ schemaVersion: 1, attemptId: value.attemptId, requestId: value.requestId, runId: value.runId, startedAt: value.startedAt, updatedAt: value.updatedAt, finished: value.finished, phases: metrics, spans, droppedSpans: Number.isSafeInteger(value.droppedSpans) && value.droppedSpans >= 0 ? value.droppedSpans : 0, ...failure ? { failure } : {} });
   }
   return result.sort((a, b) => a.startedAt - b.startedAt);
 }
@@ -1652,6 +1728,30 @@ var ExecutionJournal = class _ExecutionJournal {
     });
     return operation;
   }
+  reopenPublicationFailure(expected) {
+    return this.update((state, original) => {
+      const failed = state.steps[state.steps.length - 1];
+      const hash2 = (0, import_crypto5.createHash)("sha256").update(original).digest("hex");
+      if (state.phase !== "failed" || state.revision !== expected.revision || state.definitionHash !== expected.definitionHash || hash2 !== expected.journalHash || failed?.status !== "failed" || failed.output !== "[progress publication failed before step effects]" || Object.keys(failed).some((key) => !["stepId", "status", "startedAt", "finishedAt", "output"].includes(key)))
+        throw new Error("Publication failure evidence changed or step effects cannot be excluded");
+      const archive = path5.join(this.lease.directory, `publication-${state.runId}-${state.revision}-${hash2}.snapshot`);
+      if (!fs4.existsSync(archive)) {
+        const fd = fs4.openSync(archive, "wx", 384);
+        try {
+          fs4.writeFileSync(fd, original);
+          fs4.fsyncSync(fd);
+        } finally {
+          fs4.closeSync(fd);
+        }
+      }
+      const stat = fs4.lstatSync(archive);
+      if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || fs4.readFileSync(archive, "utf8") !== original)
+        throw new Error("Historical publication snapshot differs");
+      state.steps.pop();
+      state.phase = "ready";
+      state.nextStepId = failed.stepId;
+    });
+  }
   begin(stepId) {
     return this.update((state) => {
       if (state.phase !== "ready" || state.nextStepId !== stepId) throw new Error("Step is not ready; reconcile any interrupted execution first");
@@ -2219,6 +2319,8 @@ function executeCode(options) {
   const result = vm2.runInNewContext(preamble + "\n" + options.code + "\n;" + outputVar, sandbox, { timeout: 9e5 });
   return String(result == null ? "" : result);
 }
+var CodeExecutionError = class extends Error {
+};
 function codeNodeExecutable() {
   if (!process.versions.electron) return process.execPath;
   const fs33 = require("fs");
@@ -2282,8 +2384,8 @@ async function executeCodeAsync(options, signal) {
         if (process.connected) process.send(message, () => process.exit(0)); else process.exit(1);
       };
       worker.on('message', message => message.type === 'result' || message.type === 'error' ? finish(message) : send(message));
-      worker.once('error', error => finish({type:'error',text:String(error),name:error.name,message:error.message}));
-      worker.once('exit', code => { if (!finished) finish({type:'error',text:'Code runner exited without a result ('+code+')',name:'Error',message:'Code runner exited without a result'}); });
+      worker.once('error', () => finish({type:'runner-error'}));
+      worker.once('exit', () => { if (!finished) finish({type:'runner-error'}); });
     });
     send({type:'ready'});
   `;
@@ -2297,6 +2399,11 @@ async function executeCodeAsync(options, signal) {
     serialization: "json"
   });
   let closed = false, diagnostic = "", startupTimer;
+  let resultTimer;
+  let resultTimedOut = false;
+  let dispatched = false, observedResult = false;
+  let killTimer;
+  let killer;
   const closedPromise = new Promise((resolve11) => child.once("close", () => {
     closed = true;
     resolve11();
@@ -2306,65 +2413,117 @@ async function executeCodeAsync(options, signal) {
   });
   const stop = () => {
     if (!child.pid || closed || child.exitCode !== null || child.signalCode !== null) return;
-    if (signal?.aborted && process.platform === "win32") {
+    const fallback = () => {
+      try {
+        if (!closed) child.kill("SIGKILL");
+      } catch {
+      }
+    };
+    const terminateTree = signal?.aborted || resultTimedOut || dispatched && !observedResult;
+    if (terminateTree && process.platform === "win32") {
       const path34 = require("path");
       const system = process.env.SystemRoot || "C:\\Windows";
-      const killer = spawn4(path34.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
-      const fallback = () => {
-        if (!closed) child.kill("SIGKILL");
-      };
-      const timer = setTimeout(fallback, 2e3);
-      killer.once("error", () => {
-        clearTimeout(timer);
+      killer = spawn4(path34.join(system, "System32", "taskkill.exe"), ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+      killTimer = setTimeout(fallback, 2e3);
+      killer.on("error", () => {
+        clearTimeout(killTimer);
         fallback();
       });
       killer.once("close", () => {
-        clearTimeout(timer);
+        clearTimeout(killTimer);
         fallback();
       });
-    } else if (signal?.aborted && process.platform !== "win32") {
+    } else if (terminateTree && process.platform !== "win32") {
       try {
         process.kill(-child.pid, "SIGKILL");
       } catch {
-        child.kill("SIGKILL");
+        fallback();
       }
-    } else child.kill("SIGKILL");
+    } else fallback();
   };
   let abort;
   try {
     return await new Promise((resolve11, reject) => {
-      abort = () => reject(new Error("Code execution stopped; commands already started may still have effects"));
+      let settled = false;
+      const fail = (error) => {
+        if (!settled) {
+          settled = true;
+          reject(error);
+        }
+      };
+      abort = () => fail(new Error("Code execution stopped; commands already started may still have effects"));
       signal?.addEventListener("abort", abort, { once: true });
-      child.once("error", reject);
-      child.once("close", (code) => reject(new Error(`Code runner exited without a result (${code}). ${diagnostic}`)));
-      startupTimer = setTimeout(() => reject(new Error("The code runner did not start. Check your Node.js installation.")), 3e4);
+      child.on("error", fail);
+      child.once("disconnect", () => fail(new Error("Code runner disconnected without a result; effects may be unconfirmed")));
+      child.once("close", (code) => fail(new Error(`Code runner exited without a result (${code}). ${diagnostic}`)));
+      startupTimer = setTimeout(() => fail(new Error("The code runner did not start. Check your Node.js installation.")), 3e4);
       child.on("message", (message) => {
+        if (settled) return;
         try {
           if (message.type === "ready") {
+            if (dispatched) return;
+            dispatched = true;
             clearTimeout(startupTimer);
+            resultTimer = setTimeout(() => {
+              resultTimedOut = true;
+              fail(new Error("Code runner result timed out; effects may be unconfirmed"));
+            }, 93e4);
             child.send(data, (error) => {
-              if (error) reject(error);
+              if (error) fail(error);
             });
           } else if (message.type === "log") log?.(message.text);
           else if (message.type === "mutation") onVaultMutation?.(message.mutation);
-          else if (message.type === "result") resolve11(message.output);
+          else if (message.type === "result") {
+            observedResult = true;
+            settled = true;
+            resolve11(message.output);
+          } else if (message.type === "runner-error") fail(new Error("Code worker ended without a result; effects may be unconfirmed"));
           else if (message.type === "error") {
-            const error = new Error(message.message);
+            observedResult = true;
+            const error = new CodeExecutionError(message.message);
             error.name = message.name;
             error.toString = () => message.text;
-            reject(error);
+            fail(error);
           }
         } catch (error) {
-          reject(error);
+          fail(error);
         }
       });
       if (signal?.aborted) abort();
     });
   } finally {
     clearTimeout(startupTimer);
+    clearTimeout(resultTimer);
     if (abort) signal?.removeEventListener("abort", abort);
-    stop();
-    await closedPromise;
+    try {
+      stop();
+    } catch {
+    }
+    let closeTimer;
+    try {
+      await Promise.race([closedPromise, new Promise((resolve11) => {
+        closeTimer = setTimeout(resolve11, 3e3);
+      })]);
+    } finally {
+      clearTimeout(closeTimer);
+      clearTimeout(killTimer);
+      if (killer) {
+        try {
+          killer.kill();
+        } catch {
+        }
+        killer.unref();
+      }
+    }
+    if (!closed) {
+      try {
+        if (child.connected) child.disconnect();
+      } catch {
+      }
+      child.stderr?.destroy();
+      child.unref();
+      throw new Error("Code runner termination is unconfirmed; inspect the existing run before continuing");
+    }
   }
 }
 
@@ -2696,7 +2855,8 @@ async function executeTimedWorkflow(options) {
     if (resumed && [definition.workflow, ...definition.workflows || []].some((w) => w.handoffBranch) && ["ready", "in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed, options.vaultBase);
     }
-    if (resumed && ["completed", "failed"].includes(resumed.snapshot().phase)) {
+    if (options.publicationRecovery && (!resumed || resumed.snapshot().phase !== "failed")) throw new Error("Recovery requires the original failed run");
+    if (!options.publicationRecovery && resumed && ["completed", "failed"].includes(resumed.snapshot().phase)) {
       const state = resumed.snapshot();
       await options.onCheckpoint?.(state);
       return state;
@@ -2733,6 +2893,30 @@ async function executeTimedWorkflow(options) {
         }
       }
       const journal2 = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id, options.timing);
+      if (options.publicationRecovery) {
+        const state = journal2.snapshot(), previous = state.steps.slice(0, -1);
+        const failed2 = state.steps[state.steps.length - 1];
+        if (!failed2 || !previous.some((s) => s.codexTurnId && s.result?.succeeded) || previous.some((s) => s.status !== "completed" || !s.result?.succeeded))
+          throw new Error("Recovery requires a confirmed provider result and completed history");
+        const pending = [failed2.stepId], visited = /* @__PURE__ */ new Set();
+        while (pending.length) {
+          const id = pending.pop();
+          if (visited.has(id)) continue;
+          visited.add(id);
+          const i = steps.findIndex((s) => s.id === id), step = steps[i];
+          if (!step || step.stepKind !== "code" || previous.some((s) => s.stepId === id) || plan.scopes.get(id)?.boundary || definition.workflows?.length)
+            throw new Error("Recovery route leaves the pending Code steps");
+          const edges = step.transitions || [];
+          if (edges.some((t) => t.mode === "eval")) throw new Error("Recovery cannot invoke a provider");
+          for (const edge of edges) {
+            if (edge.mode === "conditional" && !edge.forceContinue && edge.condition?.trim() === "false") continue;
+            if (steps.findIndex((s) => s.id === edge.toStepId) <= i) throw new Error("Recovery requires forward-only Code routes");
+            pending.push(edge.toStepId);
+          }
+          if (!edges.length && steps[i + 1]) pending.push(steps[i + 1].id);
+        }
+        await journal2.reopenPublicationFailure(options.publicationRecovery);
+      }
       admission.bind(journal2.snapshot());
       return journal2;
     });
@@ -2801,6 +2985,7 @@ async function executeTimedWorkflow(options) {
           }, signal));
           return { succeeded: true, output };
         } catch (error) {
+          if (!(error instanceof CodeExecutionError)) throw error;
           return { succeeded: false, cancelled: signal?.aborted || void 0, output: `[code error: ${String(error)}]` };
         } finally {
           codeFinished();
@@ -2973,113 +3158,124 @@ function selectCodeStep(workflow, stepId, historical = false) {
 // workflow-catalog-progress.ts
 async function persistWorkflowProgress(options) {
   return catalogTransaction(options.configurationFile, async (transaction) => {
-    const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
-    if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
-      throw new Error("Catalog progress does not match the durable checkpoint");
-    }
-    const writer = options.writer || new SettingsWriter();
-    if (options.baseline) {
-      const baseline = options.baseline();
-      if (baseline.textHash && baseline.textHash === baseline.valueHash) await writer.adoptConfirmed(options.configurationFile, baseline, () => true);
-      else await writer.assertUnchanged(options.configurationFile);
-    }
-    const config = await writer.loadAsync(options.configurationFile);
-    if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
-      throw new Error("Invalid AutoOC catalog");
-    }
-    const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
-    if (virtual && (virtual.id !== durable.workflowId || config.workflows.some((workflow2) => workflow2.id === virtual.id))) throw new Error("Standalone task identity mismatch");
-    if (virtual && config.tasks.filter((task) => task.id === options.taskId).length !== 1) throw new Error("Missing or ambiguous task in catalog");
-    const matches = virtual ? [virtual] : config.workflows.filter((workflow2) => workflow2.id === durable.workflowId);
-    if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
-    let workflow = virtual ? { ...virtual, runtimeExecution: config.tasks.find((task) => task.id === options.taskId).runtimeExecution } : matches[0];
-    if (options.stepId) {
-      if (virtual) throw new Error("A code step requires its parent workflow identity");
-      workflow = selectCodeStep(workflow, options.stepId);
-    }
-    if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
-      const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
-      const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
-      validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
-      if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed", "abandoned"].includes(previous.phase)) {
-        throw new Error("Cannot replace an unfinished execution");
+    let stage = "catalog-validation";
+    try {
+      const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
+      if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
+        throw new Error("Catalog progress does not match the durable checkpoint");
       }
-      workflow = { ...workflow };
-      delete workflow.runtimeExecution;
-    }
-    const preserveLegacy = !virtual && !options.stepId && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
-    if (preserveLegacy) {
-      validateProgressBinding(matches[0], durable, options.expectedRunId);
-      if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
-    }
-    const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
-    const observedTasks = /* @__PURE__ */ new Map();
-    const executionSteps = workflowExecutionPlan({ workflow, workflows: workflowClosure(workflow, config.workflows) }).steps;
-    for (const [stepIndex, observed] of durable.steps.entries()) {
-      const step = executionSteps.find((item) => item.id === observed.stepId);
-      if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
-        observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
+      const writer = options.writer || new SettingsWriter();
+      if (options.baseline) {
+        const baseline = options.baseline();
+        if (baseline.textHash && baseline.textHash === baseline.valueHash) await writer.adoptConfirmed(options.configurationFile, baseline, () => true);
+        else await writer.assertUnchanged(options.configurationFile);
       }
-    }
-    const tasks = config.tasks.map((task) => {
-      const item = observedTasks.get(task.id);
-      if (!item) return task;
-      const previous = task.runtimeExecution;
-      if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
-      if (task.legacyExecution && previous?.runId === durable.runId) {
-        validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable, options.expectedRunId);
-        if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
-        return task;
+      stage = "catalog-read";
+      const config = await writer.loadAsync(options.configurationFile);
+      stage = "catalog-projection";
+      if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
+        throw new Error("Invalid AutoOC catalog");
       }
-      if (previous && previous.runId !== durable.runId) {
-        if (item.observed.status !== "in_flight") return task;
-        const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
-        if (!["completed", "failed", "abandoned"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
+      const virtual = options.taskId ? standaloneTaskWorkflow(options.taskId) : void 0;
+      if (virtual && (virtual.id !== durable.workflowId || config.workflows.some((workflow2) => workflow2.id === virtual.id))) throw new Error("Standalone task identity mismatch");
+      if (virtual && config.tasks.filter((task) => task.id === options.taskId).length !== 1) throw new Error("Missing or ambiguous task in catalog");
+      const matches = virtual ? [virtual] : config.workflows.filter((workflow2) => workflow2.id === durable.workflowId);
+      if (matches.length !== 1) throw new Error("Missing or ambiguous workflow in catalog");
+      let workflow = virtual ? { ...virtual, runtimeExecution: config.tasks.find((task) => task.id === options.taskId).runtimeExecution } : matches[0];
+      if (options.stepId) {
+        if (virtual) throw new Error("A code step requires its parent workflow identity");
+        workflow = selectCodeStep(workflow, options.stepId);
       }
-      return {
-        ...task,
-        legacyExecution: void 0,
-        status: item.observed.status === "in_flight" ? durable.phase === "abandoned" ? "abandoned" : "pending" : item.observed.status,
-        ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
-        output: item.observed.output || "",
-        ...item.observed.codexThreadId ? { lastCodexThreadId: item.observed.codexThreadId } : {},
-        ...item.observed.codexTurnId ? { lastCodexTurnId: item.observed.codexTurnId } : {},
-        pendingCodexApproval: durable.phase !== "abandoned" && item.observed.approval ? { ...item.observed.approval, requestId: item.observed.approval.token } : void 0,
-        runtimeExecution: {
-          runId: durable.runId,
-          workflowId: durable.workflowId,
-          definitionHash: durable.definitionHash,
-          stepId: item.stepId,
-          stepIndex: item.stepIndex,
-          revision: durable.revision,
-          finishedAt: item.observed.finishedAt,
-          phase: durable.phase,
-          abandonment: durable.abandonment,
-          requiresReconciliation: durable.phase !== "abandoned" && item.observed.status === "in_flight"
+      if (options.replaceCompletedRunId && workflow.runtimeExecution?.runId === options.replaceCompletedRunId && durable.runId !== options.replaceCompletedRunId) {
+        const previous = readExecutionCheckpoint(options.runtimeDirectory, options.replaceCompletedRunId);
+        const previousId = virtual && !previous.workflowId.startsWith("@task:") ? workflow.runtimeExecution.workflowId : workflow.id;
+        validateProgressBinding({ ...workflow, id: previousId }, previous, options.replaceCompletedRunId);
+        if (!virtual && previous.workflowId !== durable.workflowId || !["completed", "failed", "abandoned"].includes(previous.phase)) {
+          throw new Error("Cannot replace an unfinished execution");
         }
-      };
-    });
-    const replacement = options.stepId ? { ...matches[0], steps: matches[0].steps.map((step) => step.id === options.stepId ? {
-      ...step,
-      codeExecution: {
-        runtimeExecution: projected.runtimeExecution,
-        status: projected.status,
-        output: projected.steps[0].output,
-        lastRun: projected.steps[0].lastRun || durable.createdAt
+        workflow = { ...workflow };
+        delete workflow.runtimeExecution;
       }
-    } : step) } : projected;
-    const next = { ...config, tasks, workflows: virtual ? config.workflows : config.workflows.map((workflow2) => workflow2 === matches[0] ? replacement : workflow2) };
-    await writer.save(options.configurationFile, () => next, void 0, options.timing);
-    if (options.vaultBase) persistTaskHistory(options.vaultBase, { ...workflow, steps: executionSteps }, durable, config);
-    const confirmed = {
-      catalog: next,
-      version: writer.confirmedVersion(options.configurationFile),
-      runId: durable.runId,
-      workflowId: durable.workflowId,
-      revision: durable.revision
-    };
-    await options.onCommitted?.(confirmed, transaction);
-    return confirmed;
+      const preserveLegacy = !virtual && !options.stepId && matches[0].legacyExecution && matches[0].runtimeExecution?.runId === durable.runId;
+      if (preserveLegacy) {
+        validateProgressBinding(matches[0], durable, options.expectedRunId);
+        if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy workflow overlaps an unfinished shared run");
+      }
+      const projected = preserveLegacy ? matches[0] : { ...projectWorkflowProgress(workflow, config.tasks, config, durable, options.expectedRunId), legacyExecution: void 0 };
+      const observedTasks = /* @__PURE__ */ new Map();
+      const executionSteps = workflowExecutionPlan({ workflow, workflows: workflowClosure(workflow, config.workflows) }).steps;
+      for (const [stepIndex, observed] of durable.steps.entries()) {
+        const step = executionSteps.find((item) => item.id === observed.stepId);
+        if (step?.taskId && (!step.stepKind || step.stepKind === "task")) {
+          observedTasks.set(step.taskId, { stepId: step.id, stepIndex, observed });
+        }
+      }
+      const tasks = config.tasks.map((task) => {
+        const item = observedTasks.get(task.id);
+        if (!item) return task;
+        const previous = task.runtimeExecution;
+        if (previous?.runId === durable.runId && previous.revision > durable.revision) throw new Error("Stale task progress");
+        if (task.legacyExecution && previous?.runId === durable.runId) {
+          validateProgressBinding({ id: previous.workflowId, runtimeExecution: previous }, durable, options.expectedRunId);
+          if (!["completed", "failed", "abandoned"].includes(durable.phase)) throw new Error("Legacy task overlaps an unfinished shared run");
+          return task;
+        }
+        if (previous && previous.runId !== durable.runId) {
+          if (item.observed.status !== "in_flight") return task;
+          const prior = readExecutionCheckpoint(options.runtimeDirectory, previous.runId);
+          if (!["completed", "failed", "abandoned"].includes(prior.phase)) throw new Error("Task belongs to an unfinished execution");
+        }
+        return {
+          ...task,
+          legacyExecution: void 0,
+          status: item.observed.status === "in_flight" ? durable.phase === "abandoned" ? "abandoned" : "pending" : item.observed.status,
+          ...item.observed.startedAt ? { lastRun: item.observed.startedAt } : {},
+          output: item.observed.output || "",
+          ...item.observed.codexThreadId ? { lastCodexThreadId: item.observed.codexThreadId } : {},
+          ...item.observed.codexTurnId ? { lastCodexTurnId: item.observed.codexTurnId } : {},
+          pendingCodexApproval: durable.phase !== "abandoned" && item.observed.approval ? { ...item.observed.approval, requestId: item.observed.approval.token } : void 0,
+          runtimeExecution: {
+            runId: durable.runId,
+            workflowId: durable.workflowId,
+            definitionHash: durable.definitionHash,
+            stepId: item.stepId,
+            stepIndex: item.stepIndex,
+            revision: durable.revision,
+            finishedAt: item.observed.finishedAt,
+            phase: durable.phase,
+            abandonment: durable.abandonment,
+            requiresReconciliation: durable.phase !== "abandoned" && item.observed.status === "in_flight"
+          }
+        };
+      });
+      const replacement = options.stepId ? { ...matches[0], steps: matches[0].steps.map((step) => step.id === options.stepId ? {
+        ...step,
+        codeExecution: {
+          runtimeExecution: projected.runtimeExecution,
+          status: projected.status,
+          output: projected.steps[0].output,
+          lastRun: projected.steps[0].lastRun || durable.createdAt
+        }
+      } : step) } : projected;
+      const next = { ...config, tasks, workflows: virtual ? config.workflows : config.workflows.map((workflow2) => workflow2 === matches[0] ? replacement : workflow2) };
+      stage = "catalog-save";
+      await writer.save(options.configurationFile, () => next, void 0, options.timing);
+      stage = "task-history";
+      if (options.vaultBase) persistTaskHistory(options.vaultBase, { ...workflow, steps: executionSteps }, durable, config);
+      const confirmed = {
+        catalog: next,
+        version: writer.confirmedVersion(options.configurationFile),
+        runId: durable.runId,
+        workflowId: durable.workflowId,
+        revision: durable.revision
+      };
+      stage = "host-publication";
+      await options.onCommitted?.(confirmed, transaction);
+      return confirmed;
+    } catch (error) {
+      markExecutionFailure(error, stage);
+      throw error;
+    }
   });
 }
 
@@ -3391,6 +3587,7 @@ function createCodeWorkflowAdapter(vaultBase, workingDirectory = vaultBase, vaul
         output += result;
         return { succeeded: true, output };
       } catch (error) {
+        if (!(error instanceof CodeExecutionError)) throw error;
         return { succeeded: false, cancelled: signal?.aborted || void 0, output: output + `[code error: ${String(error)}]` };
       }
     }
@@ -5657,6 +5854,10 @@ async function runInstalledWorkflow(options) {
         assertNoPageTerminal(config, definition2.settings.workingDirectory || vault);
         for (const task of definition2.tasks) assertNoPageTerminal(config, task.workingDirectory || definition2.settings.workingDirectory || vault);
       }
+      if (options.publicationRecovery) {
+        if (!options.resumeRunId || matches[0].runtimeExecution?.runId !== options.resumeRunId) throw new Error("Recovery requires the original catalog binding");
+        validateProgressBinding(matches[0], readExecutionCheckpoint(runtimeDirectory, options.resumeRunId), options.resumeRunId);
+      }
       preflightInstalledWorkflow(definition2, vault);
       const terminal2 = { destination: config.cliTerminalDestination === "integrated" ? "integrated" : "external", launch: options.launchInteractiveTerminal };
       if (!options.reconcile && terminal2.destination === "integrated" && !terminal2.launch && definition2.tasks.some((task) => task.taskKind === "cli" || isOpenCodeTask(task.taskKind) && task.interactiveTerminal)) {
@@ -5706,6 +5907,7 @@ async function runInstalledWorkflow(options) {
         vaultBase: vault,
         admission,
         timing: options.timing,
+        publicationRecovery: options.publicationRecovery,
         resumeRunId: options.resumeRunId,
         reconcile: options.reconcile,
         maxSteps: options.maxSteps,
@@ -5943,12 +6145,12 @@ function installRelease(options) {
   const marker = path28.join(lease.directory, "update-pending.json");
   if (fs27.existsSync(marker)) throw new Error("Previous update requires recovery");
   assertPackageMaintenanceSafe(directory2);
-  const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
-  for (const name of names) regularPath2(directory2, name);
+  const names2 = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
+  for (const name of names2) regularPath2(directory2, name);
   const backup = path28.join(lease.directory, `update-backup-${(0, import_crypto10.randomUUID)()}`);
   fs27.mkdirSync(backup);
   const previous = /* @__PURE__ */ new Map();
-  for (const name of names) {
+  for (const name of names2) {
     const source = regularPath2(directory2, name);
     const bytes = fs27.existsSync(source) ? fs27.readFileSync(source) : void 0;
     previous.set(name, bytes);
@@ -5958,7 +6160,7 @@ function installRelease(options) {
       fs27.writeFileSync(target, bytes, { flag: "wx" });
     }
   }
-  const record = { schemaVersion: 1, version, backup: path28.basename(backup), files: names, absent: names.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
+  const record = { schemaVersion: 1, version, backup: path28.basename(backup), files: names2, absent: names2.filter((name) => !previous.has(name) || previous.get(name) === void 0) };
   fs27.writeFileSync(path28.join(backup, "recovery.json"), JSON.stringify(record));
   const fd = fs27.openSync(marker, "wx");
   try {
@@ -5969,16 +6171,16 @@ function installRelease(options) {
   }
   const written = [];
   try {
-    for (const name of names) {
+    for (const name of names2) {
       lease.assertOwned();
       const target = regularPath2(directory2, name, true);
       written.push(name);
       fs27.writeFileSync(target, files2[name]);
     }
-    const installed = Object.fromEntries(names.map((name) => [name, fs27.readFileSync(regularPath2(directory2, name))]));
+    const installed = Object.fromEntries(names2.map((name) => [name, fs27.readFileSync(regularPath2(directory2, name))]));
     verifyRelease(installed, version);
     fs27.unlinkSync(marker);
-    return { version, backup, installed: names };
+    return { version, backup, installed: names2 };
   } catch (error) {
     for (const name of written.reverse()) {
       const target = regularPath2(directory2, name);
@@ -5993,14 +6195,14 @@ function installRelease(options) {
 
 // release-maintenance.ts
 async function maintainRelease(options) {
-  const names = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
+  const names2 = [...RELEASE_FILES, RELEASE_DESCRIPTOR];
   const regular = (file) => {
     const stat = fs28.lstatSync(file);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error("Unsafe maintenance file");
     return fs28.readFileSync(file);
   };
   const source = physicalPath(options.sourceDirectory), files2 = {};
-  for (const name of names) {
+  for (const name of names2) {
     let current = source;
     for (const part of name.split("/").slice(0, -1)) {
       current = path29.join(current, part);
@@ -6070,7 +6272,7 @@ async function maintainRelease(options) {
       if (digest(regular(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
       hashes[relative7] = digest(bytes);
     };
-    for (const name of names) save(name, regular(path29.join(location.installationDirectory, name)));
+    for (const name of names2) save(name, regular(path29.join(location.installationDirectory, name)));
     const catalog = regular(location.configurationFile);
     save("data.json", catalog);
     const journals = fs28.readdirSync(location.runtimeDirectory).filter((n) => /^[a-zA-Z0-9-]+\.json$/.test(n) || /^(abandonment|disposition)-[a-zA-Z0-9-]+\.snapshot$/.test(n));
@@ -6732,30 +6934,32 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
             return;
           }
           if (request.command === "create-page") {
-            const result2 = await capabilities.pages.submit(request.request);
-            await publish2({ status: "completed", pageResult: result2 });
+            const result = await capabilities.pages.submit(request.request);
+            await publish2({ status: "completed", pageResult: result });
             return;
           }
           if (request.command === "edit-workflow" || request.command === "edit-task") {
             const handler = request.command === "edit-task" ? capabilities.editTask : edit;
             if (!handler) throw new Error("Definition editing unsupported");
-            const result2 = await handler(request);
-            await publish2({ status: "completed", editResult: result2 });
+            const result = await handler(request);
+            await publish2({ status: "completed", editResult: result });
             return;
           }
-          const result = await withExecutionTiming(root, { requestId: id, runId: request.runId, queueMs: timing.queueMs }, (context) => execute(request, execution.controller.signal, (state, presentation) => {
-            if (!acceptingProgress) return Promise.resolve();
-            const next = executionSummary(state, presentation);
-            checkpoint = next;
-            bindTimingRun(next.runId, context);
-            publications = publications.then(() => publish2({ status: "running", checkpoint: next }));
-            void publications.catch(() => {
-            });
-            return publications;
-          }, context));
-          acceptingProgress = false;
-          await publications;
-          await publish2({ status: "completed", checkpoint: executionSummary(result) });
+          await withExecutionTiming(root, { requestId: id, runId: request.runId, queueMs: timing.queueMs }, async (context) => {
+            const result = await execute(request, execution.controller.signal, (state, presentation) => {
+              if (!acceptingProgress) return Promise.resolve();
+              const next = executionSummary(state, presentation);
+              checkpoint = next;
+              bindTimingRun(next.runId, context);
+              publications = publications.then(() => withFailureStage("receipt-publication", () => publish2({ status: "running", checkpoint: next })));
+              void publications.catch(() => {
+              });
+              return publications;
+            }, context);
+            acceptingProgress = false;
+            await publications;
+            await withFailureStage("receipt-publication", () => publish2({ status: "completed", checkpoint: executionSummary(result) }));
+          });
         } catch (error) {
           acceptingProgress = false;
           await publications.catch(() => {
@@ -6822,8 +7026,8 @@ function inspectPluginRequest(runtime, selector) {
     if (!name.startsWith("cli-") || !uuid2.test(name.slice(4))) continue;
     const directory2 = path31.join(root, name), owner = name.slice(4);
     regularDirectory3(directory2);
-    const names = selector.requestId ? [selector.requestId + ".request"] : fs30.readdirSync(directory2).filter((n) => n.endsWith(".receipt") && uuid2.test(n.slice(0, -8))).map((n) => n.slice(0, -8) + ".request");
-    for (const file of names) {
+    const names2 = selector.requestId ? [selector.requestId + ".request"] : fs30.readdirSync(directory2).filter((n) => n.endsWith(".receipt") && uuid2.test(n.slice(0, -8))).map((n) => n.slice(0, -8) + ".request");
+    for (const file of names2) {
       const id = file.slice(0, -8), requestPath = path31.join(directory2, file), receiptPath = path31.join(directory2, id + ".receipt");
       if (!fs30.existsSync(requestPath)) {
         if (selector.requestId && fs30.existsSync(receiptPath)) throw new Error("CLI receipt has no matching request");

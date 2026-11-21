@@ -8,7 +8,7 @@ import { acquireExecutionLease, type ExecutionLease } from "./execution-lease";
 import { ExecutionJournal, checkpointUncertainties, type RunCheckpoint } from "./execution-journal";
 import { prepareWorkflowDefinition, type PreparedWorkflow } from "./workflow-definition";
 import { advanceWorkflowSession } from "./workflow-session";
-import { executeCodeAsync } from "./code-runtime";
+import { executeCodeAsync, CodeExecutionError } from "./code-runtime";
 import { runWithVaultMutations, type VaultMutationBatchFactory } from "./code-vault-mutations";
 import { workflowDelay, waitForWorkflowDelay } from "./workflow-delay";
 import { workflowTaskPrompt } from "./workflow-handoff";
@@ -54,6 +54,7 @@ export async function runCodeWorkflowHost(options: {
   vaultBase: string;
   signal?: AbortSignal;
   resumeRunId?: string;
+  publicationRecovery?: {revision:number; journalHash:string; definitionHash:string};
   reconcile?: boolean;
   maxSteps?: number;
   tasks?: WorkflowTaskAdapter;
@@ -108,7 +109,8 @@ async function executeTimedWorkflow(options:Parameters<typeof runCodeWorkflowHos
     if (resumed && [definition.workflow,...(definition.workflows || [])].some(w=>w.handoffBranch) && ["ready","in_flight"].includes(resumed.snapshot().phase)) {
       verifyWorkflowBranch(resumed,options.vaultBase);
     }
-    if(resumed && ["completed","failed"].includes(resumed.snapshot().phase)) {
+    if (options.publicationRecovery && (!resumed || resumed.snapshot().phase !== "failed")) throw new Error("Recovery requires the original failed run");
+    if(!options.publicationRecovery && resumed && ["completed","failed"].includes(resumed.snapshot().phase)) {
       // An already terminal resume performs no effect, but its confirmed
       // projection still resolves the provisional admission of this call.
       const state=resumed.snapshot();
@@ -146,6 +148,31 @@ async function executeTimedWorkflow(options:Parameters<typeof runCodeWorkflowHos
       }
     }
     const journal = resumed || await ExecutionJournal.create(lease, definition.workflow.id, definition.hash, entry.id,options.timing);
+    if (options.publicationRecovery) {
+      const state = journal.snapshot(), previous = state.steps.slice(0,-1);
+      const failed = state.steps[state.steps.length-1];
+      if (!failed || !previous.some(s=>s.codexTurnId && s.result?.succeeded) || previous.some(s=>s.status!=="completed" || !s.result?.succeeded))
+        throw new Error("Recovery requires a confirmed provider result and completed history");
+      // Every possible remaining route must be Code-only and disjoint from completed effects.
+      const pending = [failed.stepId], visited = new Set<string>();
+      while (pending.length) {
+        const id = pending.pop()!;
+        if (visited.has(id)) continue;
+        visited.add(id);
+        const i = steps.findIndex(s=>s.id===id), step = steps[i];
+        if (!step || step.stepKind!=="code" || previous.some(s=>s.stepId===id) || plan.scopes.get(id)?.boundary || definition.workflows?.length)
+          throw new Error("Recovery route leaves the pending Code steps");
+        const edges = step.transitions || [];
+        if (edges.some(t=>t.mode==="eval")) throw new Error("Recovery cannot invoke a provider");
+        for (const edge of edges) {
+          if (edge.mode==="conditional" && !edge.forceContinue && edge.condition?.trim()==="false") continue;
+          if (steps.findIndex(s=>s.id===edge.toStepId)<=i) throw new Error("Recovery requires forward-only Code routes");
+          pending.push(edge.toStepId);
+        }
+        if (!edges.length && steps[i+1]) pending.push(steps[i+1].id);
+      }
+      await journal.reopenPublicationFailure(options.publicationRecovery);
+    }
     admission.bind(journal.snapshot());
     return journal;
     });
@@ -201,7 +228,10 @@ async function executeTimedWorkflow(options:Parameters<typeof runCodeWorkflowHos
               if (!signal?.aborted) options.onTaskOutput?.({runId:state.runId,workflowId:state.workflowId,taskId:"",stepId:step.id,stepIndex:state.steps.length-1,output:options.redact(liveLog)});
             }}, signal));
           return {succeeded:true,output};
-        } catch (error) { return {succeeded:false,cancelled:signal?.aborted || undefined,output:`[code error: ${String(error)}]`}; }
+        } catch (error) {
+          if (!(error instanceof CodeExecutionError)) throw error;
+          return {succeeded:false,cancelled:signal?.aborted || undefined,output:`[code error: ${String(error)}]`};
+        }
         finally {codeFinished();}
       },
       evaluate:async (...args)=>{const finished=startPhaseTiming("evaluation",undefined,options.timing);try{if(!options.evaluate)throw new Error("Model evaluation is not supported by this host");return await options.evaluate(...args);}finally{finished();}},

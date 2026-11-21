@@ -7,6 +7,7 @@ import { persistTaskHistory } from "./task-history";
 import { selectCodeStep } from "./workflow-code-step";
 import { workflowExecutionPlan, workflowClosure } from "./workflow-nesting";
 import type { TimingContext } from "./execution-timing";
+import {markExecutionFailure, type FailureStage} from "./execution-failure";
 
 export interface PersistedWorkflowCatalog {
   catalog: any;
@@ -34,6 +35,8 @@ export async function persistWorkflowProgress(options: {
   onCommitted?: (catalog:PersistedWorkflowCatalog, transaction:CatalogTransaction)=>Promise<void>;
 }): Promise<PersistedWorkflowCatalog> {
   return catalogTransaction(options.configurationFile,async transaction=>{
+  let stage:FailureStage="catalog-validation";
+  try {
   const durable = readExecutionCheckpoint(options.runtimeDirectory, options.expectedRunId);
   if (JSON.stringify(durable) !== JSON.stringify(options.checkpoint)) {
     throw new Error("Catalog progress does not match the durable checkpoint");
@@ -44,7 +47,9 @@ export async function persistWorkflowProgress(options: {
     if(baseline.textHash && baseline.textHash===baseline.valueHash)await writer.adoptConfirmed(options.configurationFile,baseline,()=>true);
     else await writer.assertUnchanged(options.configurationFile);
   }
+  stage="catalog-read";
   const config: any = await writer.loadAsync(options.configurationFile);
+  stage="catalog-projection";
   if (!config || !Array.isArray(config.tasks) || !Array.isArray(config.workflows)) {
     throw new Error("Invalid AutoOC catalog");
   }
@@ -114,11 +119,15 @@ export async function persistWorkflowProgress(options: {
       output:projected.steps[0].output, lastRun:projected.steps[0].lastRun || durable.createdAt},
   } : step)} : projected;
   const next = {...config, tasks, workflows:virtual ? config.workflows : config.workflows.map((workflow:any) => workflow === matches[0] ? replacement : workflow)};
+  stage="catalog-save";
   await writer.save(options.configurationFile, () => next,undefined,options.timing);
+  stage="task-history";
   if (options.vaultBase) persistTaskHistory(options.vaultBase, {...workflow,steps:executionSteps}, durable, config);
   const confirmed={catalog:next,version:writer.confirmedVersion(options.configurationFile),
     runId:durable.runId,workflowId:durable.workflowId,revision:durable.revision};
+  stage="host-publication";
   await options.onCommitted?.(confirmed,transaction);
   return confirmed;
+  } catch(error) {markExecutionFailure(error,stage);throw error;}
   });
 }

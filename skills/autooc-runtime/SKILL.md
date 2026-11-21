@@ -1,15 +1,99 @@
 ---
 name: autooc-runtime
-description: Consultar y ejecutar AutoOC desde un agente y editar workflows compatibles con Obsidian abierto. Usar para descubrir la CLI instalada, conservar identidades y resolver conflictos o recuperación con evidencia.
+description: >-
+  Operar AutoOC desde un agente mediante su CLI instalada: consultar y ejecutar tareas y workflows, editar sus textos, crear o seleccionar páginas/worktrees, seguir ejecuciones y diagnosticar bloqueos. Usar cuando el encargo mencione AutoOC, su catálogo, una página de trabajo o sus recibos; conservar las identidades y comprobar capacidades antes de actuar.
 ---
 
 # AutoOC desde un agente
+
+## Inicio: instalación, alcance y siguiente acción
+
+Esta guía acompaña al paquete; no activa un supervisor ni ejecuta workflows al
+leerla. Su contrato se ha contrastado con las fuentes y la CLI del candidato
+**1.7.28**. Una instalación 1.7.27 u otra revisión del mismo número puede carecer
+de funciones descritas aquí: manda su `version`, su `help` y el propietario cargado.
+
+1. Resuelve el proyecto y lee su `AGENTS.md` e instrucciones aplicables. Recupera
+   el encargo autorizado y cualquier `requestId`, `runId` y `pageId` existente.
+   Consultar o diagnosticar no autoriza iniciar trabajo, instalar ni recuperar.
+2. Identifica la **bóveda anfitriona**, donde residen instalación y catálogo. En
+   esta CLI, `--vault` selecciona `<vault>/.obsidian/plugins/auto-oc/`; ejecutar el
+   binario desde otra carpeta no cambia esa selección. El plugin admite carpeta
+   de configuración personalizada, pero la CLI no ofrece un selector para ella
+   ni la descubre automáticamente. No inventes `--config-dir` o `--installation`.
+3. Usa la ruta absoluta de esa CLI y consulta primero `version`, `help`, `list`,
+   `status` y, si procede, `pages`. Comprueba solo las capacidades necesarias para
+   el encargo. Si falta alguna, informa de la incompatibilidad sin ejecutar otra
+   operación como sustitución.
+4. Selecciona IDs del catálogo, no nombres visibles. Para trabajar en una página,
+   conserva `--vault` y añade `--page PAGE_ID`: la carpeta actual de PowerShell y
+   la pestaña visible no seleccionan el worktree. `list` es global; para consultar
+   ejecuciones de una página usa `status --vault VAULT --page PAGE_ID`.
+5. Ejecuta lo solicitado y conserva la identidad devuelta. Con respuesta incierta,
+   vuelve a observar esa identidad antes de actuar. Informa de fase, resultado
+   confirmado, incertidumbre y siguiente acción; ni exit 0 ni abrir una terminal
+   significan por sí solos que el objetivo funcional esté terminado.
+
+Ejemplo de descubrimiento en PowerShell (sustituir la ruta; no inicia tareas):
+
+```powershell
+$vaultPath = 'C:\ruta\al\proyecto'
+$cliPath = Join-Path $vaultPath '.obsidian\plugins\auto-oc\autooc-cli.cjs'
+node $cliPath version
+node $cliPath help
+node $cliPath list --vault $vaultPath
+node $cliPath status --vault $vaultPath
+node $cliPath pages --vault $vaultPath
+```
+
+En los ejemplos siguientes, `CLI`, `ROOT`, `VAULT` y `ABS_VAULT` son marcadores
+de rutas absolutas; sustituye también IDs y hashes por los observados. Entrecomilla
+las rutas con espacios. Respeta el orden de opciones mostrado: varios comandos
+lo exigen. Los archivos JSON deben ser UTF-8 sin BOM; en Windows PowerShell 5.1
+`Out-File` y `Set-Content -Encoding UTF8` no garantizan ese formato. Puedes guardar
+el texto con `[IO.File]::WriteAllText($ruta, $json, [Text.UTF8Encoding]::new($false))`.
+
+### Elegir la operación soportada
+
+| Objetivo | Comandos | Capacidad o condición |
+| --- | --- | --- |
+| Descubrir el contrato | `version`, `help` | Sin parámetros. |
+| Consultar catálogo y estado | `list`, `status`, `pages` | `catalogAvailability:1`; `pageSelection:1` para páginas. |
+| Iniciar o continuar trabajo | `run`, `resume`, `reconcile`, `stop` | `taskSelection:true`; `--run` obligatorio salvo en `run`; conserva `--page` y `--step` si se usaron. |
+| Consultar una petición o ejecución | `inspect-request`, `follow` | `requestInspection:1`; exactamente uno de `--request-id` o `--run`. |
+| Editar nombre/prompt de tarea | `export-task`, `edit-task` | `taskEditing:1`, propietario compatible abierto y sin ejecuciones. |
+| Editar textos/pasos existentes | `export-workflow`, `edit-workflow` | `workflowEditing:1`; límite anunciado en `workflowEditMaxChangesBytes`. |
+| Crear página y consultar su alta | `create-page`, `inspect-page-request` | `pageCreation:1`; ID funcional estable, distinto del UUID del buzón. |
+| Contestar una aprobación pendiente | `approve`, `deny` | Token exacto del intento y decisión autorizada para esa petición. |
+| Recuperar publicación fallida antes de efectos | `recover-publication` | Candidato 1.7.28; procedimiento específico descrito abajo, plugin descargado. |
+| Revisar o recuperar guardado | `inspect-settings-write`, `recover-settings-write` | La recuperación exige una inspección vigente y decisión autorizada. |
+| Recuperar reserva de propietario ausente | `recover-lease` | Token observado; no reanuda trabajo ni resuelve efectos inciertos. |
+| Cerrar un intento con efectos desconocidos | `abandon`, `inspect-terminal`, `dispose-terminal` | Inspección y aceptación humana específica; no equivalen a éxito. |
+| Revisar o instalar un paquete completo | `maintain-release` | CLI del paquete nuevo extraído aparte; `--install`/`--decisions` modifican la instalación. |
+
+`version.capabilities` enumera comandos; los otros campos anuncian contratos
+adicionales. El propietario cargado también debe soportarlos cuando se delega.
+La edición de estructura, motores, permisos y programación, Import/Export de
+paquetes, Enable/Disable, Merge review, Finish/Discard/Delete page y las preferencias
+se operan desde la interfaz: no existen comandos CLI equivalentes en este candidato.
+Los `export-*` de edición no producen paquetes importables. No escribas `data.json`
+para suplir una operación ausente.
+
+Lee la sección correspondiente antes de mutar: [ejecutar](#seleccionar-y-ejecutar),
+[editar tareas](#editar-tareas-existentes-por-cli),
+[editar workflows](#editar-un-workflow-sin-cerrar-obsidian),
+[páginas](#páginas-de-trabajo-y-selección-de-contexto),
+[crear página](#alta-de-páginas-por-cli-candidato-de-desarrollo),
+[seguir peticiones](#cola-reconexión-y-diagnóstico) o
+[recuperar publicación](#recuperar-una-publicación-fallida-candidato-1728).
+Las recuperaciones y el mantenimiento tienen sus propias precondiciones; no son
+pasos rutinarios del inicio.
 
 ## Editar tareas existentes por CLI
 
 El candidato anuncia `taskEditing:1`, `export-task` y `edit-task`. Verificar también
 la capacidad del propietario cargado; una CLI nueva no actualiza el plugin abierto.
-Con AutoOC activo e inactivo en ejecución:
+Con AutoOC cargado en Obsidian y sin ejecuciones activas:
 
 ```text
 node CLI export-task --vault ABS_VAULT --task ID --out ABS_NEW_JSON
@@ -18,18 +102,80 @@ node CLI edit-task --vault ABS_VAULT --task ID --patch ABS_PATCH_JSON
 
 El export contiene `taskId`, `expectedHash` y `definition` (id, name, prompt).
 El patch contiene el hash exportado y `changes`, por ejemplo
-`{"expectedHash":"HASH_DEL_EXPORT","changes":{"name":"Revisión","prompt":"Revisa los cambios."}}`.
+```json
+{"expectedHash":"HASH_DEL_EXPORT","changes":{"name":"Revisión","prompt":"Revisa los cambios."}}
+```
+
 Solo se admiten `name` y `prompt`; no modifica motor, modelos, permisos, horarios,
 identidades ni historial. Modifica la tarea compartida en todos los workflows
-que la referencian. Los pasos Code se editan con `edit-workflow`.
+que la referencian. El código de un paso Code del workflow se edita con
+`edit-workflow`; el código de una tarea Code reutilizable no está entre los campos
+admitidos por `edit-task`.
 Los cambios serializados tienen límite de 2 MiB UTF-8; el archivo patch, 3 MiB.
 Ante conflicto volver a exportar; ante actividad esperar; ante respuesta incierta
-inspeccionar el recibo de la petición, sin reenviar por inferencia.
+consultar `inspect-request` con el requestId, sin reenviar por inferencia.
 No escribir directamente data.json. La exportación lee el catálogo persistido;
 un cambio aún no guardado en la interfaz puede causar un conflicto legítimo.
 
+## Diagnóstico de fallos de publicación (candidato local 1.7.28)
 
-## Cola, reconexión y diagnóstico (candidato 1.7.26)
+`inspect-request` y `follow` pueden incluir `diagnostics[].failure` para los intentos
+observados por este candidato. Contiene etapa, clase de error, código de sistema
+permitido, motivo catalogado y hasta ocho ubicaciones de código (archivo conocido,
+línea y columna). No incluye mensajes arbitrarios, rutas privadas, nombres de
+funciones, prompts, resultados ni secretos. `reason:unclassified` declara que el
+texto se omitió; no significa que el error haya sido resuelto.
+
+Las etapas distinguen validación, lectura, proyección y guardado del catálogo,
+historial, publicación del host, adopción GUI, refresco visual y publicación del
+recibo. Una etapa no clasificada aparece como `execution`. Los diagnósticos usan
+la persistencia auxiliar de timings, independiente de catálogo y recibos; un fallo
+de esa persistencia nunca cambia el resultado ni autoriza repetir efectos.
+
+La consulta vuelve a sanear los campos leídos. Los históricos conservan su formato;
+la ausencia de `failure` en un intento anterior no acredita ausencia de error.
+No se pueden recuperar excepciones ya descartadas por versiones anteriores.
+El mensaje público genérico y los estados de recibos/journals se mantienen.
+La definición y los permisos de tareas/workflows no cambian; no añadir estos
+campos de diagnóstico a paquetes importables o instrucciones de los creadores.
+
+## Recuperar una publicación fallida (candidato 1.7.28)
+
+`recover-publication` continúa **el mismo intento** cuando falló la publicación
+del progreso antes de los efectos de un paso Code. No es recuperación genérica
+de cualquier `failed`, ni una consulta: ejecuta los pasos Code pendientes.
+Usarlo solo si está anunciado en `capabilities` y el encargo autoriza continuar
+esa ejecución tras revisar su evidencia. Descargar AutoOC antes; no se delega
+al propietario abierto ni se salta una reserva existente.
+
+```text
+node CLI recover-publication --vault VAULT --workflow WORKFLOW_ID --run RUN_ID --revision REVISION --journal-sha256 JOURNAL_SHA256 --definition-hash DEFINITION_HASH
+```
+
+Mantener exactamente ese orden. No admite `--task`, `--step` ni `--page`: no usarlo
+para un intento de página o tarea individual. Obtén el run y su revisión mediante
+`status`; del journal exacto `runtime/RUN_ID.json`, lee únicamente las identidades,
+`revision`, `definitionHash` y la evidencia necesaria. Calcula SHA-256 de sus bytes
+sin reserializarlo. Ambos hashes se pasan como 64 caracteres hexadecimales en
+minúsculas. `definitionHash` es el del journal, **no** `expectedHash` de exportación:
+representan contratos diferentes. No inventar hashes ni editar el journal.
+
+El runtime exige el vínculo original del catálogo, la misma definición y revisión,
+todos los pasos anteriores completados con resultado satisfactorio y al menos un
+turno Codex con resultado durable. El último paso debe registrar exactamente el
+fallo de publicación anterior a efectos y carecer de evidencia de ejecución. Todas
+las rutas restantes deben avanzar por pasos Code pendientes: sin volver a pasos
+completados, tareas de proveedor, evaluaciones de modelo ni workflows anidados.
+Si falla una comprobación, conservar el bloqueo; no hacer `run` como sustituto.
+
+Antes de reabrir el paso guarda y verifica los bytes originales en
+`runtime/publication-RUN_ID-REVISION-HASH.snapshot`. Conserva `runId` y resultados
+previos, y ejecuta lo pendiente sin repetir el turno Codex. Devuelve `runId`,
+`revision` y `phase`; exit 0 solo si queda `completed`, 1 en otro resultado.
+Una respuesta perdida exige inspeccionar de nuevo: no repetir la orden ni aceptar
+un resultado funcional por el mero hecho de que el checkpoint esté completado.
+
+## Cola, reconexión y diagnóstico
 
 Consultar `version` y `help` del paquete instalado: las nuevas consultas requieren
 `requestInspection:1`; `phaseTimings:1` anuncia diagnóstico numérico. Los paquetes
@@ -55,6 +201,8 @@ node CLI follow --vault ROOT --run RUN_ID --include-output true
 Son operaciones de solo lectura: no lanzan, reanudan, reconcilian, cancelan ni
 recuperan reservas. SIGINT en `follow` solo interrumpe la observación. Un timeout
 devuelve `waitTimedOut:true`: se puede volver a **consultar la misma identidad**.
+Selecciona exactamente `--request-id` o `--run`, nunca ambos. `--timeout-ms` solo
+existe en `follow`: de 0 a 86.400.000 ms, con 30.000 ms por defecto.
 El `requestId` de este buzón es distinto del ID funcional de `create-page`, que se
 consulta con `inspect-page-request`.
 
@@ -86,6 +234,7 @@ un fallo de escritura de métricas no autoriza repetir efectos. Una lectura no
 disponible devuelve diagnosticsUnavailable sin ocultar el estado del recibo.
 
 No registra prompts, scripts, rutas, nombres, resultados ni mensajes del proveedor.
+El candidato 1.7.28 añade únicamente la clasificación saneada `failure` descrita arriba.
 El tiempo de proveedor incluye la espera del adaptador y sus aprobaciones; Code
 incluye su reconciliación de archivos. Los guardados incluyen la preparación,
 validación y escritura; settingsQueue mide la cola del SettingsWriter.
@@ -139,7 +288,9 @@ Un bloqueo previo a efectos por consentimiento/configuración requiere corregir 
 causa y una nueva petición revisada; no es un reintento de una operación incierta.
 
 `requirementId` y `requirementText` opcionales transportan una versión explícita del
-requisito. El texto queda en `.autooc/requirement.md` dentro de la página, con hash;
+requisito. Si se envía `requirementText`, también es obligatorio `requirementId`.
+`allowGitignoreUpdate:true` solo se admite en modo `create`, no en `link` o `folder`.
+El texto queda en `.autooc/requirement.md` dentro de la página, con hash;
 los prompts AI reciben la referencia y Code puede leerla con `codeAllowVault:true`.
 Si el archivo cambia, la ejecución se rechaza. El archivo puede quedar sin seguimiento;
 no se hace commit, copia de secretos ni preparación de dependencias. La salida CLI
@@ -170,7 +321,7 @@ No generar rutas de ejecutable como campos de tarea/workflow. Cerrar Obsidian no
 traspasa una ejecución del plugin a la aplicación. Verificar candidato e instalación
 antes de atribuir este cambio a una entrega con el mismo número de versión.
 
-## Páginas de trabajo (candidato en desarrollo, feat/pages-worktrees)
+## Páginas de trabajo y selección de contexto
 
 Dashboard incorpora Main workspace y páginas con carpeta propia. El botón O junto a
 Dashboard abre Overview; Dashboard vuelve a la última página de trabajo visitada.
@@ -180,7 +331,9 @@ el mismo Dashboard de áreas, tareas, workflows y pasos de Main workspace, sin s
 enlaces ni importar copias. Las definiciones nuevas también aparecen automáticamente.
 Cada página muestra únicamente sus resultados, logs e historial; editar una definición
 afecta al catálogo compartido. Open controls permite Run task here o Run workflow here;
-seleccionar un paso ejecuta su workflow completo, no el paso aislado. Los campos locales
+seleccionar un paso ofrece ejecutar su workflow completo. Para una tarea interactiva,
+el candidato 1.7.28 añade **Run this task only** como ejecución independiente de
+esa página, descrita al final de esta guía. Los campos locales
 históricos taskIds/workflowIds se conservan por compatibilidad y ya no filtran el Dashboard.
 Overview permite consultar actividad/logs, navegar y eliminar una página archivada
 sin historial mediante Delete page; los controles de ejecución
@@ -259,6 +412,8 @@ no sus nombres visibles. Ejemplos con los mismos marcadores CLI/ROOT de esta gu�
 ```text
 node CLI run --vault ROOT --workflow WORKFLOW_ID
 node CLI run --vault ROOT --workflow WORKFLOW_ID --page PAGE_ID
+node CLI run --vault ROOT --task TASK_ID --page PAGE_ID
+node CLI status --vault ROOT --page PAGE_ID
 node CLI resume --vault ROOT --workflow WORKFLOW_ID --run RUN_ID --page PAGE_ID
 node CLI stop --vault ROOT --workflow WORKFLOW_ID --run RUN_ID --page PAGE_ID
 ```
@@ -278,25 +433,43 @@ workflow en páginas distintas. Sin Obsidian se mantiene un propietario autónom
 por instalación; no se añade un daemon ni se permite competir entre procesos CLI.
 Cerrar Obsidian no transfiere automáticamente una ejecución ya iniciada por el plugin.
 
-Finish work revisa actividad y cambios antes de archivar la página. Por defecto
-conserva la carpeta y la rama; Archive page no hace merge ni descarta archivos.
+Usar Archive page para revisar actividad y cambios antes de archivar la página.
+Conserva la carpeta y la rama; no hace merge ni descarta archivos.
 El diálogo mantiene Archive page, Refresh review y Cancel fuera del área desplazable.
 Indica junto a la confirmación si está listo o qué actividad impide archivar; un fallo de
 inspección ofrece Retry review. El diff es desplegable, con altas verdes, bajas rojas y
 rangos azules, renderizado como texto. Changes es solo una vista previa con Close preview:
-para archivar se usa Finish work. Un éxito confirma el archivo y cómo restaurarlo.
+para archivar se usa Archive page. Un éxito confirma el archivo y cómo restaurarlo.
 El diff compara con el commit de creación del worktree o HEAD, incluyendo cambios staged
 y unstaged; no ejecuta external diff ni textconv. No incluye contenidos sin seguimiento.
 Las vistas grandes se acotan con aviso; el usuario revisa el diff completo en su herramienta Git.
 Al terminar vuelve a Main workspace. Las páginas archivadas salen de las pestañas
 habituales y siguen accesibles desde Overview para consultar su historial.
-La opción Remove worktree folder permite retirar un worktree Git vinculado limpio,
+Después de archivar, Remove worktree abre una revisión independiente para retirar un worktree Git vinculado limpio,
 con confirmación explícita de cierre de sesiones externas y servicios. Conserva
-siempre rama, commits e historial, aunque los commits no estén integrados. La revisión
-e integración se realizan con las herramientas Git del usuario; no hay merge,
+siempre rama, commits e historial, aunque los commits no estén integrados. La integración
+puede hacerse desde **Merge review** o con herramientas Git externas; archivar no hace merge,
 commit, descarte de cambios ni borrado de rama implícitos.
 
-La retirada exige inactividad de la instalación y comprueba de nuevo carpeta,
+Mantener abierto el helper de Main al archivar, retirar o descartar una Page con
+worktree independiente verificado. Bloquean las sesiones de la propia Page y las
+carpetas solapadas sin independencia verificable; siguen bloqueando ejecuciones,
+publicaciones y operaciones pendientes. Un merge que modifica Main conserva sus
+controles sobre las sesiones de Main. No confirmar el cierre de una sesión que sigue abierta.
+
+Revisar las sesiones bloqueantes por página, carpeta e identidad. Open this terminal
+y Close this session actúan sobre la sesión exacta; cerrar requiere la confirmación
+habitual. Para sesiones externas o sin observación, confirmar su finalización solo
+después de cerrar sus procesos. La confirmación libera la reserva, no mata procesos.
+Los diálogos se actualizan al cambiar sesiones/actividad, al volver a la ventana y,
+mientras estén bloqueados, periódicamente para detectar cambios externos en Git.
+Se conserva Refresh review; una operación en curso no se repite por el refresco.
+
+Revisar los archivos pendientes concretos: producto/otros archivos del proyecto y
+configuración local conocida (.obsidian y .env locales). La clasificación es informativa
+por ruta y no excluye archivos de las comprobaciones ni autoriza commits o descartes.
+
+La retirada comprueba de nuevo carpeta,
 repositorio, rama, HEAD y registro antes de ejecutar git worktree remove sin --force.
 Bloquea archivos modificados, sin seguimiento o ignorados (incluidos .env y
 dependencias locales), submódulos, flags que oculten cambios, worktrees bloqueados,
@@ -319,8 +492,9 @@ Estos campos son estado local; no deben generarse en JSON de tareas o workflows.
 Las comprobaciones no aíslan frente a procesos externos que sigan escribiendo;
 la confirmación de cierre de sesiones debe incluir esos procesos.
 
-La integración/merge automática y workflow coordinador paralelo
-pertenecen a entregas posteriores. Comprobar hashes y GUI antes de atribuir estas
+El candidato 1.7.28 ejecuta las acciones de Git desde **Merge review**, descrito
+al final de esta guía. No resuelve conflictos ni crea un workflow coordinador
+paralelo automáticamente. Comprobar hashes y GUI antes de atribuir estas
 capacidades a una instalación publicada con el mismo número de versión.
 
 ### Delete page: eliminar una página archivada vacía
@@ -337,7 +511,7 @@ inactividad, sesiones y guardados; un fallo de persistencia no autoriza repetir 
 editar data.json manualmente. El guardado participa en el drenaje del propietario.
 Esta operación no añade campos al esquema importable ni un comando CLI.
 
-Finish work, Discard work y Delete page mantienen nombre y ruta completa en un
+Archive page, Remove worktree, Discard work y Delete page mantienen nombre y ruta completa en un
 encabezado fijo, con ajuste de líneas; solo el cuerpo de revisión se desplaza.
 El pie conserva los botones. Existing folder explica que Discard work no existe
 para esa página porque no creó un worktree independiente, aunque no tenga cambios.
@@ -374,7 +548,7 @@ vuelve a revisar y exige una nueva confirmación para borrarla. Evidencia cambia
 incompleta bloquea la operación; no borrar reservas ni forzar una recuperación.
 Estos datos son locales y nunca se generan como campos JSON de tareas/workflows.
 
-## Terminales CLI integradas y Settings (candidato 1.7.22)
+## Terminales CLI integradas y Settings
 
 En el candidato de Settings ordenados, `Settings > AutoOC` se agrupa en General,
 Harnesses, Terminals, Execution, Logs, Library y Maintenance. Se retira el control
@@ -495,23 +669,30 @@ La exportación crea un archivo nuevo con `expectedHash` y la definición editab
 {"expectedHash":"SHA256_DE_LA_EXPORTACION","changes":{"description":"Descripción revisada","stepChanges":[{"id":"PASO_EXISTENTE","code":"output = 2;"}]}}
 ```
 
-Se admiten `name` y `description` del workflow y `name`, `code` o `evaluatePrompt` de pasos existentes. `code` requiere un paso Code. Mantener `changes` por debajo de 58.000 bytes UTF-8 y el archivo de patch como máximo en 60.000 bytes; dividir cambios mayores usando el hash devuelto en la última edición. La exportación es una vista editable, no un paquete importable. Esta primera versión conserva IDs, conexiones, permisos, programación, tareas asociadas y estados/historial; no crea ni elimina pasos, no edita prompts/modelos de tareas asociadas ni ejecuta el código editado.
+Se admiten `name` y `description` del workflow y `name`, `code` o `evaluatePrompt` de pasos existentes. `code` requiere un paso Code. El candidato admite `changes` serializado hasta 2.097.152 bytes UTF-8 (2 MiB, incluidos escapes JSON) y archivo patch hasta 3.145.728 bytes (3 MiB). El mensaje completo admite 2.113.536 bytes. Confirmar `workflowEditMaxChangesBytes` en CLI y propietario cargado; un host antiguo conserva 58.000 bytes y rechaza una edición grande antes del envío. No truncar ni dividir una edición para eludir el límite. La exportación es una vista editable, no un paquete importable. Esta primera versión conserva IDs, conexiones, permisos, programación, tareas asociadas y estados/historial; no crea ni elimina pasos, no edita prompts/modelos de tareas asociadas ni ejecuta el código editado.
 
 El plugin propietario guarda mediante su cola cooperativa y devuelve un recibo durable con el hash nuevo. Ante conflicto, exportar la definición actual y revisar el cambio. Ante ejecución activa, esperar a que termine manteniendo Obsidian abierto. Tras una respuesta incierta o perdida, inspeccionar el recibo y la definición antes de reintentar: no hay fallback que escriba el catálogo por fuera del plugin.
 
 Si el plugin cargado es anterior y no anuncia esta capacidad, preparar primero el candidato y su respaldo y recargar únicamente AutoOC una vez. Las ediciones posteriores de esta vía no requieren descargarlo. Los parches locales pueden contener código o instrucciones; mantenerlos privados y no incluirlos en informes públicos.
 
-Volver a exportar a un archivo nuevo para comprobar el texto guardado; guardar no equivale a ejecutar ni a validar su lógica. Leer/exportar solo la definición necesaria y enviar cambios pequeños evita copiar repetidamente un catálogo grande. Conservar contenido e historial; no truncarlos para mejorar cifras. Distinguir tiempo total de guardado CLI de pausas del editor y registrar validaciones aplazadas sin presentarlas como aprobadas. Los cambios de tareas o estructura requieren otra vía soportada o una operación de mantenimiento autorizada con respaldo y solo el plugin descargado.
+Volver a exportar a un archivo nuevo para comprobar el texto guardado; guardar no equivale a ejecutar ni a validar su lógica. Leer/exportar solo la definición necesaria evita copiar repetidamente un catálogo grande. Conservar contenido e historial; no truncarlos para mejorar cifras. Distinguir tiempo total de guardado CLI de pausas del editor y registrar validaciones aplazadas sin presentarlas como aprobadas. Para nombre/prompt de una tarea compartida, usar `export-task`/`edit-task`. Los cambios de estructura, motores, permisos o programación requieren el editor o la importación soportada; no se aplican mediante estos parches.
 
-## Explicit abandonment (1.6.5+)
+## Abandono explícito de una ejecución
 
-If an old result cannot be recovered, obtain explicit human authorization to accept its unknown effects. Close or disable the plugin and inspect the exact run ID, workflow ID and revision. Never steal a live execution lease. Then use:
+Si no puede recuperarse el resultado, obtener autorización humana explícita para
+aceptar sus efectos desconocidos. Descargar el plugin e inspeccionar el run,
+workflow y revisión exactos. Nunca retirar una reserva viva. Después usar:
 
 ```powershell
 node $cliPath abandon --vault $vaultPath --workflow WORKFLOW_ID --run RUN_ID --revision REVISION --reason 'Human-authorized abandonment; outcome unknown' --acknowledge-unknown-effects true
 ```
 
-For standalone tasks, use `@task:TASK_ID` as the workflow identity. This preserves all step evidence and a snapshot of the original checkpoint. The new state is `abandoned`, with an unknown outcome. Subsequent new work is permitted; resuming the abandoned identity is forbidden. The command does not kill external processes or prove their effects stopped. Never abandon automatically, report it as success, or substitute it for available reconciliation.
+Para tareas individuales, usar `@task:TASK_ID` como identidad de workflow. Conserva
+toda la evidencia de pasos y una copia del checkpoint original. El estado queda
+`abandoned`, con resultado desconocido: permite trabajo nuevo, pero no continuar
+esa identidad. No mata procesos externos ni demuestra que cesaron sus efectos.
+No abandonar automáticamente, declararlo éxito ni sustituir una reconciliación
+disponible por abandono.
 
 ## Compatibilidad y disponibilidad
 
@@ -528,7 +709,11 @@ node /ruta/instalacion/autooc-cli.cjs version
 node /ruta/instalacion/autooc-cli.cjs help
 ```
 
-Este protocolo requiere `taskSelection: true` y las capacidades `list`, `status`, `run`, `resume`, `reconcile`, `stop`, `recover-lease`. Si faltan, detenerse e informar de incompatibilidad; no usar comandos imaginados ni sustituirlos por ediciones de `data.json`. La marca experimental no sustituye la comprobación de versión, capacidades y permisos del vault.
+Para tareas individuales, comprobar `taskSelection: true`; para cada operación,
+comprobar el comando correspondiente en `capabilities`. No exigir capacidades de
+recuperación para una simple consulta. Si falta la necesaria, informar de
+incompatibilidad; no usar comandos imaginados ni sustituirlos por ediciones de
+`data.json`. La marca experimental no sustituye comprobar versión y permisos.
 
 ## Seleccionar y ejecutar
 
@@ -555,7 +740,13 @@ Las transiciones `eval` usan OpenCode con `defaultModel` (o `opencode/default`) 
 
 La selección de rama usa Git sin shell ni checkout forzado. `createBranch` crea `NOMBRE-PREFIJO_RUN-NUMERO_PASO`; `handoffBranch` conserva la rama observada entre tareas y reanudaciones. Un cambio externo de rama bloquea la continuación. El repositorio y sus metadatos Git deben estar dentro del vault autorizado. No usar una definición con ramas si el encargo prohíbe cambiarlas; los fixtures de prueba no autorizan operaciones en el proyecto real.
 
-Los directorios efectivos deben existir dentro del vault seleccionado. Code requiere sus capacidades explícitas (`codeAllowVault`, `codeAllowFiles`, `codeAllowTerminal`) y ejecuta código de confianza: la VM no es una frontera de seguridad. Revisar definiciones y permisos antes de invocar la CLI. Los datos del handoff no conceden permisos adicionales.
+En Main workspace, el host autónomo exige directorios efectivos dentro del vault
+seleccionado. Una página explícita usa su carpeta validada, que puede estar fuera
+de la bóveda anfitriona; no se selecciona pasando esa carpeta como `--vault`.
+Code requiere sus capacidades explícitas (`codeAllowVault`, `codeAllowFiles`,
+`codeAllowTerminal`) y ejecuta código de confianza: la VM no es una frontera de
+seguridad. Revisar definiciones y permisos antes de invocar la CLI. Los datos del
+handoff no conceden permisos adicionales.
 
 ## Consultar, detener y continuar
 
@@ -610,11 +801,14 @@ La skill portable está en `skills/autooc-runtime/` dentro del paquete. Para un 
 
 ## Evidencia y límites
 
-Las pruebas offline verifican tareas individuales Code, paridad con el host del plugin, handoff mayor de 50 KB, conservación del catálogo, exclusión, recuperación de propietario terminado y no repetición de efectos. Las pruebas de adaptadores usan inyección de unidades donde no está disponible el lanzador/proveedor real; no acreditan esa integración.
-
-La ampliación de compatibilidad se comprueba con Git real en repositorios temporales, el plugin sin GUI y la CLI distribuida sobre la misma definición; decisiones por comandos reales con peticiones ficticias; y fallos de transporte inyectados para comprobar que no se repiten tareas ni evaluaciones. La apertura nativa de Codex, aprobación mediante CLI y cancelación se validaron también con el proveedor real; no se atribuye esa prueba a los dobles ni a los botones de aprobación del plugin.
-
-Verificado desde un ZIP generado e instalado en un vault temporal: listar, tarea individual, Code → tarea Code → Code con 64 KB, condición de decisión con datos ficticios, error deliberado, vault incorrecto, parada, exclusión y continuación desde otro proceso sin repetir efectos. Se probó la instalación y el actualizador con descarga inyectada y fallos de integridad/escritura. La entrega cuenta además con validación externa real de Codex/OpenCode, apertura interactiva nativa, aprobación por CLI, cancelación y reapertura GUI. Se conserva la evidencia de cada candidato en el expediente, con fechas originales y hashes; las pruebas de un candidato anterior solo se reutilizan al comprobar equivalencia. Copilot real, botones de aprobación del plugin y descarga desde GitHub no están acreditados por esas pruebas. La publicación corresponde al responsable de la entrega. Esta guía no acredita por sí sola un requisito ni una publicación.
+La guía describe contratos, no certifica una entrega. Vincular toda afirmación de
+validación a la versión, hashes, entorno y evidencia del candidato correspondiente.
+Las pruebas offline, proveedores inyectados, Git temporal o plugin sin GUI no
+acreditan autenticación real, apertura nativa, interfaz Obsidian ni descarga pública.
+No trasladar resultados históricos a una instalación nueva por compartir versión.
+Separar preparado, compilado, probado, empaquetado, instalado, cargado y publicado;
+registrar fallos y pruebas no ejecutadas. Consultar solo los datos necesarios,
+sin incluir prompts, scripts, resultados completos ni secretos en informes.
 
 ## Actualizar instalaciones anteriores
 
@@ -745,21 +939,21 @@ protección al paquete publicado 1.6.9 ni a instalaciones anteriores: verificar
 los hashes del candidato, su entrega y la instalación antes de afirmarlo.
 
 
-## Merge review (candidato de desarrollo)
+## Merge review (candidato 1.7.28)
 
-En una página de worktree disponible, **Merge review** permite seleccionar como destino otra rama local ya abierta en un worktree del mismo repositorio. No cambia de rama. Muestra rama, commit y carpeta de origen y destino; distingue conflictos previstos de conflictos reales de un merge en curso.
+En una página de worktree disponible, **Merge review** permite elegir como destino otra rama local ya abierta en un worktree del mismo repositorio. Muestra rama, commit y carpeta de ambos lados. AutoOC ejecuta Git desde los botones; no hay que copiar órdenes a una terminal.
 
-- **Ready to merge**: no se prevén conflictos con esos commits. **Copy merge command** copia un bloque para PowerShell en Windows o un shell POSIX en macOS/Linux. El desarrollador lo revisa y ejecuta; se detiene antes del commit incluso si sería fast-forward. No sobrescribe archivos ignorados ni hace autostash.
-- **Conflicts found**: muestra archivos y detalles de Git. **Open target in VS Code** abre la carpeta de destino (requiere VS Code); **Copy target path** permite usar otro editor. Los archivos previstos todavía no tienen marcadores. Durante un merge real, resolver en el destino, revisar y preparar los archivos resueltos y ejecutar las pruebas. Current corresponde al destino; Incoming, al origen.
-- **Recheck conflicts** vuelve a inspeccionar Git. Sin entradas sin resolver, **Copy complete command** copia el commit con el mensaje de merge predeterminado. **Copy abort command** copia la cancelación; puede perder las ediciones realizadas al resolver conflictos. Cerrar el diálogo no cancela Git.
-- **Integration verified** comprueba que el commit origen es ancestro del destino. Solo entonces esta revisión ofrece **Finish work**, que mantiene sus confirmaciones habituales. Squash/rebase no se acreditan automáticamente. Esta comprobación no certifica pruebas ni corrección del código.
+1. **Start merge** aplica el commit de origen en la carpeta de destino y se detiene antes del commit, incluso si sería fast-forward. Requiere ambos árboles limpios y sin actividad conocida. No hace autostash ni sobrescribe archivos ignorados.
+2. Si hay conflictos, muestra los archivos reales sin declarar éxito. **Open target in VS Code** abre el destino; **Copy target path** permite utilizar otro editor. Resuelve, revisa y prepara los archivos en ese editor y ejecuta tus pruebas. Current es el destino; Incoming, el origen. AutoOC no elige resoluciones ni prepara archivos automáticamente.
+3. **Recheck conflicts** inspecciona de nuevo Git. **Complete merge** crea el commit con el mensaje de merge predeterminado cuando no quedan conflictos ni ediciones rastreadas sin preparar. Conserva los hooks y la configuración de firma de Git; un error se muestra y no provoca un reintento automático.
+4. **Abort merge** cancela el merge después de marcar la aceptación de pérdida de las ediciones de resolución. La confirmación se reinicia al volver a revisar. Cerrar el diálogo no aborta Git.
+5. **Already integrated / Integration verified** comprueba primero que el commit de origen es ancestro del destino, aunque haya sesiones o archivos locales pendientes. No repetir el merge ni commitear configuración del plugin para acreditarlo. **Review archiving** abre la revisión independiente de archivo; después de archivar, **Remove worktree** permite retirar la carpeta limpia conservando rama e historial. Squash/rebase no se acreditan automáticamente; la ascendencia no certifica las pruebas.
 
-AutoOC no ejecuta merge, commit, abort ni resolución automática. Hay que pausar schedules y escritores externos y cerrar tareas/CLI/servicios en ambas carpetas durante la integración: los comandos externos no adquieren la reserva del plugin. La revisión bloquea la preparación de comandos con actividad conocida, cambios pendientes o una operación Git ajena; vuelve a revisar al copiar. Los bloques comprueban rama/commits y, al iniciar, limpieza de archivos. No garantizan exclusión frente a procesos externos concurrentes.
+Cada operación vuelve a comprobar la revisión, las ramas, los commits, el contenido del índice y los cambios rastreados durante un merge. Si han cambiado, exige revisar otra vez. Las acciones de la interfaz quedan desactivadas mientras Git trabaja; el propietario mantiene su reserva e impide nuevos trabajos AutoOC hasta obtener el resultado. El diálogo se actualiza con la salida de Git. Ante un fallo o interrupción, revisa el estado existente antes de otra acción; no borres locks ni repitas órdenes por inferencia.
 
-La previsualización usa git merge-tree --write-tree y puede crear objetos Git sin referencia; no modifica ramas, índice ni archivos de trabajo. Requiere un Git compatible e historias relacionadas. Con drivers de merge personalizados o merge.renormalize se indica Preview unavailable para no ejecutar filtros/driver durante una consulta; se puede inspeccionar después un merge iniciado manualmente. Las listas se limitan a 150 archivos en pantalla y los detalles a 12 000 caracteres. La revisión es efímera, no modifica el esquema del catálogo ni añade campos al JSON de tareas/workflows.
+Mantén pausadas las programaciones y detenidos los escritores externos, tareas, CLI y servicios de ambas carpetas hasta completar o abortar. La reserva de AutoOC no excluye procesos Git externos. Entre operaciones se libera la preparación de página para permitir revisar y probar; la siguiente acción revalida la actividad.
 
-Referencias de implementación: https://git-scm.com/docs/git-merge-tree , https://git-scm.com/docs/git-merge y https://code.visualstudio.com/docs/configure/command-line .
-
+La previsualización usa `git merge-tree --write-tree`: puede crear objetos sin referencia, pero no modifica ramas, índice ni archivos. Con drivers personalizados o `merge.renormalize`, o sin un Git compatible, indica **Preview unavailable**; permite inspeccionar después un merge iniciado con otra herramienta. Muestra hasta 150 archivos y 12 000 caracteres de detalles. No cambia el esquema del catálogo ni el JSON de tareas/workflows.
 
 ## Import y CLI desde Overview
 
@@ -769,6 +963,8 @@ CLI abre Choose CLI workspace. Hay que pulsar Use workspace en Main workspace o 
 
 La elección abre el lanzador CLI existente o recupera su terminal viva. Se conservan identidad de página, carpeta y reservas; Overview permanece como vista seleccionada. Main conserva su lanzador y su selección de carpeta habituales. Las comprobaciones del motor/propietario se siguen haciendo al lanzar la sesión. No cambia el esquema JSON ni los workflows programados.
 
-## Límites de edición
+## Tareas CLI interactivas dentro de una página (candidato 1.7.28)
 
-El candidato admite 2 MiB de changes serializado y 3 MiB de archivo patch. Los escapes JSON cuentan. Comprobar workflowEditMaxChangesBytes en CLI y propietario; los propietarios antiguos mantienen 58.000 bytes. No truncar ni repetir peticiones inciertas.
+Para abrir un agente sin una tarea guardada, utiliza **CLI in this page**: la carpeta del worktree se conserva aunque cambies de pestaña. Para ejecutar una tarea guardada, abre sus controles y usa **Run task here**. Si la seleccionaste dentro de un workflow, **Run this task only** ejecuta únicamente esa tarea interactiva como ejecución independiente de la página, con su carpeta y objetivo; no ejecuta los pasos anteriores ni posteriores. Los historiales de ambas ejecuciones se muestran separados.
+
+Los workflows de varios pasos con una CLI interactiva siguen bloqueados: abrir una terminal no demuestra que el agente haya terminado. Una tarea con carpeta fija fuera de la página, cambios de rama configurados, una sesión pendiente o un ejecutable no disponible también puede rechazarse. Deja la carpeta de la tarea sin configurar si debe heredar la página; esto se decide en su definición compartida, no se cambia automáticamente. Los errores de lanzamiento quedan visibles en el diálogo para poder consultarlos. El botón de CLI manual no transmite el prompt de una tarea: para recibirlo, utiliza la tarea guardada.

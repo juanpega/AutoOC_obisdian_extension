@@ -562,7 +562,6 @@ The 1.7.13 package includes `inspect-settings-write --vault <absolute-path>` and
 If you close or reload while AutoOC is saving, the plugin keeps the window open until the save finishes. A notice tells you when to retry closing or reloading. If the process is forcibly terminated, the next startup may archive the interrupted save only with durable evidence tied to the absent owner, directory, and catalog fingerprints.
 
 Recovery preserves the last confirmed `data.json` and the temporary files in `runtime/settings-write-recovery-TOKEN`, with a verifiable receipt. It neither promotes temporary files nor resumes tasks. A live or unverifiable owner, altered files, pending maintenance, or uncertain executions still block recovery. Older locks without this evidence require explicit recovery; they are not removed because of their age. A power loss can leave incomplete metadata and still require intervention. Verify the selected installation's capabilities and integrity; older installed packages do not gain this protection automatically.
-
 ### Edición de tareas desde la CLI
 
 `export-task --vault ROOT --task ID --out ABS_JSON` exporta nombre, prompt y hash.

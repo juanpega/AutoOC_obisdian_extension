@@ -61,8 +61,9 @@ async function fixture(run) {
 const prompt=args.at(-1),file=prompt.match(/file at (.*) and follow it exactly\./)?.[1];
 fs.appendFileSync(${JSON.stringify(record)},JSON.stringify({args,cwd:process.cwd(),prompt:file?fs.readFileSync(file,'utf8'):prompt})+'\\n');
 console.log('fixture-${major}-result');process.exit(${exit});`);
-    const bin=path.join(root,name+(process.platform==='win32'?'.ps1':'.sh'));
-    fs.writeFileSync(bin,process.platform==='win32'?`& ${actual.psSingleQuoted(process.execPath)} ${actual.psSingleQuoted(js)} @args\nexit $LASTEXITCODE`:`#!/bin/sh\nexec ${actual.shSingleQuoted(process.execPath)} ${actual.shSingleQuoted(js)} "$@"\n`,{mode:0o700});
+    const bin=path.join(root,name+(process.platform==='win32'?'.cmd':'.sh'));
+    // Match npm's real Windows shim, including the safe direct-Node fallback.
+    fs.writeFileSync(bin,process.platform==='win32'?`@echo off\r\nsetlocal DisableDelayedExpansion\r\nset "dp0=%~dp0"\r\nset "_prog=${process.execPath}"\r\n"%_prog%" "%dp0%\\${name}.cjs" %*\r\nexit /b %errorlevel%\r\n`:`#!/bin/sh\nexec ${actual.shSingleQuoted(process.execPath)} ${actual.shSingleQuoted(js)} "$@"\n`,{mode:0o700});
     return {bin,record};
   };
   try {await run({root,local,makeCli});}
@@ -95,11 +96,13 @@ test('wrong version fails before a task or terminal launch',()=>fixture(async({r
 
 test('catalog refresh reads project agents with Unicode labels through a CLI shim', () => fixture(async ({root, local}) => {
   const windows = process.platform === 'win32';
-  const bin = path.join(root, windows ? 'catalog.ps1' : 'catalog.sh');
+  const bin = path.join(root, windows ? 'catalog.cmd' : 'catalog.sh');
   const output = JSON.stringify([{id:'review',name:'Revisión',mode:'primary'}]);
   fs.writeFileSync(path.join(root, 'agents.json'), output);
+  const script=path.join(root,'catalog.cjs');
+  fs.writeFileSync(script,"const fs=require('fs');if(process.argv[2]==='--version')console.log('2.0.21');else if(process.argv.slice(2).join(' ')==='debug agents')process.stdout.write(fs.readFileSync('agents.json','utf8'));else process.exit(1);");
   fs.writeFileSync(bin, windows
-    ? "if ($args[0] -eq '--version') { '2.0.21'; exit 0 }\nif (($args -join ' ') -eq 'debug agents') { Get-Content -LiteralPath agents.json -Raw -Encoding UTF8; exit 0 }; exit 1"
+    ? `@echo off\r\nsetlocal DisableDelayedExpansion\r\n"${process.execPath}" "${script}" %*\r\nexit /b %errorlevel%\r\n`
     : '#!/bin/sh\ncase "$*" in --version) echo 2.0.21 ;; "debug agents") cat agents.json ;; *) exit 1 ;; esac\n', {mode:0o700});
   const catalog = new (local('opencode2-catalog').OpenCode2Catalog)();
   assert.deepEqual(await catalog.refresh(bin, root, 'agents'), [{value:'review',label:'Revisión'}]);

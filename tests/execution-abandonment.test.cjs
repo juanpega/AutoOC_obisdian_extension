@@ -287,9 +287,7 @@ for(const [version,commit] of [['1.6.6','d5fc124'],['1.6.7','5539e570b833bd17bd5
   const packaged=spawnSync(process.execPath,[path.join(root,'scripts/package-release.mjs'),'--out',out],{cwd:root,encoding:'utf8',timeout:60000,windowsHide:true});
   assert.equal(packaged.status,0,packaged.stderr);
   const zip=path.join(out,`auto-oc-${candidateVersion}.zip`);
-  const extracted=process.platform==='win32'
-    ? spawnSync('powershell.exe',['-NoProfile','-Command',`Expand-Archive -LiteralPath '${zip.replace(/'/g,"''")}' -DestinationPath '${source.replace(/'/g,"''")}'`],{encoding:'utf8',timeout:30000,windowsHide:true})
-    : spawnSync('unzip',['-q',zip,'-d',source],{encoding:'utf8',timeout:30000,windowsHide:true});
+  const extracted=require('./helpers/extract-zip.cjs')(zip,source);
   assert.equal(extracted.status,0,extracted.stderr);
   const cli=(...args)=>spawnSync(process.execPath,[path.join(source,'autooc-cli.cjs'),...args],{encoding:'utf8',timeout:30000,windowsHide:true});
   let result=cli('maintain-release','--vault',vault,'--inspect');assert.equal(result.status,0,result.stderr);
