@@ -374,3 +374,24 @@ test('plugin unload during pending publication retains ownership until the opera
   release();await failed;await unloading;
   assert.ok(fs.existsSync(f.worktree));assert.equal(f.read().workPages[0].worktreeRemoval.status,'pending');
 });
+
+test('creation admits Main helper but blocks a session in the target folder; deletion keeps Main open',async t=>{
+  const f=await fixture(t),claim={id:'main-helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString(),exclusive:true};
+  f.p.settings.pageTerminalClaims=[claim];f.p.cliTerminals={sessions:[{id:99,label:'Main helper',cwd:f.repo,exited:false,page:{pageId:'main',claimId:claim.id}}]};
+  const scope={repository:f.repo,directory:path.join(f.repo,'.autooc/worktrees/new-page'),creating:true};
+  const release=f.p.reservePagePreparation(scope);assert.equal(f.p.pagePreparation,true);release();
+  f.p.settings.pageTerminalClaims.push({id:'target',pageId:'page',directory:f.worktree,createdAt:new Date().toISOString()});
+  assert.throws(()=>f.p.reservePagePreparation({directory:f.worktree}),/selected Page folder/);f.p.settings.pageTerminalClaims.pop();
+  await archive(f);await f.p.deleteWorkPage(f.p.settings.workPages[0]);assert.equal(f.read().workPages.length,0);
+  assert.deepEqual(f.read().pageTerminalClaims,[claim]);assert.equal(f.p.cliTerminals.sessions[0].exited,false);f.p.cliTerminals=undefined;
+});
+
+test('a new Page is created after the plugin archives and removes a real worktree',async t=>{
+  const f=await fixture(t);await archive(f);
+  const review=await f.review();await f.p.finishWorkPage('page',review.hash,true,true);
+  assert.equal(fs.existsSync(f.worktree),false);assert.equal(f.read().workPages[0].worktreeRemoval.status,'removed');
+  f.p.settings.worktreesEnabled=true;await f.p.saveSettings();f.p.releasePluginExecution(false);
+  const original=f.read().workPages[0],result=await runtime.createStandalonePage(f.vault,{requestId:'after-removal',name:'Next Page',mode:'create',repository:f.repo,branch:'feat/next',base:'fixture-main'});
+  assert.equal(result.status,'created');assert.equal(f.read().workPages.length,2);assert.deepEqual(f.read().workPages[0],original);
+  assert.equal(git(f.repo,'branch','--show-current'),'fixture-main');assert.ok(fs.existsSync(result.directory));
+});

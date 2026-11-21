@@ -35,7 +35,7 @@ async function withPageHost<T>(vault:string,action:(run:(options:InstalledWorkfl
   },
     assertOpen:()=>{lease.assertOwned();if(closed || pollFailure)throw new Error("Standalone page host is closed");},
     reserve:()=>{if(running || reserved)throw new Error("Standalone work is active");lease.assertOwned();assertIdleJournals(location.runtimeDirectory);reserved=true;return()=>{reserved=false;};},
-    catalog:async()=>{const config=await writer.loadAsync(location.configurationFile);assertIdleCatalog(config,assertIdleJournals(location.runtimeDirectory));if(config.pageTerminalClaims?.length)throw new Error("Page terminals are still reserved");return config;},
+    catalog:async()=>{const config=await writer.loadAsync(location.configurationFile);assertIdleCatalog(config,assertIdleJournals(location.runtimeDirectory));return config;},
     register:page=>catalogTransaction(location.configurationFile,async()=>{
       const config=await writer.loadAsync(location.configurationFile);
       assertIdleCatalog(config,assertIdleJournals(location.runtimeDirectory));
@@ -79,7 +79,7 @@ export async function runStandaloneWorkflowWithPages(options:InstalledWorkflowOp
   }
   return withPageHost(options.vault,run=>run(options),options.installationDirectory);
 }
-export async function createStandalonePage(vault:string,request:PageCreationRequest){
-  await withPageHost(vault,async(_run,pages)=>{await pages.submit(request);await pages.flush();});
+export async function createStandalonePage(vault:string,request:PageCreationRequest,recover=false){
+  await withPageHost(vault,async(_run,pages)=>{await pages.submit(request,recover);await pages.flush();});
   return inspectPageCreation(resolveInstalledWorkflowLocation(vault).runtimeDirectory,request.requestId);
 }

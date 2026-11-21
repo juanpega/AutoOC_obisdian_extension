@@ -87,9 +87,39 @@ export async function registerWorkPage(settings:WorkPageSettings,page:WorkPage,s
   validateWorkPages(settings);validateWorkPages({workPages:[page]});
   const previous=settings.workPages,existing=previous?.find(item=>item.id===page.id);
   if(existing){if(JSON.stringify(existing)!==JSON.stringify(page))throw new Error("Page ID already exists with different settings");return;}
-  if(previous?.some(item=>physicalPath(item.directory)===physicalPath(page.directory)))throw new Error("Another page already uses this folder");
+  assertPageDirectoryAvailable(settings,page.directory);
   const next=[...(previous || []),page];settings.workPages=next;
   try{await save();}catch(error){if(settings.workPages===next)settings.workPages=previous;throw error;}
+}
+export class PageDirectoryError extends Error {
+  constructor(readonly code:string, readonly pageId:string, readonly directory:string, message:string){super(message);}
+}
+/** Removed archives retain history, but no longer own a physical directory. */
+export function assertPageDirectoryAvailable(settings:WorkPageSettings,directory?:string,exceptId?:string):void {
+  validateWorkPages(settings);
+  const target=directory===undefined ? undefined : physicalPath(directory);
+  for(const page of settings.workPages || []) {
+    if(page.id===exceptId || page.archived===true && page.worktreeRemoval?.status==="removed")continue;
+    let resolved:string;
+    try {resolved=physicalPath(page.directory);if(!fs.statSync(resolved).isDirectory())throw new Error("Not a directory");}
+    catch {throw new PageDirectoryError("PAGE_DIRECTORY_UNAVAILABLE",page.id,page.directory,`Page "${page.name}" (${page.id}) has an unavailable folder: ${page.directory}. Review this Page before preparing another one.`);}
+    if(target!==undefined && path.relative(resolved,target)==="")throw new PageDirectoryError("PAGE_DIRECTORY_IN_USE",page.id,page.directory,"Another page already uses this folder");
+  }
+}
+export interface PagePreparationScope {directory:string; repository?:string; creating?:boolean;}
+/** Page management changes only the selected working tree; Main's CLI can stay open. */
+export function assertPagePreparationTerminals(settings:WorkPageSettings,scope:PagePreparationScope):void {
+  const target=scope.creating ? path.resolve(physicalPath(scope.repository!),WORKTREE_FOLDER,path.basename(scope.directory)) : physicalPath(scope.directory);
+  if(scope.creating && path.relative(target,scope.directory)!=="")throw new Error("Invalid new worktree directory");
+  const within=(root:string,child:string)=>{const rel=path.relative(root,child);return rel!==".." && !rel.startsWith(".."+path.sep) && !path.isAbsolute(rel);};
+  for(const claim of settings.pageTerminalClaims || []) {
+    let cwd:string;
+    try {cwd=physicalPath(claim.directory);}catch {throw new Error("A terminal folder is unavailable; review its session before preparing a Page.");}
+    if(scope.creating && claim.pageId==="main" && path.relative(cwd,physicalPath(scope.repository!))==="")continue;
+    if(!within(cwd,target) && !within(target,cwd))continue;
+    if(!scope.creating && independentGitWorkspaces(cwd,target))continue;
+    throw new Error("A terminal reserves the selected Page folder. Close that session before preparing the Page.");
+  }
 }
 export function pageExecutionId(pageId: string, sourceId: string, task = false): string {
   return "@page:" + pageId + ":" + (task ? "task:" : "workflow:") + sourceId;

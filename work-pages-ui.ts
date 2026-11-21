@@ -1,11 +1,12 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { randomUUID } from "crypto";
+import * as path from "path";
 import type { FinishWorkReview, BlockingPageSession } from "./finish-work";
 import type { WorktreeFile } from "./worktree-changes";
 import type { DiscardWorkReview } from "./discard-work";
 import type { DashboardItem } from "./dashboard-areas";
 import { mergeEditorUri, type MergeReview, type MergeCommand } from "./merge-review";
-import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage,
+import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage, assertPageDirectoryAvailable, type PagePreparationScope,
   type WorkPage, type WorkPageSettings, type WorktreePreparation, type PageRun } from "./work-pages";
 
 export interface WorkPagesHost {
@@ -13,7 +14,7 @@ export interface WorkPagesHost {
   saveSettings(refreshView?: boolean): Promise<void>;
   isLifecycleStopped(): boolean;
   assertPagesEditable(): void;
-  reservePagePreparation(): () => void;
+  reservePagePreparation(scope?:PagePreparationScope): () => void;
   runWorkPage(pageId: string, sourceId: string, task: boolean, runId?: string, reconcile?: boolean): Promise<unknown>;
   stopWorkPage(run: PageRun): Promise<unknown>;
   pageRunOutput(run: PageRun): string;
@@ -232,13 +233,15 @@ class NewPageModal extends Modal {
       let createdDirectory: string | undefined, preparedIgnore = false;
       let release: (()=>void) | undefined;
       try {
-        release = host.reservePagePreparation();
+        const id = randomUUID();
+        const scope=mode === "create" ? await inspectWorktreePreparation(directory) : undefined;
+        release = host.reservePagePreparation(scope ? {directory:path.join(scope.directory,id),repository:scope.repository,creating:true} : {directory});
+        assertPageDirectoryAvailable(host.settings);
         if (!name.trim()) throw new Error("Enter a page name.");
         if (mode !== "folder" && host.settings.worktreesEnabled !== true) throw new Error("Enable worktrees in Settings first.");
-        const id = randomUUID();
         let environment: Awaited<ReturnType<typeof describePageFolder>>;
         if (mode === "create") {
-          let preparation = await inspectWorktreePreparation(directory);
+          let preparation = scope!;
           const savedPreference = host.settings.worktreeNoticeDismissed?.includes(preparation.preferenceKey);
           const remember = savedPreference ? true : await new Promise<boolean|undefined>(resolve => new PreparationModal(this.app,preparation,resolve).open());
           if (remember === undefined || this.closed || host.isLifecycleStopped()) return;

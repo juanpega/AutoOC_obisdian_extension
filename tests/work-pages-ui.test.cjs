@@ -29,6 +29,7 @@ function harness(failPrepare=false) {
     open(){opened.push(this);this.onOpen?.();} close(){this.onClose?.();}
   }
   const helper={
+    assertPageDirectoryAvailable(){},
     registerWorkPage:async(settings,page,save)=>{settings.workPages=[...(settings.workPages||[]),page];await save();},
     readWorkspaceGitState:async()=>({kind:'branch',branch:'feat/current'}),
     inspectWorktreePreparation:async()=>{effects.push('inspect');return {directory:'/repo/.autooc/worktrees',ignoreFile:'/repo/.gitignore',preferenceKey:'repo-key',excluded:false};},
@@ -431,14 +432,14 @@ test('cancelling preparation has no Git effects and does not remember the notice
   const notice=h.opened.at(-1);assert.notEqual(notice,modal);
   assert.equal(h.field(notice,"Don't show this notice again for this project",'toggle').value,false);
   h.button(notice,'Cancel').onclick();await operation;
-  assert.deepEqual(h.effects,['reserve','inspect','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
+  assert.deepEqual(h.effects,['inspect','reserve','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
 });
 test('acceptance prepares ignore before creation, saves opt-out per repository and links the page',async()=>{
   const h=harness();h.host.settings.worktreesEnabled=true;const modal=h.create();
   h.field(modal,'Name','input').change('Feature');h.field(modal,'Environment','select').change('create');
   const operation=h.button(modal,'Create page').onclick();await tick();const notice=h.opened.at(-1);
   h.field(notice,"Don't show this notice again for this project",'toggle').change(true);h.button(notice,'Continue').onclick();await operation;
-  assert.deepEqual(h.effects,['reserve','inspect','prepare','save','create','save','select','release']);
+  assert.deepEqual(h.effects,['inspect','reserve','prepare','save','create','save','select','release']);
   assert.deepEqual(Array.from(h.host.settings.worktreeNoticeDismissed),['repo-key']);assert.equal(h.host.settings.workPages[0].kind,'worktree');
 });
 test('failed gitignore preparation creates nothing and does not save opt-out',async()=>{
@@ -446,7 +447,7 @@ test('failed gitignore preparation creates nothing and does not save opt-out',as
   h.field(modal,'Name','input').change('Feature');h.field(modal,'Environment','select').change('create');
   const operation=h.button(modal,'Create page').onclick();await tick();const notice=h.opened.at(-1);
   h.field(notice,"Don't show this notice again for this project",'toggle').change(true);h.button(notice,'Continue').onclick();await operation;
-  assert.deepEqual(h.effects,['reserve','inspect','prepare','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
+  assert.deepEqual(h.effects,['inspect','reserve','prepare','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
 });
 
 test('Overview only reads logs and navigates; execution and terminal controls stay in their page',async()=>{

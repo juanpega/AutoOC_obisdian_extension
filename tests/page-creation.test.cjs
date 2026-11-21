@@ -153,3 +153,78 @@ test('loaded plugin accepts a page request from its running workflow and publish
     assert.equal(fs.readFileSync(path.join(receipt.directory,'effect.txt'),'utf8'),'PRIVATE_PARENT_SPEC');
   }finally{clearInterval(timer);p.cliRequestHost?.close();await p.cliRequestHost?.drain();p.releasePluginExecution(false);}
 });
+
+function retainedCreation(f,changes={}) {
+  const directory=path.join(f.installation,'runtime','page-requests');
+  const file=path.join(directory,crypto.createHash('sha256').update('req-1').digest('hex')+'.json');
+  const record=JSON.parse(fs.readFileSync(file));
+  Object.assign(record,changes);fs.writeFileSync(file,JSON.stringify(record));return {file,record};
+}
+function removedArchive(f) {
+  const directory=path.join(f.repo,'.autooc/worktrees/old'),now=new Date().toISOString();
+  return {id:'old',name:'Archived',objective:'Retain history',kind:'worktree',directory,repository:f.repo,branch:'feat/old',archived:true,workflowIds:[],taskIds:[],
+    worktreeRemoval:{status:'removed',token:crypto.randomUUID(),ownerToken:crypto.randomUUID(),requestedAt:now,completedAt:now,
+      proof:{directory,repository:f.repo,commonDirectory:path.join(f.repo,'.git'),gitDirectory:path.join(f.repo,'.git/worktrees/old'),branch:'feat/old',head:'a'.repeat(40),directoryIdentity:'old',gitIdentity:'old'}}};
+}
+test('create and link after confirmed archived removal preserve archive and Main session',async t=>{
+  const f=fixture(t),archive=removedArchive(f),claim={id:'main-session',pageId:'main',directory:f.repo,createdAt:new Date().toISOString(),exclusive:true};
+  f.config.workPages=[archive];f.config.pageTerminalClaims=[claim];f.write();
+  const result=await runtime.createStandalonePage(f.vault,f.request());assert.equal(result.status,'created');
+  const linked=path.join(f.vault,'linked');f.git('worktree','add','-b','feat/linked',linked,'main');
+  const second=await runtime.createStandalonePage(f.vault,{requestId:'linked',name:'Linked',mode:'link',directory:linked});assert.equal(second.status,'created');
+  const config=JSON.parse(fs.readFileSync(f.file));assert.deepEqual(config.workPages[0],archive);assert.deepEqual(config.pageTerminalClaims,[claim]);
+});
+test('missing active or unconfirmed archived folders give specific diagnostics before Git creation',async t=>{
+  const f=fixture(t),missing={id:'missing',name:'Missing active',objective:'',kind:'folder',directory:path.join(f.vault,'missing'),workflowIds:[],taskIds:[]};
+  for(const archived of [false,true]){
+    f.config.workPages=[{...missing,archived}];f.write();
+    const result=await runtime.createStandalonePage(f.vault,f.request({requestId:archived?'archived':'active'}));
+    assert.equal(result.errorCode,'PAGE_DIRECTORY_UNAVAILABLE');assert.deepEqual(result.diagnostic,{pageId:missing.id,directory:missing.directory});
+    assert.equal(f.git('worktree','list','--porcelain').match(/^worktree /gm).length,1);
+  }
+});
+test('explicit CLI recovery registers the original legacy request without repeating Git or launching work',async t=>{
+  const f=fixture(t),request=f.request({launch:{taskId:'child-task'}}),s=service(t,f,{failRegister:true});
+  await s.pages.submit(request);await s.pages.flush();const failed=f.inspect(),trees=f.git('worktree','list','--porcelain');
+  // Reproduce the old failure: Git succeeded, but duplicate checking failed before page metadata was saved.
+  const retained=retainedCreation(f,{stage:'needs-review',page:undefined,preparedEnvironment:undefined,errorCode:'PAGE_OPERATION_FAILED'});
+  s.pages.close();await s.pages.drain();await f.cleanups.shift()();
+  const result=await call(['recover-page-request','--vault',f.vault,'--request-id','req-1']);assert.equal(result.code,0,result.stderr);
+  assert.equal(result.value.status,'created');assert.equal(result.value.pageId,failed.pageId);
+  const after=JSON.parse(fs.readFileSync(retained.file));assert.deepEqual(after.request,retained.record.request);assert.equal(after.createdAt,retained.record.createdAt);
+  assert.equal(after.recoveryHistory[0].errorCode,'PAGE_OPERATION_FAILED');assert.equal(after.launchRunId,undefined);
+  assert.equal(fs.existsSync(path.join(failed.directory,'effect.txt')),false);assert.equal(f.git('worktree','list','--porcelain'),trees);
+  await runtime.createStandalonePage(f.vault,request,true);await runtime.createStandalonePage(f.vault,request);
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).workPages.length,1);assert.equal(f.git('worktree','list','--porcelain'),trees);
+  assert.equal(fs.existsSync(path.join(failed.directory,'effect.txt')),false);
+});
+test('recovery refuses changed branch and another Page owning the retained folder',async t=>{
+  const f=fixture(t),s=service(t,f,{failRegister:true});await s.pages.submit(f.request());await s.pages.flush();const failed=f.inspect();
+  retainedCreation(f,{stage:'needs-review',page:undefined});
+  execFileSync('git',['-C',failed.directory,'checkout','-b','feat/changed'],{windowsHide:true,stdio:'pipe'});
+  await s.pages.submit(f.request(),true);await s.pages.flush();assert.equal(f.inspect().errorCode,'RECOVERY_ENVIRONMENT_MISMATCH');
+  execFileSync('git',['-C',failed.directory,'checkout','feat/requirement'],{windowsHide:true,stdio:'pipe'});
+  f.config.workPages=[{id:'other',name:'Other',objective:'',directory:failed.directory,kind:'folder',workflowIds:[],taskIds:[]}];f.write();
+  await s.pages.submit(f.request(),true);await s.pages.flush();assert.equal(f.inspect().errorCode,'PAGE_DIRECTORY_IN_USE');
+  assert.equal(JSON.parse(fs.readFileSync(f.file)).workPages.length,1);assert.equal(f.inspect().pageId,failed.pageId);
+});
+test('recovery with no existing worktree never creates one',async t=>{
+  const f=fixture(t),s=service(t,f);s.setBusy(true);const queued=await s.pages.submit(f.request());retainedCreation(f,{stage:'needs-review'});
+  s.setBusy(false);await s.pages.submit(f.request(),true);await s.pages.flush();
+  assert.equal(f.inspect().status,'needs-review');assert.equal(f.inspect().pageId,queued.pageId);assert.equal(f.git('branch','--list','feat/requirement'),'');
+});
+
+test('loaded owner recovers through the CLI mailbox while the Main terminal stays open',async t=>{
+  const f=fixture(t),s=service(t,f,{failRegister:true});await s.pages.submit(f.request());await s.pages.flush();const failed=f.inspect();
+  retainedCreation(f,{stage:'needs-review',page:undefined,preparedEnvironment:undefined});await f.cleanups.shift()();
+  const bundle={exports:{}},obsidian=Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab','WorkspaceLeaf'].map(k=>[k,class{}]));
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{module:bundle,exports:bundle.exports,require:n=>n==='obsidian'?obsidian:require(n),process,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,window:{setInterval,clearInterval,clearTimeout}});
+  const p=new bundle.exports.default();p.manifest={id:'auto-oc'};p.app={vault:{adapter:{basePath:f.vault},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[],detachLeavesOfType(){}}};p.refreshOpenViews=()=>{};p.reservePluginExecution();let timer,pollError;
+  try {
+    await p.loadSettings();const claim={id:'helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString(),exclusive:true};p.settings.pageTerminalClaims=[claim];
+    p.startCliRequests();timer=setInterval(()=>void p.cliRequestHost.poll().catch(error=>pollError=error),10);
+    const result=await call(['recover-page-request','--vault',f.vault,'--request-id','req-1']);assert.equal(result.value.pageId,failed.pageId,result.stderr);
+    await p.cliRequestHost.poll();await p.cliRequestHost.drain();if(pollError)throw pollError;
+    assert.equal(f.inspect().status,'created');assert.equal(p.settings.workPages.length,1);assert.equal(p.settings.workPages[0].id,failed.pageId);assert.deepEqual(p.settings.pageTerminalClaims,[claim]);
+  }finally{clearInterval(timer);p.cliRequestHost?.close();await p.cliRequestHost?.drain();p.releasePluginExecution(false);}
+});

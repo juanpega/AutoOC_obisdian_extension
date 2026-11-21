@@ -17,7 +17,7 @@ import {validPageCreationRequest, type PageCreationRequest, type PageCreationRes
 import {withFailureStage} from "./execution-failure";
 
 interface PageCreationCommand {
-  command:"create-page"; request:PageCreationRequest;
+  command:"create-page"; request:PageCreationRequest; recover?:boolean;
   workflowId?:never;taskId?:never;stepId?:never;pageId?:never;runId?:never;
 }
 
@@ -111,7 +111,7 @@ async function replace(file:string,value:unknown,check:()=>void,asyncFlush=true)
   }
 }
 function validCommand(value:any):boolean {
-  if(value?.command==="create-page")return validPageCreationRequest(value.request) && ["workflowId","taskId","stepId","pageId","runId"].every(key=>value[key]===undefined);
+  if(value?.command==="create-page")return (value.recover===undefined || typeof value.recover==="boolean") && validPageCreationRequest(value.request) && ["workflowId","taskId","stepId","pageId","runId"].every(key=>value[key]===undefined);
   if(value?.command==="edit-task")return validTaskEdit(value);
   if(value?.command==="edit-workflow")return value.pageId === undefined && validWorkflowEdit(value);
   try { if (value?.pageId !== undefined && (normalizePageSelection(value.pageId) !== value.pageId || value.stepId !== undefined)) return false; }
@@ -132,7 +132,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
   let publishedLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,taskEditing:capabilities.editTask?1:0,workflowEditing:!!edit,...(edit||capabilities.editTask?{workflowEditMaxChangesBytes:WORKFLOW_EDIT_MAX_CHANGES_BYTES}:{}),concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1} : {})});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,taskEditing:capabilities.editTask?1:0,workflowEditing:!!edit,...(edit||capabilities.editTask?{workflowEditMaxChangesBytes:WORKFLOW_EDIT_MAX_CHANGES_BYTES}:{}),concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1,pageCreationRecovery:1} : {})});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined,pagePolling:Promise<void>|undefined;
@@ -217,7 +217,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
             await publish({status:"rejected",error:"Expired or cancelled before execution"});return;
           }
           if(request.command==="create-page"){
-            const result=await capabilities.pages!.submit(request.request);
+            const result=await capabilities.pages!.submit(request.request,request.recover);
             await publish({status:"completed",pageResult:result});return;
           }
           if((request.command==="edit-workflow" || request.command==="edit-task")) {
@@ -288,8 +288,8 @@ export async function requestPluginTaskEdit(runtime:string,command:TaskEditComma
   if(!result)throw new Error("Enable AutoOC in Obsidian to edit tasks through its owner; do not edit data.json directly");
   return result as TaskEditResult;
 }
-export async function requestPluginPageCreation(runtime:string,request:PageCreationRequest):Promise<PageCreationResult|undefined> {
-  return requestPluginCommand(runtime,{command:"create-page",request}) as Promise<PageCreationResult|undefined>;
+export async function requestPluginPageCreation(runtime:string,request:PageCreationRequest,recover=false):Promise<PageCreationResult|undefined> {
+  return requestPluginCommand(runtime,{command:"create-page",request,...(recover?{recover:true}:{})}) as Promise<PageCreationResult|undefined>;
 }
 async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|TaskEditCommand|PageCreationCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<ExecutionSummary|WorkflowEditResult|TaskEditResult|PageCreationResult|undefined> {
   if(!fs.existsSync(path.join(runtime,"execution.lock")))return undefined;
@@ -305,6 +305,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
     if(current.token!==owner.token || current.pid!==owner.pid)throw new Error("CLI request owner changed");
     const host=read(path.join(directory,"host"));
     if(host.protocol!==1 || host.owner!==owner.token || host.pid!==owner.pid)throw new Error("Invalid CLI request host");
+    if(command.command==="create-page" && command.recover && host.pageCreationRecovery!==1)throw new Error("Loaded AutoOC does not support page recovery; reload a compatible plugin");
     if(command.command==="create-page" && host.pageCreation!==1)throw new Error("Loaded AutoOC does not support page creation; reload a compatible plugin");
     if(command.command==="edit-task" && host.taskEditing!==1)throw new Error("Loaded AutoOC does not support task editing; reload a compatible plugin before submission");
     if(command.command==="edit-workflow" && host.workflowEditing!==true)throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");

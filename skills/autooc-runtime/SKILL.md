@@ -968,3 +968,18 @@ La elección abre el lanzador CLI existente o recupera su terminal viva. Se cons
 Para abrir un agente sin una tarea guardada, utiliza **CLI in this page**: la carpeta del worktree se conserva aunque cambies de pestaña. Para ejecutar una tarea guardada, abre sus controles y usa **Run task here**. Si la seleccionaste dentro de un workflow, **Run this task only** ejecuta únicamente esa tarea interactiva como ejecución independiente de la página, con su carpeta y objetivo; no ejecuta los pasos anteriores ni posteriores. Los historiales de ambas ejecuciones se muestran separados.
 
 Los workflows de varios pasos con una CLI interactiva siguen bloqueados: abrir una terminal no demuestra que el agente haya terminado. Una tarea con carpeta fija fuera de la página, cambios de rama configurados, una sesión pendiente o un ejecutable no disponible también puede rechazarse. Deja la carpeta de la tarea sin configurar si debe heredar la página; esto se decide en su definición compartida, no se cambia automáticamente. Los errores de lanzamiento quedan visibles en el diálogo para poder consultarlos. El botón de CLI manual no transmite el prompt de una tarea: para recibirlo, utiliza la tarea guardada.
+
+## Recuperación de un alta parcial y carpetas retiradas (candidato)
+
+La validación omite únicamente Pages archivadas con `worktreeRemoval.status: "removed"`. Conserva la comprobación física de duplicados de las demás Pages. Una carpeta ausente o inaccesible devuelve `PAGE_DIRECTORY_UNAVAILABLE`, con `diagnostic.pageId` y `diagnostic.directory`; hay que revisar esa Page. Se comprueba antes de crear Git y al registrar.
+
+Para una creación cuyo worktree existe pero cuya Page no se registró, después de revisar sus efectos y autorizar la recuperación:
+
+```text
+node CLI recover-page-request --vault ROOT --request-id REQUEST_ID
+node CLI inspect-page-request --vault ROOT --request-id REQUEST_ID
+```
+
+Se requiere `pageCreationRecovery:1` en la CLI y en el propietario cargado. Se utiliza la petición durable original: mismo `requestId`, `pageId`, datos de requisito e historial; no editar el recibo ni generar otra solicitud. El propietario verifica repositorio, carpeta reservada, rama, registro Git y ausencia de otra Page vinculada. Conserva los errores previos en `recoveryHistory` y registra la Page existente sin ejecutar `git worktree add`, checkout, borrados ni lanzamientos (aunque la solicitud original incluyera `launch`). En recibos antiguos que no conservaron el commit base no se inventa ese dato. La recuperación de un lanzamiento iniciado está excluida.
+
+Las sesiones CLI de Main pueden permanecer abiertas al crear un worktree independiente y al archivar, retirar o eliminar una Page ajena. Las sesiones en la carpeta afectada, rutas no verificables, operaciones de catálogo y ejecuciones no resueltas mantienen sus bloqueos. Merge conserva sus comprobaciones sobre el destino. La actualización del paquete sigue requiriendo su propio procedimiento de inactividad.

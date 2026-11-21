@@ -674,8 +674,8 @@ function samePhysicalPath(left, right) {
   return path.relative(physicalPath(left), physicalPath(right)) === "";
 }
 function isWithinPhysicalPath(root, location) {
-  const relative7 = path.relative(physicalPath(root), physicalPath(location));
-  return relative7 !== ".." && !relative7.startsWith(".." + path.sep) && !path.isAbsolute(relative7);
+  const relative8 = path.relative(physicalPath(root), physicalPath(location));
+  return relative8 !== ".." && !relative8.startsWith(".." + path.sep) && !path.isAbsolute(relative8);
 }
 
 // catalog-transaction.ts
@@ -3353,7 +3353,7 @@ async function registerWorkPage(settings, page2, save) {
     if (JSON.stringify(existing) !== JSON.stringify(page2)) throw new Error("Page ID already exists with different settings");
     return;
   }
-  if (previous?.some((item) => physicalPath(item.directory) === physicalPath(page2.directory))) throw new Error("Another page already uses this folder");
+  assertPageDirectoryAvailable(settings, page2.directory);
   const next = [...previous || [], page2];
   settings.workPages = next;
   try {
@@ -3361,6 +3361,49 @@ async function registerWorkPage(settings, page2, save) {
   } catch (error) {
     if (settings.workPages === next) settings.workPages = previous;
     throw error;
+  }
+}
+var PageDirectoryError = class extends Error {
+  constructor(code, pageId, directory2, message) {
+    super(message);
+    this.code = code;
+    this.pageId = pageId;
+    this.directory = directory2;
+  }
+};
+function assertPageDirectoryAvailable(settings, directory2, exceptId) {
+  validateWorkPages(settings);
+  const target = directory2 === void 0 ? void 0 : physicalPath(directory2);
+  for (const page2 of settings.workPages || []) {
+    if (page2.id === exceptId || page2.archived === true && page2.worktreeRemoval?.status === "removed") continue;
+    let resolved;
+    try {
+      resolved = physicalPath(page2.directory);
+      if (!fs10.statSync(resolved).isDirectory()) throw new Error("Not a directory");
+    } catch {
+      throw new PageDirectoryError("PAGE_DIRECTORY_UNAVAILABLE", page2.id, page2.directory, `Page "${page2.name}" (${page2.id}) has an unavailable folder: ${page2.directory}. Review this Page before preparing another one.`);
+    }
+    if (target !== void 0 && path12.relative(resolved, target) === "") throw new PageDirectoryError("PAGE_DIRECTORY_IN_USE", page2.id, page2.directory, "Another page already uses this folder");
+  }
+}
+function assertPagePreparationTerminals(settings, scope) {
+  const target = scope.creating ? path12.resolve(physicalPath(scope.repository), WORKTREE_FOLDER, path12.basename(scope.directory)) : physicalPath(scope.directory);
+  if (scope.creating && path12.relative(target, scope.directory) !== "") throw new Error("Invalid new worktree directory");
+  const within = (root, child) => {
+    const rel = path12.relative(root, child);
+    return rel !== ".." && !rel.startsWith(".." + path12.sep) && !path12.isAbsolute(rel);
+  };
+  for (const claim of settings.pageTerminalClaims || []) {
+    let cwd;
+    try {
+      cwd = physicalPath(claim.directory);
+    } catch {
+      throw new Error("A terminal folder is unavailable; review its session before preparing a Page.");
+    }
+    if (scope.creating && claim.pageId === "main" && path12.relative(cwd, physicalPath(scope.repository)) === "") continue;
+    if (!within(cwd, target) && !within(target, cwd)) continue;
+    if (!scope.creating && independentGitWorkspaces(cwd, target)) continue;
+    throw new Error("A terminal reserves the selected Page folder. Close that session before preparing the Page.");
   }
 }
 function pageExecutionId(pageId, sourceId, task = false) {
@@ -3389,9 +3432,9 @@ function gitIn(directory2, args) {
     (error, stdout, stderr) => error ? reject(Object.assign(new Error("Git: " + String(stderr || error.message).trim()), { gitExitCode: error.code })) : resolve11(stdout.trim())
   ));
 }
-function regularPath(root, relative7) {
+function regularPath(root, relative8) {
   let current = root;
-  for (const part of relative7.split("/")) {
+  for (const part of relative8.split("/")) {
     current = path12.join(current, part);
     try {
       if (fs10.lstatSync(current).isSymbolicLink()) throw new Error("Worktree preparation cannot follow symbolic links");
@@ -3514,7 +3557,7 @@ function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
   if (!path13.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
   const vault = physicalPath(vaultPath);
   regularDirectory2(vault);
-  let relative7 = path13.join(".obsidian", "plugins", "auto-oc");
+  let relative8 = path13.join(".obsidian", "plugins", "auto-oc");
   if (installationDirectory !== void 0) {
     if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
       throw new Error("Invalid installation location");
@@ -3526,16 +3569,16 @@ function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
         inspected = path13.join(inspected, part);
         regularDirectory2(inspected);
       }
-      relative7 = path13.relative(vault, physicalPath(inspected));
+      relative8 = path13.relative(vault, physicalPath(inspected));
     } else {
-      relative7 = path13.isAbsolute(installationDirectory) ? path13.relative(path13.resolve(vaultPath), installationDirectory) : installationDirectory;
+      relative8 = path13.isAbsolute(installationDirectory) ? path13.relative(path13.resolve(vaultPath), installationDirectory) : installationDirectory;
     }
-    if (!relative7 || path13.isAbsolute(relative7) || relative7.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
+    if (!relative8 || path13.isAbsolute(relative8) || relative8.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
       throw new Error("Installation must remain inside the vault");
     }
   }
   let directory2 = vault;
-  for (const part of relative7.split(/[\\/]/)) {
+  for (const part of relative8.split(/[\\/]/)) {
     if (!part) throw new Error("Invalid installation component");
     directory2 = path13.join(directory2, part);
     regularDirectory2(directory2);
@@ -6118,9 +6161,9 @@ function verifyRelease(files2, expectedVersion) {
   const manifest = JSON.parse(files2["manifest.json"].toString("utf8"));
   if (manifest.id !== "auto-oc" || manifest.version !== expectedVersion) throw new Error("Release manifest identity mismatch");
 }
-function regularPath2(root, relative7, create = false) {
+function regularPath2(root, relative8, create = false) {
   let current = root;
-  const parts = relative7.split("/");
+  const parts = relative8.split("/");
   for (let i = 0; i < parts.length; i++) {
     current = path28.join(current, parts[i]);
     let stat;
@@ -6130,7 +6173,7 @@ function regularPath2(root, relative7, create = false) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
-      throw new Error(`Unsafe release destination: ${relative7}`);
+      throw new Error(`Unsafe release destination: ${relative8}`);
     }
     if (!stat && i < parts.length - 1 && create) fs27.mkdirSync(current);
   }
@@ -6257,9 +6300,9 @@ async function maintainRelease(options) {
     backup = path29.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto11.randomUUID)());
     fs28.mkdirSync(backup, { mode: 448 });
     const hashes = {};
-    const save = (relative7, bytes) => {
+    const save = (relative8, bytes) => {
       lease.assertOwned();
-      const target = path29.join(backup, relative7);
+      const target = path29.join(backup, relative8);
       fs28.mkdirSync(path29.dirname(target), { recursive: true, mode: 448 });
       const fd = fs28.openSync(target, "wx", 384);
       try {
@@ -6270,7 +6313,7 @@ async function maintainRelease(options) {
       }
       const digest = (b) => (0, import_crypto11.createHash)("sha256").update(b).digest("hex");
       if (digest(regular(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
-      hashes[relative7] = digest(bytes);
+      hashes[relative8] = digest(bytes);
     };
     for (const name of names2) save(name, regular(path29.join(location.installationDirectory, name)));
     const catalog = regular(location.configurationFile);
@@ -6368,6 +6411,11 @@ function readRecord(file) {
     validateWorkPages({ workPages: [value.page] });
     if (value.page.id !== value.pageId) throw new Error("Page request identity changed");
   }
+  if (value.registrationOnly !== void 0 && typeof value.registrationOnly !== "boolean" || value.recoveryHistory !== void 0 && (!Array.isArray(value.recoveryHistory) || value.recoveryHistory.some((item) => !item || !Number.isFinite(Date.parse(item.at)) || !["preparing", "needs-review", "environment"].includes(item.stage)))) throw new Error("Invalid page recovery evidence");
+  if (value.preparedEnvironment) {
+    const intent = value.preparedEnvironment;
+    if (value.request.mode !== "create" || intent.kind !== "worktree" || typeof intent.directory !== "string" || !path30.isAbsolute(intent.directory) || typeof intent.repository !== "string" || !path30.isAbsolute(intent.repository) || intent.branch !== value.request.branch || !/^[a-f0-9]{40,64}$/.test(intent.baseCommit)) throw new Error("Invalid page environment intent");
+  }
   return value;
 }
 function normalize(value) {
@@ -6398,6 +6446,7 @@ function summary(record) {
     baseCommit: record.page?.baseCommit,
     requirementFile: record.page?.requirementFile?.path,
     errorCode: record.errorCode,
+    diagnostic: record.diagnostic,
     launchRunId: record.launchRunId,
     launchPhase: record.launchPhase,
     waitForRuns: record.waitForRuns
@@ -6422,7 +6471,7 @@ function createPageCreationService(host) {
     directory(host.lease.directory);
     await atomicSettingsWrite(file, record);
   };
-  async function submit(value) {
+  async function submit(value, recover = false) {
     assertOpen();
     if (!validPageCreationRequest(value)) throw new Error("Invalid page creation request");
     const request = normalize(value), requestHash = hash(JSON.stringify(request));
@@ -6437,6 +6486,17 @@ function createPageCreationService(host) {
       if (fs29.existsSync(file)) {
         const previous = readRecord(file);
         if (previous.requestHash !== requestHash) throw new Error("Page request ID already used with different parameters");
+        if (recover) {
+          if (previous.registered && ["created", "completed"].includes(previous.stage)) return summary(previous);
+          if (request.mode !== "create" || previous.registered || previous.launchRunId || previous.launchPhase || !["preparing", "needs-review", "environment"].includes(previous.stage)) throw new Error("Only an unregistered worktree creation can be recovered; inspect its retained evidence");
+          previous.recoveryHistory = [...previous.recoveryHistory || [], { at: (/* @__PURE__ */ new Date()).toISOString(), stage: previous.stage, errorCode: previous.errorCode }];
+          previous.registrationOnly = true;
+          previous.owner = host.lease.token;
+          previous.stage = "needs-review";
+          await save(file, previous);
+          pending.add(file);
+          return summary(previous);
+        }
         if (previous.owner !== host.lease.token && ["preparing", "launching"].includes(previous.stage)) {
           previous.stage = "needs-review";
           previous.errorCode = "OPERATION_OUTCOME_UNCERTAIN";
@@ -6449,6 +6509,7 @@ function createPageCreationService(host) {
         }
         return summary(previous);
       }
+      if (recover) throw new Error("No reserved page request exists to recover");
       const waitForRuns = host.activeRuns();
       for (const id of waitForRuns) readExecutionCheckpoint(host.lease.directory, id);
       const record = {
@@ -6482,15 +6543,48 @@ function createPageCreationService(host) {
     }
     let release2;
     try {
+      const preparedScope = request.mode === "create" ? await inspectWorktreePreparation(request.repository) : void 0;
+      const scope = preparedScope ? { directory: path30.join(preparedScope.directory, record.pageId), repository: preparedScope.repository, creating: true } : { directory: request.directory };
       assertOpen();
-      release2 = host.reserve();
+      release2 = host.reserve(scope);
       let config = await host.catalog();
       validateWorkPages(config);
+      assertPagePreparationTerminals(config, scope);
+      assertPageDirectoryAvailable(config, void 0, record.pageId);
       if (request.mode !== "folder" && config.worktreesEnabled !== true) throw new PageCreationError("WORKTREES_DISABLED");
-      if (request.launch) {
+      if (request.launch && !record.registrationOnly) {
         const entries = request.launch.taskId ? config.tasks : config.workflows;
         const id = request.launch.taskId || request.launch.workflowId;
         if (!Array.isArray(entries) || entries.filter((item) => item.id === id).length !== 1 || entries.find((item) => item.id === id).disabled) throw new PageCreationError("LAUNCH_UNAVAILABLE");
+      }
+      if (record.stage === "needs-review" && record.registrationOnly) {
+        const preparation = await inspectWorktreePreparation(request.repository);
+        const directory2 = path30.join(preparation.directory, record.pageId);
+        const environment = await describePageFolder(directory2, true);
+        if (environment.directory !== directory2 || environment.repository !== preparation.repository || environment.branch !== request.branch) throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+        const entries = (await gitIn(preparation.repository, ["worktree", "list", "--porcelain", "-z"])).split("\0\0").map((block) => block.split("\0"));
+        const matches = entries.filter((fields) => fields.includes("worktree " + directory2.replace(/\\/g, "/")) || fields.includes("worktree " + directory2));
+        if (matches.length !== 1 || !matches[0].includes("branch refs/heads/" + request.branch) || matches[0].some((field) => /^(locked|prunable)( |$)/.test(field))) throw new PageCreationError("RECOVERY_REGISTRATION_MISMATCH");
+        assertPageDirectoryAvailable(config, directory2, record.pageId);
+        const page2 = record.page || {
+          id: record.pageId,
+          name: request.name,
+          objective: request.objective || "",
+          ...environment,
+          workflowIds: [],
+          taskIds: [],
+          ...request.requirementId ? { requirementId: request.requirementId } : {}
+        };
+        if (page2.directory !== directory2 || page2.repository !== environment.repository || page2.branch !== request.branch) throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+        if (record.preparedEnvironment) {
+          const intent = record.preparedEnvironment;
+          if (intent.directory !== directory2 || intent.repository !== environment.repository || intent.branch !== request.branch || intent.kind !== "worktree") throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+          page2.baseCommit = intent.baseCommit;
+        }
+        await verifyWorkPageEnvironment(page2);
+        record.page = page2;
+        record.stage = "environment";
+        await save(file, record);
       }
       if (record.stage === "queued") {
         let preparation;
@@ -6501,6 +6595,7 @@ function createPageCreationService(host) {
           const base = await gitIn(preparation.repository, ["rev-parse", "--verify", "--end-of-options", request.base + "^{commit}"]);
           if ((await gitIn(preparation.repository, ["branch", "--list", request.branch])).trim() || fs29.existsSync(path30.join(preparation.directory, record.pageId))) throw new PageCreationError("ENVIRONMENT_COLLISION");
           if (!preparation.excluded && !request.allowGitignoreUpdate && !config.worktreeNoticeDismissed?.includes(preparation.preferenceKey)) throw new PageCreationError("GITIGNORE_APPROVAL_REQUIRED");
+          record.preparedEnvironment = { kind: "worktree", directory: path30.join(preparation.directory, record.pageId), repository: preparation.repository, branch: request.branch, baseCommit: base };
           record.stage = "preparing";
           await save(file, record);
           assertOpen();
@@ -6511,7 +6606,6 @@ function createPageCreationService(host) {
           record.stage = "preparing";
           await save(file, record);
         }
-        if ((config.workPages || []).some((page2) => physicalPath(page2.directory) === environment.directory)) throw new PageCreationError("PAGE_DIRECTORY_IN_USE");
         record.page = {
           id: record.pageId,
           name: request.name,
@@ -6523,12 +6617,14 @@ function createPageCreationService(host) {
         };
         record.stage = "environment";
         await save(file, record);
+        assertPageDirectoryAvailable(config, environment.directory, record.pageId);
       }
       if (record.stage === "environment") {
+        assertPageDirectoryAvailable(config, record.page.directory, record.pageId);
         assertOpen();
         await verifyWorkPageEnvironment(record.page);
         if (request.requirementText !== void 0) {
-          const relative7 = ".autooc/requirement.md", folder = path30.join(record.page.directory, ".autooc"), target = path30.join(record.page.directory, relative7);
+          const relative8 = ".autooc/requirement.md", folder = path30.join(record.page.directory, ".autooc"), target = path30.join(record.page.directory, relative8);
           if (!fs29.existsSync(folder)) fs29.mkdirSync(folder);
           if (fs29.lstatSync(folder).isSymbolicLink() || !fs29.statSync(folder).isDirectory()) throw new PageCreationError("UNSAFE_REQUIREMENT_PATH");
           const digest = hash(request.requirementText);
@@ -6544,7 +6640,7 @@ function createPageCreationService(host) {
               fs29.closeSync(fd);
             }
           }
-          record.page.requirementFile = { path: relative7, sha256: digest };
+          record.page.requirementFile = { path: relative8, sha256: digest };
           await save(file, record);
         }
         await verifyWorkPageEnvironment(record.page);
@@ -6552,11 +6648,12 @@ function createPageCreationService(host) {
         record.registered = true;
         record.stage = "created";
         record.errorCode = void 0;
+        record.diagnostic = void 0;
         await save(file, record);
       }
       release2();
       release2 = void 0;
-      if (request.launch && record.stage === "created") {
+      if (request.launch && !record.registrationOnly && record.stage === "created") {
         assertOpen();
         record.stage = "launching";
         await save(file, record);
@@ -6575,7 +6672,8 @@ function createPageCreationService(host) {
       }
       pending.delete(file);
     } catch (error) {
-      record.errorCode = error instanceof PageCreationError ? error.code : "PAGE_OPERATION_FAILED";
+      record.errorCode = error instanceof PageCreationError || error instanceof PageDirectoryError ? error.code : "PAGE_OPERATION_FAILED";
+      record.diagnostic = error instanceof PageDirectoryError ? { pageId: error.pageId, directory: error.directory } : void 0;
       if (record.stage === "queued") record.stage = "blocked";
       else if (record.stage !== "environment" && record.stage !== "created") record.stage = "needs-review";
       await save(file, record);
@@ -6634,6 +6732,7 @@ var PageCreationError = class extends Error {
   }
 };
 var pageCreationHelp = {
+  recover: "recover-page-request --vault <absolute path> --request-id <original request ID>. Explicitly verify and register an existing worktree using its reserved pageId. Preserves request/history, never creates Git resources or launches work. Requires pageCreationRecovery:1 on the loaded owner.",
   create: "create-page --vault <absolute path> --request <absolute JSON file>",
   inspect: "inspect-page-request --vault <absolute path> --request-id <stable ID>",
   fields: "requestId, name, objective?, requirementId?, requirementText?, mode: create|link|folder; create requires repository/branch/base, others require directory; allowGitignoreUpdate defaults false; optional launch object selecting exactly one existing workflowId or taskId.",
@@ -6790,7 +6889,7 @@ async function replace(file, value, check, asyncFlush = true) {
   }
 }
 function validCommand(value) {
-  if (value?.command === "create-page") return validPageCreationRequest(value.request) && ["workflowId", "taskId", "stepId", "pageId", "runId"].every((key) => value[key] === void 0);
+  if (value?.command === "create-page") return (value.recover === void 0 || typeof value.recover === "boolean") && validPageCreationRequest(value.request) && ["workflowId", "taskId", "stepId", "pageId", "runId"].every((key) => value[key] === void 0);
   if (value?.command === "edit-task") return validTaskEdit(value);
   if (value?.command === "edit-workflow") return value.pageId === void 0 && validWorkflowEdit(value);
   try {
@@ -6809,7 +6908,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
   const descriptor = path31.join(directory2, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, taskEditing: capabilities.editTask ? 1 : 0, workflowEditing: !!edit, ...edit || capabilities.editTask ? { workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES } : {}, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1 } : {} });
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, taskEditing: capabilities.editTask ? 1 : 0, workflowEditing: !!edit, ...edit || capabilities.editTask ? { workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES } : {}, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1, pageCreationRecovery: 1 } : {} });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling, pagePolling;
@@ -6934,7 +7033,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
             return;
           }
           if (request.command === "create-page") {
-            const result = await capabilities.pages.submit(request.request);
+            const result = await capabilities.pages.submit(request.request, request.recover);
             await publish2({ status: "completed", pageResult: result });
             return;
           }
@@ -7150,7 +7249,6 @@ async function withPageHost(vault, action, installationDirectory) {
       catalog: async () => {
         const config = await writer.loadAsync(location.configurationFile);
         assertIdleCatalog(config, assertIdleJournals(location.runtimeDirectory));
-        if (config.pageTerminalClaims?.length) throw new Error("Page terminals are still reserved");
         return config;
       },
       register: (page2) => catalogTransaction(location.configurationFile, async () => {
@@ -7211,9 +7309,9 @@ async function runStandaloneWorkflowWithPages(options) {
   }
   return withPageHost(options.vault, (run2) => run2(options), options.installationDirectory);
 }
-async function createStandalonePage(vault, request) {
+async function createStandalonePage(vault, request, recover = false) {
   await withPageHost(vault, async (_run, pages) => {
-    await pages.submit(request);
+    await pages.submit(request, recover);
     await pages.flush();
   });
   return inspectPageCreation(resolveInstalledWorkflowLocation(vault).runtimeDirectory, request.requestId);
@@ -7413,11 +7511,11 @@ async function contents(archive) {
     if (!/^[0-7]+$/.test(sizeText) || !/^[0-7]+$/.test(checksumText) || checksum !== parseInt(checksumText, 8) || header[156] !== 48 || field(header, 345, 500) || !name.startsWith("package/") || !/^package\/[a-zA-Z0-9_./-]+$/.test(name) || name.split("/").some((part) => !part || part === "." || part === "..") || offset + 512 + size > tar.length) {
       throw new Error("Terminal PTY: formato tar no admitido; no se extraeran enlaces ni rutas arbitrarias.");
     }
-    const relative7 = name.slice("package/".length);
-    const selected = relative7 === "package.json" || relative7 === "LICENSE" || relative7.startsWith("lib/") && relative7.endsWith(".js") && !relative7.endsWith(".test.js") || (process.platform === "darwin" ? DARWIN_FILES.includes(relative7) : relative7 === "deps/winpty/LICENSE" || relative7 === "prebuilds/win32-x64/conpty.node" || relative7 === "prebuilds/win32-x64/conpty_console_list.node" || relative7.startsWith("prebuilds/win32-x64/conpty/"));
+    const relative8 = name.slice("package/".length);
+    const selected = relative8 === "package.json" || relative8 === "LICENSE" || relative8.startsWith("lib/") && relative8.endsWith(".js") && !relative8.endsWith(".test.js") || (process.platform === "darwin" ? DARWIN_FILES.includes(relative8) : relative8 === "deps/winpty/LICENSE" || relative8 === "prebuilds/win32-x64/conpty.node" || relative8 === "prebuilds/win32-x64/conpty_console_list.node" || relative8.startsWith("prebuilds/win32-x64/conpty/"));
     if (selected) {
-      if (result.has(relative7)) throw new Error("Terminal PTY: entrada duplicada en tar.");
-      result.set(relative7, tar.subarray(offset + 512, offset + 512 + size));
+      if (result.has(relative8)) throw new Error("Terminal PTY: entrada duplicada en tar.");
+      result.set(relative8, tar.subarray(offset + 512, offset + 512 + size));
     }
     offset += 512 + Math.ceil(size / 512) * 512;
   }
@@ -7453,9 +7551,9 @@ async function verify(directory2) {
       parent = path33.posix.dirname(parent);
     }
   }
-  async function walk(relative7) {
-    for (const entry of await import_node_fs.promises.readdir(path33.join(directory2, relative7), { withFileTypes: true })) {
-      const name = relative7 ? `${relative7}/${entry.name}` : entry.name;
+  async function walk(relative8) {
+    for (const entry of await import_node_fs.promises.readdir(path33.join(directory2, relative8), { withFileTypes: true })) {
+      const name = relative8 ? `${relative8}/${entry.name}` : entry.name;
       if (entry.isSymbolicLink()) throw new Error(`Terminal PTY: enlace no admitido: ${name}`);
       if (entry.isDirectory() && directories.has(name)) await walk(name);
       else if (entry.isFile() && (files2.has(name) || name === ARCHIVE)) continue;

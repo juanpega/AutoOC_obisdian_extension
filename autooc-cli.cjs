@@ -97,8 +97,8 @@ function samePhysicalPath(left, right) {
   return path.relative(physicalPath(left), physicalPath(right)) === "";
 }
 function isWithinPhysicalPath(root, location) {
-  const relative7 = path.relative(physicalPath(root), physicalPath(location));
-  return relative7 !== ".." && !relative7.startsWith(".." + path.sep) && !path.isAbsolute(relative7);
+  const relative8 = path.relative(physicalPath(root), physicalPath(location));
+  return relative8 !== ".." && !relative8.startsWith(".." + path.sep) && !path.isAbsolute(relative8);
 }
 
 // execution-journal.ts
@@ -1456,7 +1456,7 @@ function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
   if (!path5.isAbsolute(vaultPath)) throw new Error("Explicit absolute vault required");
   const vault = physicalPath(vaultPath);
   regularDirectory(vault);
-  let relative7 = path5.join(".obsidian", "plugins", "auto-oc");
+  let relative8 = path5.join(".obsidian", "plugins", "auto-oc");
   if (installationDirectory !== void 0) {
     if (typeof installationDirectory !== "string" || !installationDirectory || installationDirectory.includes("\0") || installationDirectory.split(/[\\/]/).some((part) => part === "." || part === "..")) {
       throw new Error("Invalid installation location");
@@ -1468,16 +1468,16 @@ function resolveInstalledWorkflowLocation(vaultPath, installationDirectory) {
         inspected = path5.join(inspected, part);
         regularDirectory(inspected);
       }
-      relative7 = path5.relative(vault, physicalPath(inspected));
+      relative8 = path5.relative(vault, physicalPath(inspected));
     } else {
-      relative7 = path5.isAbsolute(installationDirectory) ? path5.relative(path5.resolve(vaultPath), installationDirectory) : installationDirectory;
+      relative8 = path5.isAbsolute(installationDirectory) ? path5.relative(path5.resolve(vaultPath), installationDirectory) : installationDirectory;
     }
-    if (!relative7 || path5.isAbsolute(relative7) || relative7.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
+    if (!relative8 || path5.isAbsolute(relative8) || relative8.split(/[\\/]/).some((part) => part === ".." || part.includes(":"))) {
       throw new Error("Installation must remain inside the vault");
     }
   }
   let directory2 = vault;
-  for (const part of relative7.split(/[\\/]/)) {
+  for (const part of relative8.split(/[\\/]/)) {
     if (!part) throw new Error("Invalid installation component");
     directory2 = path5.join(directory2, part);
     regularDirectory(directory2);
@@ -2357,7 +2357,7 @@ async function registerWorkPage(settings, page, save) {
     if (JSON.stringify(existing) !== JSON.stringify(page)) throw new Error("Page ID already exists with different settings");
     return;
   }
-  if (previous?.some((item) => physicalPath(item.directory) === physicalPath(page.directory))) throw new Error("Another page already uses this folder");
+  assertPageDirectoryAvailable(settings, page.directory);
   const next = [...previous || [], page];
   settings.workPages = next;
   try {
@@ -2365,6 +2365,49 @@ async function registerWorkPage(settings, page, save) {
   } catch (error) {
     if (settings.workPages === next) settings.workPages = previous;
     throw error;
+  }
+}
+var PageDirectoryError = class extends Error {
+  constructor(code, pageId, directory2, message) {
+    super(message);
+    this.code = code;
+    this.pageId = pageId;
+    this.directory = directory2;
+  }
+};
+function assertPageDirectoryAvailable(settings, directory2, exceptId) {
+  validateWorkPages(settings);
+  const target = directory2 === void 0 ? void 0 : physicalPath(directory2);
+  for (const page of settings.workPages || []) {
+    if (page.id === exceptId || page.archived === true && page.worktreeRemoval?.status === "removed") continue;
+    let resolved;
+    try {
+      resolved = physicalPath(page.directory);
+      if (!fs9.statSync(resolved).isDirectory()) throw new Error("Not a directory");
+    } catch {
+      throw new PageDirectoryError("PAGE_DIRECTORY_UNAVAILABLE", page.id, page.directory, `Page "${page.name}" (${page.id}) has an unavailable folder: ${page.directory}. Review this Page before preparing another one.`);
+    }
+    if (target !== void 0 && path10.relative(resolved, target) === "") throw new PageDirectoryError("PAGE_DIRECTORY_IN_USE", page.id, page.directory, "Another page already uses this folder");
+  }
+}
+function assertPagePreparationTerminals(settings, scope) {
+  const target = scope.creating ? path10.resolve(physicalPath(scope.repository), WORKTREE_FOLDER, path10.basename(scope.directory)) : physicalPath(scope.directory);
+  if (scope.creating && path10.relative(target, scope.directory) !== "") throw new Error("Invalid new worktree directory");
+  const within = (root, child) => {
+    const rel = path10.relative(root, child);
+    return rel !== ".." && !rel.startsWith(".." + path10.sep) && !path10.isAbsolute(rel);
+  };
+  for (const claim of settings.pageTerminalClaims || []) {
+    let cwd;
+    try {
+      cwd = physicalPath(claim.directory);
+    } catch {
+      throw new Error("A terminal folder is unavailable; review its session before preparing a Page.");
+    }
+    if (scope.creating && claim.pageId === "main" && path10.relative(cwd, physicalPath(scope.repository)) === "") continue;
+    if (!within(cwd, target) && !within(target, cwd)) continue;
+    if (!scope.creating && independentGitWorkspaces(cwd, target)) continue;
+    throw new Error("A terminal reserves the selected Page folder. Close that session before preparing the Page.");
   }
 }
 function pageExecutionId(pageId, sourceId, task = false) {
@@ -2400,9 +2443,9 @@ function gitIn(directory2, args) {
     (error, stdout, stderr) => error ? reject(Object.assign(new Error("Git: " + String(stderr || error.message).trim()), { gitExitCode: error.code })) : resolve11(stdout.trim())
   ));
 }
-function regularPath(root, relative7) {
+function regularPath(root, relative8) {
   let current = root;
-  for (const part of relative7.split("/")) {
+  for (const part of relative8.split("/")) {
     current = path10.join(current, part);
     try {
       if (fs9.lstatSync(current).isSymbolicLink()) throw new Error("Worktree preparation cannot follow symbolic links");
@@ -6077,6 +6120,11 @@ function readRecord(file) {
     validateWorkPages({ workPages: [value.page] });
     if (value.page.id !== value.pageId) throw new Error("Page request identity changed");
   }
+  if (value.registrationOnly !== void 0 && typeof value.registrationOnly !== "boolean" || value.recoveryHistory !== void 0 && (!Array.isArray(value.recoveryHistory) || value.recoveryHistory.some((item) => !item || !Number.isFinite(Date.parse(item.at)) || !["preparing", "needs-review", "environment"].includes(item.stage)))) throw new Error("Invalid page recovery evidence");
+  if (value.preparedEnvironment) {
+    const intent = value.preparedEnvironment;
+    if (value.request.mode !== "create" || intent.kind !== "worktree" || typeof intent.directory !== "string" || !path26.isAbsolute(intent.directory) || typeof intent.repository !== "string" || !path26.isAbsolute(intent.repository) || intent.branch !== value.request.branch || !/^[a-f0-9]{40,64}$/.test(intent.baseCommit)) throw new Error("Invalid page environment intent");
+  }
   return value;
 }
 function normalize(value) {
@@ -6107,6 +6155,7 @@ function summary(record2) {
     baseCommit: record2.page?.baseCommit,
     requirementFile: record2.page?.requirementFile?.path,
     errorCode: record2.errorCode,
+    diagnostic: record2.diagnostic,
     launchRunId: record2.launchRunId,
     launchPhase: record2.launchPhase,
     waitForRuns: record2.waitForRuns
@@ -6114,6 +6163,9 @@ function summary(record2) {
 }
 function inspectPageCreation(runtime, id) {
   return summary(readRecord(fileFor(runtime, id)));
+}
+function readPageRecoveryRequest(runtime, id) {
+  return readRecord(fileFor(runtime, id)).request;
 }
 function createPageCreationService(host) {
   host.lease.assertOwned();
@@ -6131,7 +6183,7 @@ function createPageCreationService(host) {
     directory(host.lease.directory);
     await atomicSettingsWrite(file, record2);
   };
-  async function submit(value) {
+  async function submit(value, recover = false) {
     assertOpen();
     if (!validPageCreationRequest(value)) throw new Error("Invalid page creation request");
     const request = normalize(value), requestHash = hash(JSON.stringify(request));
@@ -6146,6 +6198,17 @@ function createPageCreationService(host) {
       if (fs25.existsSync(file)) {
         const previous = readRecord(file);
         if (previous.requestHash !== requestHash) throw new Error("Page request ID already used with different parameters");
+        if (recover) {
+          if (previous.registered && ["created", "completed"].includes(previous.stage)) return summary(previous);
+          if (request.mode !== "create" || previous.registered || previous.launchRunId || previous.launchPhase || !["preparing", "needs-review", "environment"].includes(previous.stage)) throw new Error("Only an unregistered worktree creation can be recovered; inspect its retained evidence");
+          previous.recoveryHistory = [...previous.recoveryHistory || [], { at: (/* @__PURE__ */ new Date()).toISOString(), stage: previous.stage, errorCode: previous.errorCode }];
+          previous.registrationOnly = true;
+          previous.owner = host.lease.token;
+          previous.stage = "needs-review";
+          await save(file, previous);
+          pending.add(file);
+          return summary(previous);
+        }
         if (previous.owner !== host.lease.token && ["preparing", "launching"].includes(previous.stage)) {
           previous.stage = "needs-review";
           previous.errorCode = "OPERATION_OUTCOME_UNCERTAIN";
@@ -6158,6 +6221,7 @@ function createPageCreationService(host) {
         }
         return summary(previous);
       }
+      if (recover) throw new Error("No reserved page request exists to recover");
       const waitForRuns = host.activeRuns();
       for (const id of waitForRuns) readExecutionCheckpoint(host.lease.directory, id);
       const record2 = {
@@ -6191,15 +6255,48 @@ function createPageCreationService(host) {
     }
     let release;
     try {
+      const preparedScope = request.mode === "create" ? await inspectWorktreePreparation(request.repository) : void 0;
+      const scope = preparedScope ? { directory: path26.join(preparedScope.directory, record2.pageId), repository: preparedScope.repository, creating: true } : { directory: request.directory };
       assertOpen();
-      release = host.reserve();
+      release = host.reserve(scope);
       let config = await host.catalog();
       validateWorkPages(config);
+      assertPagePreparationTerminals(config, scope);
+      assertPageDirectoryAvailable(config, void 0, record2.pageId);
       if (request.mode !== "folder" && config.worktreesEnabled !== true) throw new PageCreationError("WORKTREES_DISABLED");
-      if (request.launch) {
+      if (request.launch && !record2.registrationOnly) {
         const entries = request.launch.taskId ? config.tasks : config.workflows;
         const id = request.launch.taskId || request.launch.workflowId;
         if (!Array.isArray(entries) || entries.filter((item) => item.id === id).length !== 1 || entries.find((item) => item.id === id).disabled) throw new PageCreationError("LAUNCH_UNAVAILABLE");
+      }
+      if (record2.stage === "needs-review" && record2.registrationOnly) {
+        const preparation = await inspectWorktreePreparation(request.repository);
+        const directory2 = path26.join(preparation.directory, record2.pageId);
+        const environment = await describePageFolder(directory2, true);
+        if (environment.directory !== directory2 || environment.repository !== preparation.repository || environment.branch !== request.branch) throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+        const entries = (await gitIn(preparation.repository, ["worktree", "list", "--porcelain", "-z"])).split("\0\0").map((block) => block.split("\0"));
+        const matches = entries.filter((fields) => fields.includes("worktree " + directory2.replace(/\\/g, "/")) || fields.includes("worktree " + directory2));
+        if (matches.length !== 1 || !matches[0].includes("branch refs/heads/" + request.branch) || matches[0].some((field) => /^(locked|prunable)( |$)/.test(field))) throw new PageCreationError("RECOVERY_REGISTRATION_MISMATCH");
+        assertPageDirectoryAvailable(config, directory2, record2.pageId);
+        const page = record2.page || {
+          id: record2.pageId,
+          name: request.name,
+          objective: request.objective || "",
+          ...environment,
+          workflowIds: [],
+          taskIds: [],
+          ...request.requirementId ? { requirementId: request.requirementId } : {}
+        };
+        if (page.directory !== directory2 || page.repository !== environment.repository || page.branch !== request.branch) throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+        if (record2.preparedEnvironment) {
+          const intent = record2.preparedEnvironment;
+          if (intent.directory !== directory2 || intent.repository !== environment.repository || intent.branch !== request.branch || intent.kind !== "worktree") throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+          page.baseCommit = intent.baseCommit;
+        }
+        await verifyWorkPageEnvironment(page);
+        record2.page = page;
+        record2.stage = "environment";
+        await save(file, record2);
       }
       if (record2.stage === "queued") {
         let preparation;
@@ -6210,6 +6307,7 @@ function createPageCreationService(host) {
           const base = await gitIn(preparation.repository, ["rev-parse", "--verify", "--end-of-options", request.base + "^{commit}"]);
           if ((await gitIn(preparation.repository, ["branch", "--list", request.branch])).trim() || fs25.existsSync(path26.join(preparation.directory, record2.pageId))) throw new PageCreationError("ENVIRONMENT_COLLISION");
           if (!preparation.excluded && !request.allowGitignoreUpdate && !config.worktreeNoticeDismissed?.includes(preparation.preferenceKey)) throw new PageCreationError("GITIGNORE_APPROVAL_REQUIRED");
+          record2.preparedEnvironment = { kind: "worktree", directory: path26.join(preparation.directory, record2.pageId), repository: preparation.repository, branch: request.branch, baseCommit: base };
           record2.stage = "preparing";
           await save(file, record2);
           assertOpen();
@@ -6220,7 +6318,6 @@ function createPageCreationService(host) {
           record2.stage = "preparing";
           await save(file, record2);
         }
-        if ((config.workPages || []).some((page) => physicalPath(page.directory) === environment.directory)) throw new PageCreationError("PAGE_DIRECTORY_IN_USE");
         record2.page = {
           id: record2.pageId,
           name: request.name,
@@ -6232,12 +6329,14 @@ function createPageCreationService(host) {
         };
         record2.stage = "environment";
         await save(file, record2);
+        assertPageDirectoryAvailable(config, environment.directory, record2.pageId);
       }
       if (record2.stage === "environment") {
+        assertPageDirectoryAvailable(config, record2.page.directory, record2.pageId);
         assertOpen();
         await verifyWorkPageEnvironment(record2.page);
         if (request.requirementText !== void 0) {
-          const relative7 = ".autooc/requirement.md", folder = path26.join(record2.page.directory, ".autooc"), target = path26.join(record2.page.directory, relative7);
+          const relative8 = ".autooc/requirement.md", folder = path26.join(record2.page.directory, ".autooc"), target = path26.join(record2.page.directory, relative8);
           if (!fs25.existsSync(folder)) fs25.mkdirSync(folder);
           if (fs25.lstatSync(folder).isSymbolicLink() || !fs25.statSync(folder).isDirectory()) throw new PageCreationError("UNSAFE_REQUIREMENT_PATH");
           const digest = hash(request.requirementText);
@@ -6253,7 +6352,7 @@ function createPageCreationService(host) {
               fs25.closeSync(fd);
             }
           }
-          record2.page.requirementFile = { path: relative7, sha256: digest };
+          record2.page.requirementFile = { path: relative8, sha256: digest };
           await save(file, record2);
         }
         await verifyWorkPageEnvironment(record2.page);
@@ -6261,11 +6360,12 @@ function createPageCreationService(host) {
         record2.registered = true;
         record2.stage = "created";
         record2.errorCode = void 0;
+        record2.diagnostic = void 0;
         await save(file, record2);
       }
       release();
       release = void 0;
-      if (request.launch && record2.stage === "created") {
+      if (request.launch && !record2.registrationOnly && record2.stage === "created") {
         assertOpen();
         record2.stage = "launching";
         await save(file, record2);
@@ -6284,7 +6384,8 @@ function createPageCreationService(host) {
       }
       pending.delete(file);
     } catch (error) {
-      record2.errorCode = error instanceof PageCreationError ? error.code : "PAGE_OPERATION_FAILED";
+      record2.errorCode = error instanceof PageCreationError || error instanceof PageDirectoryError ? error.code : "PAGE_OPERATION_FAILED";
+      record2.diagnostic = error instanceof PageDirectoryError ? { pageId: error.pageId, directory: error.directory } : void 0;
       if (record2.stage === "queued") record2.stage = "blocked";
       else if (record2.stage !== "environment" && record2.stage !== "created") record2.stage = "needs-review";
       await save(file, record2);
@@ -6343,6 +6444,7 @@ var PageCreationError = class extends Error {
   }
 };
 var pageCreationHelp = {
+  recover: "recover-page-request --vault <absolute path> --request-id <original request ID>. Explicitly verify and register an existing worktree using its reserved pageId. Preserves request/history, never creates Git resources or launches work. Requires pageCreationRecovery:1 on the loaded owner.",
   create: "create-page --vault <absolute path> --request <absolute JSON file>",
   inspect: "inspect-page-request --vault <absolute path> --request-id <stable ID>",
   fields: "requestId, name, objective?, requirementId?, requirementText?, mode: create|link|folder; create requires repository/branch/base, others require directory; allowGitignoreUpdate defaults false; optional launch object selecting exactly one existing workflowId or taskId.",
@@ -6422,7 +6524,7 @@ async function replace(file, value, check, asyncFlush = true) {
   }
 }
 function validCommand(value) {
-  if (value?.command === "create-page") return validPageCreationRequest(value.request) && ["workflowId", "taskId", "stepId", "pageId", "runId"].every((key) => value[key] === void 0);
+  if (value?.command === "create-page") return (value.recover === void 0 || typeof value.recover === "boolean") && validPageCreationRequest(value.request) && ["workflowId", "taskId", "stepId", "pageId", "runId"].every((key) => value[key] === void 0);
   if (value?.command === "edit-task") return validTaskEdit(value);
   if (value?.command === "edit-workflow") return value.pageId === void 0 && validWorkflowEdit(value);
   try {
@@ -6441,7 +6543,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
   const descriptor = path27.join(directory2, "host");
   let heartbeatAt = Date.now();
   let publishedLimit = concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, taskEditing: capabilities.editTask ? 1 : 0, workflowEditing: !!edit, ...edit || capabilities.editTask ? { workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES } : {}, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1 } : {} });
+  const hostDescriptor = () => ({ protocol: 1, owner: lease.token, pid: process.pid, heartbeatAt, requestInspection: 1, phaseTimings: 1, taskEditing: capabilities.editTask ? 1 : 0, workflowEditing: !!edit, ...edit || capabilities.editTask ? { workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES } : {}, concurrentExecutions: publishedLimit, sharedWorkspaceConcurrency: true, codeStepSelection: true, nestedWorkflows: 1, ...capabilities.pageSelection ? { pageSelection: 1 } : {}, ...capabilities.pages ? { pageCreation: 1, pageCreationRecovery: 1 } : {} });
   write(descriptor, hostDescriptor());
   let closed = false;
   let failure, polling, pagePolling;
@@ -6566,7 +6668,7 @@ function createPluginRequestHost(lease, execute, edit, getConcurrency = () => ({
             return;
           }
           if (request.command === "create-page") {
-            const result = await capabilities.pages.submit(request.request);
+            const result = await capabilities.pages.submit(request.request, request.recover);
             await publish2({ status: "completed", pageResult: result });
             return;
           }
@@ -6650,8 +6752,8 @@ async function requestPluginTaskEdit(runtime, command) {
   if (!result) throw new Error("Enable AutoOC in Obsidian to edit tasks through its owner; do not edit data.json directly");
   return result;
 }
-async function requestPluginPageCreation(runtime, request) {
-  return requestPluginCommand(runtime, { command: "create-page", request });
+async function requestPluginPageCreation(runtime, request, recover = false) {
+  return requestPluginCommand(runtime, { command: "create-page", request, ...recover ? { recover: true } : {} });
 }
 async function requestPluginCommand(runtime, command, signal, onProgress, onSubmitted) {
   if (!fs26.existsSync(path27.join(runtime, "execution.lock"))) return void 0;
@@ -6666,6 +6768,7 @@ async function requestPluginCommand(runtime, command, signal, onProgress, onSubm
     if (current.token !== owner.token || current.pid !== owner.pid) throw new Error("CLI request owner changed");
     const host = read(path27.join(directory2, "host"));
     if (host.protocol !== 1 || host.owner !== owner.token || host.pid !== owner.pid) throw new Error("Invalid CLI request host");
+    if (command.command === "create-page" && command.recover && host.pageCreationRecovery !== 1) throw new Error("Loaded AutoOC does not support page recovery; reload a compatible plugin");
     if (command.command === "create-page" && host.pageCreation !== 1) throw new Error("Loaded AutoOC does not support page creation; reload a compatible plugin");
     if (command.command === "edit-task" && host.taskEditing !== 1) throw new Error("Loaded AutoOC does not support task editing; reload a compatible plugin before submission");
     if (command.command === "edit-workflow" && host.workflowEditing !== true) throw new Error("Loaded AutoOC does not support workflow editing; reload the updated plugin once, keeping Obsidian open");
@@ -6980,7 +7083,6 @@ async function withPageHost(vault, action, installationDirectory) {
       catalog: async () => {
         const config = await writer.loadAsync(location.configurationFile);
         assertIdleCatalog(config, assertIdleJournals(location.runtimeDirectory));
-        if (config.pageTerminalClaims?.length) throw new Error("Page terminals are still reserved");
         return config;
       },
       register: (page) => catalogTransaction(location.configurationFile, async () => {
@@ -7041,9 +7143,9 @@ async function runStandaloneWorkflowWithPages(options) {
   }
   return withPageHost(options.vault, (run2) => run2(options), options.installationDirectory);
 }
-async function createStandalonePage(vault, request) {
+async function createStandalonePage(vault, request, recover = false) {
   await withPageHost(vault, async (_run, pages) => {
-    await pages.submit(request);
+    await pages.submit(request, recover);
     await pages.flush();
   });
   return inspectPageCreation(resolveInstalledWorkflowLocation(vault).runtimeDirectory, request.requestId);
@@ -7112,15 +7214,15 @@ async function record(root, name) {
     await handle.close();
   }
 }
-function runtimeNames(root, relative7 = "runtime") {
-  const directory2 = path29.join(root, relative7), stat = present(directory2);
+function runtimeNames(root, relative8 = "runtime") {
+  const directory2 = path29.join(root, relative8), stat = present(directory2);
   if (!stat) return [];
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe settings runtime directory");
   const result = [];
   for (const name of fs29.readdirSync(directory2).sort()) {
-    if (relative7 === "runtime" && (name === "lease-recovery.lock" || name.startsWith("settings-write-explicit-"))) continue;
+    if (relative8 === "runtime" && (name === "lease-recovery.lock" || name.startsWith("settings-write-explicit-"))) continue;
     if (/secret|credential|^\.env(?:\.|$)/i.test(name)) throw new Error("Unexpected sensitive runtime evidence");
-    const next = relative7 + "/" + name, s = fs29.lstatSync(path29.join(root, next));
+    const next = relative8 + "/" + name, s = fs29.lstatSync(path29.join(root, next));
     if (s.isSymbolicLink()) throw new Error("Linked runtime evidence");
     if (s.isDirectory()) result.push(next, ...runtimeNames(root, next));
     else result.push(next);
@@ -7391,9 +7493,9 @@ function verifyRelease(files2, expectedVersion) {
   const manifest = JSON.parse(files2["manifest.json"].toString("utf8"));
   if (manifest.id !== "auto-oc" || manifest.version !== expectedVersion) throw new Error("Release manifest identity mismatch");
 }
-function regularPath2(root, relative7, create = false) {
+function regularPath2(root, relative8, create = false) {
   let current = root;
-  const parts = relative7.split("/");
+  const parts = relative8.split("/");
   for (let i = 0; i < parts.length; i++) {
     current = path31.join(current, parts[i]);
     let stat;
@@ -7403,7 +7505,7 @@ function regularPath2(root, relative7, create = false) {
       if (error.code !== "ENOENT") throw error;
     }
     if (stat && (stat.isSymbolicLink() || (i < parts.length - 1 ? !stat.isDirectory() : !stat.isFile() || stat.nlink !== 1))) {
-      throw new Error(`Unsafe release destination: ${relative7}`);
+      throw new Error(`Unsafe release destination: ${relative8}`);
     }
     if (!stat && i < parts.length - 1 && create) fs31.mkdirSync(current);
   }
@@ -7540,9 +7642,9 @@ async function maintainRelease(options) {
     backup = path32.join(location.runtimeDirectory, "maintenance-backup-" + (0, import_crypto16.randomUUID)());
     fs32.mkdirSync(backup, { mode: 448 });
     const hashes = {};
-    const save = (relative7, bytes) => {
+    const save = (relative8, bytes) => {
       lease.assertOwned();
-      const target = path32.join(backup, relative7);
+      const target = path32.join(backup, relative8);
       fs32.mkdirSync(path32.dirname(target), { recursive: true, mode: 448 });
       const fd = fs32.openSync(target, "wx", 384);
       try {
@@ -7553,7 +7655,7 @@ async function maintainRelease(options) {
       }
       const digest = (b) => (0, import_crypto16.createHash)("sha256").update(b).digest("hex");
       if (digest(regular2(target)) !== digest(bytes)) throw new Error("Maintenance backup verification failed");
-      hashes[relative7] = digest(bytes);
+      hashes[relative8] = digest(bytes);
     };
     for (const name of names3) save(name, regular2(path32.join(location.installationDirectory, name)));
     const catalog = regular2(location.configurationFile);
@@ -7627,7 +7729,7 @@ function summarizeCliCatalog(config, includeStatus) {
 }
 
 // autooc-cli.ts
-var version = "1.7.28";
+var version = "1.7.29";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "recover-publication") {
@@ -7675,13 +7777,13 @@ async function main(args) {
       process.off("SIGTERM", abort);
     }
   }
-  if (command === "create-page" || command === "inspect-page-request") {
-    const inspect = command === "inspect-page-request";
-    if (rest.length !== 4 || rest[0] !== "--vault" || !path33.isAbsolute(rest[1]) || rest[2] !== (inspect ? "--request-id" : "--request")) throw new Error("Use create-page --vault ROOT --request JSON or inspect-page-request --vault ROOT --request-id ID");
+  if (command === "create-page" || command === "recover-page-request" || command === "inspect-page-request") {
+    const inspect = command === "inspect-page-request", recover = command === "recover-page-request";
+    if (rest.length !== 4 || rest[0] !== "--vault" || !path33.isAbsolute(rest[1]) || rest[2] !== (inspect || recover ? "--request-id" : "--request")) throw new Error("Use create-page --vault ROOT --request JSON or inspect-page-request --vault ROOT --request-id ID");
     const location2 = resolveInstalledWorkflowLocation(rest[1]);
     if (inspect) return { version, ...inspectPageCreation(location2.runtimeDirectory, rest[3]) };
-    const request = readPageCreationRequest(rest[3]);
-    const result = await requestPluginPageCreation(location2.runtimeDirectory, request) || await createStandalonePage(rest[1], request);
+    const request = recover ? readPageRecoveryRequest(location2.runtimeDirectory, rest[3]) : readPageCreationRequest(rest[3]);
+    const result = await requestPluginPageCreation(location2.runtimeDirectory, request, recover) || await createStandalonePage(rest[1], request, recover);
     if (["blocked", "needs-review", "environment", "preparing", "launching"].includes(result.status) || result.launchPhase === "failed") process.exitCode = 1;
     return { version, ...result };
   }
@@ -7797,7 +7899,7 @@ async function main(args) {
     }
     return { version, ...recoverExecutionLease(directory2, rest[3]) };
   }
-  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["recover-publication", "inspect-request", "follow", "list", "status", "pages", "create-page", "inspect-page-request", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow", "export-task", "edit-task"], taskSelection: true, codeStepSelection: true, nestedWorkflows: 1, catalogAvailability: 1, pageSelection: 1, pageCreation: 1, pluginRequests: 1, requestInspection: 1, phaseTimings: 1, taskEditing: 1, workflowEditing: 1, workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES };
+  if (command === "version" && !rest.length) return { version, experimental: true, capabilities: ["recover-publication", "inspect-request", "follow", "list", "status", "pages", "create-page", "recover-page-request", "inspect-page-request", "run", "resume", "reconcile", "stop", "recover-lease", "inspect-settings-write", "recover-settings-write", "approve", "deny", "abandon", "inspect-terminal", "dispose-terminal", "maintain-release", "export-workflow", "edit-workflow", "export-task", "edit-task"], taskSelection: true, codeStepSelection: true, nestedWorkflows: 1, catalogAvailability: 1, pageSelection: 1, pageCreation: 1, pageCreationRecovery: 1, pluginRequests: 1, requestInspection: 1, phaseTimings: 1, taskEditing: 1, workflowEditing: 1, workflowEditMaxChangesBytes: WORKFLOW_EDIT_MAX_CHANGES_BYTES };
   if (command === "help" && !rest.length) return { publicationRecovery: "recover-publication --vault ROOT --workflow ID --run ID --revision N --journal-sha256 HASH --definition-hash HASH. Unload plugin first. Continues pending forward-only Code steps after a verified pre-effect publication failure.", requestInspection: "inspect-request|follow --vault ROOT <--request-id UUID|--run ID> [--include-output true]; follow also accepts --timeout-ms (0..86400000, default 30000). Read-only; never executes or cancels work. States: not-accepted, running, finished, unknown. Exit 2 means uncertainty or wait timeout; retain the same identity and do not launch again. Stored output is opt-in; diagnostics contain numeric phase timings and optional allowlisted failure stage, class, code, reason and code locations; never arbitrary error text or private paths.", pageCreation: pageCreationHelp, usage: "node autooc-cli.cjs <list|status|pages> --vault <absolute-path>", execution: "<run|resume|reconcile|stop> --vault <absolute-path> <--workflow id [--step code-step-id]|--task id> [--run <run-id> for resume/reconcile/stop] [--page <id|main>]", nestedWorkflows: "Workflow steps reference workflowId in the catalog; exports use workflowExportId and schema 1.7.0. Run, stop, reconcile and resume select the parent workflow/run. Child schedules are ignored; cycles and more than 16 levels are rejected.", pages: "pages --vault <absolute path> lists page IDs without creating folders. Omit --page or use --page main for legacy Main workspace behavior, including task-specific folders. Custom --page selects an existing page for run/resume/reconcile/stop; status --vault <absolute path> --page <id> shows its runs. --step is Main workspace only. The current shell folder never selects a page. Plugin delegation requires pageSelection:1; a loaded older plugin is rejected before submission. Standalone execution keeps one owner per installation and requires compatible non-GUI tasks.", catalog: "list/status include disabled, blockedByDisabled, disabledReason and codeSteps; these are availability gates, not proof of readiness or live activity.", codeSteps: "--step selects one Code step with empty input/outputs and preserves the full workflow result. Requires codeStepSelection:true in CLI and loaded host. run/resume reject disabled items; reconcile/stop remain available for the exact recorded execution.", settingsWriteRecovery: "inspect-settings-write --vault <absolute path>; recover-settings-write --vault <absolute path> --decision <absolute JSON file>. Requires reviewed inspectionHash, token, transactionId, reason, preserveCatalog:true and executionsResumed:false. Never resumes or recovers the execution lease.", recovery: "recover-lease --vault <absolute-path> --owner <observed-owner-token>", decision: "<approve|deny> --vault <absolute-path> --run <run-id> --approval <observed-token>", terminalDisposition: "inspect-terminal --vault <absolute vault> --run <id>; dispose-terminal --vault <absolute vault> --decision <absolute JSON file containing the exact inspection plus reason and acknowledgedUnknownEffects:true>. Unload plugin first. Keeps historical phase and unknown outcome.", maintenance: "maintain-release --vault <absolute vault> <--inspect|--install|--decisions absolute-JSON-file> from a separate extracted corrected package; --install preserves all historical runs without resolving them; optional decisions are an array of individually reviewed inspections plus reason and acknowledgedUnknownEffects:true. Backs up and installs under one lease. Never recovers locks.", abandonment: "abandon --vault <absolute-path> --workflow <id or @task:ID> --run <run-id> --revision <observed-revision> --reason <human-decision> --acknowledge-unknown-effects true (close/disable plugin first; preserves unknown outcome, does not stop external processes)", taskEditing: "export-task --vault <absolute-path> --task ID --out <new absolute JSON file>; edit-task --vault <absolute-path> --task ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name and prompt only. Shared task changes affect every referencing workflow. Maximum changes 2 MiB; patch 3 MiB. Requires taskEditing:1 on loaded host.", workflowEditing: "export-workflow --vault <absolute-path> --workflow ID --out <new absolute JSON file>; edit-workflow --vault <absolute-path> --workflow ID --patch <absolute JSON file containing expectedHash and changes>. Keep Obsidian open; name/description/existing step text only. Serialized changes: maximum 2097152 UTF-8 bytes (2 MiB), including JSON escapes; patch file: 3145728 bytes (3 MiB). Large edits require a host advertising workflowEditMaxChangesBytes.", experimental: true, foreground: true };
   if (["run", "resume", "reconcile", "stop"].includes(command)) {
     const values = /* @__PURE__ */ new Map();
