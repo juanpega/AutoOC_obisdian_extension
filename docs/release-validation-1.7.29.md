@@ -1,5 +1,26 @@
 # Validación del candidato 1.7.29
 
+## Actualización del 22/11/2026: CLI, interfaz y merge
+
+El candidato incorpora gestión de Pages mediante `review-page`/`page-action`, estabilidad de Merge review, refresco de reservas de terminal y comprobación incremental de colisiones de ignorados sobre el resultado previsto del merge. La guía distribuida y el prompt real de los creadores incluyen la gestión CLI; las correcciones posteriores conservan sus comandos y permisos.
+
+Evidencia de esta ampliación (las ejecuciones indicadas se solapan; no sumar como casos independientes):
+
+- UI y Dashboard: 55/55 aprobadas, incluyendo respuesta tardía durante acción, confirmación fallida y conservación de una reserva nueva.
+- Transporte/gestión CLI: 55/55 aprobadas inicialmente; gestión final 11/11, incluyendo interrupción después de aceptar la acción y recibos consultables sin repetir efectos.
+- Prompt real: ocho combinaciones de motor/editor aceptadas por sus validadores.
+- Regresión Git de merge: 22 aprobadas y una omitida por la restricción MSYS del entorno Windows para ejecutar hooks. Enumeración real de 20.000 archivos y 4.500.000 bytes, colisión final detectada, catálogo retirado solo en destino conservado byte a byte, colisiones archivo/directorio/mayúsculas, referencias y resoluciones cambiadas.
+- Casos adicionales de modificación real del archivo eliminado en destino y repositorio anidado ignorado: aprobados. Streaming final: 2/2 aprobadas, incluyendo UTF-8 dividido, salida incompleta y fallo del proceso.
+- CLI compilada → propietario plugin con adaptador Obsidian de prueba → Git real temporal: revisión, rechazo con sesión activa de Main, merge-start, nueva revisión y merge-complete aprobados sobre el bundle final. El catálogo ignorado conserva exactamente sus bytes. La integración anterior de archive/remove-worktree conserva también la rama y la reserva independiente de Main.
+- Lifecycle aislado sobre el bundle final: 149/149 aprobadas. Build TypeScript, ZIP de siete componentes, versiones, descriptor y hashes verificados.
+- Último `npm test`: pretest 317 aprobadas y una omitida; principal 947 casos, 927 aprobados, 17 entradas fallidas por permisos de enlaces/CScript y tres omitidas. Los fallos incluyen un padre y seis subpruebas. No se declara la suite general verde ni se relajan las comprobaciones nativas.
+
+El usuario confirmó el funcionamiento del paquete corregido en su proyecto el 22/11/2026 y autorizó incorporar los cambios al PR abierto. Es una confirmación del usuario, no una prueba automatizada de GUI ni validación de todas las funciones en macOS/Linux. CI del nuevo commit y aceptación multiplataforma siguen pendientes.
+
+Paquete validado: main.js SHA-256 `9f27d63057fe903206e459f8f31c05a385c128af6796e1cd81d4662ab94fd978`; ZIP SHA-256 `c2b0e031ee86d1823f1b9a59fdb1d8789af8a9bb51e86aa365076d2ee795f9a1`. La subida del PR no publica la release ni modifica instalaciones.
+
+## Preparación inicial del 21/11/2026
+
 Preparación del 21/11/2026. Base funcional: el árbol de 1.7.28 integrado en main, más las correcciones de Pages de esta entrega. No se modifican dependencias, esquema importable ni instalaciones reales.
 
 ## Evidencia funcional previa al cambio de versión

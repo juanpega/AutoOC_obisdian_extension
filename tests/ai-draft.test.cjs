@@ -268,6 +268,8 @@ test('the actual shipped creator prompt contains a valid example for each engine
     assert.match(prompt,/Canonical complete export format/);assert.doesNotMatch(prompt,/Minimal valid workflow example:/);
     assert.match(prompt,/compatible hosts advertise pageCreation:1/);
     assert.match(prompt,/pageCreationRecovery:1/);assert.match(prompt,/recover-page-request --vault ROOT --request-id ID/);
+    assert.match(prompt,/pageManagement:1/);assert.match(prompt,/review-page --vault ROOT --page PAGE_ID/);
+    assert.match(prompt,/page-action --vault ROOT --request FILE/);assert.match(prompt,/No force or self-session exemption/);
     assert.match(prompt,/hosts advertising requestInspection:1/);
     assert.match(prompt,/observe that same identity rather than launching again/);
     assert.match(prompt,/interrupting follow does not cancel the run/);

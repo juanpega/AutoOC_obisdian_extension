@@ -32,6 +32,31 @@ async function fixture(t){
 async function archive(f){const review=await f.review();await f.p.finishWorkPage('page',review.hash,false,false);return f;}
 async function archivedFixture(t){return archive(await fixture(t));}
 
+test('installed CLI reviews and closes a Page through the actual plugin owner while keeping an independent Main claim',async t=>{
+  const f=await fixture(t),cli=path.resolve(__dirname,'../autooc-cli.cjs');
+  const claim={id:'main-helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString()};
+  f.p.settings.pageTerminalClaims=[claim];f.p.startCliRequests();
+  const pump=f.p.cliRequestHost;let pumpError;
+  const timer=setInterval(()=>{void pump.poll().catch(error=>{pumpError=error;});},50);
+  const call=(...args)=>new Promise((resolve,reject)=>{
+    require('node:child_process').execFile(process.execPath,[cli,...args,'--vault',f.vault],{encoding:'utf8',windowsHide:true,timeout:90000},(error,stdout,stderr)=>{
+      if(error)return reject(Error(stderr||error.message));
+      try{resolve(JSON.parse(stdout));}catch(e){reject(e);}
+    });
+  });
+  const act=async request=>{const file=path.join(f.vault,'action-'+require('node:crypto').randomUUID()+'.json');fs.writeFileSync(file,JSON.stringify(request));return call('page-action','--request',file);};
+  try {
+    const merge=await call('review-page','--page','page','--kind','merge','--target',f.repo);
+    assert.equal(merge.review.integration,'verified');assert.equal(merge.sessions[0].claimId,'main-helper');assert.ok(merge.requestId);
+    const finish=await call('review-page','--page','page','--kind','finish');assert.deepEqual(finish.review.archiveBlockers,[]);assert.deepEqual(finish.sessions,[]);
+    const archived=await act({pageId:'page',action:'archive',reviewHash:finish.reviewHash});assert.equal(archived.applied,true);assert.equal(f.read().workPages[0].archived,true);
+    const removal=await call('review-page','--page','page','--kind','finish');assert.deepEqual(removal.review.removalBlockers,[]);
+    const removed=await act({pageId:'page',action:'remove-worktree',reviewHash:removal.reviewHash,sessionsClosed:true});assert.equal(removed.applied,true);
+    assert.equal(fs.existsSync(f.worktree),false);assert.equal(f.read().workPages[0].worktreeRemoval.status,'removed');assert.equal(f.read().pageTerminalClaims[0].id,claim.id);
+    assert.equal(git(f.repo,'rev-parse','refs/heads/feat/finish'),f.page.baseCommit);assert.equal(pumpError,undefined);
+  }finally{clearInterval(timer);pump.close();await pump.drain();}
+});
+
 test('merge review checks the installed owner and terminal activity without saving page settings',async t=>{
   const f=await fixture(t),before=fs.readFileSync(f.file,'utf8');
   let review=await f.p.reviewPageMerge('page');assert.equal(review.state,'integrated');assert.equal(review.source.branch,'feat/finish');
@@ -394,4 +419,38 @@ test('a new Page is created after the plugin archives and removes a real worktre
   const original=f.read().workPages[0],result=await runtime.createStandalonePage(f.vault,{requestId:'after-removal',name:'Next Page',mode:'create',repository:f.repo,branch:'feat/next',base:'fixture-main'});
   assert.equal(result.status,'created');assert.equal(f.read().workPages.length,2);assert.deepEqual(f.read().workPages[0],original);
   assert.equal(git(f.repo,'branch','--show-current'),'fixture-main');assert.ok(fs.existsSync(result.directory));
+});
+
+test('installed Page CLI merges with a target-only catalog removal and keeps its ignored bytes',async t=>{
+  const f=await fixture(t),cli=path.resolve(__dirname,'../autooc-cli.cjs'),relative='.obsidian/plugins/auto-oc/data.json';
+  git(f.repo,'config','core.editor','true');
+  fs.mkdirSync(path.dirname(path.join(f.repo,relative)),{recursive:true});fs.writeFileSync(path.join(f.repo,relative),'base catalog');
+  git(f.repo,'add','--',relative);git(f.repo,'commit','-m','catalog in common base');git(f.worktree,'merge','--ff-only','fixture-main');
+  git(f.repo,'rm','--cached','--',relative);fs.appendFileSync(path.join(f.repo,'.gitignore'),relative+'\n');
+  git(f.repo,'add','.gitignore');git(f.repo,'commit','-m','preserve local runtime');
+  const preserved=Buffer.from('local catalog\r\n'+String.fromCharCode(0)+'unchanged');fs.writeFileSync(path.join(f.repo,relative),preserved);
+  fs.writeFileSync(path.join(f.worktree,'feature.txt'),'incoming feature');git(f.worktree,'add','feature.txt');git(f.worktree,'commit','-m','feature');
+  f.p.startCliRequests();const pump=f.p.cliRequestHost;let pumpError;
+  const timer=setInterval(()=>{void pump.poll().catch(error=>{pumpError=error;});},50);
+  const call=(...args)=>new Promise((resolve,reject)=>{
+    require('node:child_process').execFile(process.execPath,[cli,...args,'--vault',f.vault],{encoding:'utf8',windowsHide:true,timeout:90000},(error,stdout,stderr)=>{
+      if(error)return reject(Error(stderr||error.message));try{resolve(JSON.parse(stdout));}catch(e){reject(e);}
+    });
+  });
+  const review=()=>call('review-page','--page','page','--kind','merge','--target',f.repo);
+  const act=async(action,r)=>{const file=path.join(f.vault,'merge-'+require('node:crypto').randomUUID()+'.json');
+    fs.writeFileSync(file,JSON.stringify({pageId:'page',action,reviewHash:r.reviewHash,targetDirectory:f.repo}));return call('page-action','--request',file);};
+  try {
+    const ready=await review();assert.equal(ready.review.state,'ready');
+    f.p.settings.pageTerminalClaims=[{id:'main-busy',pageId:'main',directory:f.repo,createdAt:new Date().toISOString()}];
+    await assert.rejects(act('merge-start',ready),/changed|terminals/);assert.equal(git(f.repo,'status','--porcelain'),'');
+    f.p.settings.pageTerminalClaims=[];
+    const start=await act('merge-start',await review());assert.equal(start.applied,true);assert.ok(start.requestId);
+    const inProgress=await review();assert.equal(inProgress.review.inProgress,true);assert.equal(inProgress.review.state,'resolved');
+    assert.deepEqual(fs.readFileSync(path.join(f.repo,relative)),preserved);
+    const complete=await act('merge-complete',inProgress);assert.equal(complete.applied,true);assert.notEqual(start.requestId,complete.requestId);
+    const integrated=await review();assert.equal(integrated.review.integration,'verified');assert.equal(integrated.review.inProgress,false);
+    assert.deepEqual(fs.readFileSync(path.join(f.repo,relative)),preserved);assert.equal(git(f.repo,'ls-files','--',relative),'');
+    assert.equal(fs.readFileSync(path.join(f.repo,'feature.txt'),'utf8'),'incoming feature');assert.equal(pumpError,undefined);
+  }finally{clearInterval(timer);pump.close();await pump.drain();}
 });

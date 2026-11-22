@@ -48,19 +48,59 @@ async function mergeContentHash(cwd:string):Promise<string> {
   const working=await git(cwd,["diff","--no-ext-diff","--no-textconv","--binary","--"]);
   return createHash("sha256").update(index.text).update("\0").update(working.text).digest("hex");
 }
-async function ignoredMergeCollisions(target:string,sourceHead:string):Promise<string[]> {
-  const ignored=(await git(target,["ls-files","--others","--ignored","--exclude-standard","-z"])).text.split("\0").filter(Boolean);
-  if(!ignored.length)return [];
+/** Consume every NUL-delimited path; a partial/failed scan never establishes safety. */
+async function gitPaths(cwd:string,args:string[],visit:(file:string)=>void):Promise<void> {
+  await new Promise<void>((resolve,reject)=>{
+    const child=spawn("git",["--no-optional-locks","-c","core.fsmonitor=false",...args],
+      {cwd,windowsHide:true,stdio:["ignore","pipe","pipe"]});
+    let pending="",stderr="",failure:Error|undefined;
+    const fail=(error:Error)=>{if(!failure){failure=error;child.kill();}};
+    const timeout=setTimeout(()=>fail(new Error("Git path scan timed out; collision checking is incomplete.")),30000);
+    child.stdout.setEncoding("utf8");child.stderr.setEncoding("utf8");
+    child.stdout.on("data",(chunk:string)=>{
+      if(failure)return;
+      pending+=chunk;
+      try {
+        let start=0,end:number;
+        while((end=pending.indexOf("\0",start))!==-1) {
+          if(end===start)throw new Error("Git path scan returned an empty path.");
+          const file=pending.slice(start,end);
+          if(Buffer.byteLength(file,"utf8")>1024*1024)throw new Error("Git path exceeds the review limit; collision checking is incomplete.");
+          visit(file);start=end+1;
+        }
+        pending=pending.slice(start);
+        if(Buffer.byteLength(pending,"utf8")>1024*1024)throw new Error("Git path exceeds the review limit; collision checking is incomplete.");
+      } catch(error) {fail(error instanceof Error?error:new Error(String(error)));}
+    });
+    child.stderr.on("data",(chunk:string)=>{stderr+=chunk.slice(0,Math.max(0,64000-stderr.length));});
+    child.once("error",error=>{failure=error;});
+    child.once("close",code=>{
+      clearTimeout(timeout);
+      if(failure)reject(failure);
+      else if(code!==0)reject(new Error("Git path scan failed; collision checking is incomplete. "+stderr.trim()));
+      else if(pending)reject(new Error("Git path scan ended with an incomplete path; collision checking is incomplete."));
+      else resolve();
+    });
+  });
+}
+async function ignoredMergeCollisions(target:string,targetHead:string,mergedTree:string,conflicts:string[]):Promise<string[]> {
   const insensitive=(await git(target,["config","--bool","--get","core.ignorecase"],[0,1])).text.trim()==="true";
   const normalize=(file:string)=>insensitive?file.toLowerCase():file;
-  const incoming=new Set((await git(target,["ls-tree","-r","--name-only","-z",sourceHead])).text.split("\0").filter(Boolean).map(normalize));
+  // Compare the actual predicted merge tree to the target, not to the source's
+  // entire historical tree. Target-only deletions stay deleted when unchanged
+  // on the source. Conflicted paths also need protection during checkout.
+  const incoming=new Set(conflicts.map(normalize));
+  await gitPaths(target,["diff","--no-ext-diff","--no-textconv","--no-renames","--name-only","--diff-filter=ACMT","-z",targetHead,mergedTree,"--"],file=>incoming.add(normalize(file)));
+  if(!incoming.size)return [];
   const parents=new Set<string>();
   for(const file of incoming)for(let i=file.indexOf("/");i>=0;i=file.indexOf("/",i+1))parents.add(file.slice(0,i));
-  return ignored.filter(file=>{
-    const key=normalize(file);if(incoming.has(key)||parents.has(key))return true;
-    for(let i=key.indexOf("/");i>=0;i=key.indexOf("/",i+1))if(incoming.has(key.slice(0,i)))return true;
-    return false;
+  const collisions:string[]=[];
+  await gitPaths(target,["ls-files","--others","--ignored","--exclude-standard","-z"],file=>{
+    // Git may report an ignored nested repository as a directory ending in '/'.
+    const key=normalize(file.replace(/\/+$/,""));if(incoming.has(key)||parents.has(key)){collisions.push(file);return;}
+    for(let i=key.indexOf("/");i>=0;i=key.indexOf("/",i+1))if(incoming.has(key.slice(0,i))){collisions.push(file);return;}
   });
+  return collisions;
 }
 async function mergeHeads(cwd:string):Promise<string> {
   const file=path.join(await value(cwd,["rev-parse","--absolute-git-dir"]),"MERGE_HEAD");
@@ -138,9 +178,6 @@ export async function reviewPageMerge(page:WorkPage,targetDirectory?:string,acti
     } else {
       if(targetStatus)review.blockers.push("Review the listed target changes before starting a merge. Preserve local configuration separately; no automatic staging or commit is performed.");
       if(!review.blockers.length) {
-        // Git's --no-overwrite-ignore is not sufficient for every merge strategy.
-        const collisions=await ignoredMergeCollisions(target.directory,source.head);
-        if(collisions.length)review.blockers.push("Preserve ignored target files that collide with incoming paths before merging: "+collisions.slice(0,10).map(file=>JSON.stringify(file)).join(", "));
         // A review must not silently execute repository-defined merge drivers or clean filters.
         const drivers=await git(target.directory,["config","--get-regexp","^merge\\..*\\.driver$"],[0,1]);
         const normalize=await git(target.directory,["config","--bool","--get","merge.renormalize"],[0,1]);
@@ -149,7 +186,11 @@ export async function reviewPageMerge(page:WorkPage,targetDirectory?:string,acti
         } else try {
           const preview=await git(target.directory,["merge-tree","--write-tree","--name-only","-z",target.head,source.head],[0,1]);
           Object.assign(review,parseMergePreview(preview.text,preview.code));
-        } catch(error) {review.state="unavailable";review.details=String((error as Error).message)+" Use a Git version supporting merge-tree --write-tree, or review in your Git tool.";}
+          // Git's --no-overwrite-ignore is not sufficient for every merge strategy.
+          const mergedTree=preview.text.split("\0",1)[0];
+          const collisions=await ignoredMergeCollisions(target.directory,target.head,mergedTree,review.conflicts);
+          if(collisions.length)review.blockers.push("Preserve ignored target files that collide with incoming paths before merging: "+collisions.slice(0,10).map(file=>JSON.stringify(file)).join(", "));
+        } catch(error) {review.state="unavailable";review.details=String((error as Error).message)+" Merge preview or ignored-file checking is incomplete. No merge can start; resolve the diagnostic and review again.";}
       }
     }
   }

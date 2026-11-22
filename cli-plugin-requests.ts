@@ -13,6 +13,7 @@ import {concurrencySettings} from "./execution-concurrency-settings";
 import {pageExecutionId, normalizePageSelection} from "./work-pages";
 import {withExecutionTiming,bindTimingRun,readExecutionTimings,type ExecutionTiming,type TimingContext} from "./execution-timing";
 import {validPageCreationRequest, type PageCreationRequest, type PageCreationResult, type createPageCreationService} from "./page-creation";
+import {validPageManagementCommand,PageManagementError,type PageManagementCommand,type PageManagementResult} from "./page-management";
 
 import {withFailureStage} from "./execution-failure";
 
@@ -111,6 +112,7 @@ async function replace(file:string,value:unknown,check:()=>void,asyncFlush=true)
   }
 }
 function validCommand(value:any):boolean {
+  if(value?.command==="review-page"||value?.command==="page-action")return validPageManagementCommand(value);
   if(value?.command==="create-page")return (value.recover===undefined || typeof value.recover==="boolean") && validPageCreationRequest(value.request) && ["workflowId","taskId","stepId","pageId","runId"].every(key=>value[key]===undefined);
   if(value?.command==="edit-task")return validTaskEdit(value);
   if(value?.command==="edit-workflow")return value.pageId === undefined && validWorkflowEdit(value);
@@ -125,18 +127,18 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // Receipts carry IDs/progress; edit requests also carry bounded editable text.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>,timing?:TimingContext)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {editTask?:(command:TaskEditCommand)=>Promise<TaskEditResult>;pageSelection?: boolean;pages?:ReturnType<typeof createPageCreationService>} = {}) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>,timing?:TimingContext)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {editTask?:(command:TaskEditCommand)=>Promise<TaskEditResult>;pageSelection?: boolean;pages?:ReturnType<typeof createPageCreationService>;managePage?:(command:PageManagementCommand)=>Promise<PageManagementResult>} = {}) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
   let publishedLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,taskEditing:capabilities.editTask?1:0,workflowEditing:!!edit,...(edit||capabilities.editTask?{workflowEditMaxChangesBytes:WORKFLOW_EDIT_MAX_CHANGES_BYTES}:{}),concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1,pageCreationRecovery:1} : {})});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,taskEditing:capabilities.editTask?1:0,workflowEditing:!!edit,...(edit||capabilities.editTask?{workflowEditMaxChangesBytes:WORKFLOW_EDIT_MAX_CHANGES_BYTES}:{}),concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1,pageCreationRecovery:1} : {}),...(capabilities.managePage?{pageManagement:1}: {})});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined,pagePolling:Promise<void>|undefined;
-  const active=new Map<string,{id:string;controller:AbortController;editing:boolean;definition:string;done?:Promise<void>}>();
+  const active=new Map<string,{id:string;controller:AbortController;editing:boolean;reading:boolean;definition:string;done?:Promise<void>}>();
   const seen=new Set<string>();
   const check=()=>{regularDirectory(directory);lease.assertOwned();};
   const checkDescriptor=()=>{
@@ -191,15 +193,20 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
         await receipt(id,{status:"rejected",error:"Expired, cancelled or invalid CLI request"});continue;
       }
       if(closed)return;
+      const pageManagement=request.command==="review-page"||request.command==="page-action",reading=request.command==="review-page";
+      if(pageManagement&&!capabilities.managePage){await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page management; reload a compatible plugin"});continue;}
       if(request.command==="create-page" && !capabilities.pages){await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page creation"});continue;}
       if (request.pageId && !capabilities.pageSelection) {await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page selection; reload the updated plugin."});continue;}
-      const definition=JSON.stringify(request.command==="create-page" ? ["create-page",request.request.requestId] : [request.pageId || "main",request.taskId ? "task" : "workflow",request.taskId || request.workflowId]);
+      const definition=JSON.stringify(pageManagement?[request.command,request.request.pageId,request.request.kind || request.request.action]:request.command==="create-page" ? ["create-page",request.request.requestId] : [request.pageId || "main",request.taskId ? "task" : "workflow",request.taskId || request.workflowId]);
       const duplicate=[...active.values()].some(e=>e.definition===definition);
       const limit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-      const busy=duplicate && request.command!=="create-page" ? "AutoOC is already executing this CLI definition" : request.command!=="create-page" && limit>0 && active.size>=limit ? `Concurrent execution limit reached (${limit})` :
-        [...active.values()].some(e=>e.editing) || (request.command==="edit-workflow" || request.command==="edit-task") && active.size ? "Workflow editing requires exclusive execution" : undefined;
+      const executing=[...active.values()].filter(e=>!e.reading);
+      const editing=request.command==="edit-workflow"||request.command==="edit-task"||request.command==="page-action";
+      const busy=duplicate && request.command!=="create-page" ? "AutoOC is already executing this CLI definition" : reading?undefined:
+        request.command!=="create-page" && limit>0 && executing.length>=limit ? `Concurrent execution limit reached (${limit})` :
+        executing.some(e=>e.editing) || editing && executing.length ? "Catalog and page mutations require exclusive execution" : undefined;
       if(busy){await receipt(id,{status:"rejected",error:busy});continue;}
-      const execution={id,controller:new AbortController(),editing:(request.command==="edit-workflow" || request.command==="edit-task"),definition,done:undefined as Promise<void>|undefined};active.set(id,execution);
+      const execution={id,controller:new AbortController(),editing,reading,definition,done:undefined as Promise<void>|undefined};active.set(id,execution);
       let checkpoint:ExecutionSummary|undefined;
       const receivedAt=Date.now();
       const submittedAt=Number.isFinite(request.submittedAt) && request.submittedAt<=receivedAt && request.submittedAt>=request.expiresAt-60000 ? request.submittedAt : request.expiresAt-30000;
@@ -219,6 +226,11 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
           if(request.command==="create-page"){
             const result=await capabilities.pages!.submit(request.request,request.recover);
             await publish({status:"completed",pageResult:result});return;
+          }
+          if(pageManagement){
+            const result=await capabilities.managePage!(request);
+            if(!validPageManagementResult(result,request))throw new Error("Invalid page management result");
+            await publish({status:"completed",pageManagementResult:result});return;
           }
           if((request.command==="edit-workflow" || request.command==="edit-task")) {
             const handler=request.command==="edit-task"?capabilities.editTask:edit;
@@ -245,7 +257,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
           acceptingProgress=false;
           await publications.catch(()=>{});
           // Raw error text is private; safe execution failure metadata is in timings.
-          try {await publish({status:"failed",checkpoint,error:(request.command==="edit-workflow" || request.command==="edit-task")?"Workflow edit failed; keep Obsidian open and inspect this request":executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again"});}
+          try {await publish({status:"failed",checkpoint,error:pageManagement&&error instanceof PageManagementError?error.message:(request.command==="edit-workflow" || request.command==="edit-task")?"Workflow edit failed; keep Obsidian open and inspect this request":executionAdmissionDiagnostic(error) || "Plugin execution or receipt publication failed; inspect the recorded request and run; do not launch again"});}
           catch {fail();} // An uncertain receipt never authorizes replay.
         } finally {if(active.get(id)===execution)active.delete(id);}
       })();
@@ -291,7 +303,18 @@ export async function requestPluginTaskEdit(runtime:string,command:TaskEditComma
 export async function requestPluginPageCreation(runtime:string,request:PageCreationRequest,recover=false):Promise<PageCreationResult|undefined> {
   return requestPluginCommand(runtime,{command:"create-page",request,...(recover?{recover:true}:{})}) as Promise<PageCreationResult|undefined>;
 }
-async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|TaskEditCommand|PageCreationCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<ExecutionSummary|WorkflowEditResult|TaskEditResult|PageCreationResult|undefined> {
+function validPageManagementResult(result:any,command:PageManagementCommand):result is PageManagementResult {
+  return result?.command===command.command&&result.pageId===command.request.pageId&&
+    (command.command==="review-page"?result.kind===(command.request as any).kind&&/^[a-f0-9]{64}$/.test(result.reviewHash)&&!!result.review&&result.applied===undefined:
+      result.action===(command.request as any).action&&result.applied===true);
+}
+export async function requestPluginPageManagement(runtime:string,command:PageManagementCommand,onSubmitted?:(id:string)=>void,signal?:AbortSignal):Promise<PageManagementResult&{requestId:string}> {
+  let requestId="";
+  const result=await requestPluginCommand(runtime,command,signal,undefined,id=>{requestId=id;onSubmitted?.(id);});
+  if(!result)throw new Error("Enable a compatible AutoOC in Obsidian to review or manage Pages through its owner; no standalone fallback");
+  return {...result as PageManagementResult,requestId};
+}
+async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|TaskEditCommand|PageCreationCommand|PageManagementCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<ExecutionSummary|WorkflowEditResult|TaskEditResult|PageCreationResult|PageManagementResult|undefined> {
   if(!fs.existsSync(path.join(runtime,"execution.lock")))return undefined;
   const root=fs.realpathSync(runtime);regularDirectory(root);
   const owner=readExecutionLeaseOwner(root),directory=path.join(root,"cli-"+owner.token);
@@ -305,6 +328,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
     if(current.token!==owner.token || current.pid!==owner.pid)throw new Error("CLI request owner changed");
     const host=read(path.join(directory,"host"));
     if(host.protocol!==1 || host.owner!==owner.token || host.pid!==owner.pid)throw new Error("Invalid CLI request host");
+    if((command.command==="review-page"||command.command==="page-action")&&host.pageManagement!==1)throw new Error("Loaded AutoOC does not support page management; reload a compatible plugin before submission");
     if(command.command==="create-page" && command.recover && host.pageCreationRecovery!==1)throw new Error("Loaded AutoOC does not support page recovery; reload a compatible plugin");
     if(command.command==="create-page" && host.pageCreation!==1)throw new Error("Loaded AutoOC does not support page creation; reload a compatible plugin");
     if(command.command==="edit-task" && host.taskEditing!==1)throw new Error("Loaded AutoOC does not support task editing; reload a compatible plugin before submission");
@@ -346,6 +370,13 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
         if(!["accepted","running","completed","rejected","failed"].includes(result.status))throw new Error("Invalid CLI receipt status");
         if(result.status==="rejected")outcome="not-accepted";
         const checkpoint=result.checkpoint;
+        if(command.command==="review-page"||command.command==="page-action"){
+          if(result.status==="completed"){
+            if(!validPageManagementResult(result.pageManagementResult,command))throw new Error("Invalid page management receipt");
+            return result.pageManagementResult;
+          }
+          if(result.status==="rejected"||result.status==="failed")throw new Error(result.error);
+        }
         if(command.command==="create-page"){
           if(result.status==="completed"){
             if(result.pageResult?.requestId!==command.request.requestId || !/^[a-f0-9-]{36}$/.test(result.pageResult?.pageId) || typeof result.pageResult?.created!=="boolean")throw new Error("Invalid page creation receipt");
@@ -389,7 +420,9 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
       }
       if(signal?.aborted) {
         write(path.join(directory,id+".cancel"),{id});
-        throw new Error("CLI wait interrupted; cooperative cancellation requested");
+        throw new Error(command.command==="review-page"||command.command==="page-action"?
+          "CLI wait interrupted; an accepted Page operation may continue. Inspect its receipt before acting again":
+          "CLI wait interrupted; cooperative cancellation requested");
       }
       check();
       if(performance.now()>=waitDeadline)throw new Error("CLI wait deadline reached; execution outcome is uncertain");
@@ -413,6 +446,8 @@ export interface RequestInspection {
   hostAvailable:boolean;receiptStatus?:string;
   checkpoint?:ExecutionSummary;
   resultAvailable?:boolean;
+  pageManagement?:Partial<PageManagementResult>;
+  error?:string;
   result?:{phase:RunCheckpoint["phase"];steps:Array<{stepId:string;output?:string;succeeded?:boolean}>};
   timing?:{submittedAt:number;receivedAt:number;queueMs:number};
   diagnostics?:ExecutionTiming[];
@@ -480,6 +515,15 @@ export function inspectPluginRequest(runtime:string,selector:RequestSelector):Re
     result.state=receipt?.status==="rejected"?"not-accepted":receipt?.status==="completed"?"finished":
       receipt && receipt.status!=="failed" && result.hostAvailable?"running":"unknown";
     if(receipt?.checkpoint)result.checkpoint=executionSummary(receipt.checkpoint);
+    if(request.command==="review-page"||request.command==="page-action") {
+      if(receipt?.status==="completed") {
+        if(!validPageManagementResult(receipt.pageManagementResult,request))throw new Error("Invalid page management receipt");
+        const value=receipt.pageManagementResult as PageManagementResult;
+        result.resultAvailable=true;
+        result.pageManagement=selector.includeOutput?value:{command:value.command,pageId:value.pageId,kind:value.kind,action:value.action,applied:value.applied,reviewHash:value.reviewHash};
+      }
+      if((receipt?.status==="failed"||receipt?.status==="rejected")&&typeof receipt.error==="string")result.error=receipt.error.slice(0,4000);
+    }
     const timing=receipt?.timing;
     if(timing && [timing.submittedAt,timing.receivedAt,timing.queueMs].every(n=>Number.isFinite(n)&&n>=0))result.timing={submittedAt:timing.submittedAt,receivedAt:timing.receivedAt,queueMs:timing.queueMs};
   }
