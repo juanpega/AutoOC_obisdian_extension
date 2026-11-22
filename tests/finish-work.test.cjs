@@ -53,6 +53,11 @@ test('installed CLI reviews and closes a Page through the actual plugin owner wh
     const removal=await call('review-page','--page','page','--kind','finish');assert.deepEqual(removal.review.removalBlockers,[]);
     const removed=await act({pageId:'page',action:'remove-worktree',reviewHash:removal.reviewHash,sessionsClosed:true});assert.equal(removed.applied,true);
     assert.equal(fs.existsSync(f.worktree),false);assert.equal(f.read().workPages[0].worktreeRemoval.status,'removed');assert.equal(f.read().pageTerminalClaims[0].id,claim.id);
+    const retained=f.read().workPages[0],deletion=await call('review-page','--page','page','--kind','delete');
+    assert.deepEqual(deletion.review.blockers,[]);
+    const deleted=await act({pageId:'page',action:'delete',reviewHash:deletion.reviewHash,confirmDelete:true});
+    assert.equal(deleted.applied,true);assert.ok(deleted.requestId);assert.equal(f.read().workPages.length,0);
+    assert.deepEqual(f.read().deletedWorkPages[0].page,retained);assert.equal(f.read().pageTerminalClaims[0].id,claim.id);
     assert.equal(git(f.repo,'rev-parse','refs/heads/feat/finish'),f.page.baseCommit);assert.equal(pumpError,undefined);
   }finally{clearInterval(timer);pump.close();await pump.drain();}
 });
@@ -220,7 +225,7 @@ test('page deletion rejects active/stale pages and terminals, and rolls back a f
   await assert.rejects(f.p.deleteWorkPage(expected),/terminals/);f.p.settings.pageTerminalClaims=[];
   const save=f.p.saveSettings.bind(f.p);f.p.saveSettings=async()=>{throw Error('save failed');};
   await assert.rejects(f.p.deleteWorkPage(expected),/save failed/);
-  assert.deepEqual(fs.readFileSync(f.file),before);assert.equal(f.p.settings.workPages[0].id,'page');
+  assert.deepEqual(fs.readFileSync(f.file),before);assert.equal(f.p.settings.workPages[0].id,'page');assert.equal(f.p.settings.deletedWorkPages,undefined);
   f.p.saveSettings=save;await f.p.deleteWorkPage(expected);assert.equal(f.read().workPages.length,0);assert.ok(fs.existsSync(f.worktree));
 });
 
@@ -238,9 +243,27 @@ test('unloading during page deletion waits for its published save before releasi
 test('page deletion retains execution history and worktree removal evidence',async t=>{
   const f=await fixture(t);await f.p.runWorkPage('page','w',false);
   let review=await f.review();await f.p.finishWorkPage('page',review.hash,false,false);
-  const before=f.read();await assert.rejects(f.p.deleteWorkPage({...f.p.settings.workPages[0]}),/run history/);assert.deepEqual(f.read(),before);
+  const before=f.read(),output=f.p.pageRunOutput(before.pageRuns[0]);
+  await f.p.deleteWorkPage({...f.p.settings.workPages[0]});
+  assert.equal(f.read().workPages.length,0);assert.deepEqual(f.read().deletedWorkPages[0].page,before.workPages[0]);
+  assert.deepEqual(f.read().pageRuns,before.pageRuns);assert.equal(f.p.pageRunOutput(before.pageRuns[0]),output);
+  await f.p.loadSettings();assert.equal(f.p.settings.deletedWorkPages[0].page.id,'page');
+  await assert.rejects(f.p.runWorkPage('page','w',false),/missing|ambiguous/);
   const g=await archivedFixture(t);review=await g.review();await g.p.finishWorkPage('page',review.hash,true,true);
-  const retained=g.read();await assert.rejects(g.p.deleteWorkPage({...g.p.settings.workPages[0]}),/removal evidence/);assert.deepEqual(g.read(),retained);
+  const retained=g.read(),head=git(g.repo,'rev-parse','HEAD');
+  await g.p.deleteWorkPage({...g.p.settings.workPages[0]});
+  assert.equal(g.read().workPages.length,0);assert.deepEqual(g.read().deletedWorkPages[0].page,retained.workPages[0]);
+  assert.equal(fs.existsSync(g.worktree),false);assert.equal(git(g.repo,'rev-parse','HEAD'),head);assert.ok(git(g.repo,'branch','--list','feat/finish'));
+  await g.p.loadSettings();assert.equal(g.p.settings.deletedWorkPages[0].page.worktreeRemoval.status,'removed');
+  await assert.rejects(g.p.deleteWorkPage(retained.workPages[0]),/missing|ambiguous/);assert.equal(g.read().deletedWorkPages.length,1);
+});
+
+test('page deletion rejects pending removal without losing recovery evidence',async t=>{
+  const f=await archivedFixture(t),review=await f.review();
+  await f.p.finishWorkPage('page',review.hash,true,true);
+  f.p.settings.workPages[0].worktreeRemoval.status='pending';await f.p.saveSettings();const before=f.read();
+  await assert.rejects(f.p.deleteWorkPage({...f.p.settings.workPages[0]}),/removal is pending/);
+  assert.deepEqual(f.read(),before);assert.equal(f.p.settings.deletedWorkPages,undefined);
 });
 
 test('Main helper stays open through separate archive and clean worktree removal',async t=>{

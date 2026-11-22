@@ -48,9 +48,12 @@ test('finish, discard and delete remain separate explicit actions and keep engin
   await f.command('page-action',{pageId:'p',action:'archive',reviewHash:review.reviewHash});assert.deepEqual(f.effects,[['p',digest,false,false]]);
   const archived=await f.review('finish');await f.command('page-action',{pageId:'p',action:'remove-worktree',reviewHash:archived.reviewHash,sessionsClosed:true});assert.deepEqual(f.effects.at(-1),['p',digest,true,true]);
   const discard=await f.review('discard');await f.command('page-action',{pageId:'p',action:'discard',reviewHash:discard.reviewHash,branchName:'feat/p',confirmLoss:true,sessionsClosed:true});assert.deepEqual(f.effects.at(-1),['p',digest,'feat/p',true]);
-  f.host.settings.pageRuns=[{pageId:'p'}];const deletion=await f.review('delete');assert.match(deletion.review.blockers.join(),/history/);
-  await assert.rejects(f.command('page-action',{pageId:'p',action:'delete',reviewHash:deletion.reviewHash,confirmDelete:true}),/history/);
-  f.host.settings.pageRuns=[];const valid=await f.review('delete');await f.command('page-action',{pageId:'p',action:'delete',reviewHash:valid.reviewHash,confirmDelete:true});assert.deepEqual(f.host.settings.workPages,[]);
+  f.host.settings.pageRuns=[{pageId:'p',phase:'in_flight',uncertain:false}];const deletion=await f.review('delete');assert.match(deletion.review.blockers.join(),/unfinished/);
+  await assert.rejects(f.command('page-action',{pageId:'p',action:'delete',reviewHash:deletion.reviewHash,confirmDelete:true}),/unfinished/);
+  f.host.settings.pageRuns[0].phase='completed';f.page.worktreeRemoval={status:'pending'};
+  assert.match((await f.review('delete')).review.blockers.join(),/removal is pending/);
+  f.page.worktreeRemoval.status='removed';const valid=await f.review('delete');assert.deepEqual(valid.review.blockers,[]);
+  await f.command('page-action',{pageId:'p',action:'delete',reviewHash:valid.reviewHash,confirmDelete:true});assert.deepEqual(f.host.settings.workPages,[]);
 });
 test('catalog drift during review and duplicate page identities never produce an actionable result',async()=>{
   const f=fixture(),read=f.host.reviewPageFinish;

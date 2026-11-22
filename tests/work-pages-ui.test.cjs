@@ -1,5 +1,7 @@
 const {test,afterEach}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
+const realPages={exports:{}};
+new Function('require','module','exports',require('esbuild').buildSync({entryPoints:[path.join(__dirname,'../work-pages.ts')],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text)(require,realPages,realPages.exports);
 const cleanups=[];
 afterEach(()=>{for(const cleanup of cleanups.splice(0))cleanup();});
 function harness(failPrepare=false) {
@@ -29,6 +31,7 @@ function harness(failPrepare=false) {
     open(){opened.push(this);this.onOpen?.();} close(){this.onClose?.();}
   }
   const helper={
+    pageDeletionBlockers:realPages.exports.pageDeletionBlockers,
     assertPageDirectoryAvailable(){},
     registerWorkPage:async(settings,page,save)=>{settings.workPages=[...(settings.workPages||[]),page];await save();},
     readWorkspaceGitState:async()=>({kind:'branch',branch:'feat/current'}),
@@ -299,15 +302,31 @@ test('Delete page is confirmed from Overview and only removes the archived page 
   assert.equal(h.root.all().some(e=>e.text==='Old attempt (archived)'),false);
 });
 
-test('Delete page retains history or removal evidence and reports failed saves without claiming success',async()=>{
+test('Delete page permits completed history and removal, blocks pending evidence and reports failed saves',async()=>{
   const h=harness(),page={id:'p',name:'Old attempt',directory:'/repo',kind:'folder',archived:true,taskIds:[],workflowIds:[]};
   h.host.settings.workPages=[page];h.host.deleteWorkPage=async()=>{throw Error('save failed');};
   h.api.renderWorkPages(h.root,h.app,h.host,'general',()=>h.effects.push('navigate'),()=>{});
   const open=()=>{h.root.all().find(e=>e.tag==='button'&&e.text==='Delete page').onclick();return h.opened.at(-1);};
   h.host.settings.pageRuns=[{pageId:'p'}];let modal=open();assert.equal(h.button(modal,'Delete page').disabled,true);
+  h.host.settings.pageRuns=[{pageId:'p',phase:'completed',uncertain:true}];modal=open();assert.equal(h.button(modal,'Delete page').disabled,true);
+  h.host.settings.pageRuns=[{pageId:'p',phase:'completed',uncertain:false}];page.worktreeRemoval={status:'removed'};modal=open();assert.equal(h.button(modal,'Delete page').disabled,false);
   h.host.settings.pageRuns=[];page.worktreeRemoval={status:'pending'};modal=open();assert.equal(h.button(modal,'Delete page').disabled,true);
   delete page.worktreeRemoval;modal=open();await h.button(modal,'Delete page').onclick();
   assert.ok(modal.contentEl.all().some(e=>/save failed/.test(e.text)));assert.deepEqual(h.effects,[]);assert.deepEqual(h.notices,[]);
+});
+
+test('deleted page history keeps logs available without workspace or execution controls',async()=>{
+  const h=harness();h.host.settings.workPages=[];
+  h.host.settings.deletedWorkPages=[{page:{id:'p',name:'Removed feature',directory:'/repo/removed',archived:true,worktreeRemoval:{status:'removed'}},deletedAt:'2026-11-22T12:00:00.000Z'}];
+  h.host.settings.pageRuns=[{pageId:'p',runId:'done',workflowId:'w',name:'Completed task',phase:'completed',uncertain:false}];
+  h.host.pageRunOutput=()=> 'retained output';
+  h.api.renderWorkPages(h.root,h.app,h.host,'general',()=>{},()=>{});
+  assert.equal(h.root.all().some(e=>e.text.includes('Completed task')),false);
+  await h.root.all().find(e=>e.tag==='button'&&e.text==='Deleted page history').onclick();
+  const modal=h.opened.at(-1);
+  assert.ok(modal.contentEl.all().some(e=>e.text.includes('Removed feature')));
+  assert.equal(modal.contentEl.all().some(e=>e.tag==='button'&&['Open page','Continue','Reconcile','Stop','Delete page'].includes(e.text)),false);
+  await h.button(modal,'Log').onclick();assert.ok(h.opened.at(-1).contentEl.all().some(e=>e.text==='retained output'));
 });
 
 test('blocked close explains the reason next to confirmation and can refresh after sessions end',async()=>{

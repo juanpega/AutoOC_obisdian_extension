@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import {createHash} from "crypto";
-import {normalizePageSelection,type WorkPage,type WorkPageSettings} from "./work-pages";
+import {normalizePageSelection,pageDeletionBlockers,type WorkPage,type WorkPageSettings} from "./work-pages";
 import {workPageRevision,type FinishWorkReview,type BlockingPageSession} from "./finish-work";
 import type {MergeReview,MergeCommand} from "./merge-review";
 import type {DiscardWorkReview} from "./discard-work";
@@ -95,9 +95,7 @@ export async function managePage(host:PageManagementHost,command:PageManagementC
     const review:MergeReview|FinishWorkReview|DiscardWorkReview|{hash:string;blockers:string[]}=
       kind==="merge"?await host.reviewPageMerge(page.id,request.targetDirectory):kind==="finish"?await host.reviewPageFinish(page.id):
       kind==="discard"?await host.reviewPageDiscard(page.id):{hash:workPageRevision(page),blockers:[
-        ...blockers(page.id),...(!page.archived?["Archive this page before deleting it"]:[]),
-        ...(page.worktreeRemoval?["Keep the worktree removal evidence; this Page cannot be deleted"]:[]),
-        ...(host.settings.pageRuns?.some(run=>run.pageId===page.id)?["Keep this Page to retain its run history"]:[])]};
+        ...blockers(page.id),...pageDeletionBlockers(host.settings,page)]};
     if(host.isLifecycleStopped()||host.settings.workPages?.filter(p=>p.id===page.id).length!==1||workPageRevision(host.settings.workPages.find(p=>p.id===page.id)!)!==workPageRevision(page))throw new Error("Page changed during review; review again");
     const sessions=host.pageBlockingSessions(kind==="merge"?undefined:page.id);
     const reviewHash=hash([kind,workPageRevision(page),review.hash,kind==="merge"?(review as MergeReview).target:null,sessions]);

@@ -72,3 +72,6 @@ Un fallo de consulta deshabilita las acciones antiguas y ofrece reintento.
 
 Guía de operación distribuida: `skills/autooc-runtime/SKILL.md`. Las capacidades
 y hashes del paquete concreto prevalecen sobre compartir el número 1.7.29.
+
+
+Delete page admite Pages archivadas con ejecuciones resueltas y retirada de worktree confirmada como `removed`. La entrada sale del listado y conserva identidad/evidencia en `deletedWorkPages`, junto al historial existente. Overview permite consultar los logs en **Deleted page history**, sin reactivar la Page. Las retiradas pendientes y ejecuciones inciertas siguen bloqueando; se mantienen revisión/hash, confirmación, propietario y sesiones.

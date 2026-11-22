@@ -12,5 +12,6 @@
     "strictNullChecks": true,
     "lib": ["ES6", "DOM", "DOM.Iterable"]
   },
-  "include": ["**/*.ts"]
+  "include": ["**/*.ts"],
+  "exclude": ["node_modules", "release"]
 }

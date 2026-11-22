@@ -1,4 +1,5 @@
 import {validTaskEdit,type TaskEditCommand,type TaskEditResult} from "./task-edit";
+import {validSharingCommand,type SharingCommand,type SharingRequest} from "./workflow-sharing-service";
 import {presentationFields, type ExecutionPresentation} from "./execution-presentation";
 import * as fs from "fs";
 import * as path from "path";
@@ -58,11 +59,11 @@ function regularDirectory(directory:string):void {
 function read(file:string):any {
   const stat=fs.lstatSync(file);
   if(!stat.isFile() || stat.isSymbolicLink() || stat.nlink!==1) throw new Error("Unsafe CLI request file");
-  const fileMax=file.endsWith(".request")?WORKFLOW_EDIT_MAX_REQUEST_BYTES:65536;
+  const fileMax=file.endsWith(".request")?WORKFLOW_EDIT_MAX_REQUEST_BYTES:file.endsWith(".receipt")?16*1024*1024:65536;
   if(stat.size>fileMax)throw Object.assign(new Error(`CLI request size ${stat.size} exceeds maximum ${fileMax} UTF-8 bytes`),{code:"CLI_SIZE"});
   const bytes=fs.readFileSync(file);
   const value=JSON.parse(bytes.toString("utf8"));
-  const max=file.endsWith(".request") && (value?.command==="edit-workflow" || value?.command==="edit-task")?WORKFLOW_EDIT_MAX_REQUEST_BYTES:65536;
+  const max=file.endsWith(".request") && (value?.command==="edit-workflow" || value?.command==="edit-task")?WORKFLOW_EDIT_MAX_REQUEST_BYTES:file.endsWith(".receipt")&&value?.sharingResult?16*1024*1024:65536;
   if(bytes.length>max)throw Object.assign(new Error(`CLI request size ${bytes.length} exceeds maximum ${max} UTF-8 bytes`),{code:"CLI_SIZE"});
   return value;
 }
@@ -112,6 +113,7 @@ async function replace(file:string,value:unknown,check:()=>void,asyncFlush=true)
   }
 }
 function validCommand(value:any):boolean {
+  if(value?.command==="share-workflows")return validSharingCommand(value);
   if(value?.command==="review-page"||value?.command==="page-action")return validPageManagementCommand(value);
   if(value?.command==="create-page")return (value.recover===undefined || typeof value.recover==="boolean") && validPageCreationRequest(value.request) && ["workflowId","taskId","stepId","pageId","runId"].every(key=>value[key]===undefined);
   if(value?.command==="edit-task")return validTaskEdit(value);
@@ -127,14 +129,14 @@ function validCommand(value:any):boolean {
 
 // One mailbox per lease. Accepted receipts survive reloads and are never replayed.
 // Receipts carry IDs/progress; edit requests also carry bounded editable text.
-export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>,timing?:TimingContext)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {editTask?:(command:TaskEditCommand)=>Promise<TaskEditResult>;pageSelection?: boolean;pages?:ReturnType<typeof createPageCreationService>;managePage?:(command:PageManagementCommand)=>Promise<PageManagementResult>} = {}) {
+export function createPluginRequestHost(lease:ExecutionLease, execute:(command:PluginCommand,signal:AbortSignal,progress:(state:RunCheckpoint,presentation?:ExecutionPresentation)=>Promise<void>,timing?:TimingContext)=>Promise<RunCheckpoint & Partial<ExecutionPresentation>>, edit?:(command:WorkflowEditCommand)=>Promise<WorkflowEditResult>, getConcurrency:()=>Record<string,any>=()=>({}), capabilities: {sharing?:(request:SharingRequest)=>Promise<any>;editTask?:(command:TaskEditCommand)=>Promise<TaskEditResult>;pageSelection?: boolean;pages?:ReturnType<typeof createPageCreationService>;managePage?:(command:PageManagementCommand)=>Promise<PageManagementResult>} = {}) {
   lease.assertOwned();
   const root=fs.realpathSync(lease.directory),directory=path.join(root,"cli-"+lease.token);
   fs.mkdirSync(directory,{mode:0o700});regularDirectory(directory);
   const descriptor=path.join(directory,"host");
   let heartbeatAt=Date.now();
   let publishedLimit=concurrencySettings(getConcurrency()).maxConcurrentExecutions;
-  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,taskEditing:capabilities.editTask?1:0,workflowEditing:!!edit,...(edit||capabilities.editTask?{workflowEditMaxChangesBytes:WORKFLOW_EDIT_MAX_CHANGES_BYTES}:{}),concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1,pageCreationRecovery:1} : {}),...(capabilities.managePage?{pageManagement:1}: {})});
+  const hostDescriptor=()=>({protocol:1,owner:lease.token,pid:process.pid,heartbeatAt,requestInspection:1,phaseTimings:1,taskEditing:capabilities.editTask?1:0,workflowEditing:!!edit,...(edit||capabilities.editTask?{workflowEditMaxChangesBytes:WORKFLOW_EDIT_MAX_CHANGES_BYTES}:{}),concurrentExecutions:publishedLimit,sharedWorkspaceConcurrency:true,codeStepSelection:true,nestedWorkflows:1,...(capabilities.pageSelection ? {pageSelection:1} : {}),...(capabilities.pages ? {pageCreation:1,pageCreationRecovery:1} : {}),...(capabilities.managePage?{pageManagement:1}: {}),...(capabilities.sharing?{workflowSharing:1}:{})});
   write(descriptor,hostDescriptor());
   let closed=false;
   let failure:Error|undefined,polling:Promise<void>|undefined,pagePolling:Promise<void>|undefined;
@@ -193,7 +195,9 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
         await receipt(id,{status:"rejected",error:"Expired, cancelled or invalid CLI request"});continue;
       }
       if(closed)return;
-      const pageManagement=request.command==="review-page"||request.command==="page-action",reading=request.command==="review-page";
+      const sharing=request.command==="share-workflows";
+      const pageManagement=request.command==="review-page"||request.command==="page-action",reading=request.command==="review-page"||sharing;
+      if(sharing&&!capabilities.sharing){await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support shared workflows; reload a compatible plugin"});continue;}
       if(pageManagement&&!capabilities.managePage){await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page management; reload a compatible plugin"});continue;}
       if(request.command==="create-page" && !capabilities.pages){await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page creation"});continue;}
       if (request.pageId && !capabilities.pageSelection) {await receipt(id,{status:"rejected",error:"Loaded AutoOC does not support page selection; reload the updated plugin."});continue;}
@@ -232,6 +236,7 @@ export function createPluginRequestHost(lease:ExecutionLease, execute:(command:P
             if(!validPageManagementResult(result,request))throw new Error("Invalid page management result");
             await publish({status:"completed",pageManagementResult:result});return;
           }
+          if(sharing){const result=await capabilities.sharing!(request.request);await publish({status:"completed",sharingResult:result});return;}
           if((request.command==="edit-workflow" || request.command==="edit-task")) {
             const handler=request.command==="edit-task"?capabilities.editTask:edit;
             if(!handler)throw new Error("Definition editing unsupported");
@@ -300,6 +305,11 @@ export async function requestPluginTaskEdit(runtime:string,command:TaskEditComma
   if(!result)throw new Error("Enable AutoOC in Obsidian to edit tasks through its owner; do not edit data.json directly");
   return result as TaskEditResult;
 }
+export async function requestPluginSharing(runtime:string,request:SharingRequest,onSubmitted?:(id:string)=>void):Promise<any> {
+  let requestId="";const result=await requestPluginCommand(runtime,{command:"share-workflows",request},undefined,undefined,id=>{requestId=id;onSubmitted?.(id);});
+  if(!result)throw new Error("Open a compatible AutoOC plugin to manage shared workflows; no standalone catalog writes");
+  return {...result,requestId};
+}
 export async function requestPluginPageCreation(runtime:string,request:PageCreationRequest,recover=false):Promise<PageCreationResult|undefined> {
   return requestPluginCommand(runtime,{command:"create-page",request,...(recover?{recover:true}:{})}) as Promise<PageCreationResult|undefined>;
 }
@@ -314,7 +324,7 @@ export async function requestPluginPageManagement(runtime:string,command:PageMan
   if(!result)throw new Error("Enable a compatible AutoOC in Obsidian to review or manage Pages through its owner; no standalone fallback");
   return {...result as PageManagementResult,requestId};
 }
-async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|TaskEditCommand|PageCreationCommand|PageManagementCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<ExecutionSummary|WorkflowEditResult|TaskEditResult|PageCreationResult|PageManagementResult|undefined> {
+async function requestPluginCommand(runtime:string,command:PluginCommand|WorkflowEditCommand|TaskEditCommand|PageCreationCommand|PageManagementCommand|SharingCommand,signal?:AbortSignal,onProgress?:(state:ExecutionSummary)=>void,onSubmitted?:(requestId:string)=>void):Promise<any> {
   if(!fs.existsSync(path.join(runtime,"execution.lock")))return undefined;
   const root=fs.realpathSync(runtime);regularDirectory(root);
   const owner=readExecutionLeaseOwner(root),directory=path.join(root,"cli-"+owner.token);
@@ -328,6 +338,7 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
     if(current.token!==owner.token || current.pid!==owner.pid)throw new Error("CLI request owner changed");
     const host=read(path.join(directory,"host"));
     if(host.protocol!==1 || host.owner!==owner.token || host.pid!==owner.pid)throw new Error("Invalid CLI request host");
+    if(command.command==="share-workflows"&&host.workflowSharing!==1)throw new Error("Loaded AutoOC does not support shared workflows; reload a compatible plugin before submission");
     if((command.command==="review-page"||command.command==="page-action")&&host.pageManagement!==1)throw new Error("Loaded AutoOC does not support page management; reload a compatible plugin before submission");
     if(command.command==="create-page" && command.recover && host.pageCreationRecovery!==1)throw new Error("Loaded AutoOC does not support page recovery; reload a compatible plugin");
     if(command.command==="create-page" && host.pageCreation!==1)throw new Error("Loaded AutoOC does not support page creation; reload a compatible plugin");
@@ -370,6 +381,10 @@ async function requestPluginCommand(runtime:string,command:PluginCommand|Workflo
         if(!["accepted","running","completed","rejected","failed"].includes(result.status))throw new Error("Invalid CLI receipt status");
         if(result.status==="rejected")outcome="not-accepted";
         const checkpoint=result.checkpoint;
+        if(command.command==="share-workflows") {
+          if(result.status==="completed"){if(result.sharingResult?.action!==command.request.action)throw new Error("Invalid shared workflow receipt");return result.sharingResult;}
+          if(result.status==="rejected"||result.status==="failed")throw new Error(result.error);
+        }
         if(command.command==="review-page"||command.command==="page-action"){
           if(result.status==="completed"){
             if(!validPageManagementResult(result.pageManagementResult,command))throw new Error("Invalid page management receipt");
@@ -515,6 +530,10 @@ export function inspectPluginRequest(runtime:string,selector:RequestSelector):Re
     result.state=receipt?.status==="rejected"?"not-accepted":receipt?.status==="completed"?"finished":
       receipt && receipt.status!=="failed" && result.hostAvailable?"running":"unknown";
     if(receipt?.checkpoint)result.checkpoint=executionSummary(receipt.checkpoint);
+    if(request.command==="share-workflows"&&receipt?.status==="completed"){
+      if(receipt.sharingResult?.action!==request.request.action)throw new Error("Invalid shared workflow receipt");
+      result.resultAvailable=true;if(selector.includeOutput)result.result=receipt.sharingResult;
+    }
     if(request.command==="review-page"||request.command==="page-action") {
       if(receipt?.status==="completed") {
         if(!validPageManagementResult(receipt.pageManagementResult,request))throw new Error("Invalid page management receipt");

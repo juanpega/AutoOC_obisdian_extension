@@ -31,14 +31,20 @@ export interface PageRun {
 export interface PageTerminalClaim { id: string; pageId: string; directory: string; createdAt: string; exclusive?: boolean; }
 export interface WorkPageSettings {
   worktreesEnabled?: boolean; workPages?: WorkPage[]; pageRuns?: PageRun[];
+  deletedWorkPages?: {page:WorkPage;deletedAt:string}[];
   pageTerminalClaims?: PageTerminalClaim[]; worktreeNoticeDismissed?: string[];
 }
 
 export function validateWorkPages(settings: WorkPageSettings): void {
   if (settings.worktreesEnabled !== undefined && typeof settings.worktreesEnabled !== "boolean") throw new Error("Invalid worktree preference");
   if (settings.workPages !== undefined && !Array.isArray(settings.workPages)) throw new Error("Invalid work pages; existing data has been preserved");
+  if (settings.deletedWorkPages !== undefined && !Array.isArray(settings.deletedWorkPages)) throw new Error("Invalid deleted page history; existing data has been preserved");
+  for(const entry of settings.deletedWorkPages || []) {
+    if(!entry || !entry.page || entry.page.archived!==true || typeof entry.deletedAt!=="string" || !Number.isFinite(Date.parse(entry.deletedAt)) ||
+        entry.page.worktreeRemoval && entry.page.worktreeRemoval.status!=="removed")throw new Error("Invalid deleted page evidence; existing data has been preserved");
+  }
   const ids = new Set<string>();
-  for (const page of settings.workPages || []) {
+  for (const page of [...(settings.workPages || []),...(settings.deletedWorkPages || []).map(entry=>entry.page)]) {
     if (!page || !/^[a-zA-Z0-9-]{1,80}$/.test(page.id) || ["main", "general"].includes(page.id) || ids.has(page.id) ||
         typeof page.name !== "string" || !page.name.trim() || typeof page.objective !== "string" ||
         typeof page.directory !== "string" || !path.isAbsolute(page.directory) || !["folder", "worktree"].includes(page.kind) ||
@@ -75,6 +81,15 @@ export function validateWorkPages(settings: WorkPageSettings): void {
       typeof run.workflowId!=="string" || typeof run.name!=="string" || typeof run.createdAt!=="string" || typeof run.uncertain!=="boolean" ||
       !Number.isSafeInteger(run.revision) || run.revision<0 || !["ready","in_flight","completed","failed","abandoned"].includes(run.phase))) throw new Error("Invalid page history; existing data has been preserved");
 }
+/** Shared UI/CLI guard. Completed history is retained, not a reason to block deletion. */
+export function pageDeletionBlockers(settings:WorkPageSettings,page:WorkPage):string[] {
+  return [
+    ...(!page.archived?["Archive this page before deleting it."]:[]),
+    ...(page.worktreeRemoval && page.worktreeRemoval.status!=="removed"?["Worktree removal is pending. Check its outcome before deleting this page."]:[]),
+    ...(settings.pageRuns?.some(run=>run.pageId===page.id && (run.uncertain || !["completed","failed","abandoned"].includes(run.phase)))
+      ?["This page has unfinished or uncertain executions. Review them before deleting it."]:[])
+  ];
+}
 export function selectWorkPage(settings: WorkPageSettings, id: string): WorkPage {
   validateWorkPages(settings);
   const matches = (settings.workPages || []).filter(page => page.id === id);
@@ -85,6 +100,7 @@ export function selectWorkPage(settings: WorkPageSettings, id: string): WorkPage
 /** Shared registration boundary for the UI and CLI. A retry never replaces an existing page. */
 export async function registerWorkPage(settings:WorkPageSettings,page:WorkPage,save:()=>Promise<void>):Promise<void> {
   validateWorkPages(settings);validateWorkPages({workPages:[page]});
+  if(settings.deletedWorkPages?.some(entry=>entry.page.id===page.id))throw new Error("Page ID belongs to deleted page history. Create a new page with a new ID.");
   const previous=settings.workPages,existing=previous?.find(item=>item.id===page.id);
   if(existing){if(JSON.stringify(existing)!==JSON.stringify(page))throw new Error("Page ID already exists with different settings");return;}
   assertPageDirectoryAvailable(settings,page.directory);

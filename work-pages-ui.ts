@@ -6,7 +6,7 @@ import type { WorktreeFile } from "./worktree-changes";
 import type { DiscardWorkReview } from "./discard-work";
 import type { DashboardItem } from "./dashboard-areas";
 import { mergeEditorUri, type MergeReview, type MergeCommand } from "./merge-review";
-import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage, assertPageDirectoryAvailable, type PagePreparationScope,
+import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage, assertPageDirectoryAvailable, pageDeletionBlockers, type PagePreparationScope,
   type WorkPage, type WorkPageSettings, type WorktreePreparation, type PageRun } from "./work-pages";
 
 export interface WorkPagesHost {
@@ -462,10 +462,8 @@ class DeletePageModal extends Modal {
     header.createEl("p",{text:page.directory,cls:"auto-oc-finish-path"});
     const body=root.createDiv("auto-oc-finish-body");
     body.createEl("p",{text:"Remove this archived page from AutoOC and Overview? Its folder, files, Git branches, tasks and workflows will stay unchanged."});
-    body.createEl("p",{text:"This removes the page configuration. To use this folder again, create a new page."});
-    const blocker=!page.archived ? "Archive this page before deleting it."
-      : page.worktreeRemoval ? "This page keeps worktree removal evidence and cannot be deleted."
-      : host.settings.pageRuns?.some(run=>run.pageId===page.id) ? "This page has run history. Keep it archived to retain access to its logs." : "";
+    body.createEl("p",{text:"The page leaves the workspace list. Its history and completed removal evidence stay available in Deleted page history. To use a remaining folder again, create a new page."});
+    const blocker=pageDeletionBlockers(host.settings,page).join("\n");
     const footer=root.createDiv("auto-oc-finish-footer");
     footer.createEl("p",{text:blocker || "Only this archived page will be deleted. All files are kept.",cls:"auto-oc-finish-status"});
     const feedback=footer.createEl("p");feedback.setAttr("role","alert");
@@ -691,13 +689,16 @@ function renderTerminalClaims(parent:HTMLElement, app:App, host:WorkPagesHost, p
   }
 }
 function runs(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?:string, openPage?:(id:string)=>void, source?:{id:string;task:boolean}) {
+  const deletedIds=new Set((host.settings.deletedWorkPages || []).map(entry=>entry.page.id));
   const history = (host.settings.pageRuns || []).filter(run => (!pageId || run.pageId === pageId) &&
+    (pageId || !deletedIds.has(run.pageId)) &&
     (!source || run.sourceId === source.id && run.task === source.task)).slice().reverse();
   for (const run of history) {
     const row = parent.createDiv("auto-oc-page-row"), active = host.ownsExecution(run.workflowId,run.runId);
     row.createEl("p",{text:(pageId ? "" : (host.settings.workPages?.find(p=>p.id===run.pageId)?.name || run.pageId) + " · ") + run.name + " · " + run.phase + (run.uncertain ? " · outcome needs review" : "")});
     row.createEl("small",{text:run.runId});
     action(row,"Log",host,async()=>new TextModal(app,run.name,host.pageRunOutput(run)).open());
+    if(deletedIds.has(run.pageId))continue;
     if (openPage) {
       row.createEl("button", {text:"Open page"}).onclick = () => openPage(run.pageId);
       continue;
@@ -803,6 +804,19 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
   if (selected === "general") {
     parent.createEl("h3",{text:"Overview"});
     parent.createEl("p",{text:"View activity and logs here. Use CLI to choose a workspace, or open a page to run workflows and manage its sessions. Import updates the shared task and workflow catalog; schedules run in Main workspace."});
+    if(host.settings.deletedWorkPages?.length)action(parent,"Deleted page history",host,async()=>{
+      const modal=new Modal(app);modal.modalEl.addClass("auto-oc-work-page-dialog");
+      modal.contentEl.createEl("h3",{text:"Deleted page history"});
+      modal.contentEl.createEl("p",{text:"Read-only records. These pages cannot run tasks or be restored. Their files and branches were not changed by Delete page."});
+      for(const entry of host.settings.deletedWorkPages || []) {
+        const row=modal.contentEl.createEl("details");
+        row.createEl("summary",{text:entry.page.name+" - "+entry.deletedAt});
+        row.createEl("p",{text:entry.page.directory});
+        if(entry.page.worktreeRemoval)row.createEl("p",{text:entry.page.worktreeRemoval.mode==="discard"?"Worktree and branch removal confirmed.":"Worktree removal confirmed; branch kept."});
+        runs(row,app,host,entry.page.id);
+      }
+      modal.contentEl.createEl("button",{text:"Close"}).onclick=()=>modal.close();modal.open();
+    });
     for (const page of entries) {
       const row = parent.createDiv("auto-oc-page-row");
       row.createEl("h4",{text:page.name + (("archived" in page && page.archived) ? " (archived)" : "")});
