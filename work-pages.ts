@@ -31,14 +31,20 @@ export interface PageRun {
 export interface PageTerminalClaim { id: string; pageId: string; directory: string; createdAt: string; exclusive?: boolean; }
 export interface WorkPageSettings {
   worktreesEnabled?: boolean; workPages?: WorkPage[]; pageRuns?: PageRun[];
+  deletedWorkPages?: {page:WorkPage;deletedAt:string}[];
   pageTerminalClaims?: PageTerminalClaim[]; worktreeNoticeDismissed?: string[];
 }
 
 export function validateWorkPages(settings: WorkPageSettings): void {
   if (settings.worktreesEnabled !== undefined && typeof settings.worktreesEnabled !== "boolean") throw new Error("Invalid worktree preference");
   if (settings.workPages !== undefined && !Array.isArray(settings.workPages)) throw new Error("Invalid work pages; existing data has been preserved");
+  if (settings.deletedWorkPages !== undefined && !Array.isArray(settings.deletedWorkPages)) throw new Error("Invalid deleted page history; existing data has been preserved");
+  for(const entry of settings.deletedWorkPages || []) {
+    if(!entry || !entry.page || entry.page.archived!==true || typeof entry.deletedAt!=="string" || !Number.isFinite(Date.parse(entry.deletedAt)) ||
+        entry.page.worktreeRemoval && entry.page.worktreeRemoval.status!=="removed")throw new Error("Invalid deleted page evidence; existing data has been preserved");
+  }
   const ids = new Set<string>();
-  for (const page of settings.workPages || []) {
+  for (const page of [...(settings.workPages || []),...(settings.deletedWorkPages || []).map(entry=>entry.page)]) {
     if (!page || !/^[a-zA-Z0-9-]{1,80}$/.test(page.id) || ["main", "general"].includes(page.id) || ids.has(page.id) ||
         typeof page.name !== "string" || !page.name.trim() || typeof page.objective !== "string" ||
         typeof page.directory !== "string" || !path.isAbsolute(page.directory) || !["folder", "worktree"].includes(page.kind) ||
@@ -75,6 +81,15 @@ export function validateWorkPages(settings: WorkPageSettings): void {
       typeof run.workflowId!=="string" || typeof run.name!=="string" || typeof run.createdAt!=="string" || typeof run.uncertain!=="boolean" ||
       !Number.isSafeInteger(run.revision) || run.revision<0 || !["ready","in_flight","completed","failed","abandoned"].includes(run.phase))) throw new Error("Invalid page history; existing data has been preserved");
 }
+/** Shared UI/CLI guard. Completed history is retained, not a reason to block deletion. */
+export function pageDeletionBlockers(settings:WorkPageSettings,page:WorkPage):string[] {
+  return [
+    ...(!page.archived?["Archive this page before deleting it."]:[]),
+    ...(page.worktreeRemoval && page.worktreeRemoval.status!=="removed"?["Worktree removal is pending. Check its outcome before deleting this page."]:[]),
+    ...(settings.pageRuns?.some(run=>run.pageId===page.id && (run.uncertain || !["completed","failed","abandoned"].includes(run.phase)))
+      ?["This page has unfinished or uncertain executions. Review them before deleting it."]:[])
+  ];
+}
 export function selectWorkPage(settings: WorkPageSettings, id: string): WorkPage {
   validateWorkPages(settings);
   const matches = (settings.workPages || []).filter(page => page.id === id);
@@ -85,11 +100,42 @@ export function selectWorkPage(settings: WorkPageSettings, id: string): WorkPage
 /** Shared registration boundary for the UI and CLI. A retry never replaces an existing page. */
 export async function registerWorkPage(settings:WorkPageSettings,page:WorkPage,save:()=>Promise<void>):Promise<void> {
   validateWorkPages(settings);validateWorkPages({workPages:[page]});
+  if(settings.deletedWorkPages?.some(entry=>entry.page.id===page.id))throw new Error("Page ID belongs to deleted page history. Create a new page with a new ID.");
   const previous=settings.workPages,existing=previous?.find(item=>item.id===page.id);
   if(existing){if(JSON.stringify(existing)!==JSON.stringify(page))throw new Error("Page ID already exists with different settings");return;}
-  if(previous?.some(item=>physicalPath(item.directory)===physicalPath(page.directory)))throw new Error("Another page already uses this folder");
+  assertPageDirectoryAvailable(settings,page.directory);
   const next=[...(previous || []),page];settings.workPages=next;
   try{await save();}catch(error){if(settings.workPages===next)settings.workPages=previous;throw error;}
+}
+export class PageDirectoryError extends Error {
+  constructor(readonly code:string, readonly pageId:string, readonly directory:string, message:string){super(message);}
+}
+/** Removed archives retain history, but no longer own a physical directory. */
+export function assertPageDirectoryAvailable(settings:WorkPageSettings,directory?:string,exceptId?:string):void {
+  validateWorkPages(settings);
+  const target=directory===undefined ? undefined : physicalPath(directory);
+  for(const page of settings.workPages || []) {
+    if(page.id===exceptId || page.archived===true && page.worktreeRemoval?.status==="removed")continue;
+    let resolved:string;
+    try {resolved=physicalPath(page.directory);if(!fs.statSync(resolved).isDirectory())throw new Error("Not a directory");}
+    catch {throw new PageDirectoryError("PAGE_DIRECTORY_UNAVAILABLE",page.id,page.directory,`Page "${page.name}" (${page.id}) has an unavailable folder: ${page.directory}. Review this Page before preparing another one.`);}
+    if(target!==undefined && path.relative(resolved,target)==="")throw new PageDirectoryError("PAGE_DIRECTORY_IN_USE",page.id,page.directory,"Another page already uses this folder");
+  }
+}
+export interface PagePreparationScope {directory:string; repository?:string; creating?:boolean;}
+/** Page management changes only the selected working tree; Main's CLI can stay open. */
+export function assertPagePreparationTerminals(settings:WorkPageSettings,scope:PagePreparationScope):void {
+  const target=scope.creating ? path.resolve(physicalPath(scope.repository!),WORKTREE_FOLDER,path.basename(scope.directory)) : physicalPath(scope.directory);
+  if(scope.creating && path.relative(target,scope.directory)!=="")throw new Error("Invalid new worktree directory");
+  const within=(root:string,child:string)=>{const rel=path.relative(root,child);return rel!==".." && !rel.startsWith(".."+path.sep) && !path.isAbsolute(rel);};
+  for(const claim of settings.pageTerminalClaims || []) {
+    let cwd:string;
+    try {cwd=physicalPath(claim.directory);}catch {throw new Error("A terminal folder is unavailable; review its session before preparing a Page.");}
+    if(scope.creating && claim.pageId==="main" && path.relative(cwd,physicalPath(scope.repository!))==="")continue;
+    if(!within(cwd,target) && !within(target,cwd))continue;
+    if(!scope.creating && independentGitWorkspaces(cwd,target))continue;
+    throw new Error("A terminal reserves the selected Page folder. Close that session before preparing the Page.");
+  }
 }
 export function pageExecutionId(pageId: string, sourceId: string, task = false): string {
   return "@page:" + pageId + ":" + (task ? "task:" : "workflow:") + sourceId;

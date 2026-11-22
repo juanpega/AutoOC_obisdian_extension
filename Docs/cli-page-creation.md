@@ -44,7 +44,7 @@ node CLI inspect-page-request --vault ROOT --request-id prepare-req-example-001
 
 ## Solicitudes desde tareas y workflows
 
-Con un propietario compatible, la CLI entrega la petición a ese propietario. Durante una ejecución devuelve `status:"queued"`, `created:false` y un `pageId` reservado. El padre puede continuar: el propietario espera a que los runs registrados terminen correctamente y a que se liberen ejecuciones, escritores y terminales antes de preparar Git y lanzar el hijo.
+Con un propietario compatible, la CLI entrega la petición a ese propietario. Durante una ejecución devuelve `status:"queued"`, `created:false` y un `pageId` reservado. El padre puede continuar: el propietario espera a que los runs registrados terminen correctamente y a que se liberen ejecuciones, escritores y terminales de la carpeta afectada antes de preparar Git y lanzar el hijo.
 
 No esperar al hijo dentro del padre ni sustituir este recorrido por un `run --page` recursivo. Fallo, cancelación o incertidumbre de los runs previos bloquean la petición. El host autónomo atiende estas solicitudes durante su ejecución y procesa la cola antes de salir; no inicia un daemon ni transfiere ejecuciones entre hosts. Sin propietario, `create-page` procesa su solicitud en primer plano.
 
@@ -78,3 +78,18 @@ Tras reiniciar no se reproducen peticiones antiguas automáticamente. Reenviar e
 - Preparación del PR 1.7.25: build aprobado y 15/15 pruebas del runtime distribuido aprobadas tras alinear la versión. Sin cambios funcionales respecto al candidato probado.
 - La suite general no está aprobada: pretest 310 aprobadas, 7 fallidas y 1 omitida; principal 829 aprobadas, 48 fallidas y 3 omitidas. Una regresión de preflight detectada en esa tanda se corrige y pasa después en la selección focal. Permanecen fallos de fixtures e integraciones Windows, OpenCode 2 y empaquetado PowerShell, sin atribuirlos todos a una causa demostrada.
 - Se usan procesos Node/Git y bóvedas sintéticas; el bundle plugin se carga con dobles de Obsidian. GUI nativa, proveedores autenticados y ejecución nativa macOS/Linux pendientes de verificación.
+
+## Recuperación de un alta parcial y carpetas retiradas (candidato)
+
+La validación omite únicamente Pages archivadas con `worktreeRemoval.status: "removed"`. Conserva la comprobación física de duplicados de las demás Pages. Una carpeta ausente o inaccesible devuelve `PAGE_DIRECTORY_UNAVAILABLE`, con `diagnostic.pageId` y `diagnostic.directory`; hay que revisar esa Page. Se comprueba antes de crear Git y al registrar.
+
+Para una creación cuyo worktree existe pero cuya Page no se registró, después de revisar sus efectos y autorizar la recuperación:
+
+```text
+node CLI recover-page-request --vault ROOT --request-id REQUEST_ID
+node CLI inspect-page-request --vault ROOT --request-id REQUEST_ID
+```
+
+Se requiere `pageCreationRecovery:1` en la CLI y en el propietario cargado. Se utiliza la petición durable original: mismo `requestId`, `pageId`, datos de requisito e historial; no editar el recibo ni generar otra solicitud. El propietario verifica repositorio, carpeta reservada, rama, registro Git y ausencia de otra Page vinculada. Conserva los errores previos en `recoveryHistory` y registra la Page existente sin ejecutar `git worktree add`, checkout, borrados ni lanzamientos (aunque la solicitud original incluyera `launch`). En recibos antiguos que no conservaron el commit base no se inventa ese dato. La recuperación de un lanzamiento iniciado está excluida.
+
+Las sesiones CLI de Main pueden permanecer abiertas al crear un worktree independiente y al archivar, retirar o eliminar una Page ajena. Las sesiones en la carpeta afectada, rutas no verificables, operaciones de catálogo y ejecuciones no resueltas mantienen sus bloqueos. Merge conserva sus comprobaciones sobre el destino. La actualización del paquete sigue requiriendo su propio procedimiento de inactividad.

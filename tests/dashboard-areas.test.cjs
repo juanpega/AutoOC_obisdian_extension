@@ -11,7 +11,7 @@ function harness(){
     addClass(c){this.classes.add(c);} focus(){doc.activeElement=this;}
     get childElementCount(){return this.children.length;}
     all(){return [this,...this.children.flatMap(c=>c.all())];}
-    querySelectorAll(selector){assert.equal(selector,'[data-area-item-key]');return this.all().filter(el=>el.attrs['data-area-item-key']);}
+    querySelectorAll(selector){if(selector==='.auto-oc-terminal-claims')return this.all().filter(el=>el.classes.has('auto-oc-terminal-claims'));assert.equal(selector,'[data-area-item-key]');return this.all().filter(el=>el.attrs['data-area-item-key']);}
   }
   class Stub{} const notices=[],opened=[],module={exports:{}};
   class Modal {constructor(app){this.app=app;this.contentEl=new Element();this.modalEl=new Element();}open(){opened.push(this);this.onOpen?.();}close(){this.onClose?.();}}
@@ -228,6 +228,7 @@ test('area Dashboard renders bounded Code detail, keeps toolbar, selection, focu
 test('Dashboard integration opens exact Code controls and clears stale list filters without running anything',()=>{
   const h=harness(),plugin={settings:{tasks:[task('a')],workflows:[flow('w',[code('s')])]},isLifecycleStopped:()=>false};
   const view=new h.AutoOCView({},plugin),root=new h.Element();let opened;
+  view.containerEl=root;
   view.app={vault:{adapter:{basePath:''}}};
   view.openWorkflowCodeEntry=(wf,step)=>opened=[wf,step];view.filterText='old';view.filterArea='missing';view.taskSource='catalog';
   view.renderDashboard(root);
@@ -261,4 +262,20 @@ test('Overview workspace selection reuses a live page terminal and Main retains 
   assert.deepEqual(effects,['p']);assert.equal(h.opened.some(e=>e instanceof h.CliLauncherModal),false);
   view.openCli();selector=h.opened.at(-1);selector.contentEl.all().find(e=>e.textContent==='Use workspace').onclick();
   assert.ok(h.opened.at(-1) instanceof h.CliLauncherModal);assert.equal(h.opened.at(-1).page,undefined);assert.equal(view.selectedWorkPage,'general');
+});
+
+test('Dashboard refresh updates terminal reservations without rebuilding the task area',()=>{
+  const h=harness(),root=new h.Element(),claim={id:'old',pageId:'main',directory:'/repo'};
+  const plugin={settings:{tasks:[],workflows:[],workingDirectory:'/repo',pageTerminalClaims:[claim]},isLifecycleStopped:()=>false,
+    pageTerminalState:id=>id==='old'?'unknown':'tracked',redactSecrets:text=>text};
+  const view=new h.AutoOCView({},plugin);view.app={vault:{adapter:{basePath:'/repo'}}};view.containerEl=root;
+  view.currentTab='dashboard';view.selectedWorkPage='main';view.renderDashboard(root);
+  assert.ok(root.all().some(e=>e.textContent.includes('completion unconfirmed')));
+  const dashboard=view.areaDashboard;
+  plugin.settings.pageTerminalClaims=[];view.refresh();
+  assert.equal(root.all().some(e=>e.textContent.includes('completion unconfirmed')),false);
+  plugin.settings.pageTerminalClaims=[{...claim,id:'new'}];view.refresh();
+  assert.ok(root.all().some(e=>e.textContent.includes('session reserved')));
+  assert.equal(root.all().some(e=>e.textContent==='Confirm session ended'),false);
+  assert.equal(view.areaDashboard,dashboard);
 });

@@ -1,11 +1,12 @@
 import { App, Modal, Notice, Setting } from "obsidian";
 import { randomUUID } from "crypto";
+import * as path from "path";
 import type { FinishWorkReview, BlockingPageSession } from "./finish-work";
 import type { WorktreeFile } from "./worktree-changes";
 import type { DiscardWorkReview } from "./discard-work";
 import type { DashboardItem } from "./dashboard-areas";
 import { mergeEditorUri, type MergeReview, type MergeCommand } from "./merge-review";
-import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage,
+import { createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore, pageChanges, selectWorkPage, readWorkspaceGitState, registerWorkPage, assertPageDirectoryAvailable, pageDeletionBlockers, type PagePreparationScope,
   type WorkPage, type WorkPageSettings, type WorktreePreparation, type PageRun } from "./work-pages";
 
 export interface WorkPagesHost {
@@ -13,7 +14,7 @@ export interface WorkPagesHost {
   saveSettings(refreshView?: boolean): Promise<void>;
   isLifecycleStopped(): boolean;
   assertPagesEditable(): void;
-  reservePagePreparation(): () => void;
+  reservePagePreparation(scope?:PagePreparationScope): () => void;
   runWorkPage(pageId: string, sourceId: string, task: boolean, runId?: string, reconcile?: boolean): Promise<unknown>;
   stopWorkPage(run: PageRun): Promise<unknown>;
   pageRunOutput(run: PageRun): string;
@@ -76,10 +77,13 @@ export function renderPendingFiles(parent:HTMLElement,host:Pick<WorkPagesHost,"r
   }
 }
 
-function blockingSessions(parent:HTMLElement,app:App,host:WorkPagesHost,navigate:()=>void,refresh:()=>Promise<void>,pageId?:string) {
-  const sessions=host.pageBlockingSessions?.(pageId) || (host.settings.pageTerminalClaims || []).filter(claim=>!pageId || claim.pageId===pageId).map(claim=>({
+function reviewSessions(host:WorkPagesHost,pageId?:string):BlockingPageSession[] {
+  return host.pageBlockingSessions?.(pageId) || (host.settings.pageTerminalClaims || []).filter(claim=>!pageId || claim.pageId===pageId).map(claim=>({
     id:"claim:"+claim.id,claimId:claim.id,pageId:claim.pageId,pageName:claim.pageId==="main"?"Main workspace":host.settings.workPages?.find(page=>page.id===claim.pageId)?.name || claim.pageId,
     label:"CLI session",directory:claim.directory,state:host.pageTerminalState?.(claim.id) || "unknown",createdAt:claim.createdAt} as BlockingPageSession));
+}
+function blockingSessions(parent:HTMLElement,app:App,host:WorkPagesHost,navigate:()=>void,refresh:()=>Promise<void>,pageId?:string) {
+  const sessions=reviewSessions(host,pageId);
   if(!sessions.length)return;
   parent.createEl("h4",{text:pageId?"Sessions blocking this page":"Sessions blocking Git operations"});
   for(const session of sessions) {
@@ -232,13 +236,15 @@ class NewPageModal extends Modal {
       let createdDirectory: string | undefined, preparedIgnore = false;
       let release: (()=>void) | undefined;
       try {
-        release = host.reservePagePreparation();
+        const id = randomUUID();
+        const scope=mode === "create" ? await inspectWorktreePreparation(directory) : undefined;
+        release = host.reservePagePreparation(scope ? {directory:path.join(scope.directory,id),repository:scope.repository,creating:true} : {directory});
+        assertPageDirectoryAvailable(host.settings);
         if (!name.trim()) throw new Error("Enter a page name.");
         if (mode !== "folder" && host.settings.worktreesEnabled !== true) throw new Error("Enable worktrees in Settings first.");
-        const id = randomUUID();
         let environment: Awaited<ReturnType<typeof describePageFolder>>;
         if (mode === "create") {
-          let preparation = await inspectWorktreePreparation(directory);
+          let preparation = scope!;
           const savedPreference = host.settings.worktreeNoticeDismissed?.includes(preparation.preferenceKey);
           const remember = savedPreference ? true : await new Promise<boolean|undefined>(resolve => new PreparationModal(this.app,preparation,resolve).open());
           if (remember === undefined || this.closed || host.isLifecycleStopped()) return;
@@ -261,23 +267,55 @@ class NewPageModal extends Modal {
 
 class MergeReviewModal extends Modal {
   private busy=false;
+  private refreshing=false;
+  private reviewGeneration=0;
   private blocked=false;
   private closed=false;
   private stopWatching?:()=>void;
   private target?:string;
   private feedback="";
+  private reviewStamp?:string;
+  private reviewStatus?:HTMLElement;
+  private reviewBody?:HTMLElement;
+  private reviewTarget?:string;
   constructor(app:App,private host:WorkPagesHost,private pageId:string,private finished:()=>void){super(app);}
-  onOpen(){this.stopWatching=watchPageReview(this.host,()=>this.refresh(),()=>this.busy,()=>this.blocked);void this.refresh();}
-  private async refresh(observed?:MergeReview) {
-    if(this.busy||this.closed||this.host.isLifecycleStopped())return;
-    this.busy=true;
+  onOpen(){this.stopWatching=watchPageReview(this.host,()=>this.refresh(undefined,true),()=>this.busy||this.refreshing,()=>this.blocked);void this.refresh();}
+  private async refresh(observed?:MergeReview,background=false) {
+    if(this.busy||background&&this.refreshing||this.closed||this.host.isLifecycleStopped())return;
+    const generation=++this.reviewGeneration;
+    this.refreshing=true;
+    if(!background)this.busy=true;
     const root=this.contentEl,host=this.host;
-    this.modalEl.addClass("auto-oc-work-page-dialog");root.empty();root.addClass("auto-oc-finish-modal");
-    const header=root.createDiv("auto-oc-finish-header");header.createEl("h3",{text:"Merge review"});
-    const loading=header.createEl("p",{text:"Checking branches and conflicts...",cls:"auto-oc-finish-context"});
+    this.modalEl.addClass("auto-oc-work-page-dialog");root.addClass("auto-oc-finish-modal");
+    // Keep the current review mounted while Git runs. Emptying it here collapses
+    // the dialog on every blocked-review poll and loses the reader's position.
+    if(!this.reviewStatus) {
+      const header=root.createDiv("auto-oc-finish-header");header.createEl("h3",{text:"Merge review"});
+      this.reviewStatus=header.createEl("p",{cls:"auto-oc-finish-context"});
+    }
+    let loading=this.reviewStatus;
+    loading.setText("Checking branches and conflicts...");
+    const focused=root.ownerDocument?.activeElement as HTMLElement|null;
+    const controls=(background?[]:Array.from(root.querySelectorAll<HTMLButtonElement|HTMLSelectElement|HTMLInputElement>("button, select, input")))
+      .map(control=>({control,disabled:control.disabled}));
+    controls.forEach(({control})=>{control.disabled=true;});
     try {
       const review=observed || await host.reviewPageMerge(this.pageId,this.target);
-      if(this.closed||host.isLifecycleStopped())return;
+      if(this.closed||host.isLifecycleStopped()||generation!==this.reviewGeneration)return;
+      const integratedReview=review.integration==="verified" || review.integration===undefined && review.state==="integrated";
+      const stamp=JSON.stringify([review,reviewSessions(host,integratedReview?this.pageId:undefined),selectWorkPage(host.settings,this.pageId)?.archived]);
+      if(background && stamp===this.reviewStamp) {
+        loading.setText("");
+        controls.forEach(({control,disabled})=>{control.disabled=disabled;});
+        if(focused?.isConnected && controls.some(({control})=>control===focused) &&
+          (!root.ownerDocument.activeElement || root.ownerDocument.activeElement===root.ownerDocument.body))focused.focus({preventScroll:true});
+        return; // Preserve scroll, focus and explicit confirmation when nothing changed.
+      }
+      const scrollTop=this.reviewTarget===review.target?.directory?this.reviewBody?.scrollTop || 0:0;
+      root.empty();
+      const header=root.createDiv("auto-oc-finish-header");header.createEl("h3",{text:"Merge review"});
+      loading=header.createEl("p",{cls:"auto-oc-finish-context"});
+      this.reviewStatus=loading;
       this.target=review.target?.directory;
       loading.setText("Source: "+review.source.branch+" · "+review.source.head.slice(0,8));
       header.createEl("p",{text:review.source.directory,cls:"auto-oc-finish-path"});
@@ -324,11 +362,15 @@ class MergeReviewModal extends Modal {
       body.createEl("p",{text:"AutoOC runs Git and prevents new AutoOC work during each operation. Keep schedules paused and external tasks, CLIs and services stopped in both folders until the merge is complete or aborted.",cls:"setting-item-description"});
       const footer=root.createDiv("auto-oc-finish-footer");
       const progress=footer.createEl("p",{cls:"auto-oc-finish-status"});progress.setAttr("role","status");
+      this.reviewStatus=progress;
       const commands=footer.createDiv("auto-oc-page-actions");
       const execute=(label:string,operation:MergeCommand,confirmed=()=>false)=>{
         const button=commands.createEl("button",{text:label,cls:operation==="abort"?"mod-warning":"mod-cta"});
         button.onclick=async()=>{
           if(this.busy||this.closed||host.isLifecycleStopped()||button.disabled)return;
+          // A user action supersedes an automatic read. Git revalidates the
+          // displayed hash under the mutation reservation before any effect.
+          this.reviewGeneration++;this.refreshing=false;
           this.busy=true;
           root.querySelectorAll<HTMLButtonElement|HTMLSelectElement|HTMLInputElement>("button, select, input").forEach(control=>{control.disabled=true;});
           progress.setText(label+" in progress. Wait for Git to finish.");
@@ -361,8 +403,17 @@ class MergeReviewModal extends Modal {
       });
       buttons.createEl("button",{text:"Recheck conflicts"}).onclick=()=>this.refresh();
       buttons.createEl("button",{text:"Close"}).onclick=()=>{if(!this.busy)this.close();};
-    } catch(error) {if(!this.closed){loading.setText(errorText(host,error));root.createEl("button",{text:"Retry review"}).onclick=()=>{this.target=undefined;return this.refresh();};root.createEl("button",{text:"Close"}).onclick=()=>this.close();}}
-    finally{this.busy=false;}
+      body.scrollTop=scrollTop;this.reviewBody=body;this.reviewTarget=this.target;this.reviewStamp=stamp;
+    } catch(error) {if(!this.closed&&generation===this.reviewGeneration){
+      this.reviewStamp=undefined;this.blocked=true;
+      // Retain the last review for context, but never enable its stale Git actions.
+      root.querySelectorAll<HTMLButtonElement|HTMLSelectElement|HTMLInputElement>("button, select, input").forEach(control=>{control.disabled=true;});
+      loading=this.reviewStatus || loading;
+      loading.setText(errorText(host,error));
+      loading.createEl("button",{text:"Retry review"}).onclick=()=>{this.target=undefined;return this.refresh();};
+      loading.createEl("button",{text:"Close"}).onclick=()=>this.close();
+    }}
+    finally{if(generation===this.reviewGeneration){this.refreshing=false;if(!background)this.busy=false;}}
   }
   onClose(){this.closed=true;this.stopWatching?.();this.contentEl.empty();}
 }
@@ -411,10 +462,8 @@ class DeletePageModal extends Modal {
     header.createEl("p",{text:page.directory,cls:"auto-oc-finish-path"});
     const body=root.createDiv("auto-oc-finish-body");
     body.createEl("p",{text:"Remove this archived page from AutoOC and Overview? Its folder, files, Git branches, tasks and workflows will stay unchanged."});
-    body.createEl("p",{text:"This removes the page configuration. To use this folder again, create a new page."});
-    const blocker=!page.archived ? "Archive this page before deleting it."
-      : page.worktreeRemoval ? "This page keeps worktree removal evidence and cannot be deleted."
-      : host.settings.pageRuns?.some(run=>run.pageId===page.id) ? "This page has run history. Keep it archived to retain access to its logs." : "";
+    body.createEl("p",{text:"The page leaves the workspace list. Its history and completed removal evidence stay available in Deleted page history. To use a remaining folder again, create a new page."});
+    const blocker=pageDeletionBlockers(host.settings,page).join("\n");
     const footer=root.createDiv("auto-oc-finish-footer");
     footer.createEl("p",{text:blocker || "Only this archived page will be deleted. All files are kept.",cls:"auto-oc-finish-status"});
     const feedback=footer.createEl("p");feedback.setAttr("role","alert");
@@ -598,7 +647,23 @@ class FinishWorkModal extends Modal {
   onClose(){this.closed=true;this.stopWatching?.();this.contentEl.empty();}
 }
 
+const terminalClaimRegions = new WeakMap<HTMLElement,()=>void>();
+/** Refresh session summaries without rebuilding the Dashboard or its open dialogs. */
+export function refreshWorkPageTerminals(parent:HTMLElement):void {
+  for(const region of Array.from(parent.querySelectorAll<HTMLElement>(".auto-oc-terminal-claims")))terminalClaimRegions.get(region)?.();
+}
 function terminalClaims(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?:string, openPage?:(id:string)=>void) {
+  const region=parent.createDiv("auto-oc-terminal-claims");
+  let previous:string|undefined;
+  const refresh=()=>{
+    const claims=(host.settings.pageTerminalClaims || []).filter(item=>!pageId || item.pageId===pageId);
+    const next=JSON.stringify(claims.map(claim=>[claim,host.pageTerminalState?.(claim.id),host.hasPageTerminal?.(claim.pageId)]));
+    if(next===previous)return;
+    region.empty();renderTerminalClaims(region,app,host,pageId,openPage);previous=next;
+  };
+  terminalClaimRegions.set(region,refresh);refresh();
+}
+function renderTerminalClaims(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?:string, openPage?:(id:string)=>void) {
   for (const claim of (host.settings.pageTerminalClaims || []).filter(item => !pageId || item.pageId === pageId)) {
     const row = parent.createDiv("auto-oc-page-row");
     const state = host.pageTerminalState?.(claim.id) || "unknown";
@@ -614,7 +679,7 @@ function terminalClaims(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?
         const modal = new Modal(app);
         modal.contentEl.createEl("p",{text:"Close the CLI and any processes it started first, including external or detached windows. Confirming releases the folder for new work; it does not stop any process."});
         modal.contentEl.createEl("button",{text:"I closed the session — release folder"}).onclick = async () => {
-          try { await host.confirmPageTerminal(claim.id); modal.close(); resolve(); }
+          try { await host.confirmPageTerminal(claim.id); terminalClaimRegions.get(parent)?.(); modal.close(); resolve(); }
           catch (error) {new Notice(errorText(host,error));}
         };
         modal.contentEl.createEl("button",{text:"Cancel"}).onclick = () => modal.close();
@@ -624,13 +689,16 @@ function terminalClaims(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?
   }
 }
 function runs(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?:string, openPage?:(id:string)=>void, source?:{id:string;task:boolean}) {
+  const deletedIds=new Set((host.settings.deletedWorkPages || []).map(entry=>entry.page.id));
   const history = (host.settings.pageRuns || []).filter(run => (!pageId || run.pageId === pageId) &&
+    (pageId || !deletedIds.has(run.pageId)) &&
     (!source || run.sourceId === source.id && run.task === source.task)).slice().reverse();
   for (const run of history) {
     const row = parent.createDiv("auto-oc-page-row"), active = host.ownsExecution(run.workflowId,run.runId);
     row.createEl("p",{text:(pageId ? "" : (host.settings.workPages?.find(p=>p.id===run.pageId)?.name || run.pageId) + " · ") + run.name + " · " + run.phase + (run.uncertain ? " · outcome needs review" : "")});
     row.createEl("small",{text:run.runId});
     action(row,"Log",host,async()=>new TextModal(app,run.name,host.pageRunOutput(run)).open());
+    if(deletedIds.has(run.pageId))continue;
     if (openPage) {
       row.createEl("button", {text:"Open page"}).onclick = () => openPage(run.pageId);
       continue;
@@ -736,6 +804,19 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
   if (selected === "general") {
     parent.createEl("h3",{text:"Overview"});
     parent.createEl("p",{text:"View activity and logs here. Use CLI to choose a workspace, or open a page to run workflows and manage its sessions. Import updates the shared task and workflow catalog; schedules run in Main workspace."});
+    if(host.settings.deletedWorkPages?.length)action(parent,"Deleted page history",host,async()=>{
+      const modal=new Modal(app);modal.modalEl.addClass("auto-oc-work-page-dialog");
+      modal.contentEl.createEl("h3",{text:"Deleted page history"});
+      modal.contentEl.createEl("p",{text:"Read-only records. These pages cannot run tasks or be restored. Their files and branches were not changed by Delete page."});
+      for(const entry of host.settings.deletedWorkPages || []) {
+        const row=modal.contentEl.createEl("details");
+        row.createEl("summary",{text:entry.page.name+" - "+entry.deletedAt});
+        row.createEl("p",{text:entry.page.directory});
+        if(entry.page.worktreeRemoval)row.createEl("p",{text:entry.page.worktreeRemoval.mode==="discard"?"Worktree and branch removal confirmed.":"Worktree removal confirmed; branch kept."});
+        runs(row,app,host,entry.page.id);
+      }
+      modal.contentEl.createEl("button",{text:"Close"}).onclick=()=>modal.close();modal.open();
+    });
     for (const page of entries) {
       const row = parent.createDiv("auto-oc-page-row");
       row.createEl("h4",{text:page.name + (("archived" in page && page.archived) ? " (archived)" : "")});

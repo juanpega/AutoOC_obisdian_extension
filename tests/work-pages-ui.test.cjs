@@ -1,14 +1,16 @@
 const {test,afterEach}=require('node:test'),assert=require('node:assert/strict');
 const fs=require('node:fs'),path=require('node:path'),vm=require('node:vm'),ts=require('typescript');
+const realPages={exports:{}};
+new Function('require','module','exports',require('esbuild').buildSync({entryPoints:[path.join(__dirname,'../work-pages.ts')],bundle:true,platform:'node',format:'cjs',write:false}).outputFiles[0].text)(require,realPages,realPages.exports);
 const cleanups=[];
 afterEach(()=>{for(const cleanup of cleanups.splice(0))cleanup();});
 function harness(failPrepare=false) {
   class Element {
     constructor(options={}){this.children=[];this.text=options.text||'';this.style={};this.attrs={};this.classes=new Set((typeof options==='string'?options:options.cls||'').split(' '));}
     createEl(tag,options={}){const child=new Element(options);child.tag=tag;this.children.push(child);return child;}
-    createDiv(options={}){return this.createEl('div',options);} empty(){this.children=[];} setText(v){this.text=v;} setAttr(k,v){this.attrs[k]=v;} addClass(c){this.classes.add(c);}
+    createDiv(options={}){return this.createEl('div',options);} empty(){this.children=[];} setText(v){this.text=v;this.children=[];} setAttr(k,v){this.attrs[k]=v;} addClass(c){this.classes.add(c);}
     all(){return [this,...this.children.flatMap(c=>c.all())];}
-    querySelectorAll(selector){return this.all().filter(e=>selector.split(',').map(t=>t.trim()).includes(e.tag));}
+    querySelectorAll(selector){return this.all().filter(e=>selector.split(',').map(t=>t.trim()).some(t=>t.startsWith('.')?e.classes.has(t.slice(1)):t===e.tag));}
   }
   class Control {
     constructor(e){this.e=e;this.options=[];} setValue(v){this.e.value=v;return this;} setDisabled(v){this.e.disabled=v;return this;}
@@ -29,6 +31,8 @@ function harness(failPrepare=false) {
     open(){opened.push(this);this.onOpen?.();} close(){this.onClose?.();}
   }
   const helper={
+    pageDeletionBlockers:realPages.exports.pageDeletionBlockers,
+    assertPageDirectoryAvailable(){},
     registerWorkPage:async(settings,page,save)=>{settings.workPages=[...(settings.workPages||[]),page];await save();},
     readWorkspaceGitState:async()=>({kind:'branch',branch:'feat/current'}),
     inspectWorktreePreparation:async()=>{effects.push('inspect');return {directory:'/repo/.autooc/worktrees',ignoreFile:'/repo/.gitignore',preferenceKey:'repo-key',excluded:false};},
@@ -97,6 +101,75 @@ test('Merge review executes Start merge for the displayed target and refreshes t
   assert.ok(modal.contentEl.all().some(e=>/Git output/.test(e.text)));
   await h.button(modal,'Open target in VS Code').onclick();assert.ok(h.effects.some(e=>e==='vscode://file//repo'));
   assert.ok(modal.modalEl.classes.has('auto-oc-work-page-dialog'));
+});
+test('blocked merge polling keeps the review mounted while Git runs and unchanged results preserve scroll and controls',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=mergeHarness('blocked');h.setReview({blockers:['Main session active']});
+  const modal=await h.open(),body=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-body'));
+  const target=h.field(modal,'Target branch','select');body.scrollTop=630;
+  const current=await h.host.reviewPageMerge();let resolve,reviews=0;
+  h.host.reviewPageMerge=()=>{reviews++;return new Promise(r=>{resolve=r;});};
+  t.mock.timers.tick(5000);
+  assert.ok(modal.contentEl.all().includes(body),'The existing review must remain visible during a slow Git check');
+  assert.equal(body.scrollTop,630);assert.equal(!!target.disabled,false,'Automatic reads must not toggle controls');
+  t.mock.timers.tick(5000);assert.equal(reviews,1,'No overlapping Git reads');
+  resolve(JSON.parse(JSON.stringify(current)));await tick();
+  assert.ok(modal.contentEl.all().includes(body));assert.equal(body.scrollTop,630);
+  assert.equal(h.field(modal,'Target branch','select'),target);assert.equal(!!target.disabled,false);
+  t.mock.timers.tick(5000);resolve({...current,state:'ready',blockers:[],hash:'new'});await tick();
+  const updated=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-body'));
+  assert.notEqual(updated,body);assert.equal(updated.scrollTop,630);
+  assert.equal(h.button(modal,'Start merge').disabled,undefined);assert.deepEqual(h.effects,[]);
+  t.mock.timers.tick(10000);assert.equal(reviews,2,'Actionable reviews are not polled');
+});
+test('unchanged automatic merge reviews preserve abort consent but changed sessions invalidate it',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=mergeHarness('resolved',true);let notify,state='tracked';
+  h.host.subscribePageReview=fn=>{notify=fn;return()=>{notify=undefined;};};
+  h.host.pageBlockingSessions=()=>[{id:'session',pageId:'main',pageName:'Main',label:'CLI',directory:'/repo',state}];
+  const modal=await h.open();h.field(modal,'I accept discarding conflict-resolution edits when aborting','toggle').change(true);
+  const abort=h.button(modal,'Abort merge');notify();t.mock.timers.tick(150);await tick();
+  assert.equal(h.button(modal,'Abort merge'),abort);assert.equal(abort.disabled,false);
+  state='exited';notify();t.mock.timers.tick(150);await tick();
+  assert.notEqual(h.button(modal,'Abort merge'),abort);assert.equal(h.button(modal,'Abort merge').disabled,true);
+  assert.deepEqual(h.effects,[]);modal.close();assert.equal(notify,undefined);
+});
+test('a merge action remains usable during background review and its result supersedes the late read',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=mergeHarness('ready');let notify,resolveRead,resolveAction;
+  h.host.subscribePageReview=fn=>{notify=fn;return()=>{};};
+  const modal=await h.open(),previous=await h.host.reviewPageMerge(),start=h.button(modal,'Start merge');
+  h.host.reviewPageMerge=()=>new Promise(r=>{resolveRead=r;});
+  h.host.executePageMerge=async()=>{h.effects.push('start');await new Promise(r=>{resolveAction=r;});return {review:{...previous,state:'resolved',inProgress:true,hash:'after-start'},output:''};};
+  notify();t.mock.timers.tick(150);await tick();
+  assert.equal(!!start.disabled,false);
+  const pending=start.onclick();await start.onclick();assert.deepEqual(h.effects,['start']);
+  resolveRead(previous);await tick();assert.equal(start.disabled,true,'The stale read must not unlock a mutation');
+  resolveAction();await pending;
+  assert.ok(h.button(modal,'Complete merge'));assert.equal(modal.contentEl.all().some(e=>e.text==='Start merge'),false);
+});
+test('failed merge refresh keeps the last review visible with stale actions disabled until a successful retry',async()=>{
+  const h=mergeHarness('ready'),modal=await h.open();
+  const body=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-body')),start=h.button(modal,'Start merge');
+  const read=h.host.reviewPageMerge;let fail;
+  h.host.reviewPageMerge=()=>new Promise((_,reject)=>{fail=reject;});
+  const pending=h.button(modal,'Recheck conflicts').onclick();
+  assert.ok(modal.contentEl.all().includes(body));assert.equal(start.disabled,true);
+  await start.onclick();assert.deepEqual(h.effects,[]);
+  fail(Error('Git is unavailable'));await pending;
+  assert.ok(modal.contentEl.all().includes(body));assert.equal(start.disabled,true);
+  assert.ok(modal.contentEl.all().some(e=>e.text.includes('Git is unavailable')));
+  h.host.reviewPageMerge=read;await h.button(modal,'Retry review').onclick();
+  assert.equal(!!h.button(modal,'Start merge').disabled,false);
+  assert.equal(modal.contentEl.all().some(e=>e.text.includes('Git is unavailable')),false);assert.deepEqual(h.effects,[]);
+});
+test('closing a merge review during a background Git read cannot reopen or repopulate it',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const h=mergeHarness('blocked');h.setReview({blockers:['Pending files']});
+  const modal=await h.open(),review=await h.host.reviewPageMerge();let resolve,reviews=0;
+  h.host.reviewPageMerge=()=>{reviews++;return new Promise(r=>{resolve=r;});};
+  t.mock.timers.tick(5000);modal.close();resolve(review);await tick();
+  t.mock.timers.tick(10000);assert.equal(reviews,1);assert.equal(modal.contentEl.children.length,0);assert.equal(h.opened.length,1);
 });
 test('Merge review gates completion on actual resolved state, preserves a merge on close and refreshes stale actions',async()=>{
   const h=mergeHarness('conflicts',true),modal=await h.open();
@@ -229,15 +302,31 @@ test('Delete page is confirmed from Overview and only removes the archived page 
   assert.equal(h.root.all().some(e=>e.text==='Old attempt (archived)'),false);
 });
 
-test('Delete page retains history or removal evidence and reports failed saves without claiming success',async()=>{
+test('Delete page permits completed history and removal, blocks pending evidence and reports failed saves',async()=>{
   const h=harness(),page={id:'p',name:'Old attempt',directory:'/repo',kind:'folder',archived:true,taskIds:[],workflowIds:[]};
   h.host.settings.workPages=[page];h.host.deleteWorkPage=async()=>{throw Error('save failed');};
   h.api.renderWorkPages(h.root,h.app,h.host,'general',()=>h.effects.push('navigate'),()=>{});
   const open=()=>{h.root.all().find(e=>e.tag==='button'&&e.text==='Delete page').onclick();return h.opened.at(-1);};
   h.host.settings.pageRuns=[{pageId:'p'}];let modal=open();assert.equal(h.button(modal,'Delete page').disabled,true);
+  h.host.settings.pageRuns=[{pageId:'p',phase:'completed',uncertain:true}];modal=open();assert.equal(h.button(modal,'Delete page').disabled,true);
+  h.host.settings.pageRuns=[{pageId:'p',phase:'completed',uncertain:false}];page.worktreeRemoval={status:'removed'};modal=open();assert.equal(h.button(modal,'Delete page').disabled,false);
   h.host.settings.pageRuns=[];page.worktreeRemoval={status:'pending'};modal=open();assert.equal(h.button(modal,'Delete page').disabled,true);
   delete page.worktreeRemoval;modal=open();await h.button(modal,'Delete page').onclick();
   assert.ok(modal.contentEl.all().some(e=>/save failed/.test(e.text)));assert.deepEqual(h.effects,[]);assert.deepEqual(h.notices,[]);
+});
+
+test('deleted page history keeps logs available without workspace or execution controls',async()=>{
+  const h=harness();h.host.settings.workPages=[];
+  h.host.settings.deletedWorkPages=[{page:{id:'p',name:'Removed feature',directory:'/repo/removed',archived:true,worktreeRemoval:{status:'removed'}},deletedAt:'2026-11-22T12:00:00.000Z'}];
+  h.host.settings.pageRuns=[{pageId:'p',runId:'done',workflowId:'w',name:'Completed task',phase:'completed',uncertain:false}];
+  h.host.pageRunOutput=()=> 'retained output';
+  h.api.renderWorkPages(h.root,h.app,h.host,'general',()=>{},()=>{});
+  assert.equal(h.root.all().some(e=>e.text.includes('Completed task')),false);
+  await h.root.all().find(e=>e.tag==='button'&&e.text==='Deleted page history').onclick();
+  const modal=h.opened.at(-1);
+  assert.ok(modal.contentEl.all().some(e=>e.text.includes('Removed feature')));
+  assert.equal(modal.contentEl.all().some(e=>e.tag==='button'&&['Open page','Continue','Reconcile','Stop','Delete page'].includes(e.text)),false);
+  await h.button(modal,'Log').onclick();assert.ok(h.opened.at(-1).contentEl.all().some(e=>e.text==='retained output'));
 });
 
 test('blocked close explains the reason next to confirmation and can refresh after sessions end',async()=>{
@@ -431,14 +520,14 @@ test('cancelling preparation has no Git effects and does not remember the notice
   const notice=h.opened.at(-1);assert.notEqual(notice,modal);
   assert.equal(h.field(notice,"Don't show this notice again for this project",'toggle').value,false);
   h.button(notice,'Cancel').onclick();await operation;
-  assert.deepEqual(h.effects,['reserve','inspect','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
+  assert.deepEqual(h.effects,['inspect','reserve','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
 });
 test('acceptance prepares ignore before creation, saves opt-out per repository and links the page',async()=>{
   const h=harness();h.host.settings.worktreesEnabled=true;const modal=h.create();
   h.field(modal,'Name','input').change('Feature');h.field(modal,'Environment','select').change('create');
   const operation=h.button(modal,'Create page').onclick();await tick();const notice=h.opened.at(-1);
   h.field(notice,"Don't show this notice again for this project",'toggle').change(true);h.button(notice,'Continue').onclick();await operation;
-  assert.deepEqual(h.effects,['reserve','inspect','prepare','save','create','save','select','release']);
+  assert.deepEqual(h.effects,['inspect','reserve','prepare','save','create','save','select','release']);
   assert.deepEqual(Array.from(h.host.settings.worktreeNoticeDismissed),['repo-key']);assert.equal(h.host.settings.workPages[0].kind,'worktree');
 });
 test('failed gitignore preparation creates nothing and does not save opt-out',async()=>{
@@ -446,7 +535,7 @@ test('failed gitignore preparation creates nothing and does not save opt-out',as
   h.field(modal,'Name','input').change('Feature');h.field(modal,'Environment','select').change('create');
   const operation=h.button(modal,'Create page').onclick();await tick();const notice=h.opened.at(-1);
   h.field(notice,"Don't show this notice again for this project",'toggle').change(true);h.button(notice,'Continue').onclick();await operation;
-  assert.deepEqual(h.effects,['reserve','inspect','prepare','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
+  assert.deepEqual(h.effects,['inspect','reserve','prepare','release']);assert.equal(h.host.settings.worktreeNoticeDismissed,undefined);
 });
 
 test('Overview only reads logs and navigates; execution and terminal controls stay in their page',async()=>{
@@ -493,4 +582,36 @@ test('Main workspace reads its effective folder and refreshes the branch without
   h.root.empty();h.host.settings.workingDirectory='';
   h.helper.readWorkspaceGitState=async directory=>{directories.push(directory);return state;};
   h.api.renderWorkPages(h.root,h.app,h.host,'main',()=>{},()=>{});await tick();assert.equal(directories.at(-1),'/repo');
+});
+
+test('confirming a terminal removes only its saved reservation and preserves a replacement session',async()=>{
+  const h=harness(),old={id:'old',pageId:'main',directory:'/repo',createdAt:'yesterday'};
+  h.host.settings.pageTerminalClaims=[old];h.host.pageTerminalState=id=>id==='old'?'unknown':'tracked';
+  h.host.confirmPageTerminal=async id=>{
+    assert.equal(id,'old');
+    h.host.settings.pageTerminalClaims=[{...old,id:'new',createdAt:'today'}];
+  };
+  h.api.renderWorkPages(h.root,h.app,h.host,'main',()=>{},()=>{});
+  const context=h.root.all().find(e=>e.classes.has('auto-oc-workspace-context'));
+  const pending=h.root.all().find(e=>e.text==='Confirm session ended').onclick();
+  await h.button(h.opened.at(-1),'I closed the session — release folder').onclick();await pending;
+  assert.equal(h.root.all().some(e=>e.text.includes('completion unconfirmed')),false);
+  assert.equal(h.root.all().some(e=>e.text==='Confirm session ended'),false);
+  assert.ok(h.root.all().some(e=>e.text.includes('session reserved')));
+  assert.ok(h.root.all().includes(context));assert.equal(h.host.settings.pageTerminalClaims[0].id,'new');
+  const row=h.root.all().find(e=>e.classes.has('auto-oc-page-row'));
+  h.api.refreshWorkPageTerminals(h.root);assert.ok(h.root.all().includes(row),'Unchanged refresh keeps the same row');
+  h.host.settings.pageTerminalClaims=[];h.api.refreshWorkPageTerminals(h.root);
+  assert.equal(h.root.all().some(e=>e.classes.has('auto-oc-page-row')),false);
+});
+
+test('a failed terminal confirmation and cancellation keep the reservation visible',async()=>{
+  const h=harness();h.host.settings.pageTerminalClaims=[{id:'old',pageId:'main',directory:'/repo'}];
+  h.host.confirmPageTerminal=async()=>{throw Error('Save failed');};
+  h.api.renderWorkPages(h.root,h.app,h.host,'main',()=>{},()=>{});
+  const pending=h.root.all().find(e=>e.text==='Confirm session ended').onclick();
+  const modal=h.opened.at(-1);await h.button(modal,'I closed the session — release folder').onclick();
+  assert.ok(h.notices.some(message=>message.includes('Save failed')));assert.ok(h.root.all().some(e=>e.text.includes('completion unconfirmed')));
+  h.button(modal,'Cancel').onclick();await pending;assert.equal(h.host.settings.pageTerminalClaims.length,1);
+  assert.ok(h.root.all().some(e=>e.text==='Confirm session ended'));
 });

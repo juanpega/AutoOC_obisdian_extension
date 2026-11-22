@@ -6,6 +6,19 @@ const runtime=require('../autooc-runtime.cjs');
 const build=require('esbuild').buildSync({entryPoints:[path.join(__dirname,'../work-pages.ts')],bundle:true,platform:'node',format:'cjs',write:false});
 const helper={exports:{}};new Function('require','module','exports',build.outputFiles[0].text)(require,helper,helper.exports);
 const pages=helper.exports;
+test('deleted Page evidence survives validation but never permits selecting or reusing its identity',async t=>{
+  const f=fixture(t),page={...f.workPages[0],archived:true};
+  const settings={workPages:[],deletedWorkPages:[{page,deletedAt:new Date().toISOString()}]};
+  pages.validateWorkPages(settings);
+  assert.throws(()=>pages.selectWorkPage(settings,page.id),/missing|ambiguous/);
+  let saves=0;await assert.rejects(pages.registerWorkPage(settings,page,async()=>saves++),/deleted page history/);assert.equal(saves,0);
+  assert.equal(pages.summarizeWorkPages(settings,f.vault).length,1);
+  await pages.registerWorkPage(settings,{...page,id:'replacement',archived:false},async()=>saves++);
+  assert.equal(saves,1);assert.equal(settings.deletedWorkPages[0].page.id,page.id);
+  assert.throws(()=>pages.validateWorkPages({...settings,workPages:[page]}),/Invalid work page/);
+  assert.throws(()=>pages.validateWorkPages({...settings,deletedWorkPages:[{page,deletedAt:'bad'}]}),/deleted page evidence/);
+  assert.throws(()=>pages.validateWorkPages({...settings,deletedWorkPages:[{page:{...page,worktreeRemoval:{status:'pending'}},deletedAt:new Date().toISOString()}]}),/deleted page evidence/);
+});
 function fixture(t) {
   // Persist canonical folders, just as the page creator does (macOS /var aliases, Windows casing).
   const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-pages-')));
@@ -219,7 +232,8 @@ test('final creator prompts include page scope and their actual examples pass bo
     assert.match(prompt,/Work pages are local execution environments/);
     assert.match(prompt,/Discard work is a separate explicit operation for independent worktrees/);
     assert.match(prompt,/Check discard only inspects an interrupted outcome/);
-    assert.match(prompt,/Delete page removes only page configuration and keeps folders, branches and shared definitions/);
+    assert.match(prompt,/Delete page removes the workspace entry, preserves an audit record and logs, and keeps folders, branches and shared definitions/);
+    assert.match(prompt,/Deleted page IDs cannot be reused or executed/);
     assert.match(prompt,/Merge review previews conflicts/);
     assert.match(prompt,/Import stays available in Overview/);
     assert.match(prompt,/CLI in Overview requires an explicit workspace selection/);

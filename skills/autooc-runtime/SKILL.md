@@ -1,7 +1,7 @@
 ---
 name: autooc-runtime
 description: >-
-  Operar AutoOC desde un agente mediante su CLI instalada: consultar y ejecutar tareas y workflows, editar sus textos, crear o seleccionar páginas/worktrees, seguir ejecuciones y diagnosticar bloqueos. Usar cuando el encargo mencione AutoOC, su catálogo, una página de trabajo o sus recibos; conservar las identidades y comprobar capacidades antes de actuar.
+  Operar AutoOC desde un agente mediante su CLI instalada: consultar y ejecutar tareas y workflows, editar sus textos, publicar y distribuir versiones de workflows vinculados, crear y revisar páginas/worktrees, gestionar merge y cierre, seguir ejecuciones y diagnosticar bloqueos. Usar cuando el encargo mencione AutoOC, su catálogo, una página de trabajo o sus recibos; conservar las identidades y comprobar capacidades antes de actuar.
 ---
 
 # AutoOC desde un agente
@@ -10,7 +10,7 @@ description: >-
 
 Esta guía acompaña al paquete; no activa un supervisor ni ejecuta workflows al
 leerla. Su contrato se ha contrastado con las fuentes y la CLI del candidato
-**1.7.28**. Una instalación 1.7.27 u otra revisión del mismo número puede carecer
+**1.7.30**. Una instalación anterior u otra revisión del mismo número puede carecer
 de funciones descritas aquí: manda su `version`, su `help` y el propietario cargado.
 
 1. Resuelve el proyecto y lee su `AGENTS.md` e instrucciones aplicables. Recupera
@@ -64,6 +64,8 @@ el texto con `[IO.File]::WriteAllText($ruta, $json, [Text.UTF8Encoding]::new($fa
 | Editar nombre/prompt de tarea | `export-task`, `edit-task` | `taskEditing:1`, propietario compatible abierto y sin ejecuciones. |
 | Editar textos/pasos existentes | `export-workflow`, `edit-workflow` | `workflowEditing:1`; límite anunciado en `workflowEditMaxChangesBytes`. |
 | Crear página y consultar su alta | `create-page`, `inspect-page-request` | `pageCreation:1`; ID funcional estable, distinto del UUID del buzón. |
+| Recuperar la Page reservada tras un alta parcial | `recover-page-request` | `pageCreationRecovery:1`; conserva la solicitud original y exige recuperación autorizada. |
+| Revisar o gestionar una Page existente | `review-page`, `page-action` | `pageManagement:1` en CLI y propietario compatible abierto; revisión previa y confirmaciones según acción. |
 | Contestar una aprobación pendiente | `approve`, `deny` | Token exacto del intento y decisión autorizada para esa petición. |
 | Recuperar publicación fallida antes de efectos | `recover-publication` | Candidato 1.7.28; procedimiento específico descrito abajo, plugin descargado. |
 | Revisar o recuperar guardado | `inspect-settings-write`, `recover-settings-write` | La recuperación exige una inspección vigente y decisión autorizada. |
@@ -74,8 +76,8 @@ el texto con `[IO.File]::WriteAllText($ruta, $json, [Text.UTF8Encoding]::new($fa
 `version.capabilities` enumera comandos; los otros campos anuncian contratos
 adicionales. El propietario cargado también debe soportarlos cuando se delega.
 La edición de estructura, motores, permisos y programación, Import/Export de
-paquetes, Enable/Disable, Merge review, Finish/Discard/Delete page y las preferencias
-se operan desde la interfaz: no existen comandos CLI equivalentes en este candidato.
+paquetes, Enable/Disable y las preferencias se operan desde la interfaz. Las
+acciones de Page documentadas abajo están disponibles con `pageManagement:1`.
 Los `export-*` de edición no producen paquetes importables. No escribas `data.json`
 para suplir una operación ausente.
 
@@ -84,6 +86,7 @@ Lee la sección correspondiente antes de mutar: [ejecutar](#seleccionar-y-ejecut
 [editar workflows](#editar-un-workflow-sin-cerrar-obsidian),
 [páginas](#páginas-de-trabajo-y-selección-de-contexto),
 [crear página](#alta-de-páginas-por-cli-candidato-de-desarrollo),
+[revisar y gestionar Pages](#gestionar-pages-desde-la-cli-candidato-1729),
 [seguir peticiones](#cola-reconexión-y-diagnóstico) o
 [recuperar publicación](#recuperar-una-publicación-fallida-candidato-1728).
 Las recuperaciones y el mantenimiento tienen sus propias precondiciones; no son
@@ -321,6 +324,90 @@ No generar rutas de ejecutable como campos de tarea/workflow. Cerrar Obsidian no
 traspasa una ejecución del plugin a la aplicación. Verificar candidato e instalación
 antes de atribuir este cambio a una entrega con el mismo número de versión.
 
+## Gestionar Pages desde la CLI (candidato 1.7.29)
+
+Comprobar `pageManagement:1` en la CLI y utilizar un propietario AutoOC compatible
+abierto en Obsidian. Estos comandos no tienen ejecución autónoma con Obsidian
+cerrado: si falta el propietario o su capacidad, detenerse con el diagnóstico,
+sin escribir `data.json` ni sustituir la acción por Git directo.
+
+Usar `--vault` para la bóveda anfitriona y el `pageId` devuelto por `pages`.
+Main no es una Page gestionable. La revisión no inicia tareas, no archiva ni
+fusiona. Puede responder durante trabajo activo y mostrar sus bloqueos.
+
+```text
+node CLI review-page --vault ROOT --page PAGE_ID --kind merge
+node CLI review-page --vault ROOT --page PAGE_ID --kind merge --target ABS_TARGET
+node CLI review-page --vault ROOT --page PAGE_ID --kind finish
+node CLI review-page --vault ROOT --page PAGE_ID --kind discard
+node CLI review-page --vault ROOT --page PAGE_ID --kind delete
+```
+
+Leer `page`, `review`, `sessions`, `reviewHash` y `requestId` de la respuesta JSON.
+En merge, elegir `review.target.directory` o revisar de nuevo con una de las
+carpetas de `review.targets`; no asumir que Main workspace utiliza la rama `main`.
+En finish, distinguir `archiveBlockers` de `removalBlockers`. En delete, leer
+`blockers`: una Page con historial o evidencia de retirada debe conservarse.
+`truncated:true` indica que se acortaron listas o detalles para el transporte;
+consultar los recuentos completos y revisar los archivos en su carpeta si hace
+falta. La truncación nunca reduce las comprobaciones que vincula el hash.
+
+Después de revisar y con autorización para la acción, escribir un JSON UTF-8
+sin BOM y ejecutarlo mediante:
+
+```text
+node CLI page-action --vault ROOT --request ABS_ACTION_JSON
+```
+
+Campos comunes: `pageId`, `action`, `reviewHash`. Copiar el hash superior de la
+revisión correspondiente; no inventarlo ni reutilizarlo tras cambios.
+
+| `action` | Revisión `--kind` | Campos adicionales obligatorios |
+| --- | --- | --- |
+| `merge-start` | `merge` | `targetDirectory` observado. Aplica el merge sin completar su commit. |
+| `merge-complete` | `merge` | `targetDirectory` observado. Revisar, resolver, preparar y probar antes. |
+| `merge-abort` | `merge` | `targetDirectory`, `confirmLoss:true`; aceptación explícita de perder resoluciones. |
+| `archive` | `finish` | Ninguno; conserva carpeta, rama e historial. |
+| `remove-worktree` | `finish` | `sessionsClosed:true`; Page ya archivada, carpeta limpia y procesos externos cerrados. Conserva rama e historial. |
+| `discard` | `discard` | `branchName` exacto, `confirmLoss:true`, `sessionsClosed:true`; autorización explícita de pérdida de archivos y rama. |
+| `delete` | `delete` | `confirmDelete:true`; elimina solo configuración de una Page archivada sin historial ni evidencia de retirada. |
+
+Ejemplo de archivo de acción (sustituir valores por la revisión real):
+
+```json
+{
+  "pageId": "PAGE_ID",
+  "action": "merge-start",
+  "reviewHash": "HASH_DE_LA_REVISION",
+  "targetDirectory": "CARPETA_ABSOLUTA_DEL_DESTINO"
+}
+```
+
+Una acción vuelve a revisar Page, Git, destino y sesiones; si cambian, obtener
+otra revisión. No existe `force`, cierre automático de terminales ni exclusión
+del agente solicitante. Una terminal del agente puede bloquear su propio merge
+o la retirada de su carpeta: entregar el diagnóstico al operador o continuar
+desde un contexto autorizado que no ocupe esa carpeta. No detener el workflow
+padre, cerrar la propia sesión ni confirmar procesos cerrados para desbloquearse.
+Main puede permanecer abierto durante el archivo o retirada de otra Page
+independiente; merge mantiene los controles del destino.
+
+Conservar el UUID del buzón emitido como `event:submitted` en stderr y el
+`requestId` de la respuesta. Ante timeout, interrupción o fallo:
+
+```text
+node CLI inspect-request --vault ROOT --request-id REQUEST_ID --include-output true
+node CLI follow --vault ROOT --request-id REQUEST_ID --include-output true
+```
+
+Leer `pageManagement` en el recibo. `applied:true` acredita esa acción, no el
+cierre completo del requisito ni las pruebas funcionales. Después, revisar de
+nuevo la Page; tras delete, comprobar su ausencia en `pages`. Un recibo fallido
+o desconocido puede tener efectos parciales: no enviar otra solicitud ni otro
+merge por inferencia. `Check removal`, `Keep worktree after review` y las
+recuperaciones de retirada interrumpida mantienen sus flujos de interfaz;
+no usar una nueva acción de retirada como recuperación.
+
 ## Páginas de trabajo y selección de contexto
 
 Dashboard incorpora Main workspace y páginas con carpeta propia. El botón O junto a
@@ -336,7 +423,7 @@ el candidato 1.7.28 añade **Run this task only** como ejecución independiente 
 esa página, descrita al final de esta guía. Los campos locales
 históricos taskIds/workflowIds se conservan por compatibilidad y ya no filtran el Dashboard.
 Overview permite consultar actividad/logs, navegar y eliminar una página archivada
-sin historial mediante Delete page; los controles de ejecución
+con actividad resuelta mediante Delete page; los controles de ejecución
 y confirmación de sesiones están en cada página. La creación de páginas se abre
 desde Main workspace u otra página mediante + New page; el usuario elige su nombre.
 Main workspace muestra la carpeta de trabajo predeterminada y su rama Git actual,
@@ -497,19 +584,24 @@ al final de esta guía. No resuelve conflictos ni crea un workflow coordinador
 paralelo automáticamente. Comprobar hashes y GUI antes de atribuir estas
 capacidades a una instalación publicada con el mismo número de versión.
 
-### Delete page: eliminar una página archivada vacía
+### Delete page: eliminar una página archivada con actividad resuelta
 
 Overview y la página archivada ofrecen Delete page. Tras confirmar, elimina solo
-su configuración local: conserva carpeta, archivos, worktree/rama y el catálogo
-global de tareas/workflows. No crea un respaldo ni ofrece Restore page después;
-puede crearse una página nueva para la carpeta conservada.
+su entrada del listado: conserva carpeta, archivos, worktree/rama y el catálogo
+global de tareas/workflows. Guarda la identidad y evidencia en deletedWorkPages,
+en la misma transacción de guardado, y conserva pageRuns y sus logs. Overview ofrece
+Deleted page history como consulta de solo lectura. No ofrece Restore page;
+puede crearse una página nueva, con otra identidad, para la carpeta conservada.
 
-Solo se admite una página archivada sin pageRuns y sin worktreeRemoval, incluso
-si la retirada ya terminó: las páginas que guardan historial o evidencia se conservan.
+Se admite historial completado, fallido o abandonado con resultado conocido y
+worktreeRemoval confirmado como removed. Una retirada pendiente, ejecución sin
+terminar o resultado incierto sigue bloqueando. Los registros eliminados no son
+workspaces ejecutables, no aparecen en pages y sus IDs no pueden reutilizarse.
 Main no se puede eliminar. Se vuelven a comprobar identidad de página, propietario,
 inactividad, sesiones y guardados; un fallo de persistencia no autoriza repetir ni
 editar data.json manualmente. El guardado participa en el drenaje del propietario.
-Esta operación no añade campos al esquema importable ni un comando CLI.
+Esta operación no añade campos al esquema importable. Con `pageManagement:1`,
+su equivalente es una revisión `delete` seguida de la acción `delete` documentada arriba.
 
 Archive page, Remove worktree, Discard work y Delete page mantienen nombre y ruta completa en un
 encabezado fijo, con ajuste de líneas; solo el cuerpo de revisión se desplaza.
@@ -949,7 +1041,7 @@ En una página de worktree disponible, **Merge review** permite elegir como dest
 4. **Abort merge** cancela el merge después de marcar la aceptación de pérdida de las ediciones de resolución. La confirmación se reinicia al volver a revisar. Cerrar el diálogo no aborta Git.
 5. **Already integrated / Integration verified** comprueba primero que el commit de origen es ancestro del destino, aunque haya sesiones o archivos locales pendientes. No repetir el merge ni commitear configuración del plugin para acreditarlo. **Review archiving** abre la revisión independiente de archivo; después de archivar, **Remove worktree** permite retirar la carpeta limpia conservando rama e historial. Squash/rebase no se acreditan automáticamente; la ascendencia no certifica las pruebas.
 
-Cada operación vuelve a comprobar la revisión, las ramas, los commits, el contenido del índice y los cambios rastreados durante un merge. Si han cambiado, exige revisar otra vez. Las acciones de la interfaz quedan desactivadas mientras Git trabaja; el propietario mantiene su reserva e impide nuevos trabajos AutoOC hasta obtener el resultado. El diálogo se actualiza con la salida de Git. Ante un fallo o interrupción, revisa el estado existente antes de otra acción; no borres locks ni repitas órdenes por inferencia.
+Cada operación vuelve a comprobar la revisión, las ramas, los commits, el contenido del índice y los cambios rastreados durante un merge. Si han cambiado, exige revisar otra vez. En el candidato 1.7.29, las consultas automáticas mantienen el contenido y los controles sin alternar su habilitación. Una acción explícita sí bloquea los controles durante su ejecución; sus comprobaciones Git siguen vigentes. Las respuestas de consultas anteriores a esa acción se descartan. Ante un fallo de consulta, conservar el contexto visible y reintentar antes de utilizar acciones antiguas. Ante un fallo o interrupción de una operación, revisar el estado existente; no borrar locks ni repetir órdenes por inferencia. Con `pageManagement:1`, usar los equivalentes CLI documentados arriba.
 
 Mantén pausadas las programaciones y detenidos los escritores externos, tareas, CLI y servicios de ambas carpetas hasta completar o abortar. La reserva de AutoOC no excluye procesos Git externos. Entre operaciones se libera la preparación de página para permitir revisar y probar; la siguiente acción revalida la actividad.
 
@@ -968,3 +1060,95 @@ La elección abre el lanzador CLI existente o recupera su terminal viva. Se cons
 Para abrir un agente sin una tarea guardada, utiliza **CLI in this page**: la carpeta del worktree se conserva aunque cambies de pestaña. Para ejecutar una tarea guardada, abre sus controles y usa **Run task here**. Si la seleccionaste dentro de un workflow, **Run this task only** ejecuta únicamente esa tarea interactiva como ejecución independiente de la página, con su carpeta y objetivo; no ejecuta los pasos anteriores ni posteriores. Los historiales de ambas ejecuciones se muestran separados.
 
 Los workflows de varios pasos con una CLI interactiva siguen bloqueados: abrir una terminal no demuestra que el agente haya terminado. Una tarea con carpeta fija fuera de la página, cambios de rama configurados, una sesión pendiente o un ejecutable no disponible también puede rechazarse. Deja la carpeta de la tarea sin configurar si debe heredar la página; esto se decide en su definición compartida, no se cambia automáticamente. Los errores de lanzamiento quedan visibles en el diálogo para poder consultarlos. El botón de CLI manual no transmite el prompt de una tarea: para recibirlo, utiliza la tarea guardada.
+
+## Recuperación de un alta parcial y carpetas retiradas (candidato)
+
+La validación omite únicamente Pages archivadas con `worktreeRemoval.status: "removed"`. Conserva la comprobación física de duplicados de las demás Pages. Una carpeta ausente o inaccesible devuelve `PAGE_DIRECTORY_UNAVAILABLE`, con `diagnostic.pageId` y `diagnostic.directory`; hay que revisar esa Page. Se comprueba antes de crear Git y al registrar.
+
+Para una creación cuyo worktree existe pero cuya Page no se registró, después de revisar sus efectos y autorizar la recuperación:
+
+```text
+node CLI recover-page-request --vault ROOT --request-id REQUEST_ID
+node CLI inspect-page-request --vault ROOT --request-id REQUEST_ID
+```
+
+Se requiere `pageCreationRecovery:1` en la CLI y en el propietario cargado. Se utiliza la petición durable original: mismo `requestId`, `pageId`, datos de requisito e historial; no editar el recibo ni generar otra solicitud. El propietario verifica repositorio, carpeta reservada, rama, registro Git y ausencia de otra Page vinculada. Conserva los errores previos en `recoveryHistory` y registra la Page existente sin ejecutar `git worktree add`, checkout, borrados ni lanzamientos (aunque la solicitud original incluyera `launch`). En recibos antiguos que no conservaron el commit base no se inventa ese dato. La recuperación de un lanzamiento iniciado está excluida.
+
+Las sesiones CLI de Main pueden permanecer abiertas al crear un worktree independiente y al archivar, retirar o eliminar una Page ajena. Las sesiones en la carpeta afectada, rutas no verificables, operaciones de catálogo y ejecuciones no resueltas mantienen sus bloqueos. Merge conserva sus comprobaciones sobre el destino. La actualización del paquete sigue requiriendo su propio procedimiento de inactividad.
+
+## Distribuir workflows vinculados — piloto 1.7.30
+
+Comprobar `workflowSharing: 1` en la CLI y en el propietario compatible cargado.
+Operar únicamente sobre los proyectos y la carpeta compartida autorizados. Una
+carpeta compartida contiene prompts y código de confianza: revisar secretos o
+rutas incrustados antes de publicar. No copiar `data.json` entre proyectos.
+
+```text
+node CLI share-workflows --vault ABS_VAULT --status
+node CLI share-workflows --vault ABS_VAULT --request ABS_REQUEST_JSON
+```
+
+El archivo contiene una sola acción, como los ejemplos siguientes. Los UUID y
+hashes de las acciones posteriores deben obtenerse del estado y la revisión
+reales; no inventarlos. Máximo 48.000 bytes por solicitud y 1.000 definiciones por
+colección, con dependencias y contenido completo hasta 16 MiB. No truncar.
+
+```json
+{"action":"connect","directory":"C:\\Dev\\AutoOC-Shared","projectName":"Inncrea","allowPush":false}
+```
+
+Conectar ambos proyectos a la misma carpeta. Autorizar `allowPush:true` en el
+destino solo si el encargo permite que otros proyectos vinculados distribuyan
+código allí. Cada instalación obtiene identidad propia; reconectar una copia de
+un catálogo antes de usarla como otro proyecto.
+
+```json
+{"action":"publish","workflowIds":["ID_LOCAL_WORKFLOW"],"taskIds":[],"name":"SDLC","note":"Primera versión probada","expectedParent":null}
+```
+
+`publish` incorpora tareas y workflows descendientes. Para publicar mejoras de
+una colección existente, añadir `bundleId` y usar su hash instalado como
+`expectedParent`; conservar sus miembros vinculados en la selección. Rechazar
+una base anterior a la versión publicada más reciente. Publicar no ejecuta ni
+distribuye automáticamente; no repetir una publicación incierta.
+
+Revisar en el destino con `action:"review"`, `bundleId`, `revision` y `hash`
+obtenidos de `status.collections`. Para vincular copias existentes, proporcionar
+`mapping`, cuyas claves son `task:UUID_COMPARTIDO` o `workflow:UUID_COMPARTIDO` y
+cuyos valores son IDs locales elegidos expresamente. No deducir identidad por
+nombre: se rechaza una creación nueva si ya existe ese nombre. Conservar el
+`mapping` resuelto y el `reviewHash` de la respuesta.
+
+Aplicar con `action:"apply"`, los mismos selectores, `mapping`, `reviewHash`,
+`replaceLocal` y `acceptPermissions`, ambos booleanos obligatorios. Revisar el
+contenido entrante y los permisos; no fijarlos a `true` por defecto. Las nuevas
+definiciones quedan desactivadas y con horario manual. Las existentes conservan
+IDs, historial, modelos/agentes, directorios, activación y horarios. Una copia
+local previa queda en `runtime/sharing-backups/`. Un cambio posterior a la
+revisión invalida la operación; no quitar la guarda.
+
+Distribuir desde el origen con `action:"distribute"`, `bundleId`, `revision`,
+`hash`, `replaceLocal` y `targets:[{"projectId":"UUID_DESTINO","localHash":"HASH_OBSERVADO"}]`.
+Obtener cada `localHash` de `status.projects[].bindings[]`; conservar la selección
+revisada. El origen debe tener instalada esa versión y el destino debe estar
+vinculado y permitir distribución. `replaceLocal:true` autoriza únicamente los
+cambios locales observados: no anula un cambio posterior, una ejecución afectada
+ni una ampliación de permisos/motor, que necesita revisión local.
+
+Consultar `status.deliveries[].receipt`: `pending` puede indicar proyecto cerrado
+o ejecución afectada; `review` exige inspección local; `rejected` no se aplica;
+`applied` se emite tras guardar. No tratar el envío como instalación. El plugin
+conectado consulta aproximadamente cada 30 segundos; no hay un daemon con el
+proyecto cerrado. No hace falta cerrar terminales ajenas para actualizar.
+
+Conservar el `requestId` del transporte y consultar `inspect-request`/`follow`
+ante una respuesta incierta. `--include-output true` recupera el resultado de
+distribución en `result`; no reenviar automáticamente. Una advertencia de estado
+compartido desactualizado no revierte un guardado confirmado. Un bloqueo de
+publicación interrumpida se inspecciona; no borrar `publish.lock` por antigüedad.
+
+El piloto no elimina miembros retirados ni combina modificaciones de código,
+no permite volver atrás instalando una revisión anterior y no acredita LAN real
+por pasar una prueba local. Publicar una nueva versión revisada para revertir
+definiciones. Los metadatos de distribución no pertenecen al JSON importable de
+los creadores de tareas/workflows.

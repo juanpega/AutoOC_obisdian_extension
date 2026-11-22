@@ -9,7 +9,8 @@ import {atomicSettingsWrite} from "./settings-writer";
 import {catalogTransaction} from "./catalog-transaction";
 import {physicalPath} from "./path-identity";
 import {createPageWorktree, describePageFolder, inspectWorktreePreparation, prepareWorktreeIgnore,
-  verifyWorkPageEnvironment, validateWorkPages, pageExecutionId, gitIn, WORKTREE_FOLDER, WORKTREE_IGNORE, type WorkPage} from "./work-pages";
+  verifyWorkPageEnvironment, validateWorkPages, assertPageDirectoryAvailable, assertPagePreparationTerminals, PageDirectoryError,
+  pageExecutionId, gitIn, WORKTREE_FOLDER, WORKTREE_IGNORE, type WorkPage, type PagePreparationScope} from "./work-pages";
 
 export interface PageCreationRequest {
   requestId: string; name: string; objective?: string; requirementId?: string; requirementText?: string;
@@ -22,11 +23,16 @@ interface PageCreationRecord {
   schemaVersion: 1; requestId: string; requestHash: string; pageId: string; owner: string;
   request: PageCreationRequest; stage: Stage; createdAt: string; waitForRuns: string[];
   page?: WorkPage; registered?:boolean; errorCode?: string; launchRunId?: string; launchPhase?: string;
+  preparedEnvironment?: Pick<WorkPage,"directory"|"repository"|"branch"|"baseCommit"|"kind">;
+  registrationOnly?:boolean;
+  recoveryHistory?: {at:string;stage:Stage;errorCode?:string}[];
+  diagnostic?: {pageId:string;directory:string};
 }
 export interface PageCreationResult {
   requestId: string; pageId: string; status: Stage; created: boolean; requirementId?: string;
   directory?: string; branch?: string; baseCommit?: string; requirementFile?: string;
   errorCode?: string; launchRunId?: string; launchPhase?: string; waitForRuns: string[];
+  diagnostic?: {pageId:string;directory:string};
 }
 const requestId = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$/;
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
@@ -79,6 +85,13 @@ function readRecord(file:string):PageCreationRecord {
       !/^[a-f0-9-]{36}$/.test(value.owner) || !Array.isArray(value.waitForRuns) || value.waitForRuns.some((id:any)=>!text(id,256) || !/^[a-f0-9-]+$/.test(id)) ||
       !["queued","preparing","environment","created","launching","completed","blocked","needs-review"].includes(value.stage)) throw new Error("Invalid durable page request; evidence preserved");
   if(value.page){validateWorkPages({workPages:[value.page]});if(value.page.id!==value.pageId)throw new Error("Page request identity changed");}
+  if(value.registrationOnly!==undefined && typeof value.registrationOnly!=="boolean" ||
+      value.recoveryHistory!==undefined && (!Array.isArray(value.recoveryHistory) || value.recoveryHistory.some((item:any)=>!item || !Number.isFinite(Date.parse(item.at)) || !["preparing","needs-review","environment"].includes(item.stage))))throw new Error("Invalid page recovery evidence");
+  if(value.preparedEnvironment){
+    const intent=value.preparedEnvironment;
+    if(value.request.mode!=="create" || intent.kind!=="worktree" || typeof intent.directory!=="string" || !path.isAbsolute(intent.directory) ||
+        typeof intent.repository!=="string" || !path.isAbsolute(intent.repository) || intent.branch!==value.request.branch || !/^[a-f0-9]{40,64}$/.test(intent.baseCommit))throw new Error("Invalid page environment intent");
+  }
   return value;
 }
 function normalize(value:PageCreationRequest):PageCreationRequest {
@@ -91,10 +104,13 @@ function normalize(value:PageCreationRequest):PageCreationRequest {
 function summary(record:PageCreationRecord):PageCreationResult {
   return {requestId:record.requestId,pageId:record.pageId,status:record.stage,created:record.registered===true,
     requirementId:record.request.requirementId,directory:record.page?.directory,branch:record.page?.branch,baseCommit:record.page?.baseCommit,
-    requirementFile:record.page?.requirementFile?.path,errorCode:record.errorCode,launchRunId:record.launchRunId,launchPhase:record.launchPhase,waitForRuns:record.waitForRuns};
+    requirementFile:record.page?.requirementFile?.path,errorCode:record.errorCode,diagnostic:record.diagnostic,launchRunId:record.launchRunId,launchPhase:record.launchPhase,waitForRuns:record.waitForRuns};
 }
 export function inspectPageCreation(runtime:string,id:string):PageCreationResult {
   return summary(readRecord(fileFor(runtime,id)));
+}
+export function readPageRecoveryRequest(runtime:string,id:string):PageCreationRequest {
+  return readRecord(fileFor(runtime,id)).request;
 }
 export interface PageCreationHost {
   lease:ExecutionLease; location:InstalledWorkflowLocation;
@@ -102,7 +118,7 @@ export interface PageCreationHost {
   busy():boolean;
   assertOpen():void;
   activeRuns():string[];
-  reserve():()=>void;
+  reserve(scope?:PagePreparationScope):()=>void;
   catalog():Promise<any>;
   register(page:WorkPage):Promise<void>;
   launch(request:NonNullable<PageCreationRequest["launch"]>,pageId:string,signal:AbortSignal,progress:(state:RunCheckpoint)=>Promise<void>):Promise<RunCheckpoint>;
@@ -117,7 +133,7 @@ export function createPageCreationService(host:PageCreationHost) {
   const controller=new AbortController();
   const assertOpen=()=>{if(closed)throw new Error("Page creation host is closed");host.assertOpen();host.lease.assertOwned();};
   const save=async(file:string,record:PageCreationRecord)=>{host.lease.assertOwned();directory(host.lease.directory);await atomicSettingsWrite(file,record);};
-  async function submit(value:PageCreationRequest):Promise<PageCreationResult> {
+  async function submit(value:PageCreationRequest,recover=false):Promise<PageCreationResult> {
     assertOpen();if(!validPageCreationRequest(value))throw new Error("Invalid page creation request");
     const request=normalize(value),requestHash=hash(JSON.stringify(request));
     const file=fileFor(host.lease.directory,request.requestId,true);
@@ -131,6 +147,14 @@ export function createPageCreationService(host:PageCreationHost) {
       if(fs.existsSync(file)){
         const previous=readRecord(file);
         if(previous.requestHash!==requestHash)throw new Error("Page request ID already used with different parameters");
+        if(recover){
+          if(previous.registered && ["created","completed"].includes(previous.stage))return summary(previous);
+          if(request.mode!=="create" || previous.registered || previous.launchRunId || previous.launchPhase || !["preparing","needs-review","environment"].includes(previous.stage))throw new Error("Only an unregistered worktree creation can be recovered; inspect its retained evidence");
+          previous.recoveryHistory=[...(previous.recoveryHistory || []),{at:new Date().toISOString(),stage:previous.stage,errorCode:previous.errorCode}];
+          previous.registrationOnly=true;previous.owner=host.lease.token;
+          // Recovery never enters queued: Git creation cannot be replayed.
+          previous.stage="needs-review";await save(file,previous);pending.add(file);return summary(previous);
+        }
         if(previous.owner!==host.lease.token && ["preparing","launching"].includes(previous.stage)){
           previous.stage="needs-review";previous.errorCode="OPERATION_OUTCOME_UNCERTAIN";await save(file,previous);
         }
@@ -139,6 +163,7 @@ export function createPageCreationService(host:PageCreationHost) {
         }
         return summary(previous);
       }
+      if(recover)throw new Error("No reserved page request exists to recover");
       const waitForRuns=host.activeRuns();
       for(const id of waitForRuns)readExecutionCheckpoint(host.lease.directory,id);
       const record:PageCreationRecord={schemaVersion:1,requestId:request.requestId,requestHash,pageId:randomUUID(),owner:host.lease.token,
@@ -157,13 +182,37 @@ export function createPageCreationService(host:PageCreationHost) {
     }
     let release:(()=>void)|undefined;
     try {
-      assertOpen();release=host.reserve();
+      const preparedScope=request.mode==="create" ? await inspectWorktreePreparation(request.repository!) : undefined;
+      const scope:PagePreparationScope=preparedScope ? {directory:path.join(preparedScope.directory,record.pageId),repository:preparedScope.repository,creating:true} : {directory:request.directory!};
+      assertOpen();release=host.reserve(scope);
       let config=await host.catalog();validateWorkPages(config);
+      assertPagePreparationTerminals(config,scope);
+      assertPageDirectoryAvailable(config,undefined,record.pageId);
       if(request.mode!=="folder" && config.worktreesEnabled!==true)throw new PageCreationError("WORKTREES_DISABLED");
-      if(request.launch){
+      if(request.launch && !record.registrationOnly){
         const entries=request.launch.taskId ? config.tasks : config.workflows;
         const id=request.launch.taskId || request.launch.workflowId;
         if(!Array.isArray(entries) || entries.filter((item:any)=>item.id===id).length!==1 || entries.find((item:any)=>item.id===id).disabled)throw new PageCreationError("LAUNCH_UNAVAILABLE");
+      }
+      if(record.stage==="needs-review" && record.registrationOnly){
+        const preparation=await inspectWorktreePreparation(request.repository!);
+        const directory=path.join(preparation.directory,record.pageId);
+        const environment=await describePageFolder(directory,true);
+        if(environment.directory!==directory || environment.repository!==preparation.repository || environment.branch!==request.branch)throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+        const entries=(await gitIn(preparation.repository,["worktree","list","--porcelain","-z"])).split("\0\0").map(block=>block.split("\0"));
+        const matches=entries.filter(fields=>fields.includes("worktree "+directory.replace(/\\/g,"/")) || fields.includes("worktree "+directory));
+        if(matches.length!==1 || !matches[0].includes("branch refs/heads/"+request.branch) || matches[0].some(field=>/^(locked|prunable)( |$)/.test(field)))throw new PageCreationError("RECOVERY_REGISTRATION_MISMATCH");
+        assertPageDirectoryAvailable(config,directory,record.pageId);
+        const page=record.page || {id:record.pageId,name:request.name,objective:request.objective || "",...environment,workflowIds:[],taskIds:[],
+          ...(request.requirementId ? {requirementId:request.requirementId} : {})};
+        if(page.directory!==directory || page.repository!==environment.repository || page.branch!==request.branch)throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+        if(record.preparedEnvironment){
+          const intent=record.preparedEnvironment;
+          if(intent.directory!==directory || intent.repository!==environment.repository || intent.branch!==request.branch || intent.kind!=="worktree")throw new PageCreationError("RECOVERY_ENVIRONMENT_MISMATCH");
+          page.baseCommit=intent.baseCommit;
+        }
+        await verifyWorkPageEnvironment(page);
+        record.page=page;record.stage="environment";await save(file,record);
       }
       if(record.stage==="queued"){
         let preparation:Awaited<ReturnType<typeof inspectWorktreePreparation>>|undefined;
@@ -175,6 +224,7 @@ export function createPageCreationService(host:PageCreationHost) {
           if((await gitIn(preparation.repository,["branch","--list",request.branch!])).trim() || fs.existsSync(path.join(preparation.directory,record.pageId)))throw new PageCreationError("ENVIRONMENT_COLLISION");
           if(!preparation.excluded && !request.allowGitignoreUpdate && !config.worktreeNoticeDismissed?.includes(preparation.preferenceKey))throw new PageCreationError("GITIGNORE_APPROVAL_REQUIRED");
           // The intent precedes the first effect. A crash here never authorizes replay of Git.
+          record.preparedEnvironment={kind:"worktree",directory:path.join(preparation.directory,record.pageId),repository:preparation.repository,branch:request.branch!,baseCommit:base};
           record.stage="preparing";await save(file,record);assertOpen();
           if(!preparation.excluded)preparation=await prepareWorktreeIgnore(preparation);
           environment=await createPageWorktree(preparation,record.pageId,request.branch!,base);
@@ -182,13 +232,14 @@ export function createPageCreationService(host:PageCreationHost) {
           environment=await describePageFolder(request.directory!,request.mode==="link");
           record.stage="preparing";await save(file,record);
         }
-        if((config.workPages || []).some((page:WorkPage)=>physicalPath(page.directory)===environment.directory))throw new PageCreationError("PAGE_DIRECTORY_IN_USE");
         record.page={id:record.pageId,name:request.name,objective:request.objective || "",...environment,workflowIds:[],taskIds:[],
           ...(request.requirementId ? {requirementId:request.requirementId} : {})};
         // Observed Git completion is durable before publishing the page to the catalog.
         record.stage="environment";await save(file,record);
+        assertPageDirectoryAvailable(config,environment.directory,record.pageId);
       }
       if(record.stage==="environment"){
+        assertPageDirectoryAvailable(config,record.page!.directory,record.pageId);
         assertOpen();await verifyWorkPageEnvironment(record.page!);
         if(request.requirementText!==undefined){
           const relative=".autooc/requirement.md",folder=path.join(record.page!.directory,".autooc"),target=path.join(record.page!.directory,relative);
@@ -204,10 +255,10 @@ export function createPageCreationService(host:PageCreationHost) {
         }
         await verifyWorkPageEnvironment(record.page!);
         await host.register(record.page!);
-        record.registered=true;record.stage="created";record.errorCode=undefined;await save(file,record);
+        record.registered=true;record.stage="created";record.errorCode=undefined;record.diagnostic=undefined;await save(file,record);
       }
       release();release=undefined;
-      if(request.launch && record.stage==="created"){
+      if(request.launch && !record.registrationOnly && record.stage==="created"){
         assertOpen();record.stage="launching";await save(file,record);
         const workflowId=pageExecutionId(record.pageId,request.launch.taskId || request.launch.workflowId!,!!request.launch.taskId);
         const state=await host.launch(request.launch,record.pageId,controller.signal,async state=>{
@@ -224,7 +275,8 @@ export function createPageCreationService(host:PageCreationHost) {
     } catch(error) {
       // Never replay a partially observed Git operation or launch. Known environment
       // completion can be resubmitted explicitly to finish registration under a lease.
-      record.errorCode=error instanceof PageCreationError ? error.code : "PAGE_OPERATION_FAILED";
+      record.errorCode=error instanceof PageCreationError || error instanceof PageDirectoryError ? error.code : "PAGE_OPERATION_FAILED";
+      record.diagnostic=error instanceof PageDirectoryError ? {pageId:error.pageId,directory:error.directory} : undefined;
       if(record.stage==="queued")record.stage="blocked";
       else if(record.stage!=="environment" && record.stage!=="created")record.stage="needs-review";
       await save(file,record);pending.delete(file);
@@ -247,6 +299,7 @@ export function createPageCreationService(host:PageCreationHost) {
 class PageCreationError extends Error {constructor(readonly code:string){super(code);}}
 
 export const pageCreationHelp = {
+  recover:"recover-page-request --vault <absolute path> --request-id <original request ID>. Explicitly verify and register an existing worktree using its reserved pageId. Preserves request/history, never creates Git resources or launches work. Requires pageCreationRecovery:1 on the loaded owner.",
   create:"create-page --vault <absolute path> --request <absolute JSON file>",
   inspect:"inspect-page-request --vault <absolute path> --request-id <stable ID>",
   fields:"requestId, name, objective?, requirementId?, requirementText?, mode: create|link|folder; create requires repository/branch/base, others require directory; allowGitignoreUpdate defaults false; optional launch object selecting exactly one existing workflowId or taskId.",

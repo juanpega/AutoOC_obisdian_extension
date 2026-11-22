@@ -177,3 +177,83 @@ test('NUL parser preserves unusual paths and conflicted exit status without file
   assert.throws(()=>mergeEditorUri(f.repo,'../outside'),/outside/);assert.match(mergeEditorUri(f.repo,'file #?.txt'),/file%20%23%3F.txt$/);
   const uri=new URL(mergeEditorUri(f.repo));assert.equal(decodeURIComponent(uri.pathname),(process.platform==='win32'?'/':'')+fs.realpathSync(f.repo).replace(/\\/g,'/')+'/');
 });
+
+test('target-only removal of an unchanged source catalog keeps exact ignored bytes through merge',async t=>{
+  const f=fixture(t),relative='.obsidian/plugins/auto-oc/data.json';
+  fs.mkdirSync(path.dirname(path.join(f.repo,relative)),{recursive:true});
+  f.commit(f.repo,relative,'base catalog\n');git(f.source,'merge','--ff-only','main');
+  git(f.repo,'rm','--cached','--',relative);fs.writeFileSync(path.join(f.repo,'.gitignore'),relative+'\n');
+  git(f.repo,'add','.gitignore');git(f.repo,'commit','-m','keep local catalog outside Git');
+  const preserved=Buffer.from([0,255,10,13,123,125]);fs.writeFileSync(path.join(f.repo,relative),preserved);
+  f.commit(f.source,'feature.txt','incoming feature');
+  let r=await f.review();assert.equal(r.state,'ready');assert.deepEqual(r.blockers,[]);
+  await f.execute(r,'start');r=await f.review();assert.equal(r.state,'resolved');
+  assert.deepEqual(fs.readFileSync(path.join(f.repo,relative)),preserved);
+  await f.execute(r,'complete');assert.equal((await f.review()).state,'integrated');
+  assert.deepEqual(fs.readFileSync(path.join(f.repo,relative)),preserved);
+  assert.equal(git(f.repo,'ls-files','--',relative),'');assert.equal(git(f.repo,'status','--porcelain'),'');
+});
+
+test('ignored file/directory and case-folded incoming collisions remain blocked',async t=>{
+  for(const shape of ['incoming-file','incoming-directory','case'])await t.test(shape,async t=>{
+    const f=fixture(t);git(f.repo,'config','core.ignorecase','true');f.commit(f.repo,'.gitignore','local\nlocal/\nLOCAL\n');
+    if(shape==='incoming-file') {
+      fs.mkdirSync(path.join(f.repo,'local'));fs.writeFileSync(path.join(f.repo,'local/kept.txt'),'preserve');
+      f.commit(f.source,'local','incoming');
+    }else if(shape==='incoming-directory') {
+      fs.writeFileSync(path.join(f.repo,'local'),'preserve');fs.mkdirSync(path.join(f.source,'local'));
+      f.commit(f.source,'local/incoming.txt','incoming');
+    }else {fs.writeFileSync(path.join(f.repo,'local'),'preserve');f.commit(f.source,'LOCAL','incoming');}
+    const before=git(f.repo,'rev-parse','HEAD'),r=await f.review();
+    assert.equal(r.state,'blocked');assert.match(r.blockers.join(),/ignored target files/);
+    await assert.rejects(f.execute(r,'start'),/Recheck/);assert.equal(git(f.repo,'rev-parse','HEAD'),before);
+    assert.equal(fs.readFileSync(path.join(f.repo,shape==='incoming-file'?'local/kept.txt':'local'),'utf8'),'preserve');
+  });
+});
+
+test('ignored enumeration beyond 4 MiB is fully scanned, including its final collision',async t=>{
+  const f=fixture(t);git(f.repo,'config','core.longpaths','true');f.commit(f.repo,'.gitignore','.cache/\n');
+  fs.mkdirSync(path.join(f.repo,'.cache'));
+  const prefix='x'.repeat(210);
+  for(let i=0;i<20000;i++)fs.writeFileSync(path.join(f.repo,'.cache',prefix+'-'+String(i).padStart(6,'0')),'');
+  const enumeration=execFileSync('git',['ls-files','--others','--ignored','--exclude-standard','-z'],{cwd:f.repo,windowsHide:true,maxBuffer:16*1024*1024});
+  assert.ok(enumeration.length>4*1024*1024);assert.equal(enumeration.toString().split('\0').length-1,20000);
+  f.commit(f.source,'feature.txt','incoming');assert.equal((await f.review()).state,'ready');
+  fs.mkdirSync(path.join(f.source,'.cache'));f.commit(f.source,'.cache/zzzz-last','incoming');
+  fs.writeFileSync(path.join(f.repo,'.cache/zzzz-last'),'preserve final collision');
+  const r=await f.review();assert.equal(r.state,'blocked');assert.match(r.blockers.join(),/zzzz-last/);
+  await assert.rejects(f.execute(r,'start'),/Recheck/);
+  assert.equal(fs.readFileSync(path.join(f.repo,'.cache/zzzz-last'),'utf8'),'preserve final collision');
+});
+
+test('streamed path checking handles split UTF-8 and rejects incomplete output or process failure',async()=>{
+  const {EventEmitter}=require('node:events'),{PassThrough}=require('node:stream');let scenario;
+  const fake={...require('node:child_process'),spawn(){
+    const child=new EventEmitter();child.stdout=new PassThrough();child.stderr=new PassThrough();
+    child.kill=()=>{setImmediate(()=>child.emit('close',null));return true;};
+    setImmediate(()=>{for(const chunk of scenario.chunks)child.stdout.write(chunk);child.stdout.end();child.emit('close',scenario.code);});return child;
+  }};
+  const mod={exports:{}};new Function('require','module','exports',build.outputFiles[0].text+'\nmodule.exports.scan=gitPaths;')(id=>id==='child_process'?fake:require(id),mod,mod.exports);
+  const bytes=Buffer.from('café/file\0second\0');scenario={chunks:[bytes.subarray(0,4),bytes.subarray(4,9),bytes.subarray(9)],code:0};
+  const paths=[];await mod.exports.scan('.',[],file=>paths.push(file));assert.deepEqual(paths,['café/file','second']);
+  scenario={chunks:[Buffer.from('complete\0partial')],code:0};await assert.rejects(mod.exports.scan('.',[],()=>{}),/incomplete path/);
+  scenario={chunks:[Buffer.from('complete\0')],code:1};await assert.rejects(mod.exports.scan('.',[],()=>{}),/scan failed/);
+});
+
+test('a source modification of a target-deleted file remains a real ignored collision',async t=>{
+  const f=fixture(t);f.commit(f.repo,'catalog.json','common');git(f.source,'merge','--ff-only','main');
+  git(f.repo,'rm','--cached','catalog.json');fs.writeFileSync(path.join(f.repo,'.gitignore'),'catalog.json\n');
+  git(f.repo,'add','.gitignore');git(f.repo,'commit','-m','target removes catalog');
+  f.commit(f.source,'catalog.json','source changed it');fs.writeFileSync(path.join(f.repo,'catalog.json'),'local private bytes');
+  const r=await f.review();assert.equal(r.state,'blocked');assert.match(r.blockers.join(),/catalog.json/);
+  await assert.rejects(f.execute(r,'start'),/Recheck/);assert.equal(fs.readFileSync(path.join(f.repo,'catalog.json'),'utf8'),'local private bytes');
+});
+
+test('an ignored nested repository directory also blocks incoming descendants',async t=>{
+  const f=fixture(t);f.commit(f.repo,'.gitignore','nested/\n');const nested=path.join(f.repo,'nested');fs.mkdirSync(nested);
+  git(nested,'init');fs.writeFileSync(path.join(nested,'kept.txt'),'private nested bytes');
+  fs.mkdirSync(path.join(f.source,'nested'));f.commit(f.source,'nested/kept.txt','incoming');
+  assert.match(git(f.repo,'ls-files','--others','--ignored','--exclude-standard'),/nested/);
+  const r=await f.review();assert.equal(r.state,'blocked');assert.match(r.blockers.join(),/nested/);
+  await assert.rejects(f.execute(r,'start'),/Recheck/);assert.equal(fs.readFileSync(path.join(nested,'kept.txt'),'utf8'),'private nested bytes');
+});

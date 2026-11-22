@@ -1,0 +1,31 @@
+{
+  "autoOCExport": {
+    "schemaVersion": "1.7.0",
+    "exportedAt": "2026-11-22T00:00:00.000Z",
+    "pluginVersion": "1.7.30",
+    "name": "Prueba de distribución",
+    "description": "Workflow manual sin acceso a archivos ni terminal para probar versiones entre proyectos."
+  },
+  "tasks": [],
+  "workflows": [
+    {
+      "exportId": "sharing-demo",
+      "name": "Demo — Distribución entre proyectos",
+      "description": "Versión inicial: publicar desde Inncrea y vincular en AutoOC.",
+      "scheduleType": "manual",
+      "steps": [
+        {
+          "id": "message",
+          "stepKind": "code",
+          "name": "Mostrar versión",
+          "code": "output = 'Versión 1 publicada desde Inncrea';",
+          "codeLang": "javascript",
+          "codeAllowVault": false,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": []
+        }
+      ]
+    }
+  ]
+}
