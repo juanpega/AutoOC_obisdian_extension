@@ -63,6 +63,8 @@ el texto con `[IO.File]::WriteAllText($ruta, $json, [Text.UTF8Encoding]::new($fa
 | Consultar una petición o ejecución | `inspect-request`, `follow` | `requestInspection:1`; exactamente uno de `--request-id` o `--run`. |
 | Editar nombre/prompt de tarea | `export-task`, `edit-task` | `taskEditing:1`, propietario compatible abierto y sin ejecuciones. |
 | Editar textos/pasos existentes | `export-workflow`, `edit-workflow` | `workflowEditing:1`; límite anunciado en `workflowEditMaxChangesBytes`. |
+| Create a workflow externally | Reviewed importable JSON → UI **Import** | No generic workflow-create/package-import CLI command; see [external authoring](#external-workflow-authoring-and-ui-import). |
+| Distribute linked definitions | `share-workflows --vault ABS_VAULT --status` or `--request ABS_REQUEST_JSON` | `workflowSharing:1` and a compatible loaded owner; explicit linking/review, not ordinary package import. |
 | Crear página y consultar su alta | `create-page`, `inspect-page-request` | `pageCreation:1`; ID funcional estable, distinto del UUID del buzón. |
 | Recuperar la Page reservada tras un alta parcial | `recover-page-request` | `pageCreationRecovery:1`; conserva la solicitud original y exige recuperación autorizada. |
 | Revisar o gestionar una Page existente | `review-page`, `page-action` | `pageManagement:1` en CLI y propietario compatible abierto; revisión previa y confirmaciones según acción. |
@@ -92,33 +94,222 @@ Lee la sección correspondiente antes de mutar: [ejecutar](#seleccionar-y-ejecut
 Las recuperaciones y el mantenimiento tienen sus propias precondiciones; no son
 pasos rutinarios del inicio.
 
+## External workflow authoring and UI import
+
+Choose the artifact before opening an editor:
+
+| Artifact | Purpose | Supported destination |
+| --- | --- | --- |
+| Importable package: `autoOCExport`, `tasks`, `workflows` | Create reviewed definitions with package-local dependency references | AutoOC UI **Import**, including Import in Overview |
+| CLI editable export: `workflowId`/`taskId`, `expectedHash`, `definition` | Inspect supported text of an existing catalog definition | Prepare a **separate patch**, then `edit-workflow`/`edit-task`; not UI Import |
+| Linked shared collection | Review/version/distribute explicitly linked definitions across projects | [Linked sharing](#distribuir-workflows-vinculados--piloto-1730), not an editable export or a replacement-import shortcut |
+
+There is no generic `create-workflow` or package `import` command in the candidate
+CLI. `create-page` creates a workspace, not a workflow. For structural edits to an
+existing definition, use WorkFlows; do not rewrite `data.json`. Editing a JSON
+package outside AutoOC does not modify an installed definition.
+
+### Minimal package: a manual, disabled delay workflow
+
+Save this complete example as a private UTF-8-without-BOM `.json` file. It needs no
+provider, tasks, code, external paths or credentials. Importing is a catalog
+mutation, not authorization to run it; `disabled:true` and a manual schedule keep
+the example explicitly opt-in.
+
+```json
+{
+  "autoOCExport": {
+    "schemaVersion": "1.6.0",
+    "exportedAt": "2026-11-24T00:00:00.000Z",
+    "pluginVersion": "1.7.30",
+    "name": "Manual delay example"
+  },
+  "tasks": [],
+  "workflows": [
+    {
+      "exportId": "workflow-delay",
+      "name": "Manual delay example",
+      "description": "Reviewed delay-only definition; no code or provider calls.",
+      "disabled": true,
+      "scheduleType": "manual",
+      "scheduleTime": "09:00",
+      "scheduleDate": "",
+      "scheduleDays": [],
+      "scheduleMonthDays": [],
+      "scheduleIntervalValue": 10,
+      "scheduleIntervalUnit": "minutes",
+      "handoffBranch": false,
+      "handoffOutput": true,
+      "steps": [
+        {
+          "id": "wait",
+          "stepKind": "delay",
+          "name": "Wait one second",
+          "delayValue": 1,
+          "delayUnit": "seconds",
+          "codeAllowVault": false,
+          "codeAllowFiles": false,
+          "codeAllowTerminal": false,
+          "transitions": []
+        }
+      ]
+    }
+  ]
+}
+```
+
+Use the actual authoring time/version for a real package. `pluginVersion` is
+provenance, not capability negotiation. The header's `schemaVersion` is the export
+schema, **not** the plugin version: this candidate accepts `1.0`, `1.4.0`,
+`1.5.0`, `1.6.0` and `1.7.0`; prefer `1.6.0` for ordinary current definitions
+and require `1.7.0` for nested workflows. Check the target plugin's support first.
+
+The export interfaces include `autoOCExport.schemaVersion`, `exportedAt` and
+`pluginVersion`, both root arrays, and each workflow's `exportId`, nonempty `name`,
+schedule fields and `steps`. Keep these interface-complete fields even where the
+preview validator is permissive: it does not validate every header/schedule field,
+and the importer supplies defaults for omitted schedules. Validation alone is not
+proof of safe code, permissions, provider availability or a runnable definition.
+
+### Dependencies, transitions and permissions
+
+- Give every task/workflow a unique nonempty `exportId` within its collection;
+  these are **package-local** references, not runtime/catalog IDs. Use nonempty
+  unique step `id` values within each workflow. Do not copy runtime bindings,
+  journals, status/output/history, Page IDs, secret values or private host paths.
+- A `stepKind:"task"` step uses `taskExportId` matching an included
+  `tasks[].exportId`. Include every referenced task, not just its visible name.
+  Each task needs `exportId`, `name`, nonempty `prompt`, an explicit supported
+  `taskKind`, schedule fields and export fields `useRalphLoop`, `forceModel`,
+  `agent`; prefer exporting a representative task through the UI to preserve its
+  kind-specific contract. Current kinds are `opencode`, `opencode2`, `codex`,
+  `copilot`, `code`, `cli`; availability still depends on the target candidate.
+  Review models/agents/defaults after import: not every provider's model is portable.
+- Use explicit `transitions` arrays. Each `toStepId` names a step in the **same**
+  workflow; `mode` is `default`, `force`, `eval` or `conditional`. An `eval`
+  transition requires `evaluatePrompt` and calls a model when run; a `conditional`
+  transition requires a JavaScript `condition`. Keep an entry with no incoming
+  transitions. `transitions:[]` explicitly terminates the example; omitted
+  transitions can receive legacy linear defaults, so do not omit them by accident.
+- For nesting, change the header to `schemaVersion:"1.7.0"` and include the full
+  child/descendant workflow and task closure. A `stepKind:"workflow"` step uses
+  `workflowExportId` matching an included `workflows[].exportId`, never a catalog
+  `workflowId`. Children can appear before or after parents. Missing/ambiguous
+  references, recursive cycles and more than 16 levels are rejected; the runtime
+  also bounds expanded plans to 10,000 internal steps. See [nested workflows](#workflows-anidados-candidato-de-desarrollo).
+- Review every reachable Code task/step and transition as trusted code.
+  `codeAllowVault`, `codeAllowFiles`, `codeAllowTerminal` are explicit capabilities,
+  not a security sandbox; leave them false unless individually authorized.
+  The delay example grants none and executes no code. Also review provider/tool
+  permissions, `copilotAllowAllTools`, interactive modes, working directories,
+  branch effects and schedules of **tasks as well as workflows**. A manual parent
+  does not make a separately scheduled task manual. Do not enable
+  `requiresAutoOCSecrets` to request credentials: that historical dependency is
+  rejected by current hosts.
+
+### External editor → reviewed import
+
+1. Author a new package, or use the UI's ordinary Export to obtain a representative
+   package and edit a separate copy. CLI `export-workflow`/`export-task` is **not**
+   this package export. Parse the JSON locally; review every dependency, prompt,
+   script, permission and schedule before handing it to the target installation.
+2. In the authorized, loaded AutoOC UI, open **Import** (also available in Overview),
+   select the JSON file and inspect the preview. Fix all errors and review every
+   warning before confirming **Import**. This is the supported validation/import
+   path, not a request to call internal plugin methods or write catalog storage.
+3. Inspect the imported definitions in Tasks/WorkFlows and obtain their actual
+   catalog IDs with `list --vault ABS_VAULT`. Import creates new task/workflow
+   identities, resolves package references and may rename duplicate names; it
+   does **not** patch an existing definition in place. Reimporting can create
+   additional copies. Existing executions/history are not transferred by the file.
+4. Confirm dependencies, transitions, activation, schedules, permissions and local
+   provider settings after import. Definitions are in the shared catalog visible
+   to all Pages, not private to the currently selected Page. Keep the example
+   disabled; enabling or running it requires its own authorization.
+
+For an existing workflow's text, use the CLI path below instead of reimporting.
+For structure/providers/permissions/schedules, use the supported editor, or review
+a separately imported new definition without assuming replacement. Linked sharing
+has a distinct explicit mapping/review contract for preserving existing identities.
+
 ## Editar tareas existentes por CLI
 
-El candidato anuncia `taskEditing:1`, `export-task` y `edit-task`. Verificar también
-la capacidad del propietario cargado; una CLI nueva no actualiza el plugin abierto.
-Con AutoOC cargado en Obsidian y sin ejecuciones activas:
+Require `taskEditing:1`, `export-task` and `edit-task` in the selected CLI and a
+compatible loaded Obsidian owner, with no active executions. A newer CLI does not
+upgrade the owner. Export is a read of the persisted catalog; submission requires
+the loaded owner. An unsaved UI change can legitimately cause a hash conflict.
+
+Only shared-task `name` and `prompt` are editable. The change affects **every**
+workflow referencing that task, not a Page-local copy. It preserves identity,
+history, provider/model, schedules and permissions. Reusable Code task `code` is
+not supported here; an existing workflow Code step uses `edit-workflow`.
+
+Example patch shape (replace the marker with the observed export hash):
+
+```json
+{"expectedHash":"HASH_FROM_EXPORT","changes":{"name":"Review","prompt":"Review the changes."}}
+```
+
+PowerShell preparation, using the absolute `$cliPath` and `$vaultPath` resolved at
+startup. Replace the task ID and choose a private **existing absolute directory**;
+use new filenames for each export/patch. Do not run this against an unauthorized
+catalog. The UTF-8 writer below explicitly omits the BOM.
+
+```powershell
+$taskId = 'CATALOG_TASK_ID'
+$editDir = 'C:\private\autooc-edits'
+$taskExportPath = Join-Path $editDir 'task-before.json'
+$taskPatchPath = Join-Path $editDir 'task-patch.json'
+node $cliPath export-task --vault $vaultPath --task $taskId --out $taskExportPath
+if ($LASTEXITCODE -ne 0) { throw 'Task export failed; stop.' }
+$taskExport = Get-Content -LiteralPath $taskExportPath -Raw | ConvertFrom-Json
+if ($taskExport.taskId -ne $taskId) { throw 'Unexpected task identity.' }
+$taskPatch = @{
+  expectedHash = $taskExport.expectedHash
+  changes = @{ name = 'Review'; prompt = 'Review the changes.' }
+}
+if (Test-Path -LiteralPath $taskPatchPath) { throw 'Choose a new patch filename.' }
+[IO.File]::WriteAllText($taskPatchPath, ($taskPatch | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+```
+
+Review the separate patch before the following **explicit mutation**:
+
+```powershell
+node $cliPath edit-task --vault $vaultPath --task $taskId --patch $taskPatchPath
+```
+
+Inspect the returned task identity/hash. Unlike execution commands, this
+candidate's edit wrapper does **not** emit `event:submitted` or return a request ID
+on success. An uncertain-response error includes `requestId`; preserve that
+mailbox UUID (not an SDLC request ID). A nonzero exit, timeout or lost response is
+**not** permission to resubmit. When that UUID is available, inspect it:
 
 ```text
-node CLI export-task --vault ABS_VAULT --task ID --out ABS_NEW_JSON
-node CLI edit-task --vault ABS_VAULT --task ID --patch ABS_PATCH_JSON
+node CLI inspect-request --vault ABS_VAULT --request-id REQUEST_UUID --include-output true
+node CLI follow --vault ABS_VAULT --request-id REQUEST_UUID --include-output true
 ```
 
-El export contiene `taskId`, `expectedHash` y `definition` (id, name, prompt).
-El patch contiene el hash exportado y `changes`, por ejemplo
-```json
-{"expectedHash":"HASH_DEL_EXPORT","changes":{"name":"Revisión","prompt":"Revisa los cambios."}}
+Read `acceptance`, `receiptStatus` and `state`, not just exit status. In this
+candidate `--include-output true` does not expose the edit-specific result/hash
+or error; use the original response and fresh export for text verification.
+If the client was killed before reporting a UUID, preserve its logs and seek
+read-only correlation of the existing request; do not invent an ID or resubmit.
+No receipt/unknown outcome means stop and diagnose, not another edit.
+After a confirmed save, export to a **new** file and compare persisted text/hash:
+
+```powershell
+$taskAfterPath = Join-Path $editDir 'task-after.json'
+node $cliPath export-task --vault $vaultPath --task $taskId --out $taskAfterPath
+if ($LASTEXITCODE -ne 0) { throw 'Task read-back failed.' }
+$taskAfter = Get-Content -LiteralPath $taskAfterPath -Raw | ConvertFrom-Json
+if ($taskAfter.taskId -ne $taskId -or $taskAfter.definition.name -cne 'Review' -or $taskAfter.definition.prompt -cne 'Review the changes.') { throw 'Task read-back differs; inspect before acting.' }
 ```
 
-Solo se admiten `name` y `prompt`; no modifica motor, modelos, permisos, horarios,
-identidades ni historial. Modifica la tarea compartida en todos los workflows
-que la referencian. El código de un paso Code del workflow se edita con
-`edit-workflow`; el código de una tarea Code reutilizable no está entre los campos
-admitidos por `edit-task`.
-Los cambios serializados tienen límite de 2 MiB UTF-8; el archivo patch, 3 MiB.
-Ante conflicto volver a exportar; ante actividad esperar; ante respuesta incierta
-consultar `inspect-request` con el requestId, sin reenviar por inferencia.
-No escribir directamente data.json. La exportación lee el catálogo persistido;
-un cambio aún no guardado en la interfaz puede causar un conflicto legítimo.
+Compare `taskAfter.expectedHash` with the confirmed save's `definitionHash`; a
+later authorized edit can explain a difference, but never overwrite it blindly.
+Changes are limited to 2 MiB serialized UTF-8 JSON (including escapes), the patch
+file to 3 MiB. Check the owner's announced limit as well. On stale hash, re-export
+and review; on active execution, wait. Never edit `data.json` or retry automatically.
 
 ## Diagnóstico de fallos de publicación (candidato local 1.7.28)
 
@@ -748,26 +939,114 @@ GUI, programación y CLI delegada comparten el límite. El descriptor compatible
 
 ## Editar un workflow sin cerrar Obsidian
 
-Consultar primero `version` y `help`. Si `capabilities` incluye `export-workflow` y `edit-workflow`, usar esta vía en la bóveda autorizada con AutoOC activo. No escribir directamente `data.json`, quitar reservas ni pedir cerrar Obsidian para estas ediciones.
+Check `version`/`help`, `workflowEditing:1` and both editing commands in the
+authorized installation. Keep a compatible owner loaded in Obsidian and wait for
+active executions to finish. This edits a shared catalog definition, not the
+frozen definition of an existing run or a Page-private copy; no `--page` is
+accepted. Do not close Obsidian, remove reservations or write `data.json`.
 
 ```text
 node CLI export-workflow --vault ABS_VAULT --workflow ID --out ABS_NEW_JSON
 node CLI edit-workflow --vault ABS_VAULT --workflow ID --patch ABS_PATCH_JSON
 ```
 
-La exportación crea un archivo nuevo con `expectedHash` y la definición editable del workflow seleccionado, sin resultados ni historial. Preparar un patch JSON con ese `expectedHash` y `changes`, por ejemplo:
+Export creates a **new** file with `workflowId`, `expectedHash` and `definition`
+(workflow id/name/description and existing steps' id/name/code/evaluatePrompt),
+without results/history, permissions or step kinds. It is not an importable
+package or a full structural export. Inspect the authorized definition in
+WorkFlows to confirm a step's kind before changing its code.
+
+Prepare a separate patch containing the **observed** hash and only desired
+changes. The markers below are not literal valid IDs/hashes to submit:
 
 ```json
-{"expectedHash":"SHA256_DE_LA_EXPORTACION","changes":{"description":"Descripción revisada","stepChanges":[{"id":"PASO_EXISTENTE","code":"output = 2;"}]}}
+{"expectedHash":"HASH_FROM_EXPORT","changes":{"description":"Revised description","stepChanges":[{"id":"EXISTING_CODE_STEP_ID","code":"output = 2;"}]}}
 ```
 
-Se admiten `name` y `description` del workflow y `name`, `code` o `evaluatePrompt` de pasos existentes. `code` requiere un paso Code. El candidato admite `changes` serializado hasta 2.097.152 bytes UTF-8 (2 MiB, incluidos escapes JSON) y archivo patch hasta 3.145.728 bytes (3 MiB). El mensaje completo admite 2.113.536 bytes. Confirmar `workflowEditMaxChangesBytes` en CLI y propietario cargado; un host antiguo conserva 58.000 bytes y rechaza una edición grande antes del envío. No truncar ni dividir una edición para eludir el límite. La exportación es una vista editable, no un paquete importable. Esta primera versión conserva IDs, conexiones, permisos, programación, tareas asociadas y estados/historial; no crea ni elimina pasos, no edita prompts/modelos de tareas asociadas ni ejecuta el código editado.
+Supported fields: workflow `name` (nonblank), `description`; existing step `name`,
+`code`, `evaluatePrompt`, all strings. `code` requires an existing Code step.
+`stepChanges` accepts 1–1,000 entries with distinct existing IDs and at least one
+text field per entry. It does not change transitions (including transition-level
+evaluation prompts), step kinds, dependencies, providers/models, permissions,
+schedules, IDs or history; it does not add/delete/reorder steps or execute code.
 
-El plugin propietario guarda mediante su cola cooperativa y devuelve un recibo durable con el hash nuevo. Ante conflicto, exportar la definición actual y revisar el cambio. Ante ejecución activa, esperar a que termine manteniendo Obsidian abierto. Tras una respuesta incierta o perdida, inspeccionar el recibo y la definición antes de reintentar: no hay fallback que escriba el catálogo por fuera del plugin.
+PowerShell preparation, reusing the absolute `$cliPath`/`$vaultPath` from startup:
 
-Si el plugin cargado es anterior y no anuncia esta capacidad, preparar primero el candidato y su respaldo y recargar únicamente AutoOC una vez. Las ediciones posteriores de esta vía no requieren descargarlo. Los parches locales pueden contener código o instrucciones; mantenerlos privados y no incluirlos en informes públicos.
+```powershell
+$workflowId = 'CATALOG_WORKFLOW_ID'
+$stepId = 'EXISTING_CODE_STEP_ID'
+$editDir = 'C:\private\autooc-edits'
+$workflowExportPath = Join-Path $editDir 'workflow-before.json'
+$workflowPatchPath = Join-Path $editDir 'workflow-patch.json'
+node $cliPath export-workflow --vault $vaultPath --workflow $workflowId --out $workflowExportPath
+if ($LASTEXITCODE -ne 0) { throw 'Workflow export failed; stop.' }
+$workflowExport = Get-Content -LiteralPath $workflowExportPath -Raw | ConvertFrom-Json
+if ($workflowExport.workflowId -ne $workflowId) { throw 'Unexpected workflow identity.' }
+$selectedSteps = @($workflowExport.definition.steps | Where-Object { $_.id -eq $stepId })
+if ($selectedSteps.Count -ne 1) { throw 'Select one existing step; verify its Code kind in WorkFlows.' }
+$workflowPatch = @{
+  expectedHash = $workflowExport.expectedHash
+  changes = @{
+    description = 'Revised description'
+    stepChanges = @(@{ id = $stepId; code = 'output = 2;' })
+  }
+}
+if (Test-Path -LiteralPath $workflowPatchPath) { throw 'Choose a new patch filename.' }
+[IO.File]::WriteAllText($workflowPatchPath, ($workflowPatch | ConvertTo-Json -Depth 10), [Text.UTF8Encoding]::new($false))
+```
 
-Volver a exportar a un archivo nuevo para comprobar el texto guardado; guardar no equivale a ejecutar ni a validar su lógica. Leer/exportar solo la definición necesaria evita copiar repetidamente un catálogo grande. Conservar contenido e historial; no truncarlos para mejorar cifras. Distinguir tiempo total de guardado CLI de pausas del editor y registrar validaciones aplazadas sin presentarlas como aprobadas. Para nombre/prompt de una tarea compartida, usar `export-task`/`edit-task`. Los cambios de estructura, motores, permisos o programación requieren el editor o la importación soportada; no se aplican mediante estos parches.
+Choose an existing private absolute `$editDir` and new filenames. Review the
+patch and the selected Code step/permissions, then explicitly submit:
+
+```powershell
+node $cliPath edit-workflow --vault $vaultPath --workflow $workflowId --patch $workflowPatchPath
+```
+
+The owner uses its cooperative save queue and returns a durable result with
+`workflowId` and the new `definitionHash`. This candidate's edit wrapper does
+**not** emit `event:submitted` or include a UUID on success; preserve the
+`requestId` from an uncertain-response error when available. On lost/uncertain
+delivery, inspect that receipt **before** any resubmission; neither a failed
+client nor a missing receipt proves no effects:
+
+```text
+node CLI inspect-request --vault ABS_VAULT --request-id REQUEST_UUID --include-output true
+node CLI follow --vault ABS_VAULT --request-id REQUEST_UUID --include-output true
+```
+
+Read `acceptance`, `receiptStatus` and `state`. The inspection command currently
+does not project edit-specific results/hashes/errors even with `--include-output`;
+do not expect a `result.definitionHash` there. If termination lost the UUID too,
+preserve logs and correlate the original request read-only with the operator.
+An unknown outcome requires diagnosis, not a fresh request or direct storage
+fallback. After a confirmed save, read back into another new export:
+
+```powershell
+$workflowAfterPath = Join-Path $editDir 'workflow-after.json'
+node $cliPath export-workflow --vault $vaultPath --workflow $workflowId --out $workflowAfterPath
+if ($LASTEXITCODE -ne 0) { throw 'Workflow read-back failed.' }
+$workflowAfter = Get-Content -LiteralPath $workflowAfterPath -Raw | ConvertFrom-Json
+$afterSteps = @($workflowAfter.definition.steps | Where-Object { $_.id -eq $stepId })
+if ($workflowAfter.workflowId -ne $workflowId -or $workflowAfter.definition.description -cne 'Revised description' -or $afterSteps.Count -ne 1 -or $afterSteps[0].code -cne 'output = 2;') { throw 'Workflow read-back differs; inspect before acting.' }
+```
+
+Compare `workflowAfter.expectedHash` with the confirmed result's `definitionHash`.
+A stale hash requires fresh export and review, not replacing the old hash and
+blindly resending. An active-execution rejection requires waiting with Obsidian
+open. Exports read persisted storage, so unsaved editor changes may cause a
+legitimate conflict. A save/read-back proves stored text, not execution correctness.
+
+Limits: serialized `changes` ≤ 2,097,152 UTF-8 bytes (including JSON escapes);
+patch file ≤ 3,145,728 bytes; full transport message ≤ 2,113,536 bytes. Check
+`workflowEditMaxChangesBytes` in CLI **and owner**. Older hosts retain 58,000 bytes
+and reject a large edit before submission. Do not truncate or split edits to evade
+limits. Without a compatible loaded owner, stop; updating/reloading software is a
+separate authorized operation, never an implicit step of documentation or editing.
+
+Keep local patches/exports private. For a shared task's name/prompt, use
+`export-task`/`edit-task`. For structure/provider/permission/schedule changes use
+WorkFlows/Tasks or the reviewed package route above (which creates new definitions,
+not in-place replacements). Linked distribution has its own explicit review.
 
 ## Abandono explícito de una ejecución
 
