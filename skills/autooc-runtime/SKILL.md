@@ -346,8 +346,11 @@ node CLI review-page --vault ROOT --page PAGE_ID --kind delete
 Leer `page`, `review`, `sessions`, `reviewHash` y `requestId` de la respuesta JSON.
 En merge, elegir `review.target.directory` o revisar de nuevo con una de las
 carpetas de `review.targets`; no asumir que Main workspace utiliza la rama `main`.
-En finish, distinguir `archiveBlockers` de `removalBlockers`. En delete, leer
-`blockers`: una Page con historial o evidencia de retirada debe conservarse.
+En finish, distinguir `archiveBlockers` de `removalBlockers`.
+For delete, read `blockers`: an archived Page may be deleted with resolved,
+non-uncertain history (`completed`, `failed` or `abandoned`) and completed removal
+evidence (`removed`). Unfinished or uncertain executions and pending removal
+still block deletion; owner, activity and session guards remain enforced.
 `truncated:true` indica que se acortaron listas o detalles para el transporte;
 consultar los recuentos completos y revisar los archivos en su carpeta si hace
 falta. La truncación nunca reduce las comprobaciones que vincula el hash.
@@ -370,7 +373,7 @@ revisión correspondiente; no inventarlo ni reutilizarlo tras cambios.
 | `archive` | `finish` | Ninguno; conserva carpeta, rama e historial. |
 | `remove-worktree` | `finish` | `sessionsClosed:true`; Page ya archivada, carpeta limpia y procesos externos cerrados. Conserva rama e historial. |
 | `discard` | `discard` | `branchName` exacto, `confirmLoss:true`, `sessionsClosed:true`; autorización explícita de pérdida de archivos y rama. |
-| `delete` | `delete` | `confirmDelete:true`; elimina solo configuración de una Page archivada sin historial ni evidencia de retirada. |
+| `delete` | `delete` | `confirmDelete:true`; removes only the archived Page from the workspace list, retaining identity, resolved history, logs and completed removal evidence in Deleted page history. Leaves its folder, worktree registration, branches and shared definitions unchanged. |
 
 Ejemplo de archivo de acción (sustituir valores por la revisión real):
 

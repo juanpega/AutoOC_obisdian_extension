@@ -34,6 +34,9 @@ async function archivedFixture(t){return archive(await fixture(t));}
 
 test('installed CLI reviews and closes a Page through the actual plugin owner while keeping an independent Main claim',async t=>{
   const f=await fixture(t),cli=path.resolve(__dirname,'../autooc-cli.cjs');
+  f.p.settings.workflows[0].steps[0].code='output="retained CLI output";';await f.p.saveSettings();
+  await f.p.runWorkPage('page','w',false);
+  const history=f.read(),output=f.p.pageRunOutput(history.pageRuns[0]);
   const claim={id:'main-helper',pageId:'main',directory:f.repo,createdAt:new Date().toISOString()};
   f.p.settings.pageTerminalClaims=[claim];f.p.startCliRequests();
   const pump=f.p.cliRequestHost;let pumpError;
@@ -58,6 +61,10 @@ test('installed CLI reviews and closes a Page through the actual plugin owner wh
     const deleted=await act({pageId:'page',action:'delete',reviewHash:deletion.reviewHash,confirmDelete:true});
     assert.equal(deleted.applied,true);assert.ok(deleted.requestId);assert.equal(f.read().workPages.length,0);
     assert.deepEqual(f.read().deletedWorkPages[0].page,retained);assert.equal(f.read().pageTerminalClaims[0].id,claim.id);
+    assert.deepEqual(f.read().pageRuns,history.pageRuns);assert.deepEqual(f.read().tasks,history.tasks);assert.deepEqual(f.read().workflows,history.workflows);
+    assert.ok(!git(f.repo,'worktree','list','--porcelain').includes(f.worktree.replace(/\\/g,'/')));
+    await f.p.loadSettings();assert.deepEqual(JSON.parse(JSON.stringify(f.p.settings.deletedWorkPages[0].page)),retained);
+    assert.equal(f.p.pageRunOutput(f.p.settings.pageRuns[0]),output);
     assert.equal(git(f.repo,'rev-parse','refs/heads/feat/finish'),f.page.baseCommit);assert.equal(pumpError,undefined);
   }finally{clearInterval(timer);pump.close();await pump.drain();}
 });
@@ -208,12 +215,16 @@ test('deleting an empty archived folder page removes its configuration and prese
   f.p.settings.workPages.push({...f.page,id:'other'});await f.p.saveSettings();await f.p.runWorkPage('other','w',false);
   const page=f.p.settings.workPages[0];page.kind='folder';page.directory=f.repo;page.archived=true;await f.p.saveSettings();
   const before=f.read(),head=git(f.repo,'rev-parse','HEAD'),index=fs.readFileSync(path.join(f.repo,'.git/index'));
+  const files=['tracked.txt','untracked.bin','.env'];
+  fs.writeFileSync(path.join(f.repo,'untracked.bin'),Buffer.from([0,255,13,10,65]));fs.writeFileSync(path.join(f.repo,'.env'),'local\r\nprivate');
+  const bytes=files.map(file=>fs.readFileSync(path.join(f.repo,file)));
   await f.p.deleteWorkPage(JSON.parse(JSON.stringify(page)));
   const after=f.read();assert.equal(after.workPages.length,1);assert.equal(after.workPages[0].id,'other');
   assert.deepEqual(after.tasks,before.tasks);assert.deepEqual(after.workflows,before.workflows);assert.deepEqual(after.pageRuns,before.pageRuns);
   assert.ok(fs.existsSync(f.worktree));assert.equal(fs.readFileSync(path.join(f.repo,'tracked.txt'),'utf8'),'base');
   assert.equal(git(f.repo,'rev-parse','HEAD'),head);assert.deepEqual(fs.readFileSync(path.join(f.repo,'.git/index')),index);
   assert.ok(git(f.repo,'branch','--list','feat/finish'));assert.equal(typeof f.p.pageRunOutput(after.pageRuns[0]),'string');
+  assert.deepEqual(files.map(file=>fs.readFileSync(path.join(f.repo,file))),bytes);
 });
 
 test('page deletion rejects active/stale pages and terminals, and rolls back a failed save',async t=>{
@@ -244,17 +255,28 @@ test('page deletion retains execution history and worktree removal evidence',asy
   const f=await fixture(t);await f.p.runWorkPage('page','w',false);
   let review=await f.review();await f.p.finishWorkPage('page',review.hash,false,false);
   const before=f.read(),output=f.p.pageRunOutput(before.pageRuns[0]);
+  const registration=git(f.repo,'worktree','list','--porcelain');
   await f.p.deleteWorkPage({...f.p.settings.workPages[0]});
   assert.equal(f.read().workPages.length,0);assert.deepEqual(f.read().deletedWorkPages[0].page,before.workPages[0]);
   assert.deepEqual(f.read().pageRuns,before.pageRuns);assert.equal(f.p.pageRunOutput(before.pageRuns[0]),output);
   await f.p.loadSettings();assert.equal(f.p.settings.deletedWorkPages[0].page.id,'page');
+  assert.equal(f.p.pageRunOutput(f.p.settings.pageRuns[0]),output);assert.ok(fs.existsSync(f.worktree));
+  assert.equal(git(f.repo,'worktree','list','--porcelain'),registration);
   await assert.rejects(f.p.runWorkPage('page','w',false),/missing|ambiguous/);
-  const g=await archivedFixture(t);review=await g.review();await g.p.finishWorkPage('page',review.hash,true,true);
-  const retained=g.read(),head=git(g.repo,'rev-parse','HEAD');
+  const g=await fixture(t);await g.p.runWorkPage('page','w',false);
+  fs.writeFileSync(path.join(g.worktree,'tracked.txt'),'retained feature');git(g.worktree,'add','.');git(g.worktree,'commit','-m','retained feature');
+  const feature=git(g.worktree,'rev-parse','HEAD');await archive(g);
+  review=await g.review();await g.p.finishWorkPage('page',review.hash,true,true);
+  const retained=g.read(),head=git(g.repo,'rev-parse','HEAD'),retainedOutput=g.p.pageRunOutput(retained.pageRuns[0]);
   await g.p.deleteWorkPage({...g.p.settings.workPages[0]});
   assert.equal(g.read().workPages.length,0);assert.deepEqual(g.read().deletedWorkPages[0].page,retained.workPages[0]);
   assert.equal(fs.existsSync(g.worktree),false);assert.equal(git(g.repo,'rev-parse','HEAD'),head);assert.ok(git(g.repo,'branch','--list','feat/finish'));
   await g.p.loadSettings();assert.equal(g.p.settings.deletedWorkPages[0].page.worktreeRemoval.status,'removed');
+  assert.deepEqual(JSON.parse(JSON.stringify(g.p.settings.deletedWorkPages[0].page)),retained.workPages[0]);
+  assert.deepEqual(g.read().pageRuns,retained.pageRuns);assert.equal(g.p.pageRunOutput(g.p.settings.pageRuns[0]),retainedOutput);
+  assert.deepEqual(g.read().tasks,retained.tasks);assert.deepEqual(g.read().workflows,retained.workflows);
+  assert.equal(git(g.repo,'rev-parse','refs/heads/feat/finish'),feature);assert.equal(git(g.repo,'show',feature+':tracked.txt'),'retained feature');
+  assert.ok(!git(g.repo,'worktree','list','--porcelain').includes(g.worktree.replace(/\\/g,'/')));
   await assert.rejects(g.p.deleteWorkPage(retained.workPages[0]),/missing|ambiguous/);assert.equal(g.read().deletedWorkPages.length,1);
 });
 
