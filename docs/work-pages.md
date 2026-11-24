@@ -30,6 +30,18 @@ de Main workspace, ambas páginas trabajan sobre esos mismos archivos.
 
 ## Ejecutar y alternar páginas
 
+For a top-level catalog task (including Code) or workflow in the selected Page,
+single-click to select, then use **▶ Play** in the inspector (Enter or Space),
+or double-click its Dashboard circle. Both shortcuts request a run in that Page,
+not Main workspace; **Open controls** remains available. Disabled or unavailable
+definitions, changed/archived Pages, and active or uncertain Page runs cannot
+start through these shortcuts. Repeated gestures for the same pending launch
+do not start another run. Rejections appear below the Dashboard; use
+**Open controls** to inspect the reason or recovery options, rather than retrying
+automatically. A launch request does not guarantee provider success.
+Workflow steps, including nested workflows, delays and embedded Code, have no
+quick-run shortcut; their existing controls and execution rules remain unchanged.
+
 Selecciona una tarea o workflow en el Dashboard de la página y pulsa
 **Open controls → Run task here / Run workflow here**. Las definiciones nuevas
 aparecen automáticamente. El resultado, log e historial pertenecen a esa página;

@@ -154,10 +154,15 @@ export class AreaDashboard {
   private previous = new Map<string, string>();
   private stepLimit = 40;
   private inspectedWorkflow?: string;
+  private pending = new Set<string>();
+  private play?: { button: HTMLButtonElement; item: DashboardItem };
   constructor(parent: HTMLElement, private state: AreaDashboardState, private host: {
     items(): DashboardItem[];
     open(item: DashboardItem): void;
     log(item: DashboardItem): void; history(item: DashboardItem): void;
+    startReason?(item: DashboardItem): string | undefined;
+    run?(item: DashboardItem): Promise<unknown>;
+    errorText?(error: unknown): string;
   }) {
     this.root = parent.createDiv("auto-oc-areas-dashboard");
     const heading = this.root.createDiv("auto-oc-areas-heading");
@@ -198,7 +203,7 @@ export class AreaDashboard {
   }
   update() {
     const items = this.host.items(), signature = JSON.stringify(items);
-    if (signature === this.signature) return;
+    if (signature === this.signature) { this.refreshPlay(); return; }
     let message = "Recorded execution state. Select an item for controls, log and history.";
     const flat = items.flatMap(item => [item, ...(item.children || [])]);
     for (const item of flat) {
@@ -251,7 +256,35 @@ export class AreaDashboard {
     this.orb(button, item);
     button.createSpan({ cls: "auto-oc-area-name", text: item.name });
     button.createSpan({ cls: "auto-oc-area-meta", text: `${step ? item.kind : item.kind === "workflow" ? `${item.children?.length || 0} steps` : item.detail} · ${stateLabel(item)}${item.activeSteps ? ` · ${item.activeSteps} step(s) running` : ""}` });
-    button.onclick = () => { this.state.selected = item.key; this.drawMap(); this.drawInspector(); this.restoreFocus(item.key); };
+    button.onclick = () => {
+      this.state.selected = item.key;
+      for (const node of Array.from(this.root.querySelectorAll<HTMLElement>("[data-area-item-key]")))
+        node.setAttr("aria-pressed", String(node.getAttribute("data-area-item-key") === item.key));
+      this.drawInspector(); this.restoreFocus(item.key);
+    };
+    if (!step && !item.workflowId && item.kind !== "delay")
+      button.ondblclick = event => { event.stopPropagation(); void this.quickRun(item); };
+  }
+  private startReason(item: DashboardItem): string | undefined {
+    if (!this.host.run || item.workflowId || item.kind === "delay") return "Open controls for this selection.";
+    if (this.pending.has(item.key)) return "Starting…";
+    return this.host.startReason?.(item) || (item.disabled ? "Execution is disabled." : undefined);
+  }
+  private refreshPlay() {
+    if (!this.play) return;
+    const {button, item} = this.play, reason = this.startReason(item);
+    button.disabled = !!reason;
+    button.title = reason || "Run in the selected workspace";
+    button.setAttr("aria-busy", String(this.pending.has(item.key)));
+  }
+  private async quickRun(item: DashboardItem) {
+    const reason = this.startReason(item);
+    if (reason) { this.event.setText(reason); this.refreshPlay(); return; }
+    this.pending.add(item.key); this.refreshPlay();
+    this.event.setText(`Starting ${item.name}…`);
+    try { await this.host.run!(item); this.event.setText(`Launch requested for ${item.name}.`); }
+    catch (error) { this.event.setText(this.host.errorText?.(error) || "Launch rejected. Open controls for details."); }
+    finally { this.pending.delete(item.key); this.refreshPlay(); }
   }
   private restoreFocus(key?: string) {
     if (!key) return;
@@ -284,6 +317,7 @@ export class AreaDashboard {
     const focused = this.inspector.ownerDocument.activeElement?.getAttribute("data-area-item-key") || undefined;
     const top = this.inspector.scrollTop;
     this.inspector.empty();
+    this.play = undefined;
     const parent = this.items.find(item => item.key === this.state.selected || item.children?.some(child => child.key === this.state.selected));
     if (!parent) { this.inspector.createEl("p", { text: "Select a workflow, task or Code step." }); return; }
     const item = parent.children?.find(child => child.key === this.state.selected) || parent;
@@ -297,6 +331,11 @@ export class AreaDashboard {
     const action = (text: string, callback: () => void) => {
       const button = actions.createEl("button", { text }); button.onclick = callback; return button;
     };
+    if (this.host.run && !item.workflowId && item.kind !== "delay") {
+      const button = action("▶ Play", () => this.quickRun(item));
+      button.setAttr("aria-label", `Play ${item.name}`);
+      this.play = { button, item }; this.refreshPlay();
+    }
     action("Open controls", () => this.host.open(item));
     if (item.kind !== "delay") {
       action(item.kind === "workflow" ? "Current step log" : "Log", () => this.host.log(item));
