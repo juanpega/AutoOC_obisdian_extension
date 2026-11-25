@@ -5,7 +5,7 @@ import { workflowStepDisplayName, bindWorkflowLabel, refreshWorkflowLabels } fro
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
 import { INTERACTIVE_CLIS, launchInteractiveCli, type InteractiveCliProvider } from "./interactive-cli";
-import { addWorkPageSettings, renderWorkPages, refreshWorkPageTerminals, openPageItemControls, showPageItemHistory, openCliWorkspaceSelector } from "./work-pages-ui";
+import { addWorkPageSettings, renderWorkPages, refreshWorkPageContent, refreshWorkPageTerminals, openPageItemControls, showPageItemHistory, openCliWorkspaceSelector } from "./work-pages-ui";
 import { reviewPageMerge, executePageMerge, type MergeReview, type MergeCommand } from "./merge-review";
 import { assertNoPageTerminal, selectWorkPage, pageExecutionId, validateWorkPages, verifyWorkPageEnvironment, type WorkPageSettings, type PageRun, type WorkPage } from "./work-pages";
 import { reviewWorkPage, workPageRevision, removeReviewedWorktree, inspectRemovalOutcome, assertRemovalScope, type FinishWorkReview } from "./finish-work";
@@ -6579,7 +6579,9 @@ class AutoOCView extends ItemView {
     await this.persistDashboardPositionsSafely();
   }
   refresh() {
-    if (this.currentTab === "dashboard" && this.areaDashboard?.root.isConnected) {
+    const pageExists=this.selectedWorkPage==="main" || this.plugin.settings.workPages?.some(page=>page.id===this.selectedWorkPage);
+    if (this.currentTab === "dashboard" && this.areaDashboard?.root.isConnected && pageExists) {
+      refreshWorkPageContent(this.containerEl);
       refreshWorkPageTerminals(this.containerEl);
       this.areaDashboard.update();
     }

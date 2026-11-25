@@ -648,6 +648,32 @@ class FinishWorkModal extends Modal {
 }
 
 const terminalClaimRegions = new WeakMap<HTMLElement,()=>void>();
+const pageContentRegions = new WeakMap<HTMLElement,()=>void>();
+/** Page-owned regions only: never replace the mounted Dashboard or history disclosure. */
+export function refreshWorkPageContent(parent:HTMLElement):void {
+  for(const region of Array.from(parent.querySelectorAll<HTMLElement>(".auto-oc-page-refresh-region")))pageContentRegions.get(region)?.();
+}
+function pageContentRegion(region:HTMLElement, signature:()=>unknown, render:()=>void, fallback?:HTMLElement) {
+  region.addClass("auto-oc-page-refresh-region");
+  let previous:string|undefined;
+  const refresh=()=>{
+    const next=JSON.stringify(signature() ?? null);
+    if(next===previous)return;
+    const focused=region.ownerDocument?.activeElement as HTMLElement|null;
+    const hadFocus=!!focused && region.contains(focused);
+    const key=hadFocus?focused.getAttribute("data-page-focus"):null;
+    region.empty();render();
+    // Keys use Page/run identity, not row position or user-controlled CSS selectors.
+    const controls=Array.from(region.querySelectorAll<HTMLElement>("button"));
+    for(const control of controls)if(!control.getAttribute("data-page-focus"))control.setAttr("data-page-focus",control.textContent || "");
+    previous=next;
+    if(hadFocus) {
+      const enabled=controls.filter(control=>!(control as HTMLButtonElement).disabled);
+      (enabled.find(control=>control.getAttribute("data-page-focus")===key) || fallback || enabled[0])?.focus({preventScroll:true});
+    }
+  };
+  pageContentRegions.set(region,refresh);refresh();
+}
 /** Refresh session summaries without rebuilding the Dashboard or its open dialogs. */
 export function refreshWorkPageTerminals(parent:HTMLElement):void {
   for(const region of Array.from(parent.querySelectorAll<HTMLElement>(".auto-oc-terminal-claims")))terminalClaimRegions.get(region)?.();
@@ -708,6 +734,7 @@ function runs(parent:HTMLElement, app:App, host:WorkPagesHost, pageId?:string, o
       action(row,"Continue",host,()=>host.runWorkPage(run.pageId,run.sourceId,run.task,run.runId,false),run.uncertain);
       action(row,"Reconcile",host,()=>host.runWorkPage(run.pageId,run.sourceId,run.task,run.runId,true));
     }
+    for(const button of Array.from(row.querySelectorAll<HTMLElement>("button")))button.setAttr("data-page-focus",JSON.stringify([run.pageId,run.workflowId,run.runId,button.textContent]));
   }
   if (!history.length) parent.createEl("p",{text:"No page runs yet."});
 }
@@ -795,11 +822,15 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
   renderCatalog?:(parent:HTMLElement,page:WorkPage)=>void):boolean {
   const nav = parent.createDiv("auto-oc-page-tabs"); nav.setAttr("aria-label","Work pages");
   const entries = [{id:"main",name:"Main workspace"},...(host.settings.workPages || [])];
-  for (const page of entries.filter(page=>!("archived" in page && page.archived) || page.id === selected)) {
-    const button = nav.createEl("button",{text:page.name + (("archived" in page && page.archived) ? " (archived)" : "")});
-    button.setAttr("aria-pressed",String(page.id === selected)); button.onclick = () => select(page.id);
-  }
-  if (selected !== "general") nav.createEl("button",{text:"+ New page"}).onclick = () => new NewPageModal(app,host,select).open();
+  pageContentRegion(nav,()=>host.settings.workPages?.map(page=>[page.id,page.name,page.archived]),()=>{
+    const currentEntries = [{id:"main",name:"Main workspace"},...(host.settings.workPages || [])];
+    for (const page of currentEntries.filter(page=>!("archived" in page && page.archived) || page.id === selected)) {
+      const button = nav.createEl("button",{text:page.name + (("archived" in page && page.archived) ? " (archived)" : "")});
+      button.setAttr("data-page-focus",page.id);
+      button.setAttr("aria-pressed",String(page.id === selected)); button.onclick = () => select(page.id);
+    }
+    if (selected !== "general") nav.createEl("button",{text:"+ New page"}).onclick = () => new NewPageModal(app,host,select).open();
+  });
   if (selected === "main") { renderMainWorkspace(parent,app,host); terminalClaims(parent,app,host,"main"); return false; }
   if (selected === "general") {
     parent.createEl("h3",{text:"Overview"});
@@ -831,6 +862,26 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
     runs(parent,app,host,undefined,select); terminalClaims(parent,app,host,undefined,select); return true;
   }
   const page = selectWorkPage(host.settings,selected);
+  const shell=parent.createDiv();
+  pageContentRegion(shell,()=>[host.settings.workPages?.find(page=>page.id===selected),host.hasPageTerminal?.(selected),
+    host.settings.pageTerminalClaims?.some(claim=>claim.pageId===selected)],()=>{
+    const current=host.settings.workPages?.find(page=>page.id===selected);
+    if(current)renderPageControls(shell,app,host,current,select,openCli,()=>refreshWorkPageContent(parent));
+  });
+  parent.createEl("p",{text:"All tasks and workflows from Main workspace are available here automatically. Results belong to this page. Edits are shared; schedules run in Main workspace.",cls:"setting-item-description"});
+  renderCatalog?.(parent,page);
+  const history = parent.createEl("details"), summary=history.createEl("summary",{text:"Page executions"});
+  const content=history.createDiv();
+  pageContentRegion(content,()=>[
+    (host.settings.pageRuns || []).filter(run=>run.pageId===selected).map(run=>[run,host.ownsExecution(run.workflowId,run.runId)]),
+    host.settings.deletedWorkPages?.some(entry=>entry.page.id===selected)
+  ],()=>runs(content,app,host,selected),summary);
+  terminalClaims(parent,app,host,page.id);
+  return true;
+}
+
+function renderPageControls(parent:HTMLElement,app:App,host:WorkPagesHost,page:WorkPage,select:(id:string)=>void,
+  openCli:(page:WorkPage)=>void,refresh:()=>void) {
   parent.createEl("h3",{text:page.name});
   parent.createEl("p",{text:page.objective || "No objective set."});
   parent.createEl("p",{text:page.directory,cls:"auto-oc-cli-path"});
@@ -838,7 +889,7 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
   if (page.kind === "folder") parent.createEl("p",{text:"Existing folder · no separate worktree or branch was created. Files are shared with anyone using this folder.",cls:"setting-item-description"});
   const controls = parent.createDiv("auto-oc-page-actions");
   if(page.archived) action(controls,"Delete page",host,async()=>new DeletePageModal(app,host,JSON.parse(JSON.stringify(page)),()=>select("general")).open());
-  action(controls,"CLI in this page",host,async()=>openCli({...page}),!!page.archived);
+  action(controls,"CLI in this page",host,async()=>openCli({...page}),!!page.archived || !!page.worktreeRemoval);
   if (host.hasPageTerminal?.(page.id) && !host.settings.pageTerminalClaims?.some(c=>c.pageId===page.id)) {
     action(controls,"Open terminal",host,()=>host.showPageTerminal!(page.id));
   }
@@ -875,17 +926,15 @@ export function renderWorkPages(parent:HTMLElement, app:App, host:WorkPagesHost,
     if(page.archived && page.kind==="worktree")action(controls,"Remove worktree",host,async()=>new FinishWorkModal(app,host,page.id,()=>select("main"),true).open());
     if (page.archived) action(controls,"Restore page",host,async()=>{
       host.assertPagesEditable();
-      const current = selectWorkPage(host.settings,page.id);
+      const current = {...selectWorkPage(host.settings,page.id)};
       if (current.worktreeRemoval) throw new Error("This worktree is unavailable. Keep its page history and link a new environment instead.");
       await describePageFolder(current.directory,current.kind === "worktree");
       host.assertPagesEditable();
+      const latest = selectWorkPage(host.settings,page.id);
+      if (latest.worktreeRemoval || latest.directory !== current.directory || latest.kind !== current.kind)
+        throw new Error("This page changed while its folder was checked. Review the page before restoring it.");
       await saveField(host,"workPages",host.settings.workPages!.map(p=>p.id===page.id?{...p,archived:false}:p));
+      refresh();
     });
   }
-  parent.createEl("p",{text:"All tasks and workflows from Main workspace are available here automatically. Results belong to this page. Edits are shared; schedules run in Main workspace.",cls:"setting-item-description"});
-  renderCatalog?.(parent,page);
-  const history = parent.createEl("details"); history.createEl("summary",{text:"Page executions"});
-  runs(history,app,host,page.id);
-  terminalClaims(parent,app,host,page.id);
-  return true;
 }

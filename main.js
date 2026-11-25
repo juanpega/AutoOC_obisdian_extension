@@ -75,9 +75,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// node_modules/@lezer/javascript/dist/index.cjs
+// ../../../node_modules/@lezer/javascript/dist/index.cjs
 var require_dist = __commonJS({
-  "node_modules/@lezer/javascript/dist/index.cjs"(exports) {
+  "../../../node_modules/@lezer/javascript/dist/index.cjs"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var lr = require("@lezer/lr");
@@ -296,9 +296,9 @@ var require_dist = __commonJS({
   }
 });
 
-// node_modules/@codemirror/lang-javascript/dist/index.cjs
+// ../../../node_modules/@codemirror/lang-javascript/dist/index.cjs
 var require_dist2 = __commonJS({
-  "node_modules/@codemirror/lang-javascript/dist/index.cjs"(exports) {
+  "../../../node_modules/@codemirror/lang-javascript/dist/index.cjs"(exports) {
     "use strict";
     var javascript$1 = require_dist();
     var language = require("@codemirror/language");
@@ -758,9 +758,9 @@ var require_dist2 = __commonJS({
   }
 });
 
-// node_modules/@xterm/xterm/lib/xterm.js
+// ../../../node_modules/@xterm/xterm/lib/xterm.js
 var require_xterm = __commonJS({
-  "node_modules/@xterm/xterm/lib/xterm.js"(exports, module2) {
+  "../../../node_modules/@xterm/xterm/lib/xterm.js"(exports, module2) {
     !function(e, t) {
       if ("object" == typeof exports && "object" == typeof module2) module2.exports = t();
       else if ("function" == typeof define && define.amd) define([], t);
@@ -6888,9 +6888,9 @@ WARNING: This link could potentially be dangerous`)) {
   }
 });
 
-// node_modules/@xterm/addon-fit/lib/addon-fit.js
+// ../../../node_modules/@xterm/addon-fit/lib/addon-fit.js
 var require_addon_fit = __commonJS({
-  "node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module2) {
+  "../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module2) {
     !function(e, t) {
       "object" == typeof exports && "object" == typeof module2 ? module2.exports = t() : "function" == typeof define && define.amd ? define([], t) : "object" == typeof exports ? exports.FitAddon = t() : e.FitAddon = t();
     }(self, () => (() => {
@@ -6924,9 +6924,9 @@ var require_addon_fit = __commonJS({
   }
 });
 
-// node_modules/@xterm/xterm/css/xterm.css
+// ../../../node_modules/@xterm/xterm/css/xterm.css
 var require_xterm2 = __commonJS({
-  "node_modules/@xterm/xterm/css/xterm.css"(exports, module2) {
+  "../../../node_modules/@xterm/xterm/css/xterm.css"(exports, module2) {
     module2.exports = `/**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
@@ -13104,6 +13104,34 @@ var FinishWorkModal = class extends import_obsidian4.Modal {
   }
 };
 var terminalClaimRegions = /* @__PURE__ */ new WeakMap();
+var pageContentRegions = /* @__PURE__ */ new WeakMap();
+function refreshWorkPageContent(parent) {
+  var _a;
+  for (const region of Array.from(parent.querySelectorAll(".auto-oc-page-refresh-region"))) (_a = pageContentRegions.get(region)) == null ? void 0 : _a();
+}
+function pageContentRegion(region, signature, render, fallback) {
+  region.addClass("auto-oc-page-refresh-region");
+  let previous;
+  const refresh = () => {
+    var _a, _b, _c;
+    const next = JSON.stringify((_a = signature()) != null ? _a : null);
+    if (next === previous) return;
+    const focused = (_b = region.ownerDocument) == null ? void 0 : _b.activeElement;
+    const hadFocus = !!focused && region.contains(focused);
+    const key = hadFocus ? focused.getAttribute("data-page-focus") : null;
+    region.empty();
+    render();
+    const controls = Array.from(region.querySelectorAll("button"));
+    for (const control of controls) if (!control.getAttribute("data-page-focus")) control.setAttr("data-page-focus", control.textContent || "");
+    previous = next;
+    if (hadFocus) {
+      const enabled = controls.filter((control) => !control.disabled);
+      (_c = enabled.find((control) => control.getAttribute("data-page-focus") === key) || fallback || enabled[0]) == null ? void 0 : _c.focus({ preventScroll: true });
+    }
+  };
+  pageContentRegions.set(region, refresh);
+  refresh();
+}
 function refreshWorkPageTerminals(parent) {
   var _a;
   for (const region of Array.from(parent.querySelectorAll(".auto-oc-terminal-claims"))) (_a = terminalClaimRegions.get(region)) == null ? void 0 : _a();
@@ -13181,6 +13209,7 @@ function runs(parent, app, host, pageId, openPage, source) {
       action(row, "Continue", host, () => host.runWorkPage(run2.pageId, run2.sourceId, run2.task, run2.runId, false), run2.uncertain);
       action(row, "Reconcile", host, () => host.runWorkPage(run2.pageId, run2.sourceId, run2.task, run2.runId, true));
     }
+    for (const button of Array.from(row.querySelectorAll("button"))) button.setAttr("data-page-focus", JSON.stringify([run2.pageId, run2.workflowId, run2.runId, button.textContent]));
   }
   if (!history.length) parent.createEl("p", { text: "No page runs yet." });
 }
@@ -13296,16 +13325,23 @@ function renderMainWorkspace(parent, app, host) {
   void update();
 }
 function renderWorkPages(parent, app, host, selected, select, openCli, renderCatalog) {
-  var _a, _b, _c, _d;
+  var _a, _b;
   const nav = parent.createDiv("auto-oc-page-tabs");
   nav.setAttr("aria-label", "Work pages");
   const entries2 = [{ id: "main", name: "Main workspace" }, ...host.settings.workPages || []];
-  for (const page2 of entries2.filter((page3) => !("archived" in page3 && page3.archived) || page3.id === selected)) {
-    const button = nav.createEl("button", { text: page2.name + ("archived" in page2 && page2.archived ? " (archived)" : "") });
-    button.setAttr("aria-pressed", String(page2.id === selected));
-    button.onclick = () => select(page2.id);
-  }
-  if (selected !== "general") nav.createEl("button", { text: "+ New page" }).onclick = () => new NewPageModal(app, host, select).open();
+  pageContentRegion(nav, () => {
+    var _a2;
+    return (_a2 = host.settings.workPages) == null ? void 0 : _a2.map((page2) => [page2.id, page2.name, page2.archived]);
+  }, () => {
+    const currentEntries = [{ id: "main", name: "Main workspace" }, ...host.settings.workPages || []];
+    for (const page2 of currentEntries.filter((page3) => !("archived" in page3 && page3.archived) || page3.id === selected)) {
+      const button = nav.createEl("button", { text: page2.name + ("archived" in page2 && page2.archived ? " (archived)" : "") });
+      button.setAttr("data-page-focus", page2.id);
+      button.setAttr("aria-pressed", String(page2.id === selected));
+      button.onclick = () => select(page2.id);
+    }
+    if (selected !== "general") nav.createEl("button", { text: "+ New page" }).onclick = () => new NewPageModal(app, host, select).open();
+  });
   if (selected === "main") {
     renderMainWorkspace(parent, app, host);
     terminalClaims(parent, app, host, "main");
@@ -13345,6 +13381,35 @@ function renderWorkPages(parent, app, host, selected, select, openCli, renderCat
     return true;
   }
   const page = selectWorkPage(host.settings, selected);
+  const shell = parent.createDiv();
+  pageContentRegion(shell, () => {
+    var _a2, _b2, _c;
+    return [
+      (_a2 = host.settings.workPages) == null ? void 0 : _a2.find((page2) => page2.id === selected),
+      (_b2 = host.hasPageTerminal) == null ? void 0 : _b2.call(host, selected),
+      (_c = host.settings.pageTerminalClaims) == null ? void 0 : _c.some((claim) => claim.pageId === selected)
+    ];
+  }, () => {
+    var _a2;
+    const current = (_a2 = host.settings.workPages) == null ? void 0 : _a2.find((page2) => page2.id === selected);
+    if (current) renderPageControls(shell, app, host, current, select, openCli, () => refreshWorkPageContent(parent));
+  });
+  parent.createEl("p", { text: "All tasks and workflows from Main workspace are available here automatically. Results belong to this page. Edits are shared; schedules run in Main workspace.", cls: "setting-item-description" });
+  renderCatalog == null ? void 0 : renderCatalog(parent, page);
+  const history = parent.createEl("details"), summary3 = history.createEl("summary", { text: "Page executions" });
+  const content = history.createDiv();
+  pageContentRegion(content, () => {
+    var _a2;
+    return [
+      (host.settings.pageRuns || []).filter((run2) => run2.pageId === selected).map((run2) => [run2, host.ownsExecution(run2.workflowId, run2.runId)]),
+      (_a2 = host.settings.deletedWorkPages) == null ? void 0 : _a2.some((entry) => entry.page.id === selected)
+    ];
+  }, () => runs(content, app, host, selected), summary3);
+  terminalClaims(parent, app, host, page.id);
+  return true;
+}
+function renderPageControls(parent, app, host, page, select, openCli, refresh) {
+  var _a, _b;
   parent.createEl("h3", { text: page.name });
   parent.createEl("p", { text: page.objective || "No objective set." });
   parent.createEl("p", { text: page.directory, cls: "auto-oc-cli-path" });
@@ -13352,8 +13417,8 @@ function renderWorkPages(parent, app, host, selected, select, openCli, renderCat
   if (page.kind === "folder") parent.createEl("p", { text: "Existing folder \xB7 no separate worktree or branch was created. Files are shared with anyone using this folder.", cls: "setting-item-description" });
   const controls = parent.createDiv("auto-oc-page-actions");
   if (page.archived) action(controls, "Delete page", host, async () => new DeletePageModal(app, host, JSON.parse(JSON.stringify(page)), () => select("general")).open());
-  action(controls, "CLI in this page", host, async () => openCli({ ...page }), !!page.archived);
-  if (((_c = host.hasPageTerminal) == null ? void 0 : _c.call(host, page.id)) && !((_d = host.settings.pageTerminalClaims) == null ? void 0 : _d.some((c) => c.pageId === page.id))) {
+  action(controls, "CLI in this page", host, async () => openCli({ ...page }), !!page.archived || !!page.worktreeRemoval);
+  if (((_a = host.hasPageTerminal) == null ? void 0 : _a.call(host, page.id)) && !((_b = host.settings.pageTerminalClaims) == null ? void 0 : _b.some((c) => c.pageId === page.id))) {
     action(controls, "Open terminal", host, () => host.showPageTerminal(page.id));
   }
   action(controls, "Changes", host, async () => new ChangesModal(app, "Changes \xB7 " + page.name, host.redactSecrets(await pageChanges(page))).open(), !!page.worktreeRemoval);
@@ -13390,20 +13455,17 @@ function renderWorkPages(parent, app, host, selected, select, openCli, renderCat
     if (page.archived && page.kind === "worktree") action(controls, "Remove worktree", host, async () => new FinishWorkModal(app, host, page.id, () => select("main"), true).open());
     if (page.archived) action(controls, "Restore page", host, async () => {
       host.assertPagesEditable();
-      const current = selectWorkPage(host.settings, page.id);
+      const current = { ...selectWorkPage(host.settings, page.id) };
       if (current.worktreeRemoval) throw new Error("This worktree is unavailable. Keep its page history and link a new environment instead.");
       await describePageFolder(current.directory, current.kind === "worktree");
       host.assertPagesEditable();
+      const latest = selectWorkPage(host.settings, page.id);
+      if (latest.worktreeRemoval || latest.directory !== current.directory || latest.kind !== current.kind)
+        throw new Error("This page changed while its folder was checked. Review the page before restoring it.");
       await saveField(host, "workPages", host.settings.workPages.map((p) => p.id === page.id ? { ...p, archived: false } : p));
+      refresh();
     });
   }
-  parent.createEl("p", { text: "All tasks and workflows from Main workspace are available here automatically. Results belong to this page. Edits are shared; schedules run in Main workspace.", cls: "setting-item-description" });
-  renderCatalog == null ? void 0 : renderCatalog(parent, page);
-  const history = parent.createEl("details");
-  history.createEl("summary", { text: "Page executions" });
-  runs(history, app, host, page.id);
-  terminalClaims(parent, app, host, page.id);
-  return true;
 }
 
 // discard-work.ts
@@ -27630,8 +27692,10 @@ var AutoOCView = class extends import_obsidian13.ItemView {
     await this.persistDashboardPositionsSafely();
   }
   refresh() {
-    var _a;
-    if (this.currentTab === "dashboard" && ((_a = this.areaDashboard) == null ? void 0 : _a.root.isConnected)) {
+    var _a, _b;
+    const pageExists = this.selectedWorkPage === "main" || ((_a = this.plugin.settings.workPages) == null ? void 0 : _a.some((page) => page.id === this.selectedWorkPage));
+    if (this.currentTab === "dashboard" && ((_b = this.areaDashboard) == null ? void 0 : _b.root.isConnected) && pageExists) {
+      refreshWorkPageContent(this.containerEl);
       refreshWorkPageTerminals(this.containerEl);
       this.areaDashboard.update();
     } else this.render();

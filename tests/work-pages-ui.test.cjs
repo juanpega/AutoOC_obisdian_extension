@@ -5,10 +5,14 @@ new Function('require','module','exports',require('esbuild').buildSync({entryPoi
 const cleanups=[];
 afterEach(()=>{for(const cleanup of cleanups.splice(0))cleanup();});
 function harness(failPrepare=false) {
+  const doc={activeElement:null};
   class Element {
-    constructor(options={}){this.children=[];this.text=options.text||'';this.style={};this.attrs={};this.classes=new Set((typeof options==='string'?options:options.cls||'').split(' '));}
-    createEl(tag,options={}){const child=new Element(options);child.tag=tag;this.children.push(child);return child;}
+    constructor(options={}){this.ownerDocument=doc;this.children=[];this.text=options.text||'';this.style={};this.attrs={};this.classes=new Set((typeof options==='string'?options:options.cls||'').split(' '));}
+    createEl(tag,options={}){const child=new Element(options);child.tag=tag;child.parentElement=this;this.children.push(child);return child;}
     createDiv(options={}){return this.createEl('div',options);} empty(){this.children=[];} setText(v){this.text=v;this.children=[];} setAttr(k,v){this.attrs[k]=v;} addClass(c){this.classes.add(c);}
+    getAttribute(k){return this.attrs[k]??null;} contains(e){return this.all().includes(e);} focus(){doc.activeElement=this;}
+    get textContent(){return this.text;}
+    setSelectionRange(start,end,direction){this.selectionStart=start;this.selectionEnd=end;this.selectionDirection=direction;}
     all(){return [this,...this.children.flatMap(c=>c.all())];}
     querySelectorAll(selector){return this.all().filter(e=>selector.split(',').map(t=>t.trim()).some(t=>t.startsWith('.')?e.classes.has(t.slice(1)):t===e.tag));}
   }
@@ -53,9 +57,83 @@ function harness(failPrepare=false) {
   function field(modal,name,tag){return modal.contentEl.all().find(e=>e.name===name).all().find(e=>e.tag===tag);}
   function button(modal,text){const b=modal.contentEl.all().find(e=>e.tag==='button'&&e.text===text);assert.ok(b,text);return b;}
   function create(){const modal=new module.exports.testing.NewPageModal(app,host,id=>effects.push('select'));modal.open();return modal;}
-  return {api:module.exports,host,app,root,effects,opened,notices,field,button,create,helper};
+  return {api:module.exports,host,app,root,effects,opened,notices,field,button,create,helper,doc};
 }
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
+
+function refreshHarness(archived=true) {
+  const h=harness(),selected=[],page={id:'p',name:'Feature',objective:'Goal',directory:'/repo/p',kind:'worktree',branch:'feat/p',archived,taskIds:[],workflowIds:[]};
+  h.host.settings.workPages=[page,{...page,id:'other',name:'Other'}];
+  const catalog=[];
+  h.api.renderWorkPages(h.root,h.app,h.host,'p',id=>selected.push(id),()=>h.effects.push('cli'),parent=>{
+    const input=parent.createEl('input');input.value='draft';catalog.push(input);
+  });
+  return {...h,selected,page,catalog,find:text=>h.root.all().find(e=>e.text===text),
+    refresh:()=>h.api.refreshWorkPageContent?.(h.root)};
+}
+
+test('open Page restore refreshes canonical controls without replacing history, catalog or focus',async()=>{
+  const h=refreshHarness(),history=h.root.all().find(e=>e.tag==='details');history.open=true;
+  const restore=h.find('Restore page');restore.focus();
+  await restore.onclick();h.refresh();
+  assert.equal(h.host.settings.workPages[0].archived,false);
+  assert.equal(h.find('Feature (archived)'),undefined);
+  assert.equal(h.find('Restore page'),undefined);
+  assert.ok(h.find('Archive page'));assert.equal(h.find('CLI in this page').disabled,false);
+  assert.ok(h.root.contains(h.doc.activeElement));assert.equal(h.doc.activeElement.disabled,false);
+  assert.equal(h.root.all().find(e=>e.tag==='details'),history);assert.equal(history.open,true);
+  const input=h.catalog[0];input.focus();input.setSelectionRange(1,4,'backward');
+  const controls=h.find('Archive page');h.refresh();h.refresh();
+  assert.equal(h.find('Archive page'),controls);assert.equal(h.doc.activeElement,input);
+  assert.equal(input.value,'draft');assert.equal(input.selectionStart,1);assert.equal(input.selectionEnd,4);
+  assert.deepEqual(h.selected,[]);assert.deepEqual(h.effects,['save']);
+});
+
+test('failed restore and unavailable worktrees retain archive and execution restrictions',async()=>{
+  for(const reason of ['save','folder','pending','removed']){
+    const h=refreshHarness(),restore=h.find('Restore page');
+    if(reason==='save')h.host.saveSettings=async()=>{throw Error('save rejected');};
+    if(reason==='folder')h.helper.describePageFolder=async()=>{throw Error('folder unavailable');};
+    if(['pending','removed'].includes(reason))h.host.settings.workPages=[{...h.page,worktreeRemoval:{status:reason}}];
+    await restore.onclick();h.refresh();
+    assert.equal(h.host.settings.workPages[0].archived,true);
+    assert.equal(h.find('CLI in this page').disabled,true);assert.equal(h.find('Archive page'),undefined);
+    assert.ok(h.notices.length);assert.deepEqual(h.selected,[]);
+    if(['pending','removed'].includes(reason))assert.equal(h.find('Restore page'),undefined);
+  }
+});
+
+test('restore does not activate a worktree changed while folder validation was pending',async()=>{
+  const h=refreshHarness();let validated;
+  h.helper.describePageFolder=()=>new Promise(resolve=>{validated=resolve;});
+  const restoring=h.find('Restore page').onclick();
+  h.host.settings.workPages=[{...h.page,worktreeRemoval:{status:'pending'}}];
+  validated({});await restoring;h.refresh();
+  assert.equal(h.host.settings.workPages[0].archived,true);
+  assert.equal(h.find('CLI in this page').disabled,true);assert.equal(h.effects.includes('save'),false);
+  assert.ok(h.notices.length);
+});
+
+test('open Page history refresh tracks insertion, ownership and uncertainty without cross-Page rows',()=>{
+  const h=refreshHarness(false),history=h.root.all().find(e=>e.tag==='details');
+  const run={pageId:'p',sourceId:'w',task:false,workflowId:'p:w',runId:'one',name:'Build',phase:'in_flight'};
+  let owned=true;h.host.ownsExecution=()=>owned;
+  h.host.settings.pageRuns=[{...run,pageId:'other',runId:'foreign',name:'Foreign'},run];
+  h.refresh();assert.ok(h.find('Build · in_flight'));assert.ok(h.find('Stop'));
+  assert.equal(h.find('Foreign · in_flight'),undefined);assert.equal(h.find('No page runs yet.'),undefined);
+  const stop=h.find('Stop');stop.focus();h.refresh();assert.equal(h.find('Stop'),stop);
+  owned=false;h.refresh();assert.equal(h.find('Stop'),undefined);
+  assert.ok(h.find('Continue'));assert.ok(h.find('Reconcile'));assert.ok(h.root.contains(h.doc.activeElement));
+  history.open=true;h.find('Reconcile').focus();
+  h.host.settings.pageRuns[1]={...run,uncertain:true};h.refresh();
+  assert.equal(h.find('Continue').disabled,true);assert.equal(h.doc.activeElement,h.find('Reconcile'));
+  h.host.settings.pageRuns[1]={...run,phase:'completed'};h.refresh();
+  assert.ok(h.find('Build · completed'));assert.equal(h.find('Continue'),undefined);assert.equal(h.find('Reconcile'),undefined);
+  assert.ok(h.root.contains(h.doc.activeElement));assert.equal(history.open,true);
+  h.host.settings.pageRuns.push({...run,runId:'two',name:'Second',phase:'failed'});h.refresh();h.refresh();
+  assert.equal(history.all().filter(e=>e.text==='one').length,1);assert.equal(history.all().filter(e=>e.text==='two').length,1);
+  history.open=false;h.refresh();assert.equal(history.open,false);assert.deepEqual(h.effects,[]);
+});
 
 test('CLI workspace selector requires a choice, excludes unavailable pages and never saves configuration',()=>{
   const h=harness(),selected=[],page={id:'p',name:'Feature',directory:'/repo/p',kind:'worktree',branch:'feat/p'};
