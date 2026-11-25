@@ -12624,6 +12624,23 @@ var NewPageModal = class extends import_obsidian4.Modal {
     this.contentEl.empty();
   }
 };
+function mergeFooterGuidance(review, redact) {
+  var _a;
+  const brief = (text3) => {
+    const clean2 = redact(text3).replace(/\s+/g, " ").trim();
+    return clean2.length > 180 ? clean2.slice(0, 180) + "\u2026 (see review details)" : clean2;
+  };
+  if (review.integration === "verified" || review.integration === void 0 && review.state === "integrated")
+    return "Integration verified. No repeated merge or commit is needed. Archiving is independent and preserves files and branches.";
+  if (review.blockers.length)
+    return "Cannot proceed: " + brief(review.blockers[0]) + (review.blockers.length > 1 ? " (+" + (review.blockers.length - 1) + " more in details)" : "") + ". Resolve the blocker, then choose Recheck conflicts.";
+  if (!review.target) return "No target folder available. Choose a checked-out local branch in this repository, then choose Recheck conflicts.";
+  if (review.state === "blocked" || review.state === "unavailable")
+    return "Merge review unavailable: " + brief(review.details || "Git could not establish merge readiness") + ". Check the target folder and Git status, then choose Recheck conflicts.";
+  if (review.state === "resolved") return ((_a = review.completionBlockers) == null ? void 0 : _a.length) ? "Complete merge is blocked: " + brief(review.completionBlockers[0]) + ". Resolve completion blockers in the target folder, run tests, then choose Recheck conflicts." : "Complete merge creates the merge commit in the target folder. Review the staged result and run tests first. Closing leaves the merge in progress.";
+  if (review.inProgress) return "Resolve conflicts and stage resolved files in the target folder, run tests, then choose Recheck conflicts. Closing leaves the merge in progress.";
+  return "Start merge applies changes in the target folder and stops before creating the merge commit. Review the result and run tests, then choose Complete merge.";
+}
 var MergeReviewModal = class extends import_obsidian4.Modal {
   constructor(app, host, pageId, finished) {
     super(app);
@@ -12636,6 +12653,7 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
     this.blocked = false;
     this.closed = false;
     this.feedback = "";
+    this.footerGuidance = "";
   }
   onOpen() {
     this.stopWatching = watchPageReview(this.host, () => this.refresh(void 0, true), () => this.busy || this.refreshing, () => this.blocked);
@@ -12668,7 +12686,7 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
       const integratedReview = review.integration === "verified" || review.integration === void 0 && review.state === "integrated";
       const stamp = JSON.stringify([review, reviewSessions(host, integratedReview ? this.pageId : void 0), (_b = selectWorkPage(host.settings, this.pageId)) == null ? void 0 : _b.archived]);
       if (background && stamp === this.reviewStamp) {
-        loading.setText("");
+        loading.setText(this.footerGuidance);
         controls.forEach(({ control, disabled }) => {
           control.disabled = disabled;
         });
@@ -12737,7 +12755,8 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
       body.createEl("p", { text: review.state === "integrated" ? "You can review archiving independently of integration. Archiving preserves files and branches. Removing a worktree is a separate action after archiving; discarding its branch has its own loss confirmation." : review.inProgress ? "Resolve each conflict in the target folder, review the result, stage the resolved files and run your tests. Recheck conflicts before completing the merge. Closing this dialog leaves the Git merge in progress." : "Start merge applies the source commit in the target folder and stops before creating the merge commit, even for a fast-forward. Review the result and run your tests, then choose Complete merge." });
       body.createEl("p", { text: "AutoOC runs Git and prevents new AutoOC work during each operation. Keep schedules paused and external tasks, CLIs and services stopped in both folders until the merge is complete or aborted.", cls: "setting-item-description" });
       const footer = root.createDiv("auto-oc-finish-footer");
-      const progress = footer.createEl("p", { cls: "auto-oc-finish-status" });
+      this.footerGuidance = mergeFooterGuidance(review, (text3) => host.redactSecrets(text3));
+      const progress = footer.createEl("p", { text: this.footerGuidance, cls: "auto-oc-finish-status" });
       progress.setAttr("role", "status");
       this.reviewStatus = progress;
       const commands = footer.createDiv("auto-oc-page-actions");
@@ -12803,8 +12822,16 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
         root.querySelectorAll("button, select, input").forEach((control) => {
           control.disabled = true;
         });
-        loading = this.reviewStatus || loading;
-        loading.setText(errorText(host, error));
+        let footer = root.querySelectorAll(".auto-oc-finish-footer")[0];
+        if (!footer) footer = root.createDiv("auto-oc-finish-footer");
+        footer.empty();
+        loading = footer.createEl("p", { cls: "auto-oc-finish-status" });
+        loading.setAttr("role", "status");
+        this.reviewStatus = loading;
+        const diagnostic = errorText(host, error).replace(/\s+/g, " ").trim();
+        this.footerGuidance = "";
+        loading.setText("Review failed: " + (diagnostic.length > 180 ? diagnostic.slice(0, 180) + "\u2026" : diagnostic) + ". Readiness is unverified. Check Git and the target folder, then choose Retry review.");
+        loading.title = diagnostic;
         loading.createEl("button", { text: "Retry review" }).onclick = () => {
           this.target = void 0;
           return this.refresh();
