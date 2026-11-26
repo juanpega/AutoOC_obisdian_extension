@@ -8023,7 +8023,7 @@ function summarizeCliCatalog(config, includeStatus) {
 }
 
 // autooc-cli.ts
-var version = "1.7.31";
+var version = "1.7.32";
 async function main(args) {
   const [command, ...rest] = args;
   if (command === "share-workflows") {
