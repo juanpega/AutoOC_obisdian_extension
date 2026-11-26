@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main, dev]
-  pull_request:
+    branches: ['verify/terminal-picker-20261126-c1']
+
 
 jobs:
   build-and-test:
@@ -27,6 +27,9 @@ jobs:
 
       - name: Type-check & build
         run: npm run build
+
+      - name: Protected workflow compatibility
+        run: node --test tests/workflow-compatibility.test.cjs
 
       - name: Run tests
         run: npm test
