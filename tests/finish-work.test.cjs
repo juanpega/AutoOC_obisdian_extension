@@ -6,7 +6,7 @@ const source=require('esbuild').buildSync({entryPoints:[path.join(__dirname,'../
 const mod={exports:{}};new Function('require','module','exports',source.outputFiles[0].text)(require,mod,mod.exports);
 const helper=mod.exports;
 const git=(cwd,...args)=>execFileSync('git',['-c','safe.directory='+cwd.replace(/\\/g,'/'),...args],{cwd,windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
-function plugin(vault){
+function plugin(vault,platform=process.platform){
   const mod={exports:{}},obsidian=Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab','WorkspaceLeaf'].map(k=>[k,class{}]));
   // Fail closed even when a regression routes to an installed native provider.
   const launches=[], policy={allow:false,fail:false},intervals=new Set();
@@ -29,12 +29,14 @@ function plugin(vault){
     return child;
   }};
   const trackedInterval=(...args)=>{const timer=setInterval(...args);intervals.add(timer);return timer;};
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{module:mod,exports:mod.exports,require:n=>n==='obsidian'?obsidian:['child_process','node:child_process'].includes(n)?childProcess:require(n),process,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval:trackedInterval,clearInterval,window:{setInterval:trackedInterval,clearInterval,clearTimeout}});
+  const fixtureProcess=Object.create(process);
+  Object.defineProperty(fixtureProcess,'platform',{value:platform});
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{module:mod,exports:mod.exports,require:n=>n==='obsidian'?obsidian:['child_process','node:child_process'].includes(n)?childProcess:require(n),process:fixtureProcess,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval:trackedInterval,clearInterval,window:{setInterval:trackedInterval,clearInterval,clearTimeout}});
   const p=new mod.exports.default();p.manifest={id:'auto-oc'};
   p.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[],detachLeavesOfType(){}}};
   p.refreshOpenViews=()=>{};p.testLaunches=launches;p.testLaunchPolicy=policy;p.testIntervals=intervals;return p;
 }
-async function fixture(t){
+async function fixture(t,platform=process.platform){
   const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-finish-'))),repo=path.join(vault,'repo');fs.mkdirSync(repo);
   git(repo,'init','-b','fixture-main');git(repo,'config','user.name','AutoOC test');git(repo,'config','user.email','test@example.invalid');
   fs.writeFileSync(path.join(repo,'tracked.txt'),'base');fs.writeFileSync(path.join(repo,'.gitignore'),'.autooc/worktrees/\n.env\nnode_modules/\n');git(repo,'add','.');git(repo,'commit','-m','base');
@@ -44,7 +46,7 @@ async function fixture(t){
   const page={id:'page',name:'Finish me',objective:'Keep history',directory:fs.realpathSync.native(worktree),repository:fs.realpathSync.native(repo),kind:'worktree',branch:'feat/finish',baseCommit:base,workflowIds:['w'],taskIds:[]};
   fs.writeFileSync(file,JSON.stringify({workingDirectory:repo,tasks:[],workflows:[{id:'w',name:'Write',steps:[{id:'write',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","once");'}]}],workPages:[page]}));
   const instances=[];
-  const open=async()=>{const p=plugin(vault);instances.push(p);p.reservePluginExecution();await p.loadSettings();
+  const open=async()=>{const p=plugin(vault,platform);instances.push(p);p.reservePluginExecution();await p.loadSettings();
     const availability=p.cliDestinationUnavailableReason.bind(p);
     // Mock integrated hosts below do not load/install real terminal support.
     p.cliDestinationUnavailableReason=d=>d==='integrated'&&p.cliTerminals?undefined:availability(d);
@@ -293,11 +295,13 @@ for(const destination of ['integrated','external','shared-external']) {
     assert.equal(f.read().pageTerminalClaims?.length||0,0);assert.equal(f.p.testLaunches.length,0);
   });
 
-  for(const context of ['page','main','legacy']) test(`combined ${destination} ${context} launch preserves preference and context with deny-by-default native boundary`,async t=>{
-    const f=await fixture(t),opened=[];
+  for(const context of ['page','main','legacy']) test(`combined Windows ${destination} ${context} launch preserves preference and context with deny-by-default native boundary`,async t=>{
+    // All three routes below assert Windows scripts, even on POSIX CI hosts.
+    // Scope the platform to this VM; never change the runner's real platform.
+    const f=await fixture(t,'win32'),opened=[];
     if(context==='legacy')f.p.settings.workPages=[];
     const cwd=context==='page'?f.worktree:f.repo,pageId=context==='page'?'page':undefined;
-    const executable=path.join(f.repo,'synthetic.cmd');fs.writeFileSync(executable,'synthetic data, never executable');
+    const executable=path.join(f.repo,'synthetic.cmd');fs.writeFileSync(executable,'synthetic data, never executable',{mode:0o700});
     fs.writeFileSync(path.join(f.repo,'wt.exe'),'synthetic router, never executable');
     f.p.settings.codexPath=executable;f.p.settings.cliTerminalDestination=destination==='external'?'shared-external':'external';
     f.p.cliDestinationUnavailableReason=()=>undefined;

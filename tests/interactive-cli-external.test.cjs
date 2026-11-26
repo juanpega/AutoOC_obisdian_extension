@@ -586,21 +586,35 @@ test('Windows timeout retains the last safe stage but ignores arbitrary receipt 
 // Execute only generated pipe code in hidden synthetic PowerShell children.
 // No Terminal router, provider, inherited credentials or user window is used.
 function pipeChild(t, script) {
+  const started = Date.now(), marker = 'AUTOOC_TEST_SCRIPT_STARTED';
   const child = require('node:child_process').spawn(
     path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`[Console]::Out.WriteLine('${marker}')\n${script}`, 'utf16le').toString('base64')],
     { windowsHide: true, timeout: 15000, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows' } });
-  let stdout = '';
+  let stdout = '', stderrBytes = 0;
   child.stdout.on('data', data => { stdout += data; });
-  child.stderr.resume(); // Do not retain exception text or transferred values.
+  // Retain only a byte count, never exception text or transferred values.
+  child.stderr.on('data', data => { stderrBytes += data.length; });
   const done = new Promise((resolve, reject) => {
     child.on('error', reject);
-    child.on('close', code => resolve({ code, stdout }));
+    child.on('close', (code, signal) => resolve({
+      code, signal, scriptStarted: stdout.startsWith(marker + '\r\n') || stdout.startsWith(marker + '\n'),
+      stdout: stdout.replace(new RegExp('^' + marker + '\\r?\\n'), ''),
+      stderrBytes, elapsedMs: Date.now() - started,
+    }));
   });
   t.after(() => { if (child.exitCode === null) child.kill(); });
   child.stdin.end();
   return { child, done };
 }
+
+test('native synthetic PowerShell starts in the isolated environment before pipe work', { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+  const result = await pipeChild(t, "[Console]::Out.WriteLine('ok')").done;
+  assert.equal(result.code, 0, JSON.stringify(result));
+  assert.equal(result.scriptStarted, true);
+  assert.equal(result.stdout.trim(), 'ok');
+  assert.equal(result.signal, null);
+});
 
 for (const mode of ['success', 'literal script success', 'stalled environment', 'invalid environment']) {
   test(`native shared runner pipe: ${mode}`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
@@ -637,7 +651,7 @@ for (const mode of ['success', 'literal script success', 'stalled environment', 
     }
     const script = `$ErrorActionPreference='Stop'\ntry {\n${body}\n} catch { [Console]::Out.WriteLine('failed'); exit 2 }`;
     const result = await pipeChild(t, script).done;
-    assert.equal(result.code, success ? 0 : 2);
+    assert.equal(result.code, success ? 0 : 2, JSON.stringify(result));
     assert.match(result.stdout, success ? /ok/ : /failed/);
     if (success) assert.equal(result.stdout.trim(), 'ok', 'handshake writes must not pollute CLI stdout');
     assert.equal(acknowledged, success);
@@ -678,7 +692,7 @@ for (const mode of ['success', 'stalled identity', 'stalled environment write', 
       }
     });
     const result = await done;
-    assert.equal(result.code, mode === 'success' ? 0 : 2);
+    assert.equal(result.code, mode === 'success' ? 0 : 2, JSON.stringify(result));
     if (mode === 'success') assert.match(result.stdout, /ok/);
     else assert.match(result.stdout, new RegExp(`failed:${mode === 'stalled identity' ? 'runner-identity' : mode === 'stalled environment write' ? 'environment-handoff' : 'environment-ack'}/handshake-timeout`));
     assert.doesNotMatch(result.stdout, /SystemRoot|safe/);
@@ -709,7 +723,7 @@ ${monitoring}
 [Console]::Out.WriteLine("confirmed=$confirmed")
 `;
     const result = await pipeChild(t, script).done;
-    assert.equal(result.code, 0);
+    assert.equal(result.code, 0, JSON.stringify(result));
     assert.equal(result.stdout.trim().replace(/\r/g, ''), descendant === 'node.exe'
       ? 'pending/False/False\nstarted/True/False\nconfirmed=True'
       : 'pending/False/False\nconfirmed=False');

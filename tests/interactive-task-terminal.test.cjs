@@ -379,14 +379,19 @@ test('shared uncertain terminal launch retains in-flight journal and cannot sile
   assert.equal(launches, 1); assert.deepEqual(h.external, []); assert.deepEqual(h.background, []);
 }));
 
-for (const uncertain of [false, true]) {
-  test(`shared Windows Page task retains its claim after ${uncertain ? 'uncertain routing' : 'launch acknowledgement'}`, {skip: process.platform !== 'win32'}, () => fixture(async root => {
+for (const uncertain of [false, true]) for (const alias of [false, true]) {
+  test(`shared Windows Page task retains its claim after ${uncertain ? 'uncertain routing' : 'launch acknowledgement'}${alias ? ' with mixed-case temp spelling' : ''}`, {skip: process.platform !== 'win32'}, () => fixture(async root => {
     const h = terminalHarness({}, args => {
       assert.ok(args.at(-1).sharedExternal);
       if (uncertain) args.at(-1).onError(Object.assign(Error('synthetic uncertain route'), {code:'AUTOOC_TERMINAL_UNCERTAIN'}));
       else args.at(-1).onLaunched();
     });
-    const f = installed(root), pageDirectory = path.join(root, 'disposable-page'); fs.mkdirSync(pageDirectory);
+    const f = installed(root), requestedDirectory = path.join(root, 'disposable-page'); fs.mkdirSync(requestedDirectory);
+    // Real Page registration stores physicalPath. os.tmpdir() on hosted Windows
+    // can use a different spelling; do not fabricate a noncanonical saved Page.
+    const inputDirectory = alias ? requestedDirectory.toUpperCase() : requestedDirectory;
+    const pageDirectory = fs.realpathSync.native(inputDirectory);
+    if (alias) assert.notEqual(inputDirectory, pageDirectory);
     f.catalog.cliTerminalDestination = 'shared-external';
     f.catalog.workPages = [{id:'page', name:'Disposable', directory:pageDirectory, kind:'folder', objective:'Synthetic objective', taskIds:[], workflowIds:[]}];
     fs.writeFileSync(f.file, JSON.stringify(f.catalog));
