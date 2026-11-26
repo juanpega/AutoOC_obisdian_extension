@@ -1,4 +1,5 @@
 import { App, Modal, Notice, Setting } from "obsidian";
+import type { InteractiveCliDestination } from "./interactive-task-terminal";
 import { INTERACTIVE_CLIS, configuredInteractiveClis, launchInteractiveCli, resolveInteractiveCli, type InteractiveCliProvider, type InteractiveCliSettings } from "./interactive-cli";
 import { detectOpenCodeVersion, readCliVersion } from "./opencode-version";
 import { inspectCodexCli } from "./codex-diagnostics";
@@ -9,7 +10,9 @@ interface CliSettingsHost {
   saveSettings(refreshView?: boolean): Promise<void>;
   isLifecycleStopped(): boolean;
   openIntegratedCli?(provider: InteractiveCliProvider, cwd: string): Promise<void>;
-  launchManualCli?(provider: InteractiveCliProvider, cwd: string, pageId?: string): Promise<void>;
+  launchManualCli?(provider: InteractiveCliProvider, cwd: string, pageId?: string, destination?: InteractiveCliDestination): Promise<void>;
+  /** Undefined means available; rechecked immediately before dispatch. */
+  cliDestinationUnavailableReason?(destination: InteractiveCliDestination): string | undefined | Promise<string | undefined>;
   installCliTerminalSupport?(): Promise<void>;
   showCliTerminals?(): Promise<void>;
   hasPageTerminal?(pageId: string, liveOnly?: boolean): boolean;
@@ -33,17 +36,23 @@ export function openCliLauncher(app: App, host: CliSettingsHost, selected?: Inte
 
 export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHost,
   options: { providers?: Partial<Record<InteractiveCliProvider, HTMLElement>> } = {}) {
+  const windows = typeof process !== "undefined" && process.platform === "win32";
+  const destination = () => host.settings.cliTerminalDestination === "shared-external" ? "shared-external"
+    : host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external";
   root.createEl("h3", { text: "Interactive CLI launchers" });
   root.createEl("p", { text: "Choose which CLIs appear under 💻 CLI. Sessions open in a terminal and use each CLI's own model, sign-in and approval settings. These sessions are independent of scheduled tasks.", cls: "setting-item-description" });
   new Setting(root).setName("CLI terminal destination")
-    .setDesc("Where manual CLIs and interactive CLI tasks for all harnesses open, including workflow steps. Background tasks, the Codex app and existing terminals are unchanged. Integrated tasks require Obsidian to be open.")
+    .setDesc("Where new manual CLIs and interactive CLI tasks open, including workflow steps. Shared external requires Windows Terminal (wt.exe) and uses the named AutoOC window across instances of the same Windows user/session. Each tab is independent. Background tasks, the Codex app and existing terminals are unchanged. Integrated tasks require Obsidian to be open."
+      + (!windows && destination() === "shared-external" ? " The saved shared destination is unavailable on this platform; choose another destination. No fallback is used." : ""))
     .addDropdown(dropdown => {
       let saving = false;
-      dropdown.addOption("external", "External window").addOption("integrated", "Integrated in Obsidian")
-        .setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external")
+      dropdown.addOption("external", "External window").addOption("integrated", "Integrated in Obsidian");
+      if (windows) dropdown.addOption("shared-external", "Shared external terminal");
+      else if (destination() === "shared-external") dropdown.addOption("shared-external", "Shared external terminal (unavailable: Windows only)");
+      dropdown.setValue(destination())
         .onChange(async value => {
-          if (saving || host.isLifecycleStopped() || (value !== "integrated" && value !== "external")) {
-            dropdown.setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external"); return;
+          if (saving || host.isLifecycleStopped() || (value !== "integrated" && value !== "external" && !(windows && value === "shared-external"))) {
+            dropdown.setValue(destination()); return;
           }
           const previous = host.settings.cliTerminalDestination;
           saving = true; dropdown.setDisabled(true); host.settings.cliTerminalDestination = value;
@@ -53,7 +62,7 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
             new Notice("Terminal destination could not be saved. Try again.");
           } finally {
             saving = false; dropdown.setDisabled(false);
-            dropdown.setValue(host.settings.cliTerminalDestination === "integrated" ? "integrated" : "external");
+            dropdown.setValue(destination());
           }
         });
     });
@@ -148,6 +157,7 @@ export function addInteractiveCliSettings(root: HTMLElement, host: CliSettingsHo
 
 export class CliLauncherModal extends Modal {
   private selected?: InteractiveCliProvider;
+  private destination: InteractiveCliDestination = "external";
   private closed = false;
   private launching = false;
   constructor(app: App, private host: CliSettingsHost, private configure: () => void, selected?: InteractiveCliProvider, private page?: {id:string;name:string;directory:string}) {
@@ -156,6 +166,7 @@ export class CliLauncherModal extends Modal {
 
   onOpen() {
     this.closed = false;
+    this.destination = this.host.settings.cliTerminalDestination ?? "external";
     const root = this.contentEl;
     root.empty(); root.addClass("auto-oc-cli-modal");
     root.createEl("h3", { text: "💻 CLI" });
@@ -176,8 +187,56 @@ export class CliLauncherModal extends Modal {
       });
     });
     else root.createEl("p", { text: "No configured CLI is available. Open Settings to enable one and set its executable path." });
-    const integrated = this.host.settings.cliTerminalDestination === "integrated";
-    root.createEl("p", { text: `Terminal: ${integrated ? "Integrated in Obsidian" : "External window"}. Change the destination in AutoOC Settings.`, cls: "setting-item-description" });
+    const destinations: Record<InteractiveCliDestination, string> = {
+      integrated: "Integrated in Obsidian", external: "External window", "shared-external": "Shared Windows Terminal",
+    };
+    const checkAvailability = (destination: InteractiveCliDestination) => {
+      if (!(destination in destinations)) return "Unknown terminal destination is unavailable. Choose another destination.";
+      if (this.host.cliDestinationUnavailableReason) return this.host.cliDestinationUnavailableReason(destination);
+      if (destination === "shared-external") return "Shared Windows Terminal is unavailable in this build; the shared transport has not been connected.";
+      if (destination === "integrated" && !this.host.launchManualCli && !this.host.openIntegratedCli)
+        return "Integrated terminals are unavailable. Check AutoOC Settings; no external session was started.";
+      return undefined;
+    };
+    const availability = new Map<InteractiveCliDestination, string | undefined>();
+    const unavailable = (destination: InteractiveCliDestination): string | undefined => {
+      if (availability.has(destination)) return availability.get(destination);
+      const result = checkAvailability(destination);
+      if (result && typeof result !== "string") {
+        availability.set(destination, "Checking terminal support…");
+        void result.then(reason => {
+          availability.set(destination, reason);
+          if (!this.closed) updateButtons();
+        }, error => {
+          availability.set(destination, String(error));
+          if (!this.closed) updateButtons();
+        });
+      } else availability.set(destination, result);
+      return availability.get(destination);
+    };
+    let syncDestination = () => {};
+    new Setting(root).setName("Terminal destination")
+      .setDesc("For this launch only. Your configured default is not changed. Terminal support is checked again when opening.")
+      .addDropdown(dropdown => {
+        dropdown.selectEl.setAttr("aria-label", "Terminal destination");
+        dropdown.selectEl.setAttr("autocomplete", "off");
+        for (const destination of Object.keys(destinations) as InteractiveCliDestination[]) {
+          dropdown.addOption(destination, destinations[destination]);
+        }
+        if (!(this.destination in destinations)) dropdown.addOption(this.destination, "Unknown destination (unavailable)");
+        dropdown.setValue(this.destination).onChange(value => {
+          if (this.launching || this.closed) return;
+          if (value in destinations) this.destination = value as InteractiveCliDestination;
+          updateButtons();
+        });
+        // The modal owns this value, not host form restoration. Reconcile after
+        // construction/support updates and before keyboard interaction, using
+        // current modal state so a deliberate launch-local choice is retained.
+        syncDestination = () => { dropdown.setValue(this.destination); };
+        dropdown.selectEl.addEventListener("focus", syncDestination);
+      });
+    const destinationStatus = root.createDiv();
+    destinationStatus.setAttr("role", "status");
     const missing = configured.filter(cli => !cli.executable);
     if (missing.length) root.createEl("p", { text: `Not found: ${missing.map(cli => cli.label).join(", ")}. Configure their paths in Settings.`, cls: "setting-item-description" });
     const feedback = root.createDiv(); feedback.setAttr("role", "alert");
@@ -189,21 +248,48 @@ export class CliLauncherModal extends Modal {
     const choose = buttons.createEl("button", { text: "🗀 Choose folder…" });
     if (this.page) choose.style.display = "none";
     updateButtons = () => {
-      open.disabled = this.launching || !this.selected || !defaultCwd;
-      choose.disabled = this.launching || !this.selected;
+      syncDestination();
+      const reason = unavailable(this.destination);
+      destinationStatus.setText(reason || destinations[this.destination]);
+      open.disabled = this.launching || !this.selected || !defaultCwd || !!reason;
+      choose.disabled = this.launching || !this.selected || !!reason;
     };
     updateButtons();
-    const launch = async (cwd: string) => {
-      if (this.closed || this.launching || !this.selected) return;
+    const dispatch = async (cwd: string, provider: InteractiveCliProvider, destination: InteractiveCliDestination) => {
+      if (this.closed) return;
+      const result = checkAvailability(destination);
+      const reason = result && typeof result !== "string" ? await result : result;
+      if (this.closed) return;
+      availability.set(destination, reason);
+      if (reason) { feedback.setText(reason); return; }
       if (this.host.isLifecycleStopped()) { feedback.setText("AutoOC has closed. Reopen the plugin before launching a CLI."); return; }
-      this.launching = true; open.disabled = choose.disabled = true; feedback.setText("Opening terminal…");
+      feedback.setText("Opening terminal…");
+      if (this.host.launchManualCli) await this.host.launchManualCli(provider, cwd, this.page?.id, destination);
+      else if (destination === "integrated") await this.host.openIntegratedCli!(provider, cwd);
+      else if (destination === "external") await launchInteractiveCli(provider, cwd, this.host.settings, {destination});
+      else throw new Error("Shared Windows Terminal is unavailable without a manual launch host. Nothing was launched.");
+      if (!this.closed) this.close();
+    };
+    const confirm = async (pickFolder: boolean) => {
+      if (this.closed || this.launching || !this.selected) return;
+      const provider = this.selected, destination = this.destination;
+      this.launching = true; updateButtons();
       try {
-        if (this.host.launchManualCli) await this.host.launchManualCli(this.selected, cwd, this.page?.id);
-        else if (integrated) {
-          if (!this.host.openIntegratedCli) throw new Error("Integrated terminals are unavailable. Check AutoOC Settings; no external session was started.");
-          await this.host.openIntegratedCli(this.selected, cwd);
-        } else await launchInteractiveCli(this.selected, cwd, this.host.settings);
-        if (!this.closed) this.close();
+        const result = checkAvailability(destination);
+        const reason = result && typeof result !== "string" ? await result : result;
+        if (this.closed) return;
+        availability.set(destination, reason);
+        if (reason) { feedback.setText(reason); return; }
+        let cwd = defaultCwd;
+        if (pickFolder) {
+          const electron = (window as any).require("electron");
+          const dialog = electron.remote?.dialog || electron.dialog;
+          if (!dialog?.showOpenDialog) throw new Error("Folder picker is unavailable. Set the Working Directory in AutoOC Settings.");
+          const result = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Select folder for CLI" });
+          if (result.canceled || !result.filePaths?.[0]) return;
+          cwd = result.filePaths[0];
+        }
+        await dispatch(cwd, provider, destination);
       } catch (error) {
         if (!this.closed) feedback.setText(error instanceof Error ? error.message : String(error));
       } finally {
@@ -211,17 +297,8 @@ export class CliLauncherModal extends Modal {
         updateButtons();
       }
     };
-    open.onclick = () => launch(defaultCwd);
-    choose.onclick = async () => {
-      try {
-        // Electron's dialog is provided by Obsidian Desktop.
-        const electron = (window as any).require("electron");
-        const dialog = electron.remote?.dialog || electron.dialog;
-        if (!dialog?.showOpenDialog) throw new Error("Folder picker is unavailable. Set the Working Directory in AutoOC Settings.");
-        const result = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Select folder for CLI" });
-        if (!result.canceled && result.filePaths?.[0]) await launch(result.filePaths[0]);
-      } catch (error) { if (!this.closed) feedback.setText(`Could not choose a folder. ${String(error)}`); }
-    };
+    open.onclick = () => confirm(false);
+    choose.onclick = () => confirm(true);
     buttons.createEl("button", { text: "Configure CLIs" }).onclick = () => { if (!this.launching) { this.configure(); this.close(); } };
     buttons.createEl("button", { text: "Cancel" }).onclick = () => this.close();
   }

@@ -100,6 +100,18 @@ export class IntegratedTerminals {
     await installTerminalSupport(this.pluginDirectory());
   }
 
+  /** Read-only preflight: never downloads support or loads a native module. */
+  async unavailableReason(): Promise<string | undefined> {
+    try {
+      this.assertOpen();
+      await verifyTerminalSupport(this.pluginDirectory());
+      this.assertOpen();
+      return undefined;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+  }
+
   private assertOpen() {
     if (this.disposed || this.host.isLifecycleStopped()) throw new Error("AutoOC has closed. Reopen it before using integrated terminals.");
     if (this.stoppingAll) throw new Error("Terminal sessions are stopping. Wait before launching another session.");
