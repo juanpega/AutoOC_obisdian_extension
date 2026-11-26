@@ -30,6 +30,18 @@ de Main workspace, ambas páginas trabajan sobre esos mismos archivos.
 
 ## Ejecutar y alternar páginas
 
+For a top-level catalog task (including Code) or workflow in the selected Page,
+single-click to select, then use **▶ Play** in the inspector (Enter or Space),
+or double-click its Dashboard circle. Both shortcuts request a run in that Page,
+not Main workspace; **Open controls** remains available. Disabled or unavailable
+definitions, changed/archived Pages, and active or uncertain Page runs cannot
+start through these shortcuts. Repeated gestures for the same pending launch
+do not start another run. Rejections appear below the Dashboard; use
+**Open controls** to inspect the reason or recovery options, rather than retrying
+automatically. A launch request does not guarantee provider success.
+Workflow steps, including nested workflows, delays and embedded Code, have no
+quick-run shortcut; their existing controls and execution rules remain unchanged.
+
 Selecciona una tarea o workflow en el Dashboard de la página y pulsa
 **Open controls → Run task here / Run workflow here**. Las definiciones nuevas
 aparecen automáticamente. El resultado, log e historial pertenecen a esa página;
@@ -140,24 +152,43 @@ ni autoriza guardarlos, descartarlos o ignorarlos automáticamente.
 Una retirada interrumpida queda pendiente de **Check removal**, que comprueba el
 resultado sin repetir el borrado. No elimines reservas ni journals manualmente.
 
-## Eliminar una página archivada vacía
+## Delete an archived Page with resolved history
 
-En **Overview**, pulsa **Delete page** en la ficha archivada y confirma. La ficha
-desaparece de AutoOC; la carpeta, archivos, ramas y tareas/workflows permanecen.
-También está disponible al abrir la página archivada. Para volver a usar esa
-carpeta, crea una página nueva.
+In **Overview**, choose **Delete page** on the archived card and confirm. This
+removes the Page from the workspace list, not its folder or Git worktree
+registration. Files, branches, commits and shared tasks/workflows stay unchanged.
+The same action is available inside an archived Page. To use a remaining folder
+again, create a new Page with a new identity.
 
-Esta opción requiere una página archivada sin ejecuciones registradas ni evidencia
-de retirada/descarte de worktree. Las páginas con historial permanecen archivadas
-para conservar sus logs y su evidencia. Main workspace no se elimina.
+Resolved, non-uncertain executions (`completed`, `failed` or `abandoned`) and
+completed worktree removal evidence (`removed`) do not prevent deletion.
+**Deleted page history** in Overview retains the Page identity, history, readable
+logs and completed removal evidence after settings reload; it does not restore
+the Page or offer execution controls. Main workspace cannot be deleted.
 
-Es la opción para quitar un primer intento creado como **Existing folder**.
-**Discard work** solo existe para worktrees independientes: no depende de haber
-hecho cambios. Para crearlos, activa **Settings → Execution → Git worktrees
-(developers)** y elige **New Git worktree** en **New page**.
+To reclaim disk space as well as remove the card, use the separate reviewed
+sequence: **Archive page → Remove worktree → Delete page**. Worktree removal
+requires an eligible clean registered Git worktree, a current review and session
+confirmation. Modified, untracked or ignored files block removal; they are not
+automatically discarded. Main, protected/overlapping folders and ineligible
+worktrees remain protected. The branch, commits and logs are retained.
 
-Los diálogos mantienen nombre y ruta de carpeta en el encabezado, fuera del área
-desplazable de revisión, con los botones visibles en el pie.
+For an **Existing folder** Page, archive and delete only detach its card;
+the folder and its contents remain untouched. **Discard work** is a different,
+destructive action for independent worktrees: it deletes their files and local
+branch after its own explicit loss confirmation. It is not required to delete a
+card or safely remove a clean worktree folder.
+
+Unfinished or uncertain executions and pending removal evidence still block
+deletion, as do the existing owner, activity and session guards. If removal is
+interrupted or its final save fails, use **Check removal** and the existing
+explicit review/recovery path. Checking inspects the outcome without replaying
+deletion. Do not force removal or erase reservations/journals to bypass a blocker.
+If saving card deletion fails, do not assume success: reopen Overview and inspect
+the retained Page before trying again.
+
+Dialogs keep the Page name and full folder path above the scrolling review,
+with confirmation buttons visible in the footer.
 
 ## Descartar una funcionalidad
 
