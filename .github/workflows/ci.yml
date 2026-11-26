@@ -31,6 +31,10 @@ jobs:
       - name: Protected workflow compatibility
         run: node --test tests/workflow-compatibility.test.cjs
 
+      - name: Focused Windows terminal diagnostics
+        if: runner.os == 'Windows'
+        run: node --test --test-name-pattern="native isolated PowerShell stage probe|native shared runner pipe|native shared observer pipe|native observer confirmation" tests/interactive-cli-external.test.cjs
+
       - name: Run tests
         run: npm test
 

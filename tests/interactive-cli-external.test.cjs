@@ -585,12 +585,44 @@ test('Windows timeout retains the last safe stage but ignores arbitrary receipt 
 
 // Execute only generated pipe code in hidden synthetic PowerShell children.
 // No Terminal router, provider, inherited credentials or user window is used.
-function pipeChild(t, script) {
+test('synthetic stage tracing uses constant labels without copying statement values', () => {
+  const script = "$pipe = New-Object IO.MemoryStream\n$pipe.Connect(10000)\n$value = 'private-value' | ConvertFrom-Json\n$x | Add-Member NoteProperty X 1";
+  const traced = tracePipeScript(script);
+  assert.match(traced, /WriteLine\('AUTOOC_TEST_STAGE:new-object'\)\n\$pipe = New-Object/);
+  assert.match(traced, /WriteLine\('AUTOOC_TEST_STAGE:pipe-connect'\)\n\$pipe.Connect/);
+  assert.match(traced, /WriteLine\('AUTOOC_TEST_STAGE:json-read'\)/);
+  assert.match(traced, /WriteLine\('AUTOOC_TEST_STAGE:add-member'\)/);
+  assert.equal(traced.split('\n').filter(line => line.includes('AUTOOC_TEST_STAGE:')).some(line => line.includes('private-value')), false);
+  assert.equal(traced.split('\n').filter(line => !line.includes('AUTOOC_TEST_STAGE:')).join('\n'), script);
+});
+
+// Test-only instrumentation: labels are fixed, never derived from script data.
+// Insert before a statement so a child deadline identifies the blocked stage.
+const pipeStages = [
+  ['new-object', /\bNew-Object\b/],
+  ['pipe-connect', /\$pipe\.Connect\(/],
+  ['pipe-create-dotnet', /\[IO\.Pipes\.NamedPipeClientStream\]::new/],
+  ['identity-write', /\$writer\.WriteLineAsync\(\[string\]\$PID/],
+  ['json-read', /\bConvertFrom-Json\b/],
+  ['json-write', /\bConvertTo-Json\b/],
+  ['add-member', /\bAdd-Member\b/],
+  ['module-import', /\bImport-Module\b/],
+  ['process-lookup', /\bGet-Process\b/],
+  ['connection-wait', /\$connection\.AsyncWaitHandle\.WaitOne/],
+];
+function tracePipeScript(script) {
+  return script.split('\n').map(line => {
+    const stages = pipeStages.filter(([, pattern]) => pattern.test(line));
+    return stages.map(([stage]) => `[Console]::Out.WriteLine('AUTOOC_TEST_STAGE:${stage}')\n`).join('') + line;
+  }).join('\n');
+}
+
+function pipeChild(t, script, diagnosticEnvironment = {}) {
   const started = Date.now(), marker = 'AUTOOC_TEST_SCRIPT_STARTED';
   const child = require('node:child_process').spawn(
     path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`[Console]::Out.WriteLine('${marker}')\n${script}`, 'utf16le').toString('base64')],
-    { windowsHide: true, timeout: 15000, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows' } });
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`[Console]::Out.WriteLine('${marker}')\n${tracePipeScript(script)}`, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 15000, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', ...diagnosticEnvironment } });
   let stdout = '', stderrBytes = 0;
   child.stdout.on('data', data => { stdout += data; });
   // Retain only a byte count, never exception text or transferred values.
@@ -599,7 +631,8 @@ function pipeChild(t, script) {
     child.on('error', reject);
     child.on('close', (code, signal) => resolve({
       code, signal, scriptStarted: stdout.startsWith(marker + '\r\n') || stdout.startsWith(marker + '\n'),
-      stdout: stdout.replace(new RegExp('^' + marker + '\\r?\\n'), ''),
+      stages: [...stdout.matchAll(/^AUTOOC_TEST_STAGE:([a-z-]+)\r?$/gm)].map(match => match[1]),
+      stdout: stdout.replace(new RegExp('^' + marker + '\\r?\\n'), '').replace(/^AUTOOC_TEST_STAGE:[a-z-]+\r?\n/gm, ''),
       stderrBytes, elapsedMs: Date.now() - started,
     }));
   });
@@ -615,6 +648,35 @@ test('native synthetic PowerShell starts in the isolated environment before pipe
   assert.equal(result.stdout.trim(), 'ok');
   assert.equal(result.signal, null);
 });
+
+// Bounded clean-runner hypothesis probes, not a production environment change.
+// Each child starts afresh; no profile, inherited credentials, provider or router.
+for (const [name, script, environment] of [
+  ['dotnet pipe construction', "$p = [IO.Pipes.NamedPipeClientStream]::new('.', 'autooc-synthetic-unused', [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous); $p.Dispose()", 'minimal'],
+  ['New-Object minimal', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'minimal'],
+  ['New-Object fixture temp', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'temp'],
+  ['New-Object analysis cache disabled', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'no-cache'],
+  ['JSON minimal', '$value = \'{"value":1}\' | ConvertFrom-Json; $null = $value | ConvertTo-Json -Compress', 'minimal'],
+  ['JSON fixture temp', '$value = \'{"value":1}\' | ConvertFrom-Json; $null = $value | ConvertTo-Json -Compress', 'temp'],
+  ['Add-Member minimal', '$value = [pscustomobject]@{ X=1 }; $value | Add-Member NoteProperty Y 2', 'minimal'],
+  ['Utility explicit import', "Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop", 'minimal'],
+]) {
+  test(`native isolated PowerShell stage probe: ${name}`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+    const env = {};
+    if (environment === 'temp') {
+      const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'autooc-pipe-probe-'));
+      t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+      env.TEMP = temp; env.TMP = temp;
+    } else if (environment === 'no-cache') {
+      env.PSModuleAnalysisCachePath = 'NUL';
+    }
+    const result = await pipeChild(t, `$ErrorActionPreference='Stop'\n${script}\n[Console]::Out.WriteLine('ok')`, env).done;
+    // Successful CI probes are printed too, to compare minimal/control stages.
+    t.diagnostic(JSON.stringify({ probe: name, ...result }));
+    assert.equal(result.code, 0, JSON.stringify(result));
+    assert.equal(result.stdout.trim(), 'ok');
+  });
+}
 
 for (const mode of ['success', 'literal script success', 'stalled environment', 'invalid environment']) {
   test(`native shared runner pipe: ${mode}`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
