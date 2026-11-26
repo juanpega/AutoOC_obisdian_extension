@@ -617,11 +617,31 @@ function tracePipeScript(script) {
   }).join('\n');
 }
 
+test('isolated PowerShell initializes built-in modules before executing the body', () => {
+  const script = isolatedPowerShellScript("[Console]::Out.WriteLine('body')");
+  for (const module of ['Utility', 'Management']) {
+    assert.ok(script.includes(`Microsoft.PowerShell.${module}\\Microsoft.PowerShell.${module}.psd1`));
+  }
+  assert.match(script, /Import-Module -Name \(\$PSHOME \+/);
+  assert.match(script, /-ErrorAction Stop/);
+  assert.ok(script.indexOf('Import-Module') < script.indexOf("WriteLine('body')"));
+});
+
+function isolatedPowerShellScript(script) {
+  // No environment-based module discovery in the SystemRoot-only fixture.
+  // Import-Module is a core cmdlet; these paths belong to this PowerShell host.
+  return [
+    "Import-Module -Name ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop",
+    "Import-Module -Name ($PSHOME + '\\Modules\\Microsoft.PowerShell.Management\\Microsoft.PowerShell.Management.psd1') -ErrorAction Stop",
+    tracePipeScript(script),
+  ].join('\n');
+}
+
 function pipeChild(t, script, diagnosticEnvironment = {}) {
   const started = Date.now(), marker = 'AUTOOC_TEST_SCRIPT_STARTED';
   const child = require('node:child_process').spawn(
     path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
-    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`[Console]::Out.WriteLine('${marker}')\n${tracePipeScript(script)}`, 'utf16le').toString('base64')],
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(`[Console]::Out.WriteLine('${marker}')\n${isolatedPowerShellScript(script)}`, 'utf16le').toString('base64')],
     { windowsHide: true, timeout: 15000, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows', ...diagnosticEnvironment } });
   let stdout = '', stderrBytes = 0;
   child.stdout.on('data', data => { stdout += data; });
@@ -649,17 +669,17 @@ test('native synthetic PowerShell starts in the isolated environment before pipe
   assert.equal(result.signal, null);
 });
 
-// Bounded clean-runner hypothesis probes, not a production environment change.
+// Bounded checks of explicit built-in module initialization, not auto-discovery.
 // Each child starts afresh; no profile, inherited credentials, provider or router.
 for (const [name, script, environment] of [
   ['dotnet pipe construction', "$p = [IO.Pipes.NamedPipeClientStream]::new('.', 'autooc-synthetic-unused', [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous); $p.Dispose()", 'minimal'],
-  ['New-Object minimal', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'minimal'],
-  ['New-Object fixture temp', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'temp'],
-  ['New-Object analysis cache disabled', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'no-cache'],
-  ['JSON minimal', '$value = \'{"value":1}\' | ConvertFrom-Json; $null = $value | ConvertTo-Json -Compress', 'minimal'],
-  ['JSON fixture temp', '$value = \'{"value":1}\' | ConvertFrom-Json; $null = $value | ConvertTo-Json -Compress', 'temp'],
-  ['Add-Member minimal', '$value = [pscustomobject]@{ X=1 }; $value | Add-Member NoteProperty Y 2', 'minimal'],
-  ['Utility explicit import', "Import-Module ($PSHOME + '\\Modules\\Microsoft.PowerShell.Utility\\Microsoft.PowerShell.Utility.psd1') -ErrorAction Stop", 'minimal'],
+  ['New-Object initialized minimal', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'minimal'],
+  ['New-Object initialized fixture temp', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'temp'],
+  ['New-Object initialized analysis cache disabled', '$p = New-Object IO.MemoryStream; $p.Dispose()', 'no-cache'],
+  ['JSON initialized minimal', '$value = \'{"value":1}\' | ConvertFrom-Json; $null = $value | ConvertTo-Json -Compress', 'minimal'],
+  ['JSON initialized fixture temp', '$value = \'{"value":1}\' | ConvertFrom-Json; $null = $value | ConvertTo-Json -Compress', 'temp'],
+  ['Add-Member initialized minimal', '$value = [pscustomobject]@{ X=1 }; $value | Add-Member NoteProperty Y 2', 'minimal'],
+  ['built-in commands without auto-discovery', "$PSModuleAutoLoadingPreference = 'None'; $p = New-Object IO.MemoryStream; $p.Dispose(); $value = '{\"value\":1}' | ConvertFrom-Json; $value | Add-Member NoteProperty Y 2; $null = $value | ConvertTo-Json -Compress; $null = Get-Process -Id $PID -ErrorAction Stop", 'minimal'],
 ]) {
   test(`native isolated PowerShell stage probe: ${name}`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
     const env = {};
