@@ -105,7 +105,7 @@ export async function runPageWorkflow(options: InstalledWorkflowOptions) {
       } else definition = preparePageDefinition(config, page, sourceId, task);
       preflightInstalledWorkflow(definition, page.directory);
       // Page-scoped Code uses its own filesystem-backed vault; never app.vault of the host.
-      const terminal = { destination: config.cliTerminalDestination === "integrated" ? "integrated" as const : "external" as const, launch: options.launchInteractiveTerminal };
+      const terminal = { destination: config.cliTerminalDestination === "shared-external" ? "shared-external" as const : config.cliTerminalDestination === "integrated" ? "integrated" as const : "external" as const, launch: options.launchInteractiveTerminal };
       if (terminal.destination === "integrated" && !terminal.launch && definition.tasks.some(interactivePageTask)) throw new Error("Integrated CLI tasks need the open Obsidian plugin");
       admission = coordinator.admit(definition, page.directory, options.resumeRunId, { directory: physicalPath(page.directory), worktree: page.kind === "worktree" });
       if (config.pageTerminalClaims?.length && admission.resources.exclusive) throw new Error("Exclusive execution must wait for page terminals to finish.");

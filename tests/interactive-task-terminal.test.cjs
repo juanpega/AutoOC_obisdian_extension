@@ -29,7 +29,7 @@ function loader(overrides = {}) {
   return load;
 }
 
-function terminalHarness(overrides = {}) {
+function terminalHarness(overrides = {}, onExternal) {
   const external = [], background = [], versions = [];
   const actual = loader()('cli-launchers');
   const codeRuntime = loader()('code-runtime');
@@ -38,7 +38,7 @@ function terminalHarness(overrides = {}) {
     'code-runtime': {...codeRuntime, executeCodeAsync: async options => codeRuntime.executeCode(options)},
     'cli-launchers': {...actual, resolveOpencodeBin: value => value || 'opencode',
       openOpencodeCli: (...args) => external.push(args),
-      openOpencodeCliLongPromptWindows: (...args) => external.push(args),
+      openOpencodeCliLongPromptWindows: (...args) => { external.push(args); onExternal?.(args); },
       launchHidden(script) {
         background.push(script);
         fs.writeFileSync(path.join(path.dirname(script), 'stdout.txt'), 'background response');
@@ -234,7 +234,7 @@ test('sync and cooperative snapshots keep historical fingerprints across termina
   const {prepareWorkflowDefinition: prepare, prepareWorkflowDefinitionAsync: prepareAsync} = loader()('workflow-definition');
   const workflow = flow('parent', [taskStep]), tasks = [interactive()];
   const historical = prepare(workflow, tasks, settings);
-  for (const destination of ['external', 'integrated']) {
+  for (const destination of ['external', 'integrated', 'shared-external']) {
     const config = {...settings, cliTerminalDestination: destination};
     const sync = prepare(workflow, tasks, config), asyncSnapshot = await prepareAsync(workflow, tasks, config);
     assert.deepEqual(sync, historical); assert.deepEqual(asyncSnapshot, historical);
@@ -378,6 +378,37 @@ test('shared uncertain terminal launch retains in-flight journal and cannot sile
   await assert.rejects(run({...options, resumeRunId: runId}), /reconcil/i);
   assert.equal(launches, 1); assert.deepEqual(h.external, []); assert.deepEqual(h.background, []);
 }));
+
+for (const uncertain of [false, true]) {
+  test(`shared Windows Page task retains its claim after ${uncertain ? 'uncertain routing' : 'launch acknowledgement'}`, {skip: process.platform !== 'win32'}, () => fixture(async root => {
+    const h = terminalHarness({}, args => {
+      assert.ok(args.at(-1).sharedExternal);
+      if (uncertain) args.at(-1).onError(Object.assign(Error('synthetic uncertain route'), {code:'AUTOOC_TERMINAL_UNCERTAIN'}));
+      else args.at(-1).onLaunched();
+    });
+    const f = installed(root), pageDirectory = path.join(root, 'disposable-page'); fs.mkdirSync(pageDirectory);
+    f.catalog.cliTerminalDestination = 'shared-external';
+    f.catalog.workPages = [{id:'page', name:'Disposable', directory:pageDirectory, kind:'folder', objective:'Synthetic objective', taskIds:[], workflowIds:[]}];
+    fs.writeFileSync(f.file, JSON.stringify(f.catalog));
+    const options = {vault:root, pageId:'page', taskId:'terminal', redact:s=>s};
+    const run = h.load('installed-workflow-host').runInstalledWorkflow;
+    if (uncertain) await assert.rejects(run(options), /synthetic uncertain route/);
+    else {
+      const done = await run(options); assert.equal(done.phase, 'completed');
+      assert.match(done.steps.at(-1).output, /interactive task result is not observed/);
+    }
+    assert.equal(h.external.length, 1);
+    assert.equal(h.external[0][1], fs.realpathSync.native(pageDirectory));
+    const saved = JSON.parse(fs.readFileSync(f.file));
+    assert.equal(saved.pageTerminalClaims.length, 1);
+    assert.equal(saved.pageTerminalClaims[0].pageId, 'page');
+    assert.throws(()=>h.load('work-pages').assertNoPageTerminal(saved,pageDirectory,true), /terminal reserves/);
+    await assert.rejects(run(options), /terminal reserves/);
+    assert.equal(h.external.length, 1);
+    const invalid = {...saved, workflows:[flow('multi',[taskStep,{id:'after',stepKind:'code',code:'output="no";'}])]};
+    assert.throws(()=>h.load('page-workflow').preparePageDefinition(invalid,invalid.workPages[0],'multi',false), /standalone page task or one-step workflow/);
+  }));
+}
 
 for (const kind of ['task', 'workflow']) for (const engine of ['opencode', 'opencode2', 'codex', 'copilot']) {
   test(`real ${kind} creator prompt for ${engine} keeps global destination out of valid JSON examples`, () => {

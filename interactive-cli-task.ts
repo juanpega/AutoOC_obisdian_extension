@@ -6,7 +6,7 @@ import { isOpenCodeTask } from "./opencode-profile";
 import { assertOpenCode2 } from "./opencode-version";
 import { openOpencodeCli, openOpencodeCliLongPromptWindows, shSingleQuoted, resolveLinuxTerminal } from "./cli-launchers";
 import { createAuxiliaryDirectory, completeAuxiliaryDirectory, auxiliaryCompletionRecord, AUXILIARY_COMPLETION } from "./execution-files";
-import type { InteractiveTaskTerminalRequest } from "./interactive-task-terminal";
+import type { InteractiveTaskTerminalRequest, InteractiveCliDestination } from "./interactive-task-terminal";
 
 export function getCliTaskValidationError(task: Readonly<Record<string, any>>): string | null {
   if (task.taskKind !== "cli") return task.cliProvider !== undefined ? "cliProvider is only valid for taskKind cli." : null;
@@ -39,15 +39,17 @@ export function prepareCliTask(task:Readonly<Record<string,any>>, settings:Reado
     model:task.model || "",agent:task.forceModel ? "" : task.agent || "",prompt,reasoningEffort:task.reasoningEffort,signal};
 }
 
-export async function launchExternalCliTask(request:InteractiveTaskTerminalRequest, linuxTerminal?:string):Promise<void> {
+export async function launchExternalCliTask(request:InteractiveTaskTerminalRequest, linuxTerminal?:string, destination?:InteractiveCliDestination):Promise<void> {
   if (!request.provider || !isInteractiveCliProvider(request.provider)) throw new Error("A CLI task provider is required.");
+  if (destination === "shared-external" && process.platform !== "win32") throw new Error("Shared external terminal requires Windows and Windows Terminal (wt.exe).");
   if (request.signal?.aborted) throw new Error("CLI task cancelled before launch.");
   if (request.provider === "opencode2") await assertOpenCode2(request.bin);
   if (request.signal?.aborted) throw new Error("CLI task cancelled before launch.");
   const argsForPrompt = (instruction:string)=>interactiveCliTaskArgs(request.provider!,request.model,request.agent,instruction,request.reasoningEffort);
   if (process.platform === "win32") {
     await new Promise<void>((resolve,reject)=>openOpencodeCliLongPromptWindows(request.bin,request.cwd,{},request.model,request.agent,request.prompt,
-      {onLaunched:resolve,onError:reject,promptArgs:argsForPrompt}));
+      {onLaunched:resolve,onError:reject,promptArgs:argsForPrompt,signal:request.signal,
+        sharedExternal:destination === "shared-external" ? {provider:INTERACTIVE_CLIS.find(cli=>cli.id===request.provider)!.label,task:request.label} : undefined}));
     return;
   }
   if (!["linux", "darwin"].includes(process.platform)) throw new Error("Interactive CLI tasks require Windows, macOS or Linux.");

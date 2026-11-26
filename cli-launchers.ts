@@ -4,6 +4,7 @@ import * as os from "os";
 import { InteractiveTerminalLaunchUncertainError } from "./interactive-task-terminal";
 import * as crypto from "crypto";
 import { spawn } from "child_process";
+import { resolveSharedWindowsTerminal, sharedWindowsTerminalScripts } from "./shared-windows-terminal";
 import { createAuxiliaryDirectory, completeAuxiliaryDirectory, auxiliaryCompletionRecord, AUXILIARY_COMPLETION } from './execution-files';
 
 // Honor the selected command on PATH before probing fallback installations.
@@ -143,6 +144,10 @@ export interface CliLaunchOptions {
   linuxTerminal?: string;
   opencodeMajor?: 1 | 2;
   promptArgs?: (instruction: string) => string[];
+  sharedExternal?: import("./shared-windows-terminal").SharedExternalIdentity;
+  /** Manual sessions have no preloaded prompt and keep provider-native defaults. */
+  manual?: boolean;
+  signal?: AbortSignal;
 }
 
 export function openOpencodeCli(
@@ -204,6 +209,11 @@ export function openOpencodeCliLongPromptWindows(
   prompt: string,
   options: CliLaunchOptions = {},
 ): void {
+  let sharedTerminal: string | undefined;
+  try {
+    if (options.sharedExternal) sharedTerminal = resolveSharedWindowsTerminal();
+    if (options.signal?.aborted) throw new Error("CLI task cancelled before launch.");
+  } catch (error) { options.onError?.(error instanceof Error ? error : new Error(String(error))); return; }
   const attempt = crypto.randomBytes(16).toString("hex");
   let directory: string;
   try { directory = createAuxiliaryDirectory(cwd, 'interactive'); }
@@ -243,7 +253,7 @@ export function openOpencodeCliLongPromptWindows(
       `Set-Location -LiteralPath ${psSingleQuoted(path.resolve(cwd))}`,
       "try {",
       `  $target = Get-Command -Name ${psSingleQuoted(bin)} -CommandType Application,ExternalScript -ErrorAction Stop | Select-Object -First 1`,
-      `  $cliArgs = @(${options.promptArgs ? options.promptArgs(instruction).map(psSingleQuoted).join(", ") : `${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)}`})`,
+      `  $cliArgs = @(${options.manual ? "" : options.promptArgs ? options.promptArgs(instruction).map(psSingleQuoted).join(", ") : `${options.opencodeMajor === 2 ? "'mini', '--standalone', " : ""}'-m', ${psSingleQuoted(model)}${agent ? `, '--agent', ${psSingleQuoted(agent)}` : ""}, '--prompt', ${psSingleQuoted(instruction)}`})`,
       "  & $target.Source @cliArgs",
       "  exit $LASTEXITCODE",
       "} catch { Write-Error 'AutoOC: interactive CLI invocation failed' -ErrorAction Continue; exit 1 }",
@@ -258,16 +268,21 @@ export function openOpencodeCliLongPromptWindows(
       "}",
     ].join("\n");
     const encodedRunner = Buffer.from(runner, "utf16le").toString("base64");
+    const sharedRunnerFile = path.join(directory, "runner.ps1");
+    const shared = sharedTerminal && options.sharedExternal
+      ? sharedWindowsTerminalScripts({ ...options.sharedExternal, terminal: sharedTerminal, cwd, attempt, runner, runnerFile: sharedRunnerFile }) : undefined;
+    if (shared) fs.writeFileSync(sharedRunnerFile, "\ufeff" + shared.runnerScript, { encoding: "utf8", flag: "wx" });
     // The hidden observer launches ONE visible session. A descendant native
     // process (OpenCode executable or its Node runtime) confirms invocation;
     // starting PowerShell/cmd alone is explicitly insufficient.
     const observer = [
       "$ErrorActionPreference = 'Stop'",
       checkDirectory,
-      "$session = $null; $confirmed = $false",
-      `function Report($status, $ended) { if (-not (Test-AutoOCAuxiliary)) { throw 'AutoOC auxiliary directory changed' }; @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
+      "$session = $null; $confirmed = $false; $dispatched = $false; $stage = 'dispatch'; $autoocErrorCode = 'stage-failed'",
+      `function Report($status, $ended) { if (-not (Test-AutoOCAuxiliary)) { throw 'AutoOC auxiliary directory changed' }; @{ attempt = ${psSingleQuoted(attempt)}; status = $status; ended = $ended; confirmed = $confirmed; stage = $stage; errorCode = $autoocErrorCode } | ConvertTo-Json -Compress | Set-Content -LiteralPath ${psSingleQuoted(stateFile)} -Encoding UTF8 }`,
       "try {",
-      `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path.resolve(cwd))} -PassThru`,
+      shared ? shared.observerLaunch : `  $session = Start-Process -FilePath (Join-Path $PSHOME 'powershell.exe') -ArgumentList @('-NoLogo', '-NoProfile', '-EncodedCommand', '${encodedRunner}') -WorkingDirectory ${psSingleQuoted(path.resolve(cwd))} -PassThru`,
+      "  $stage = 'process-inspection'; Report 'pending' $false",
       "  while (-not $session.HasExited) {",
       "    if (-not $confirmed) {",
       "      $all = @(Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,Name)",
@@ -280,34 +295,41 @@ export function openOpencodeCliLongPromptWindows(
       "    }",
       "    Start-Sleep -Milliseconds 100; $session.Refresh()",
       "  }",
-      "  Report 'ended' $true",
+      "  $stage = 'session-exit'; Report 'ended' $true",
       "} catch {",
-      "  Report 'error' ($null -eq $session)",
+      shared ? "  Report 'error' (-not $dispatched -and $null -eq $session)" : "  Report 'error' ($null -eq $session)",
       "  if ($null -ne $session) { $session.WaitForExit(); Report 'error' $true }",
       "} finally {",
       // The observer is the last writer of state.json. If the Node host has
       // exited, it owns final cleanup; the runner leaves a receipt as fallback.
       `  if ($null -ne $session -and $session.HasExited -and -not (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue) -and (Test-AutoOCAuxiliary)) {`,
       completion,
-      `    Remove-Item -LiteralPath ${psSingleQuoted(promptFile)}, ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)} -ErrorAction SilentlyContinue`,
+      `    Remove-Item -LiteralPath ${psSingleQuoted(promptFile)}, ${psSingleQuoted(stateFile)}, ${psSingleQuoted(ignoreFile)}${shared ? `, ${psSingleQuoted(sharedRunnerFile)}` : ""} -ErrorAction SilentlyContinue`,
       `    try { if (@([System.IO.Directory]::GetFileSystemEntries(${psSingleQuoted(directory)})).Count -eq 1 -and (Test-Path -LiteralPath ${psSingleQuoted(completionFile)})) { Remove-Item -LiteralPath ${psSingleQuoted(completionFile)}; [System.IO.Directory]::Delete(${psSingleQuoted(directory)}, $false) } } catch { }`,
       "  }",
       "}",
     ].join("\n");
     const encodedObserver = Buffer.from(observer, "utf16le").toString("base64");
     if (encodedObserver.length > 30000 || encodedRunner.length > 30000) throw new Error("Interactive launcher configuration exceeds Windows command-line limit");
+    // Treat receipt fields as untrusted: surface only fixed protocol labels,
+    // never a native exception, command, path or environment value.
+    const stages = new Set(["dispatch", "runner-connect", "runner-identity", "environment-handoff", "environment-ack", "process-inspection", "session-exit"]);
+    let lastStage = "dispatch";
     const readState = () => {
-      let state: { attempt?: string; status?: string; ended?: boolean; confirmed?: boolean };
+      let state: { attempt?: string; status?: string; ended?: boolean; confirmed?: boolean; stage?: string; errorCode?: string };
       try { state = JSON.parse(fs.readFileSync(stateFile, "utf8").replace(/^\uFEFF/, "")); }
       catch { return; } // A partial write is retried; it is never a success.
       if (state.attempt !== attempt) return;
-      if (state.status === "error") finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI launcher failed; check the session and Windows process inspection availability"));
+      if (state.stage && stages.has(state.stage)) lastStage = state.stage;
+      const code = state.errorCode === "handshake-timeout" ? "handshake-timeout" : "stage-failed";
+      if (state.status === "error") finish(new InteractiveTerminalLaunchUncertainError(`Interactive CLI launcher failed at ${lastStage} (${code}); inspect the existing session before retrying`));
       else if (state.confirmed === true && (state.status === "started" || state.status === "ended")) finish();
       else if (state.status === "ended") finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI exited without confirmed startup"));
       if (state.ended === true && (state.status === "ended" || state.status === "error")) { stopPolling(); cleanup(); }
     };
     poll = setInterval(readState, 100);
-    timeout = setTimeout(() => finish(new InteractiveTerminalLaunchUncertainError("Interactive CLI startup was not confirmed within 30 seconds; prompt retained until session exit")), 30000);
+    timeout = setTimeout(() => finish(new InteractiveTerminalLaunchUncertainError(`Interactive CLI startup was not confirmed within 30 seconds (last stage: ${lastStage}); prompt retained until session exit`)), 30000);
+    if (options.signal?.aborted) throw new Error("CLI task cancelled before launch.");
     const launcher = spawn("powershell.exe", ["-NoLogo", "-NoProfile", "-EncodedCommand", encodedObserver], {
       // A detached hidden PowerShell can exit without executing its command on
       // Windows. The observer does not need a new process group; unref below

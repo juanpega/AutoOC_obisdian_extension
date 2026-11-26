@@ -4,6 +4,8 @@ import { setupCodeTextarea, renderCodePreview } from "./code-editor";
 import { workflowStepDisplayName, bindWorkflowLabel, refreshWorkflowLabels } from "./workflow-labels";
 import { taskDisabledReason, workflowDisabledReason, assertWorkflowEnabled, validateDisabled } from "./catalog-availability";
 import { addInteractiveCliSettings, openCliLauncher } from "./interactive-cli-ui";
+import type { InteractiveCliDestination } from "./interactive-task-terminal";
+import { resolveSharedWindowsTerminal } from "./shared-windows-terminal";
 import { INTERACTIVE_CLIS, launchInteractiveCli, type InteractiveCliProvider } from "./interactive-cli";
 import { addWorkPageSettings, renderWorkPages, refreshWorkPageTerminals, openPageItemControls, showPageItemHistory, openCliWorkspaceSelector } from "./work-pages-ui";
 import { reviewPageMerge, executePageMerge, type MergeReview, type MergeCommand } from "./merge-review";
@@ -176,7 +178,7 @@ Task fields:
 - area: optional grouping area.
 - prompt: required, non-empty complete direct instruction for the selected engine. Every task must include it, including taskKind "code"; for code tasks, mirror the code here for compatibility.
 - interactiveTerminal: true is required for taskKind "cli"; for legacy AI tasks it opens OpenCode 1 for taskKind "opencode", OpenCode 2 mini for "opencode2", or the ChatGPT/Codex app for taskKind "codex".
-- Interactive OpenCode tasks and all generic taskKind "cli" providers, including workflow steps, use the vault's CLI terminal destination setting (integrated in Obsidian or external window). Do not export cliTerminalDestination as a task/workflow field. Integrated tasks require a loaded Obsidian plugin; autonomous execution without that host rejects before starting workflow steps. Interactive CLI completion only confirms terminal launch, not the human task result. Background tasks, Code, background Copilot and the Codex app are unchanged.
+- Interactive OpenCode tasks and all generic taskKind "cli" providers, including workflow steps, use the vault's CLI terminal destination setting (integrated in Obsidian, external window, or Windows-only shared external terminal). Do not export cliTerminalDestination as a task/workflow field. Shared external uses independent tabs in the named Windows Terminal AutoOC window and requires wt.exe; it is not a new task provider. Integrated tasks require a loaded Obsidian plugin; autonomous execution without that host rejects before starting workflow steps. Interactive CLI completion only confirms terminal launch, not the human task result. Background tasks, Code, background Copilot and the Codex app are unchanged.
 - Integrated PTY requires explicitly installed terminal support and Node.js 18+ on Windows x64 or macOS Intel/Apple Silicon. Linux integrated PTY is not available. Terminal support is installed separately on each computer; updating the plugin does not install it automatically. CLI executables and authentication must already be configured locally.
 - reasoningEffort: optional for taskKind "codex"; use "minimal", "low", "medium", "high", "xhigh", "max", or "ultra" when requested. Also optional for taskKind "cli" with cliProvider "codex", where the value must be supported by the selected native CLI/model.
 - code, codeLang, codeInputVar, codeOutputVar, codeAllowVault, codeAllowFiles, codeAllowTerminal: only for taskKind "code".
@@ -660,7 +662,7 @@ interface AutoOCSettings extends WorkPageSettings {
   copilotPath: string;
   claudePath?: string;
   cliLauncherEnabled?: Partial<Record<InteractiveCliProvider, boolean>>;
-  cliTerminalDestination?: "integrated" | "external";
+  cliTerminalDestination?: InteractiveCliDestination;
   defaultCopilotModel: string;
   defaultAiEngine: DefaultAiEngine;
   defaultModel: string;
@@ -1907,12 +1909,31 @@ export default class AutoOCPlugin extends Plugin {
     } finally { release(); }
   }
 
-  async launchManualCli(provider: InteractiveCliProvider, cwd: string, pageId?: string): Promise<void> {
+  cliDestinationUnavailableReason(destination: InteractiveCliDestination): string | undefined | Promise<string | undefined> {
+    if (destination === "shared-external") {
+      try { resolveSharedWindowsTerminal(); return undefined; }
+      catch (error) { return error instanceof Error ? error.message : String(error); }
+    }
+    if (destination === "integrated") return this.cliTerminals?.unavailableReason()
+      ?? "Integrated terminals are unavailable. Reopen AutoOC.";
+    if (destination !== "external") return "Unknown terminal destination is unavailable.";
+    return undefined;
+  }
+
+  async launchManualCli(provider: InteractiveCliProvider, cwd: string, pageId?: string, destination?: InteractiveCliDestination): Promise<void> {
     this.assertLifecycleOpen();
+    destination ??= this.settings.cliTerminalDestination ?? "external";
     // Preserve the historical launcher when this installation has no pages.
     if (!pageId && !this.settings.workPages?.length && !this.settings.pageTerminalClaims?.length) {
-      if (this.settings.cliTerminalDestination === "integrated") return this.openIntegratedCli(provider,cwd);
-      return launchInteractiveCli(provider,cwd,this.settings);
+      const reason = await this.cliDestinationUnavailableReason(destination);
+      if (reason) throw new Error(reason);
+      this.assertLifecycleOpen();
+      // Support verification yielded: a concurrently published Page/claim must
+      // route through ownership/admission rather than the legacy shortcut.
+      if (this.settings.workPages?.length || this.settings.pageTerminalClaims?.length)
+        return this.launchManualCli(provider,cwd,pageId,destination);
+      if (destination === "integrated") return this.openIntegratedCli(provider,cwd);
+      return launchInteractiveCli(provider,cwd,this.settings,{destination});
     }
     this.beginExecutionEffects();
     if (!this.pluginExecutionLease) throw new Error("This AutoOC instance must own execution before opening a page terminal.");
@@ -1925,6 +1946,14 @@ export default class AutoOCPlugin extends Plugin {
     if (existing && !existing.exited && samePhysicalPath(existing.cwd,cwd)) {
       await this.cliTerminals!.focusPage(pageId || "main"); return;
     }
+    const revisionBeforeSupport = page && workPageRevision(page);
+    const reason = await this.cliDestinationUnavailableReason(destination);
+    if (reason) throw new Error(reason);
+    this.beginExecutionEffects(); this.pluginExecutionLease!.assertOwned();
+    if (this.updateInProgress || this.bulkCatalogMutationInProgress || this.definitionStarts?.size || this.runningProcesses.size ||
+        this.runningCodexClients.size || this.legacyAttempts.size) throw new Error("Wait for work currently starting or using legacy execution.");
+    if (page && workPageRevision(selectWorkPage(this.settings,pageId!)) !== revisionBeforeSupport)
+      throw new Error("Page context changed. Reopen its CLI launcher.");
     if (page) {
       const revision = workPageRevision(page);
       await verifyWorkPageEnvironment({...page});
@@ -1956,10 +1985,10 @@ export default class AutoOCPlugin extends Plugin {
     finally { admission.finish(); }
     // Retain the claim even if launch throws: an OS window may already exist.
     try {
-      if (this.settings.cliTerminalDestination === "integrated") {
+      if (destination === "integrated") {
         if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. Review the terminal reservation in the page.");
         await this.cliTerminals.open(provider,cwd,(page?.name || "Main workspace") + " · " + provider,{pageId:claim.pageId,claimId:claim.id});
-      } else await launchInteractiveCli(provider,cwd,this.settings);
+      } else await launchInteractiveCli(provider,cwd,this.settings,{destination,project:page?.name});
     } finally {
       this.pageTerminalOpening.delete(claim.id);
       this.refreshOpenViews();
@@ -4791,7 +4820,7 @@ export default class AutoOCPlugin extends Plugin {
             if (!this.cliTerminals) throw new Error("Integrated terminals are unavailable. No external terminal was started.");
             await this.cliTerminals.openTask(request);
           } else {
-            await launchExternalCliTask(request, this.settings.linuxTerminal);
+            await launchExternalCliTask(request, this.settings.linuxTerminal, this.settings.cliTerminalDestination);
           }
           await finish();
           return;
@@ -4810,12 +4839,16 @@ export default class AutoOCPlugin extends Plugin {
           await finish();
           return;
         }
-        const launchOptions = {
+        const launchOptions: CliLaunchOptions = {
           onError: (error: Error) => { void finish(error); },
           onLaunched: () => { void finish(); },
           linuxTerminal: this.settings.linuxTerminal,
           opencodeMajor: major as 1 | 2,
+          signal: launchController.signal,
+          sharedExternal: this.settings.cliTerminalDestination === "shared-external"
+            ? {provider:`OpenCode ${major} CLI`,task:effectiveTask.name} : undefined,
         };
+        if (launchOptions.sharedExternal && process.platform !== "win32") throw new Error("Shared external terminal requires Windows and Windows Terminal (wt.exe).");
         if (process.platform === "win32") {
           openOpencodeCliLongPromptWindows(bin, taskCwd, secretEnv, effectiveTask.model, effectiveTask.forceModel ? "" : agent, prompt, launchOptions);
         } else {

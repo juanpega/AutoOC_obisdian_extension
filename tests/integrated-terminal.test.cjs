@@ -7,7 +7,7 @@ const ts = require('typescript');
 const compile = file => ts.transpileModule(fs.readFileSync(path.join(__dirname, '..', file), 'utf8'), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
 }).outputText;
-const sources = Object.fromEntries(['integrated-terminal.ts', 'interactive-cli.ts', 'interactive-cli-ui.ts', 'terminal-pty.ts', 'cli-launchers.ts', 'opencode-profile.ts', 'interactive-task-terminal.ts', 'interactive-cli-profile.ts']
+const sources = Object.fromEntries(['integrated-terminal.ts', 'interactive-cli.ts', 'interactive-cli-ui.ts', 'terminal-pty.ts', 'cli-launchers.ts', 'shared-windows-terminal.ts', 'opencode-profile.ts', 'interactive-task-terminal.ts', 'interactive-cli-profile.ts']
   .map(file => [file, compile(file)]));
 
 function evaluate(file, dependencies, globals = {}) {
@@ -66,6 +66,9 @@ function harness() {
   const launchers = evaluate('cli-launchers.ts', {
     child_process: { spawn: (...args) => { external.push(args); throw Error('External launch forbidden'); } },
     './interactive-task-terminal': taskTerminal,
+    './shared-windows-terminal': evaluate('shared-windows-terminal.ts', {
+      fs: {}, path: path.win32, crypto: require('node:crypto'), zlib: require('node:zlib'),
+    }, {process}),
     os: { platform: () => 'win32' }, fs: {}, path: path.win32, crypto: {}, './execution-files': {},
   }, { process });
   const backend = evaluate('interactive-cli.ts', {
@@ -88,7 +91,7 @@ function harness() {
     registerEvent() {}
   }
   class Control {
-    constructor(el) { this.el = this.inputEl = el; this.el.options = {}; }
+    constructor(el) { this.el = this.inputEl = this.selectEl = el; this.el.options = {}; }
     addOption(key, value) { this.el.options[key] = value; return this; }
     setValue(value) { this.el.value = value; return this; }
     setPlaceholder() { return this; }
@@ -239,6 +242,16 @@ function harness() {
     modal(selected = 'codex') { const modal = new ui.CliLauncherModal(app, host, () => {}, selected); modal.open(); return modal; },
   };
 }
+
+test('destination availability verifies local installed support without installing or spawning', async () => {
+  const h=harness();
+  assert.equal(await h.manager.unavailableReason(),undefined);
+  assert.deepEqual(h.loads,['C:\\Vault\\.obsidian\\plugins\\auto-oc']);
+  h.setLoad(async()=>{throw Error('support absent: opt-in required');});
+  assert.match(await h.manager.unavailableReason(),/support absent/);
+  assert.equal(h.installs.length,0);assert.equal(h.spawns.length,0);assert.equal(h.external.length,0);assert.equal(h.terminals.length,0);
+  h.stop();assert.match(await h.manager.unavailableReason(),/closed/i);
+});
 
 test('terminal spacing stays outside the session box measured by FitAddon', () => {
   const css = fs.readFileSync(path.join(__dirname, '..', 'styles.css'), 'utf8');
@@ -721,14 +734,17 @@ test('session cap rejects a thirteenth launch before loading another backend', a
   assert.equal(h.loads.length, 12); assert.equal(h.spawns.length, 12); await h.manager.dispose();
 });
 
-test('Settings owns destination and opt-in support; opening Settings or launcher never installs', async () => {
+test('Settings owns the default and opt-in support; launcher choice never installs or saves', async () => {
   const h = harness(), modal = h.modal();
   const root = h.settings();
   assert.equal(h.installs.length, 0);
-  assert.equal(modal.contentEl.all().some(el => el.tag === 'select' && el.options.integrated), false);
+  const launchDestination = modal.contentEl.all().find(el => el.tag === 'select' && el.options.integrated);
+  assert.equal(launchDestination.attrs['aria-label'], 'Terminal destination');
   assert.equal(h.button(modal.contentEl, 'Download and install'), undefined);
   assert.equal(h.button(modal.contentEl, 'Show existing terminals'), undefined);
-  assert.ok(modal.contentEl.all().some(el => el.textContent.includes('Terminal: External window')));
+  assert.equal(launchDestination.value, 'external');
+  await launchDestination.change('integrated');
+  assert.equal(h.host.settings.cliTerminalDestination, undefined);
   const destination = root.all().find(el => el.tag === 'select' && el.options.integrated);
   assert.equal(destination.value, 'external'); await destination.change('integrated'); assert.equal(h.installs.length, 0);
   await h.button(root, 'Download and install').onclick();

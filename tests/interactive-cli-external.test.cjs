@@ -71,8 +71,9 @@ function harness(t, platform = 'win32') {
       versions.push({ bin, args: Array.from(args), options, callback });
     },
   };
+  const environment = { ...process.env };
   const load = sourceLoader({ fs: fakeFs, child_process: childProcess, os: { ...os, platform: () => platform } }, {
-    process: { platform, pid: process.pid, env: { ...process.env } },
+    process: { platform, pid: process.pid, env: environment },
     setTimeout: (fn, ms) => timer(timers, fn, ms),
     setInterval: (fn, ms) => timer(intervals, fn, ms),
     clearTimeout: value => { value.active = false; },
@@ -86,10 +87,14 @@ function harness(t, platform = 'win32') {
   }
   function scripts(index = 0) {
     const observer = Buffer.from(calls[index].args.at(-1), 'base64').toString('utf16le');
-    const runner = Buffer.from(observer.match(/'-EncodedCommand', '([A-Za-z0-9+/=]+)'/)[1], 'base64').toString('utf16le');
+    const bootstrap = Buffer.from(observer.match(/'-EncodedCommand', '([A-Za-z0-9+/=]+)'/)[1], 'base64').toString('utf16le');
+    const file = /^& '((?:[^']|'')+)'$/.exec(bootstrap);
+    const compressed = bootstrap.match(/FromBase64String\('([A-Za-z0-9+/=]+)'\)/);
+    const runner = file ? fs.readFileSync(file[1].replace(/''/g, "'"), 'utf8')
+      : compressed ? require('node:zlib').gunzipSync(Buffer.from(compressed[1], 'base64')).toString('utf16le') : bootstrap;
     const attempt = observer.match(/attempt = '([a-f0-9]+)'/)[1];
     const stateFile = observer.match(/Set-Content -LiteralPath '((?:[^']|'')*state\.json)'/)[1].replace(/''/g, "'");
-    return { observer, runner, attempt, stateFile, directory: path.dirname(stateFile) };
+    return { observer, runner, bootstrap, attempt, stateFile, directory: path.dirname(stateFile) };
   }
   function state(value, index = 0) {
     const script = scripts(index);
@@ -110,11 +115,52 @@ function harness(t, platform = 'win32') {
     });
     return result;
   }
-  return { cwd, auxiliary, control, calls, probes, versions, timers, intervals, writes, load, launch,
+  return { cwd, auxiliary, control, calls, probes, versions, timers, intervals, writes, load, launch, environment,
     Uncertain, directories, scripts, state, request, start };
 }
 
 async function flush() { await new Promise(resolve => setImmediate(resolve)); }
+
+// Resolution only: deny every process boundary, and model Windows paths even
+// on non-Windows CI. An alias is a reparse point, not a stat-able regular file.
+function terminalResolver({ env = {}, stat = 'EACCES', link = true, entries = ['wt.exe'], lstatError, listingError } = {}) {
+  const alias = 'C:\\Users\\synthetic\\AppData\\Local\\Microsoft\\WindowsApps\\wt.exe';
+  const fail = code => { throw Object.assign(new Error(code), { code }); };
+  const load = sourceLoader({
+    path: path.win32,
+    fs: {
+      statSync: () => stat === 'file' ? { isFile: () => true } : stat === 'directory' ? { isFile: () => false } : fail(stat),
+      lstatSync: () => lstatError ? fail(lstatError) : { isSymbolicLink: () => link },
+      readdirSync: () => listingError ? fail(listingError) : entries,
+    },
+    child_process: new Proxy({}, { get() { throw Error('Resolution must not launch or probe a process'); } }),
+  }, { process: { platform: 'win32', env: { PATH: '', LOCALAPPDATA: 'C:\\Users\\synthetic\\AppData\\Local', ...env } } });
+  return { resolve: load('shared-windows-terminal.ts').resolveSharedWindowsTerminal, alias };
+}
+
+test('shared resolver accepts a listed user WindowsApps execution alias when stat is denied, without probing wt', () => {
+  for (const stat of ['EACCES', 'EPERM']) {
+    const h = terminalResolver({ stat });
+    assert.equal(h.resolve(), h.alias);
+  }
+});
+
+test('shared resolver preserves absolute regular executable discovery', () => {
+  const h = terminalResolver({ stat: 'file', env: { PATH: '"D:\\Terminal";relative', LOCALAPPDATA: '' } });
+  assert.equal(h.resolve(), 'D:\\Terminal\\wt.exe');
+});
+
+test('shared resolver rejects missing, unproven, non-alias and invalid paths without treating permission errors as success', () => {
+  const cases = [
+    { stat: 'ENOENT' }, { stat: 'EIO' }, { stat: 'directory' },
+    { link: false }, { entries: [] }, { lstatError: 'EACCES' }, { listingError: 'EACCES' },
+    { env: { LOCALAPPDATA: '', PATH: 'D:\\Untrusted' } },
+    { env: { LOCALAPPDATA: 'relative', PATH: 'relative;.;wt.exe' } },
+    { env: { LOCALAPPDATA: '', PATH: 'relative;.;wt.exe' } },
+  ];
+  for (const scenario of cases)
+    assert.throws(() => terminalResolver(scenario).resolve(), /wt\.exe.*not found/);
+});
 
 async function versionChecked(h, provider) {
   if (provider === 'opencode2') {
@@ -450,3 +496,352 @@ test('Windows generated observer and runner parse natively without executing eit
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(result.stdout.trim(), '10');
 });
+
+for (const platform of ['linux', 'darwin']) {
+  test(`shared Windows transport rejects ${platform} before writing or spawning`, t => {
+    const h = harness(t, platform), results = [];
+    h.load('cli-launchers.ts').openOpencodeCliLongPromptWindows('synthetic.exe', h.cwd, {}, '', '', payload, {
+      sharedExternal: { provider: 'Codex CLI' }, onError: error => results.push(error),
+    });
+    assert.match(results[0]?.message || '', /Shared external terminal requires Windows/);
+    assert.equal(h.calls.length, 0); assert.equal(h.writes.length, 0);
+  });
+}
+
+test('shared transport uses per-attempt runner identity, not the Terminal router PID or inherited window environment', t => {
+  const h = harness(t);
+  const terminal = path.join(h.cwd, 'wt.exe'); fs.writeFileSync(terminal, 'fake');
+  const { sharedWindowsTerminalScripts } = h.load('shared-windows-terminal.ts');
+  const first = sharedWindowsTerminalScripts({
+    terminal, cwd: h.cwd, project: "Prójèct ; split-pane & ' $ % `\n", provider: 'Codex CLI',
+    task: 'Task " ; new-tab', attempt: 'a'.repeat(32), runner: 'RUNNER', runnerFile: path.join(h.cwd, 'runner.ps1'),
+  });
+  const second = sharedWindowsTerminalScripts({
+    terminal, cwd: h.cwd, project: 'other display', provider: 'Claude Code CLI',
+    attempt: 'b'.repeat(32), runner: 'RUNNER', runnerFile: path.join(h.cwd, 'runner.ps1'),
+  });
+  assert.equal(first.color, second.color);
+  assert.match(first.color, /^#[a-f0-9]{6}$/);
+  assert.doesNotMatch(first.title, /[;"'$%`&\r\n]/);
+  assert.match(first.observerLaunch, /'-w', 'AutoOC', 'new-tab'/);
+  assert.match(first.observerLaunch, /NamedPipeServerStream/);
+  assert.match(first.observerLaunch, /PipeSecurity/);
+  assert.match(first.observerLaunch, /WindowsIdentity/);
+  assert.match(first.observerLaunch, /EnvironmentVariables/);
+  assert.match(first.observerLaunch, /Get-Process -Id/);
+  assert.doesNotMatch(first.observerLaunch, /\$session = Start-Process/);
+  assert.match(first.runnerPrefix, /NamedPipeClientStream/);
+  assert.match(first.runnerPrefix, /GetEnvironmentVariables/);
+  assert.match(first.runnerPrefix, /SetEnvironmentVariable/);
+  assert.notEqual(first.runnerPrefix, second.runnerPrefix);
+});
+
+test('shared handshake reads and writes are bounded and environment application is acknowledged before process inspection', t => {
+  const h = harness(t);
+  const scripts = h.load('shared-windows-terminal.ts').sharedWindowsTerminalScripts({
+    terminal: 'synthetic-wt.exe', cwd: h.cwd, attempt: 'c'.repeat(32), provider: 'Synthetic', runner: '', runnerFile: path.join(h.cwd, 'runner.ps1'),
+  });
+  for (const script of [scripts.runnerPrefix, scripts.observerLaunch]) {
+    assert.doesNotMatch(script, /\.ReadLine\(\)|\.WriteLine\(/);
+    assert.match(script, /ReadLineAsync/);
+    assert.match(script, /WriteLineAsync/);
+    assert.match(script, /\.Wait\(5000\)/);
+    assert.match(script, /handshake-timeout/);
+    assert.match(script, /finally \{ \$pipe.Dispose\(\) \}/);
+  }
+  assert.match(scripts.runnerPrefix, /environment-applied/);
+  assert.match(scripts.observerLaunch, /environment-ack/);
+  assert.match(scripts.observerLaunch, /Report 'pending' \$false/);
+});
+
+test('Windows startup diagnostics expose only allowlisted stages/codes and never turn progress into confirmation', async t => {
+  const h = harness(t), pending = h.start(h.request());
+  const { observer, directory } = h.scripts();
+  assert.match(observer, /stage = \$stage/);
+  assert.match(observer, /errorCode = \$autoocErrorCode/);
+  assert.doesNotMatch(observer, /\$_\.Exception|\$_\.ToString/);
+  h.state({ status: 'pending', confirmed: false, stage: 'runner-identity' });
+  await flush(); assert.equal(pending.status, 'pending');
+  h.state({ status: 'error', ended: false, stage: 'runner-identity', errorCode: 'handshake-timeout', message: 'sensitive-value' });
+  await pending.promise;
+  assert.ok(pending.error instanceof h.Uncertain);
+  assert.match(pending.error.message, /runner-identity.*handshake-timeout/);
+  assert.doesNotMatch(pending.error.message, /sensitive-value/);
+  assert.ok(fs.existsSync(path.join(directory, 'prompt.txt')));
+  assert.equal(h.calls.length, 1);
+});
+
+test('Windows timeout retains the last safe stage but ignores arbitrary receipt diagnostics', async t => {
+  for (const stage of ['environment-ack', 'sensitive-value']) {
+    const h = harness(t), pending = h.start(h.request());
+    h.state({ status: 'pending', stage, errorCode: 'sensitive-value' });
+    h.timers[0].fn(); await pending.promise;
+    assert.doesNotMatch(pending.error.message, /sensitive-value/);
+    if (stage === 'environment-ack') assert.match(pending.error.message, /environment-ack/);
+    assert.ok(pending.error instanceof h.Uncertain);
+    assert.equal(h.calls.length, 1);
+  }
+});
+
+// Execute only generated pipe code in hidden synthetic PowerShell children.
+// No Terminal router, provider, inherited credentials or user window is used.
+function pipeChild(t, script) {
+  const child = require('node:child_process').spawn(
+    path.join(process.env.SystemRoot || 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { windowsHide: true, timeout: 15000, env: { SystemRoot: process.env.SystemRoot || 'C:\\Windows' } });
+  let stdout = '';
+  child.stdout.on('data', data => { stdout += data; });
+  child.stderr.resume(); // Do not retain exception text or transferred values.
+  const done = new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', code => resolve({ code, stdout }));
+  });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  child.stdin.end();
+  return { child, done };
+}
+
+for (const mode of ['success', 'literal script success', 'stalled environment', 'invalid environment']) {
+  test(`native shared runner pipe: ${mode}`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+    const h = harness(t), attempt = require('node:crypto').randomBytes(16).toString('hex');
+    const success = mode.endsWith('success');
+    const runnerFile = path.join(h.cwd, "O'Brien ; & $ ` 工具", 'runner.ps1');
+    const scripts = h.load('shared-windows-terminal.ts').sharedWindowsTerminalScripts({
+      terminal: 'never-executed.exe', cwd: h.cwd, attempt, provider: 'Synthetic', runner: "[Console]::Out.WriteLine('ok')", runnerFile,
+    });
+    const sockets = [];
+    let acknowledged = false;
+    const server = require('node:net').createServer(socket => {
+      sockets.push(socket);
+      let buffer = '', sent = false;
+      socket.on('error', () => {});
+      socket.on('data', data => {
+        buffer += data.toString('utf8');
+        if (!sent && buffer.includes('\n')) {
+          sent = true; buffer = '';
+          if (mode !== 'stalled environment') socket.write(success ? '{"AUTOOC_SYNTHETIC":"safe"}\n' : 'invalid-json\n');
+        } else if (buffer.includes('environment-applied')) acknowledged = true;
+      });
+    });
+    t.after(() => { sockets.forEach(socket => socket.destroy()); server.close(); });
+    await new Promise((resolve, reject) => {
+      server.once('error', reject);
+      server.listen(`\\\\.\\pipe\\autooc-terminal-${attempt}`, resolve);
+    });
+    let body = scripts.runnerPrefix + "\n[Console]::Out.WriteLine('ok')";
+    if (mode === 'literal script success') {
+      fs.mkdirSync(path.dirname(runnerFile));
+      fs.writeFileSync(runnerFile, '\ufeff' + scripts.runnerScript);
+      body = Buffer.from(scripts.observerLaunch.match(/'-EncodedCommand', '([A-Za-z0-9+/=]+)'/)[1], 'base64').toString('utf16le');
+    }
+    const script = `$ErrorActionPreference='Stop'\ntry {\n${body}\n} catch { [Console]::Out.WriteLine('failed'); exit 2 }`;
+    const result = await pipeChild(t, script).done;
+    assert.equal(result.code, success ? 0 : 2);
+    assert.match(result.stdout, success ? /ok/ : /failed/);
+    if (success) assert.equal(result.stdout.trim(), 'ok', 'handshake writes must not pollute CLI stdout');
+    assert.equal(acknowledged, success);
+  });
+}
+
+for (const mode of ['success', 'stalled identity', 'stalled environment write', 'stalled acknowledgement']) {
+  test(`native shared observer pipe: ${mode}`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+    const h = harness(t), attempt = require('node:crypto').randomBytes(16).toString('hex');
+    const scripts = h.load('shared-windows-terminal.ts').sharedWindowsTerminalScripts({
+      terminal: 'never-executed.exe', cwd: h.cwd, attempt, provider: 'Synthetic', runner: '', runnerFile: path.join(h.cwd, 'runner.ps1'),
+    });
+    // Replace ONLY native Terminal dispatch. The real pipe/security/handshake
+    // code executes, but no session monitoring or launch command executes.
+    let launch = scripts.observerLaunch.replace(/^.*\$router = Start-Process.*$/m, '    $router = $null');
+    if (mode === 'stalled environment write') {
+      launch = launch.replace(/^.*\$environment = @\{\};.*$/m, "    $environment = @{ AUTOOC_SYNTHETIC = ('x' * 1048576) }");
+    }
+    const script = `$ErrorActionPreference='Stop'; $stage='dispatch'; $autoocErrorCode='stage-failed'\nfunction Report($status,$ended) { [Console]::Out.WriteLine($stage) }\ntry {\n${launch}\n[Console]::Out.WriteLine('ok')\n} catch { [Console]::Out.WriteLine("failed:$stage/$autoocErrorCode"); exit 2 }`;
+    const { child, done } = pipeChild(t, script);
+    let socket, connected = false, output = '';
+    t.after(() => socket?.destroy());
+    child.stdout.on('data', data => {
+      output += data.toString('utf8');
+      if (!connected && output.includes('runner-connect')) {
+        connected = true;
+        socket = require('node:net').connect(`\\\\.\\pipe\\autooc-terminal-${attempt}`, () => {
+          if (mode !== 'stalled identity') socket.write(String(process.pid) + '\n');
+          if (mode === 'stalled environment write') socket.pause();
+        });
+        socket.on('error', () => {});
+        let received = false;
+        socket.on('data', () => {
+          // Deliberately do not retain transferred environment bytes.
+          if (!received && mode === 'success') socket.write('environment-applied\n');
+          received = true;
+        });
+      }
+    });
+    const result = await done;
+    assert.equal(result.code, mode === 'success' ? 0 : 2);
+    if (mode === 'success') assert.match(result.stdout, /ok/);
+    else assert.match(result.stdout, new RegExp(`failed:${mode === 'stalled identity' ? 'runner-identity' : mode === 'stalled environment write' ? 'environment-handoff' : 'environment-ack'}/handshake-timeout`));
+    assert.doesNotMatch(result.stdout, /SystemRoot|safe/);
+    assert.doesNotMatch(result.stdout, /VoidTaskResult/);
+  });
+}
+
+for (const descendant of ['none', 'cmd.exe', 'node.exe']) {
+  test(`native observer confirmation requires a CLI descendant, not ${descendant} alone`, { skip: process.platform !== 'win32', timeout: 20000 }, async t => {
+    const h = harness(t);
+    h.start(h.request());
+    const { observer } = h.scripts();
+    // Execute the actual monitoring loop with synthetic process metadata only.
+    // No observer dispatch, CIM lookup, native CLI or user process is invoked.
+    const monitoring = observer.slice(observer.indexOf("  $stage = 'process-inspection'"), observer.indexOf("  $stage = 'session-exit'"));
+    assert.ok(monitoring.includes('Get-CimInstance'));
+    const script = `
+$ErrorActionPreference='Stop'; $confirmed=$false
+$session = [pscustomobject]@{ Id=100; HasExited=$false }
+$session | Add-Member ScriptMethod Refresh { $this.HasExited=$true }
+function Start-Sleep {}
+function Get-CimInstance {
+  [pscustomobject]@{ ProcessId=101; ParentProcessId=100; Name='cmd.exe' }
+  ${descendant === 'none' ? '' : `[pscustomobject]@{ ProcessId=102; ParentProcessId=101; Name='${descendant}' }`}
+}
+function Report($status,$ended) { [Console]::Out.WriteLine("$status/$confirmed/$ended") }
+${monitoring}
+[Console]::Out.WriteLine("confirmed=$confirmed")
+`;
+    const result = await pipeChild(t, script).done;
+    assert.equal(result.code, 0);
+    assert.equal(result.stdout.trim().replace(/\r/g, ''), descendant === 'node.exe'
+      ? 'pending/False/False\nstarted/True/False\nconfirmed=True'
+      : 'pending/False/False\nconfirmed=False');
+  });
+}
+
+test('cmd-only process-inspection progress remains uncertain after deadline and never retries', async t => {
+  const h = harness(t), pending = h.start(h.request());
+  const { directory } = h.scripts();
+  h.state({ status: 'pending', stage: 'process-inspection', confirmed: false, ended: false });
+  await flush();
+  assert.equal(pending.status, 'pending');
+  h.timers[0].fn(); await pending.promise;
+  assert.ok(pending.error instanceof h.Uncertain);
+  assert.match(pending.error.message, /last stage: process-inspection/);
+  assert.equal(h.calls.length, 1);
+  assert.ok(fs.existsSync(path.join(directory, 'prompt.txt')));
+});
+
+test('shared readable runner uses an exact literal path, retains uncertain input and cleans only on completion', t => {
+  const h = harness(t), results = [];
+  const tricky = path.join(h.cwd, "Prójèct O'Brien; & $ ` 工具");
+  fs.mkdirSync(tricky);
+  const terminal = path.join(h.cwd, 'wt.exe'); fs.writeFileSync(terminal, 'fake'); h.environment.PATH = h.cwd;
+  h.load('cli-launchers.ts').openOpencodeCliLongPromptWindows('synthetic.exe', tricky, { AUTOOC_ONLY_IN_MEMORY: 'not-in-source' }, '', '', payload, {
+    sharedExternal: { provider: 'Synthetic' }, onError: error => results.push(error),
+  });
+  const { bootstrap, runner, directory } = h.scripts(), file = path.join(directory, 'runner.ps1');
+  assert.equal(bootstrap, "& '" + file.replace(/'/g, "''") + "'");
+  assert.doesNotMatch(runner, /GZipStream|FromBase64String|not-in-source|BEGIN/);
+  assert.ok(fs.readFileSync(file).subarray(0, 3).equals(Buffer.from([239, 187, 191])));
+  assert.equal(h.writes.find(write => write.file === file).options.flag, 'wx');
+  h.state({ status: 'error', stage: 'runner-connect', ended: false });
+  assert.ok(fs.existsSync(file)); assert.ok(fs.existsSync(path.join(directory, 'prompt.txt')));
+  fs.writeFileSync(path.join(directory, 'foreign.txt'), 'preserve');
+  h.state({ status: 'error', ended: true });
+  assert.equal(fs.existsSync(file), false);
+  assert.equal(fs.readFileSync(path.join(directory, 'foreign.txt'), 'utf8'), 'preserve');
+  assert.equal(h.calls.length, 1); assert.equal(results.length, 1);
+});
+
+test('shared launch retains prompts under uncertain routing, isolates concurrent receipts and parses native scripts', async t => {
+  const h = harness(t), results = [[], []];
+  fs.writeFileSync(path.join(h.cwd, 'wt.exe'), 'fake');
+  h.environment.PATH = h.cwd;
+  const launch = h.load('cli-launchers.ts').openOpencodeCliLongPromptWindows;
+  for (let i = 0; i < 2; i++) launch("C:\\工具 O'Brien; & % $ `\\cli.exe", h.cwd,
+    { AUTOOC_TEST_ENV: `synthetic-${i}` }, '', '', payload + i, {
+      sharedExternal: { provider: i ? 'Claude CLI' : 'Codex CLI', task: 'task ; " & $ % `\n' },
+      promptArgs: instruction => ['--', instruction],
+      onLaunched: () => results[i].push('launched'), onError: error => results[i].push(error),
+    });
+  assert.equal(h.calls.length, 2);
+  const scripts = [h.scripts(0), h.scripts(1)];
+  assert.notEqual(scripts[0].attempt, scripts[1].attempt);
+  assert.notEqual(scripts[0].directory, scripts[1].directory);
+  for (let i = 0; i < 2; i++) {
+    assert.ok(h.calls[i].args.at(-1).length < 30000);
+    assert.ok(!scripts[i].observer.includes(`synthetic-${i}`));
+    assert.ok(!scripts[i].runner.includes(`synthetic-${i}`));
+    assert.equal(h.calls[i].options.env.AUTOOC_TEST_ENV, `synthetic-${i}`);
+    h.calls[i].child.emit('spawn');
+  }
+  assert.deepEqual(results, [[], []]);
+  h.state({ status: 'started', confirmed: true, attempt: scripts[1].attempt }, 0);
+  assert.deepEqual(results, [[], []]);
+  h.state({ status: 'started', confirmed: true }, 1);
+  assert.deepEqual(results[1], ['launched']);
+  h.state({ status: 'error', ended: false }, 0);
+  assert.ok(results[0][0] instanceof h.Uncertain);
+  assert.equal(fs.existsSync(path.join(scripts[0].directory, 'prompt.txt')), true);
+  assert.equal(fs.existsSync(path.join(scripts[1].directory, 'prompt.txt')), true);
+  h.state({ status: 'ended', ended: true, confirmed: true }, 1);
+  assert.equal(fs.existsSync(path.join(scripts[0].directory, 'prompt.txt')), true);
+  assert.equal(fs.existsSync(path.join(scripts[1].directory, 'prompt.txt')), false);
+  if (process.platform === 'win32') {
+    const parser = "$scripts = [Console]::In.ReadToEnd() | ConvertFrom-Json; foreach ($text in $scripts) { $tokens = $null; $errors = $null; [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$tokens, [ref]$errors); if ($errors.Count) { $errors | ForEach-Object { $_.Message }; exit 1 } }";
+    const parsed = require('node:child_process').spawnSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-Command', parser],
+      { input: JSON.stringify(scripts.flatMap(script => [script.runner, script.observer, script.bootstrap])), encoding: 'utf8', windowsHide: true, timeout: 15000 });
+    assert.ifError(parsed.error); assert.equal(parsed.status, 0, parsed.stderr + parsed.stdout);
+  }
+});
+
+for (const provider of providers) {
+  test(`shared task destination routes ${provider} through exactly one runner with its own prompt`, async t => {
+    const h = harness(t);
+    fs.writeFileSync(path.join(h.cwd, 'wt.exe'), 'fake'); h.environment.PATH = h.cwd;
+    const request = h.request(provider, { model: 'model; " & $ % ` 工具', agent: provider.startsWith('opencode') ? "plan' ;" : '' });
+    const pending = h.launch(request, undefined, 'shared-external');
+    await versionChecked(h, provider);
+    assert.equal(h.calls.length, 1);
+    const { observer, runner, directory } = h.scripts();
+    assert.match(observer, /NamedPipeServerStream/);
+    const instruction = `Read the full task prompt from ${path.relative(h.cwd, path.join(directory, 'prompt.txt')).split(path.sep).join('/')} and follow it exactly.`;
+    assert.deepEqual(runnerArgs(runner), expectedArgs(provider, request.model, request.agent, instruction));
+    h.state({ status: 'started', confirmed: true }); await pending;
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'prompt.txt')), Buffer.from(payload));
+  });
+}
+
+test('missing Windows Terminal is actionable and creates neither auxiliary input nor processes', t => {
+  const h = harness(t), results = [];
+  h.environment.PATH = h.cwd; h.environment.LOCALAPPDATA = h.cwd;
+  h.load('cli-launchers.ts').openOpencodeCliLongPromptWindows('synthetic.exe', h.cwd, {}, '', '', payload, {
+    sharedExternal:{provider:'Synthetic CLI'}, onError:error=>results.push(error),
+  });
+  assert.match(results[0]?.message || '', /Windows Terminal.*not found.*another terminal destination/);
+  assert.equal(h.calls.length,0); assert.equal(h.writes.length,0);
+});
+
+for (const mode of ['timeout','observer exit','partial receipt','spawn failure','cancel after preparation']) {
+  test(`shared ${mode} preserves ownership and never retries`, t => {
+    const h = harness(t), results = [], controller = new AbortController();
+    fs.writeFileSync(path.join(h.cwd,'wt.exe'),'fake'); h.environment.PATH = h.cwd;
+    h.control.spawnFailure = mode === 'spawn failure';
+    if (mode === 'cancel after preparation') h.control.writeHook = file => { if (path.basename(file)==='prompt.txt') controller.abort(); };
+    h.load('cli-launchers.ts').openOpencodeCliLongPromptWindows('synthetic.exe',h.cwd,{},'','',payload,{
+      sharedExternal:{provider:'Synthetic CLI'},signal:controller.signal,onError:error=>results.push(error),onLaunched:()=>results.push('ok'),
+    });
+    assert.equal(h.calls.length,mode === 'cancel after preparation' ? 0 : 1);
+    if (mode === 'spawn failure' || mode === 'cancel after preparation') {
+      assert.equal(results.length,1); assert.ok(!(results[0] instanceof h.Uncertain));
+      assert.equal(h.directories().length,0); return;
+    }
+    const {stateFile,directory} = h.scripts();
+    if (mode === 'observer exit') h.calls[0].child.emit('exit',0);
+    else {
+      if (mode === 'partial receipt') { fs.writeFileSync(stateFile,'{partial'); h.intervals[0].fn(); assert.deepEqual(results,[]); }
+      h.timers[0].fn();
+    }
+    assert.equal(results.length,1); assert.ok(results[0] instanceof h.Uncertain);
+    assert.deepEqual(fs.readFileSync(path.join(directory,'prompt.txt')),Buffer.from(payload));
+    assert.equal(h.calls.length,1);
+  });
+}

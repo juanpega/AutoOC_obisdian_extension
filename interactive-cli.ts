@@ -2,7 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { spawn } from "child_process";
-import { openOpencodeCli, psSingleQuoted } from "./cli-launchers";
+import { openOpencodeCli, openOpencodeCliLongPromptWindows, psSingleQuoted } from "./cli-launchers";
+import type { InteractiveCliDestination } from "./interactive-task-terminal";
 import { resolveCodexBin } from "./codex-client";
 import { assertOpenCode2 } from "./opencode-version";
 
@@ -14,7 +15,7 @@ export interface InteractiveCliSettings {
   copilotPath: string;
   claudePath?: string;
   cliLauncherEnabled?: Partial<Record<InteractiveCliProvider, boolean>>;
-  cliTerminalDestination?: "integrated" | "external";
+  cliTerminalDestination?: InteractiveCliDestination;
   workingDirectory: string;
   linuxTerminal?: string;
 }
@@ -100,9 +101,17 @@ export function prepareInteractiveCli(provider: InteractiveCliProvider, cwd: str
   return { cli, bin, cwd };
 }
 
-export async function launchInteractiveCli(provider: InteractiveCliProvider, cwd: string, settings: InteractiveCliSettings): Promise<void> {
+export async function launchInteractiveCli(provider: InteractiveCliProvider, cwd: string, settings: InteractiveCliSettings,
+  options: { destination?: InteractiveCliDestination; project?: string } = {}): Promise<void> {
+  const destination = options.destination ?? settings.cliTerminalDestination;
+  if (destination === "shared-external" && process.platform !== "win32") throw new Error("Shared external terminal requires Windows and Windows Terminal (wt.exe).");
   const { cli, bin } = prepareInteractiveCli(provider, cwd, settings);
   if (provider === "opencode2") await assertOpenCode2(bin);
+  if (destination === "shared-external") return new Promise((resolve, reject) => {
+    openOpencodeCliLongPromptWindows(bin, cwd, {}, "", "", "", {
+      manual: true, sharedExternal: { provider: cli.label, project: options.project }, onLaunched: resolve, onError: reject,
+    });
+  });
   if (process.platform !== "win32") return new Promise((resolve, reject) => {
     try { openOpencodeCli(bin, cwd, {}, [], { linuxTerminal: settings.linuxTerminal, onLaunched: resolve, onError: reject }); }
     catch (error) { reject(error); }

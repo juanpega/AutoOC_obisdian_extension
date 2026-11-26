@@ -8,10 +8,31 @@ const helper=mod.exports;
 const git=(cwd,...args)=>execFileSync('git',['-c','safe.directory='+cwd.replace(/\\/g,'/'),...args],{cwd,windowsHide:true,encoding:'utf8',stdio:['ignore','pipe','pipe']}).trim();
 function plugin(vault){
   const mod={exports:{}},obsidian=Object.fromEntries(['Plugin','Notice','Modal','Setting','ItemView','PluginSettingTab','WorkspaceLeaf'].map(k=>[k,class{}]));
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{module:mod,exports:mod.exports,require:n=>n==='obsidian'?obsidian:require(n),process,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,window:{setInterval,clearInterval,clearTimeout}});
+  // Fail closed even when a regression routes to an installed native provider.
+  const launches=[], policy={allow:false,fail:false},intervals=new Set();
+  const childProcess={...require('node:child_process'),spawn(...args){
+    if(/^git(?:\.exe)?$/i.test(path.basename(args[0])) ||
+      (args[1]?.[0]==='-e' && args[1]?.[1]?.includes("const {Worker} = require('worker_threads')") && args[2]?.stdio?.includes('ipc')))
+      return require('node:child_process').spawn(...args);
+    if(!policy.allow)throw Error('Native process launch forbidden in synthetic plugin fixture');
+    launches.push(args);
+    if(policy.fail)throw Error('synthetic launch failure');
+    const {EventEmitter}=require('node:events'),child=new EventEmitter();
+    child.stdout=new EventEmitter();child.stderr=new EventEmitter();child.unref=()=>{};
+    const observer=Buffer.from(args[1].at(-1),'base64').toString('utf16le');
+    const state=observer.match(/Set-Content -LiteralPath '((?:[^']|'')*state\.json)'/);
+    if(state){
+      const attempt=observer.match(/attempt = '([a-f0-9]+)'/)[1];
+      fs.writeFileSync(state[1].replace(/''/g,"'"),JSON.stringify({attempt,status:'started',confirmed:true}));
+    }
+    queueMicrotask(()=>{child.emit('spawn');if(!state){child.stdout.emit('data','AUTOOC_TERMINAL_PID=123\r\n');child.emit('close',0);}});
+    return child;
+  }};
+  const trackedInterval=(...args)=>{const timer=setInterval(...args);intervals.add(timer);return timer;};
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../main.js'),'utf8'),{module:mod,exports:mod.exports,require:n=>n==='obsidian'?obsidian:['child_process','node:child_process'].includes(n)?childProcess:require(n),process,Buffer,console,AbortController,setTimeout,clearTimeout,setInterval:trackedInterval,clearInterval,window:{setInterval:trackedInterval,clearInterval,clearTimeout}});
   const p=new mod.exports.default();p.manifest={id:'auto-oc'};
   p.app={vault:{adapter:{basePath:vault},configDir:'.obsidian'},workspace:{getLeavesOfType:()=>[],detachLeavesOfType(){}}};
-  p.refreshOpenViews=()=>{};return p;
+  p.refreshOpenViews=()=>{};p.testLaunches=launches;p.testLaunchPolicy=policy;p.testIntervals=intervals;return p;
 }
 async function fixture(t){
   const vault=fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(),'autooc-finish-'))),repo=path.join(vault,'repo');fs.mkdirSync(repo);
@@ -23,8 +44,12 @@ async function fixture(t){
   const page={id:'page',name:'Finish me',objective:'Keep history',directory:fs.realpathSync.native(worktree),repository:fs.realpathSync.native(repo),kind:'worktree',branch:'feat/finish',baseCommit:base,workflowIds:['w'],taskIds:[]};
   fs.writeFileSync(file,JSON.stringify({workingDirectory:repo,tasks:[],workflows:[{id:'w',name:'Write',steps:[{id:'write',stepKind:'code',codeAllowVault:true,code:'vault.append("effect.txt","once");'}]}],workPages:[page]}));
   const instances=[];
-  const open=async()=>{const p=plugin(vault);instances.push(p);p.reservePluginExecution();await p.loadSettings();return p;};
-  t.after(async()=>{for(const p of instances){await p.settingsWriter.drain().catch(()=>{});p.releasePluginExecution(false);}assert.equal(path.dirname(fs.realpathSync.native(vault)),fs.realpathSync.native(os.tmpdir()));assert.match(path.basename(vault),/^autooc-finish-/);fs.rmSync(vault,{recursive:true,force:true});});
+  const open=async()=>{const p=plugin(vault);instances.push(p);p.reservePluginExecution();await p.loadSettings();
+    const availability=p.cliDestinationUnavailableReason.bind(p);
+    // Mock integrated hosts below do not load/install real terminal support.
+    p.cliDestinationUnavailableReason=d=>d==='integrated'&&p.cliTerminals?undefined:availability(d);
+    return p;};
+  t.after(async()=>{for(const p of instances){for(const timer of p.testIntervals)clearInterval(timer);await p.settingsWriter.drain().catch(()=>{});p.releasePluginExecution(false);}assert.equal(path.dirname(fs.realpathSync.native(vault)),fs.realpathSync.native(os.tmpdir()));assert.match(path.basename(vault),/^autooc-finish-/);fs.rmSync(vault,{recursive:true,force:true});});
   const p=await open();
   return {vault,repo,worktree,dir,file,page,p,open,read:()=>JSON.parse(fs.readFileSync(file,'utf8')),review:()=>p.reviewPageFinish('page')};
 }
@@ -201,6 +226,124 @@ test('manual worktree CLI refuses a changed branch before publishing a reservati
   git(f.worktree,'checkout','feat/finish');
   await f.p.launchManualCli('codex',f.worktree,'page');
   assert.equal(opened.length,1);assert.equal(f.read().pageTerminalClaims.length,1);
+});
+
+test('manual destination override keeps Page context and preference, and cannot bypass an existing claim',async t=>{
+  const f=await fixture(t),opened=[];
+  f.p.settings.cliLauncherEnabled={codex:false}; // Never let a broken route reach an installed provider.
+  f.p.settings.cliTerminalDestination='external';
+  f.p.cliTerminals={sessions:[],pageSession:()=>undefined,async open(...args){opened.push(args);}};
+  await f.p.launchManualCli('codex',f.worktree,'page','integrated');
+  assert.equal(opened.length,1);assert.equal(opened[0][0],'codex');assert.equal(opened[0][1],f.worktree);
+  assert.equal(opened[0][3].pageId,'page');assert.equal(opened[0][3].claimId,f.read().pageTerminalClaims[0].id);
+  assert.equal(f.p.settings.cliTerminalDestination,'external');assert.equal(f.read().cliTerminalDestination,'external');
+  await assert.rejects(f.p.launchManualCli('codex',f.worktree,'page','external'),/terminal|reservation/i);
+  assert.equal(opened.length,1);assert.equal(f.read().pageTerminalClaims.length,1);
+});
+
+test('external override failure retains reservation without changing integrated preference or retrying',async t=>{
+  const f=await fixture(t),opened=[];
+  f.p.settings.cliTerminalDestination='integrated';f.p.settings.cliLauncherEnabled={codex:false};
+  f.p.cliTerminals={sessions:[],pageSession:()=>undefined,async open(...args){opened.push(args);}};
+  await assert.rejects(f.p.launchManualCli('codex',f.worktree,'page','external'),/disabled/i);
+  assert.equal(opened.length,0);assert.equal(f.read().pageTerminalClaims.length,1);
+  assert.equal(f.p.settings.cliTerminalDestination,'integrated');
+  await assert.rejects(f.p.launchManualCli('codex',f.worktree,'page','integrated'),/terminal|reservation/i);
+});
+
+test('all overrides reveal the exact live Page session and do not create a reservation',async t=>{
+  const f=await fixture(t),focused=[];
+  f.p.cliTerminals={sessions:[],pageSession:()=>({cwd:f.worktree,exited:false}),async focusPage(id){focused.push(id);},
+    async open(){throw Error('must not open');}};
+  for(const destination of ['integrated','external','shared-external'])await f.p.launchManualCli('codex',f.worktree,'page',destination);
+  assert.deepEqual(focused,['page','page','page']);
+  assert.equal(f.read().pageTerminalClaims?.length || 0,0);
+});
+
+test('unavailable shared route is rejected before reservation rather than silently opening externally',async t=>{
+  const f=await fixture(t);
+  f.p.cliDestinationUnavailableReason=destination=>destination==='shared-external'?'synthetic shared unavailable':undefined;
+  f.p.settings.cliLauncherEnabled={codex:false};
+  await assert.rejects(f.p.launchManualCli('codex',f.worktree,'page','shared-external'),/unavailable/i);
+  assert.equal(f.read().pageTerminalClaims?.length || 0,0);
+});
+
+for(const destination of ['integrated','external','shared-external']) {
+  test(`legacy ${destination} cannot bypass a reservation published during support verification`,async t=>{
+    const f=await fixture(t);
+    f.p.settings.workPages=[];f.p.settings.cliLauncherEnabled={codex:false};
+    let finish;
+    f.p.cliDestinationUnavailableReason=()=>new Promise(resolve=>{finish=resolve;});
+    const pending=f.p.launchManualCli('codex',f.repo,undefined,destination);
+    f.p.settings.pageTerminalClaims=[{id:'concurrent',pageId:'main',directory:f.repo,createdAt:new Date().toISOString()}];
+    // The resumed Page-aware path can use the already-resolved injected check.
+    f.p.cliDestinationUnavailableReason=()=>undefined;finish(undefined);
+    await assert.rejects(pending,/terminal reserves/i);
+    assert.equal(f.p.settings.pageTerminalClaims.length,1);assert.equal(f.p.testLaunches.length,0);
+  });
+
+  test(`Main ${destination} rechecks admission while asynchronous support verification is pending`,async t=>{
+    const f=await fixture(t);
+    f.p.settings.cliLauncherEnabled={codex:false};
+    let finish;
+    f.p.cliDestinationUnavailableReason=()=>new Promise(resolve=>{finish=resolve;});
+    const pending=f.p.launchManualCli('codex',f.repo,undefined,destination);
+    f.p.updateInProgress=true;finish(undefined);
+    await assert.rejects(pending,/Wait for work/);
+    assert.equal(f.read().pageTerminalClaims?.length||0,0);assert.equal(f.p.testLaunches.length,0);
+  });
+
+  for(const context of ['page','main','legacy']) test(`combined ${destination} ${context} launch preserves preference and context with deny-by-default native boundary`,async t=>{
+    const f=await fixture(t),opened=[];
+    if(context==='legacy')f.p.settings.workPages=[];
+    const cwd=context==='page'?f.worktree:f.repo,pageId=context==='page'?'page':undefined;
+    const executable=path.join(f.repo,'synthetic.cmd');fs.writeFileSync(executable,'synthetic data, never executable');
+    fs.writeFileSync(path.join(f.repo,'wt.exe'),'synthetic router, never executable');
+    f.p.settings.codexPath=executable;f.p.settings.cliTerminalDestination=destination==='external'?'shared-external':'external';
+    f.p.cliDestinationUnavailableReason=()=>undefined;
+    f.p.cliTerminals={sessions:[],pageSession:()=>undefined,async open(...args){opened.push(args);}};
+    f.p.testLaunchPolicy.allow=true;
+    // Resolver sees only the inert fixture router; no actual executable can run.
+    const oldPath=process.env.PATH;process.env.PATH=f.repo+path.delimiter+oldPath;
+    try { await f.p.launchManualCli('codex',cwd,pageId,destination); }
+    finally {process.env.PATH=oldPath;}
+    assert.equal(opened.length,destination==='integrated'?1:0);
+    assert.equal(f.p.testLaunches.length,destination==='integrated'?0:1);
+    assert.equal(f.p.settings.cliTerminalDestination,destination==='external'?'shared-external':'external');
+    if(context!=='legacy'){
+      assert.equal(f.read().cliTerminalDestination,destination==='external'?'shared-external':'external');
+      assert.equal(f.read().pageTerminalClaims[0].pageId,pageId||'main');
+    }else assert.equal(f.read().pageTerminalClaims?.length||0,0);
+    if(destination==='shared-external'){
+      const script=Buffer.from(f.p.testLaunches[0][1].at(-1),'base64').toString('utf16le');
+      assert.match(script,/'-w', 'AutoOC', 'new-tab'/);if(context==='page')assert.match(script,/Finish me/);
+    }
+    if(context!=='legacy')await assert.rejects(f.p.launchManualCli('codex',cwd,pageId,destination),/terminal|reservation/i);
+    assert.equal(f.p.testLaunches.length,destination==='integrated'?0:1);
+  });
+
+  test(`override ${destination} cannot bypass changed directory, stale revision or lost ownership`,async t=>{
+    const f=await fixture(t),opened=[];
+    f.p.cliDestinationUnavailableReason=()=>undefined;
+    f.p.cliTerminals={sessions:[],pageSession:()=>undefined,async open(...args){opened.push(args);}};
+    await assert.rejects(f.p.launchManualCli('codex',f.repo,'page',destination),/context changed/);
+    const page=f.p.settings.workPages[0],pending=f.p.launchManualCli('codex',f.worktree,'page',destination);
+    await Promise.resolve();page.objective+=' changed during environment verification';
+    await assert.rejects(pending,/context changed/);
+    f.p.releasePluginExecution(false);
+    await assert.rejects(f.p.launchManualCli('codex',f.worktree,'page',destination),/own execution|lease|owner/i);
+    assert.equal(f.read().pageTerminalClaims?.length||0,0);assert.equal(opened.length,0);assert.equal(f.p.testLaunches.length,0);
+  });
+}
+
+test('legacy integrated override is launch-local even when it fails',async t=>{
+  const f=await fixture(t),opened=[];
+  f.p.settings.cliLauncherEnabled={codex:false};
+  f.p.settings.workPages=[];f.p.settings.cliTerminalDestination='external';
+  f.p.cliTerminals={sessions:[]};
+  f.p.openIntegratedCli=async(...args)=>{opened.push(args);throw Error('synthetic support failure');};
+  await assert.rejects(f.p.launchManualCli('codex',f.repo,undefined,'integrated'),/synthetic support failure/);
+  assert.deepEqual(opened,[['codex',f.repo]]);assert.equal(f.p.settings.cliTerminalDestination,'external');
 });
 
 test('deleting an empty archived folder page removes its configuration and preserves Main, other pages and history',async t=>{
