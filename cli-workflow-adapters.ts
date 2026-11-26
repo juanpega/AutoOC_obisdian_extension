@@ -19,7 +19,7 @@ export function createInteractiveCliWorkflowAdapter(definition:PreparedWorkflow,
     if (terminal?.destination === 'integrated') {
       if (!terminal.launch) throw new Error('Integrated CLI tasks require a loaded Obsidian terminal host. No external terminal was started.');
       await terminal.launch(request);
-    } else await launchExternalCliTask(request,definition.settings.linuxTerminal);
+    } else await launchExternalCliTask(request,definition.settings.linuxTerminal,terminal?.destination);
     return {succeeded:true,output:'[opened interactive CLI with preloaded prompt; interactive task result is not observed]'};
   }};
 }
@@ -68,6 +68,14 @@ export function createOpenCodeWorkflowAdapter(definition:PreparedWorkflow,vault:
         await terminal.launch({bin,cwd:taskCwd,label:task.name || `OpenCode ${major} CLI task`,major,
           model,agent:task.forceModel?'':agent,prompt,signal});
         return {succeeded:true,output:'[opened integrated OpenCode CLI with preloaded prompt; interactive task result is not observed]'};
+      }
+      if (terminal?.destination === 'shared-external') {
+        if (process.platform !== 'win32') throw new Error('Shared external terminal requires Windows and Windows Terminal (wt.exe).');
+        await new Promise<void>((resolve,reject)=>openOpencodeCliLongPromptWindows(bin,taskCwd,{},model,task.forceModel?'':agent,prompt,{
+          onLaunched:resolve,onError:reject,opencodeMajor:major as 1|2,signal,
+          sharedExternal:{provider:`OpenCode ${major} CLI`,task:task.name || 'Interactive task'},
+        }));
+        return {succeeded:true,output:'[opened shared external OpenCode CLI; interactive task result is not observed]'};
       }
       // Completion describes the OS launch acknowledgement, never the result
       // of the human's interactive session, matching the plugin's contract.

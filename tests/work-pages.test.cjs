@@ -338,8 +338,9 @@ test('manual page CLI records context before launch and reuses an existing live 
   p.reservePluginExecution();
   try {
     await p.loadSettings();p.settings.cliTerminalDestination='integrated';
+    p.settings.cliLauncherEnabled={codex:false}; // A routing regression must not reach an installed provider.
     const opened=[],focused=[];
-    p.cliTerminals={sessions:[],pageSession(id){return this.sessions.find(s=>s.page.pageId===id);},
+    p.cliTerminals={sessions:[],unavailableReason:async()=>undefined,pageSession(id){return this.sessions.find(s=>s.page.pageId===id);},
       focusPage:async id=>{focused.push(id);return true;},async open(provider,cwd,label,page){
         assert.ok(JSON.parse(fs.readFileSync(f.file)).pageTerminalClaims.some(c=>c.id===page.claimId));
         await assert.rejects(p.confirmPageTerminal(page.claimId),/still tracked/);
