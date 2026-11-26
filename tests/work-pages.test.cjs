@@ -6,6 +6,18 @@ const runtime=require('../autooc-runtime.cjs');
 const build=require('esbuild').buildSync({entryPoints:[path.join(__dirname,'../work-pages.ts')],bundle:true,platform:'node',format:'cjs',write:false});
 const helper={exports:{}};new Function('require','module','exports',build.outputFiles[0].text)(require,helper,helper.exports);
 const pages=helper.exports;
+test('archived deletion permits only resolved non-uncertain history and completed removal evidence',()=>{
+  const page={id:'p',archived:true};
+  for(const phase of ['completed','failed','abandoned']){
+    assert.deepEqual(pages.pageDeletionBlockers({pageRuns:[{pageId:'p',phase,uncertain:false}]},page),[]);
+    assert.match(pages.pageDeletionBlockers({pageRuns:[{pageId:'p',phase,uncertain:true}]},page).join(),/uncertain/);
+  }
+  for(const phase of ['ready','in_flight']){
+    assert.match(pages.pageDeletionBlockers({pageRuns:[{pageId:'p',phase,uncertain:false}]},page).join(),/unfinished/);
+  }
+  assert.deepEqual(pages.pageDeletionBlockers({pageRuns:[{pageId:'other',phase:'in_flight'}]},{...page,worktreeRemoval:{status:'removed'}}),[]);
+  assert.match(pages.pageDeletionBlockers({}, {...page,worktreeRemoval:{status:'pending'}}).join(),/removal is pending/);
+});
 test('deleted Page evidence survives validation but never permits selecting or reusing its identity',async t=>{
   const f=fixture(t),page={...f.workPages[0],archived:true};
   const settings={workPages:[],deletedWorkPages:[{page,deletedAt:new Date().toISOString()}]};

@@ -265,6 +265,22 @@ class NewPageModal extends Modal {
   onClose() { this.closed = true; this.contentEl.empty(); }
 }
 
+function mergeFooterGuidance(review:MergeReview,redact:(text:string)=>string):string {
+  const brief=(text:string)=>{const clean=redact(text).replace(/\s+/g," ").trim();return clean.length>180?clean.slice(0,180)+"… (see review details)":clean;};
+  if(review.integration==="verified" || review.integration===undefined && review.state==="integrated")
+    return "Integration verified. No repeated merge or commit is needed. Archiving is independent and preserves files and branches.";
+  if(review.blockers.length)
+    return "Cannot proceed: "+brief(review.blockers[0])+(review.blockers.length>1?" (+"+(review.blockers.length-1)+" more in details)":"")+". Resolve the blocker, then choose Recheck conflicts.";
+  if(!review.target)return "No target folder available. Choose a checked-out local branch in this repository, then choose Recheck conflicts.";
+  if(review.state==="blocked" || review.state==="unavailable")
+    return "Merge review unavailable: "+brief(review.details || "Git could not establish merge readiness")+". Check the target folder and Git status, then choose Recheck conflicts.";
+  if(review.state==="resolved")return review.completionBlockers?.length
+    ? "Complete merge is blocked: "+brief(review.completionBlockers[0])+". Resolve completion blockers in the target folder, run tests, then choose Recheck conflicts."
+    : "Complete merge creates the merge commit in the target folder. Review the staged result and run tests first. Closing leaves the merge in progress.";
+  if(review.inProgress)return "Resolve conflicts and stage resolved files in the target folder, run tests, then choose Recheck conflicts. Closing leaves the merge in progress.";
+  return "Start merge applies changes in the target folder and stops before creating the merge commit. Review the result and run tests, then choose Complete merge.";
+}
+
 class MergeReviewModal extends Modal {
   private busy=false;
   private refreshing=false;
@@ -278,6 +294,7 @@ class MergeReviewModal extends Modal {
   private reviewStatus?:HTMLElement;
   private reviewBody?:HTMLElement;
   private reviewTarget?:string;
+  private footerGuidance="";
   constructor(app:App,private host:WorkPagesHost,private pageId:string,private finished:()=>void){super(app);}
   onOpen(){this.stopWatching=watchPageReview(this.host,()=>this.refresh(undefined,true),()=>this.busy||this.refreshing,()=>this.blocked);void this.refresh();}
   private async refresh(observed?:MergeReview,background=false) {
@@ -305,7 +322,7 @@ class MergeReviewModal extends Modal {
       const integratedReview=review.integration==="verified" || review.integration===undefined && review.state==="integrated";
       const stamp=JSON.stringify([review,reviewSessions(host,integratedReview?this.pageId:undefined),selectWorkPage(host.settings,this.pageId)?.archived]);
       if(background && stamp===this.reviewStamp) {
-        loading.setText("");
+        loading.setText(this.footerGuidance);
         controls.forEach(({control,disabled})=>{control.disabled=disabled;});
         if(focused?.isConnected && controls.some(({control})=>control===focused) &&
           (!root.ownerDocument.activeElement || root.ownerDocument.activeElement===root.ownerDocument.body))focused.focus({preventScroll:true});
@@ -361,7 +378,8 @@ class MergeReviewModal extends Modal {
         : "Start merge applies the source commit in the target folder and stops before creating the merge commit, even for a fast-forward. Review the result and run your tests, then choose Complete merge."});
       body.createEl("p",{text:"AutoOC runs Git and prevents new AutoOC work during each operation. Keep schedules paused and external tasks, CLIs and services stopped in both folders until the merge is complete or aborted.",cls:"setting-item-description"});
       const footer=root.createDiv("auto-oc-finish-footer");
-      const progress=footer.createEl("p",{cls:"auto-oc-finish-status"});progress.setAttr("role","status");
+      this.footerGuidance=mergeFooterGuidance(review,text=>host.redactSecrets(text));
+      const progress=footer.createEl("p",{text:this.footerGuidance,cls:"auto-oc-finish-status"});progress.setAttr("role","status");
       this.reviewStatus=progress;
       const commands=footer.createDiv("auto-oc-page-actions");
       const execute=(label:string,operation:MergeCommand,confirmed=()=>false)=>{
@@ -408,8 +426,15 @@ class MergeReviewModal extends Modal {
       this.reviewStamp=undefined;this.blocked=true;
       // Retain the last review for context, but never enable its stale Git actions.
       root.querySelectorAll<HTMLButtonElement|HTMLSelectElement|HTMLInputElement>("button, select, input").forEach(control=>{control.disabled=true;});
-      loading=this.reviewStatus || loading;
-      loading.setText(errorText(host,error));
+      let footer=root.querySelectorAll<HTMLElement>(".auto-oc-finish-footer")[0];
+      if(!footer)footer=root.createDiv("auto-oc-finish-footer");
+      footer.empty();
+      loading=footer.createEl("p",{cls:"auto-oc-finish-status"});loading.setAttr("role","status");
+      this.reviewStatus=loading;
+      const diagnostic=errorText(host,error).replace(/\s+/g," ").trim();
+      this.footerGuidance="";
+      loading.setText("Review failed: "+(diagnostic.length>180?diagnostic.slice(0,180)+"…":diagnostic)+". Readiness is unverified. Check Git and the target folder, then choose Retry review.");
+      loading.title=diagnostic;
       loading.createEl("button",{text:"Retry review"}).onclick=()=>{this.target=undefined;return this.refresh();};
       loading.createEl("button",{text:"Close"}).onclick=()=>this.close();
     }}

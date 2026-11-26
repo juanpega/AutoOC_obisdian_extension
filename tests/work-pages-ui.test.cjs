@@ -92,6 +92,21 @@ function mergeHarness(state='conflicts',inProgress=false) {
   h.api.renderWorkPages(h.root,h.app,h.host,'p',()=>{},()=>{});
   return {...h,setReview(value){review={...review,...value};},async open(){await h.root.all().find(e=>e.text==='Merge review').onclick();await tick();return h.opened.at(-1);}};
 }
+function mergeFooter(modal){
+  const footer=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-footer'));
+  assert.ok(footer,'Merge guidance must live outside the scrolling body');
+  return footer;
+}
+function footerText(modal){return mergeFooter(modal).all().map(e=>e.text).join(' ');}
+test('ready and predicted-conflict previews explain Start merge in the footer without executing Git',async()=>{
+  for(const state of ['ready','conflicts']){
+    const h=mergeHarness(state),modal=await h.open(),footer=mergeFooter(modal);
+    assert.match(footerText(modal),/Start merge.*target folder.*stops before.*merge commit/);
+    assert.ok(footer.all().some(e=>e.text==='Start merge'&&!e.disabled));
+    assert.equal(footer.all().some(e=>e.text==='Complete merge'),false);
+    assert.deepEqual(h.effects,[]);
+  }
+});
 test('Merge review executes Start merge for the displayed target and refreshes the outcome',async()=>{
   const h=mergeHarness(),modal=await h.open();
   assert.ok(modal.contentEl.all().some(e=>e.text==='Predicted conflict files (1)'));
@@ -101,6 +116,47 @@ test('Merge review executes Start merge for the displayed target and refreshes t
   assert.ok(modal.contentEl.all().some(e=>/Git output/.test(e.text)));
   await h.button(modal,'Open target in VS Code').onclick();assert.ok(h.effects.some(e=>e==='vscode://file//repo'));
   assert.ok(modal.modalEl.classes.has('auto-oc-work-page-dialog'));
+});
+test('active and resolved footer guidance describes resolution, completion and actual blockers',async()=>{
+  const h=mergeHarness('conflicts',true),modal=await h.open();
+  assert.match(footerText(modal),/Resolve.*stage.*target folder.*tests.*Recheck conflicts/);
+  assert.equal(mergeFooter(modal).all().some(e=>e.text==='Start merge'||e.text==='Complete merge'),false);
+  h.setReview({state:'resolved',conflicts:[]});await h.button(modal,'Recheck conflicts').onclick();
+  assert.match(footerText(modal),/Complete merge creates the merge commit/);
+  assert.equal(!!h.button(modal,'Complete merge').disabled,false);
+  h.setReview({completionBlockers:['Stage changes before completing']});await h.button(modal,'Recheck conflicts').onclick();
+  assert.match(footerText(modal),/Stage changes before completing.*Recheck conflicts/);
+  assert.equal(h.button(modal,'Complete merge').disabled,true);assert.deepEqual(h.effects,[]);
+});
+test('verified integration footer needs no repeated merge or commit and keeps archiving independent',async()=>{
+  for(const archived of [false,true]){
+    const h=mergeHarness('integrated');h.host.settings.workPages[0].archived=archived;
+    h.setReview({integration:'verified',blockers:['Session active'],sourceFiles:[{path:'pending.ts',category:'project',indexStatus:' ',worktreeStatus:'M'}]});
+    const modal=await h.open();
+    assert.match(footerText(modal),/No.*merge or commit.*Archiving is independent/);
+    assert.equal(mergeFooter(modal).all().some(e=>e.text==='Review archiving'),!archived);
+    assert.equal(mergeFooter(modal).all().some(e=>['Start merge','Complete merge','Abort merge'].includes(e.text)),false);
+    assert.deepEqual(h.effects,[]);
+  }
+});
+test('blocked and unavailable footer shows bounded redacted diagnostics with recovery guidance',async()=>{
+  for(const state of ['blocked','unavailable']){
+    const h=mergeHarness(state);h.host.redactSecrets=s=>s.replaceAll('secret','[redacted]');
+    h.setReview({blockers:state==='blocked'?['Session secret active '+ 'x'.repeat(4000)]:[],details:'Git secret preview failed '+ 'x'.repeat(4000)});
+    const modal=await h.open(),status=mergeFooter(modal).all().find(e=>e.classes.has('auto-oc-finish-status'));
+    assert.match(status.text,/\[redacted\]/);assert.doesNotMatch(status.text,/secret/);
+    assert.match(status.text,/Recheck conflicts/);assert.ok(status.text.length<600);
+    assert.equal(mergeFooter(modal).all().some(e=>e.text==='Start merge'),false);
+  }
+  const h=mergeHarness('blocked');h.setReview({target:undefined,targets:[],blockers:[]});
+  const modal=await h.open();assert.match(footerText(modal),/No target.*checked-out local branch.*Recheck conflicts/);
+});
+test('an initial review failure has footer recovery controls and no readiness claim',async()=>{
+  const h=mergeHarness('ready');h.host.reviewPageMerge=async()=>{throw Error('Git unavailable');};
+  const modal=await h.open();
+  assert.match(footerText(modal),/Review failed.*Git unavailable.*Retry review/);
+  assert.ok(mergeFooter(modal).all().some(e=>e.text==='Retry review'));
+  assert.equal(modal.contentEl.all().some(e=>e.text==='Start merge'),false);assert.deepEqual(h.effects,[]);
 });
 test('blocked merge polling keeps the review mounted while Git runs and unchanged results preserve scroll and controls',async t=>{
   t.mock.timers.enable({apis:['setTimeout']});
@@ -116,10 +172,12 @@ test('blocked merge polling keeps the review mounted while Git runs and unchange
   resolve(JSON.parse(JSON.stringify(current)));await tick();
   assert.ok(modal.contentEl.all().includes(body));assert.equal(body.scrollTop,630);
   assert.equal(h.field(modal,'Target branch','select'),target);assert.equal(!!target.disabled,false);
+  assert.match(footerText(modal),/Main session active.*Recheck conflicts/);
   t.mock.timers.tick(5000);resolve({...current,state:'ready',blockers:[],hash:'new'});await tick();
   const updated=modal.contentEl.all().find(e=>e.classes.has('auto-oc-finish-body'));
   assert.notEqual(updated,body);assert.equal(updated.scrollTop,630);
   assert.equal(h.button(modal,'Start merge').disabled,undefined);assert.deepEqual(h.effects,[]);
+  assert.match(footerText(modal),/Start merge applies/);
   t.mock.timers.tick(10000);assert.equal(reviews,2,'Actionable reviews are not polled');
 });
 test('unchanged automatic merge reviews preserve abort consent but changed sessions invalidate it',async t=>{
@@ -130,6 +188,7 @@ test('unchanged automatic merge reviews preserve abort consent but changed sessi
   const modal=await h.open();h.field(modal,'I accept discarding conflict-resolution edits when aborting','toggle').change(true);
   const abort=h.button(modal,'Abort merge');notify();t.mock.timers.tick(150);await tick();
   assert.equal(h.button(modal,'Abort merge'),abort);assert.equal(abort.disabled,false);
+  assert.match(footerText(modal),/Complete merge creates the merge commit/);
   state='exited';notify();t.mock.timers.tick(150);await tick();
   assert.notEqual(h.button(modal,'Abort merge'),abort);assert.equal(h.button(modal,'Abort merge').disabled,true);
   assert.deepEqual(h.effects,[]);modal.close();assert.equal(notify,undefined);
@@ -144,9 +203,11 @@ test('a merge action remains usable during background review and its result supe
   notify();t.mock.timers.tick(150);await tick();
   assert.equal(!!start.disabled,false);
   const pending=start.onclick();await start.onclick();assert.deepEqual(h.effects,['start']);
+  assert.match(footerText(modal),/Start merge in progress.*Wait for Git/);
   resolveRead(previous);await tick();assert.equal(start.disabled,true,'The stale read must not unlock a mutation');
   resolveAction();await pending;
   assert.ok(h.button(modal,'Complete merge'));assert.equal(modal.contentEl.all().some(e=>e.text==='Start merge'),false);
+  assert.match(footerText(modal),/Complete merge creates the merge commit/);
 });
 test('failed merge refresh keeps the last review visible with stale actions disabled until a successful retry',async()=>{
   const h=mergeHarness('ready'),modal=await h.open();
@@ -159,8 +220,11 @@ test('failed merge refresh keeps the last review visible with stale actions disa
   fail(Error('Git is unavailable'));await pending;
   assert.ok(modal.contentEl.all().includes(body));assert.equal(start.disabled,true);
   assert.ok(modal.contentEl.all().some(e=>e.text.includes('Git is unavailable')));
+  assert.match(footerText(modal),/Review failed.*Git is unavailable.*Retry review/);
+  assert.doesNotMatch(footerText(modal),/Start merge applies/);
   h.host.reviewPageMerge=read;await h.button(modal,'Retry review').onclick();
   assert.equal(!!h.button(modal,'Start merge').disabled,false);
+  assert.match(footerText(modal),/Start merge applies/);
   assert.equal(modal.contentEl.all().some(e=>e.text.includes('Git is unavailable')),false);assert.deepEqual(h.effects,[]);
 });
 test('closing a merge review during a background Git read cannot reopen or repopulate it',async t=>{

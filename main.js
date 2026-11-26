@@ -75,9 +75,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
-// node_modules/@lezer/javascript/dist/index.cjs
+// ../../../node_modules/@lezer/javascript/dist/index.cjs
 var require_dist = __commonJS({
-  "node_modules/@lezer/javascript/dist/index.cjs"(exports) {
+  "../../../node_modules/@lezer/javascript/dist/index.cjs"(exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     var lr = require("@lezer/lr");
@@ -296,9 +296,9 @@ var require_dist = __commonJS({
   }
 });
 
-// node_modules/@codemirror/lang-javascript/dist/index.cjs
+// ../../../node_modules/@codemirror/lang-javascript/dist/index.cjs
 var require_dist2 = __commonJS({
-  "node_modules/@codemirror/lang-javascript/dist/index.cjs"(exports) {
+  "../../../node_modules/@codemirror/lang-javascript/dist/index.cjs"(exports) {
     "use strict";
     var javascript$1 = require_dist();
     var language = require("@codemirror/language");
@@ -758,9 +758,9 @@ var require_dist2 = __commonJS({
   }
 });
 
-// node_modules/@xterm/xterm/lib/xterm.js
+// ../../../node_modules/@xterm/xterm/lib/xterm.js
 var require_xterm = __commonJS({
-  "node_modules/@xterm/xterm/lib/xterm.js"(exports, module2) {
+  "../../../node_modules/@xterm/xterm/lib/xterm.js"(exports, module2) {
     !function(e, t) {
       if ("object" == typeof exports && "object" == typeof module2) module2.exports = t();
       else if ("function" == typeof define && define.amd) define([], t);
@@ -6888,9 +6888,9 @@ WARNING: This link could potentially be dangerous`)) {
   }
 });
 
-// node_modules/@xterm/addon-fit/lib/addon-fit.js
+// ../../../node_modules/@xterm/addon-fit/lib/addon-fit.js
 var require_addon_fit = __commonJS({
-  "node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module2) {
+  "../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"(exports, module2) {
     !function(e, t) {
       "object" == typeof exports && "object" == typeof module2 ? module2.exports = t() : "function" == typeof define && define.amd ? define([], t) : "object" == typeof exports ? exports.FitAddon = t() : e.FitAddon = t();
     }(self, () => (() => {
@@ -6924,9 +6924,9 @@ var require_addon_fit = __commonJS({
   }
 });
 
-// node_modules/@xterm/xterm/css/xterm.css
+// ../../../node_modules/@xterm/xterm/css/xterm.css
 var require_xterm2 = __commonJS({
-  "node_modules/@xterm/xterm/css/xterm.css"(exports, module2) {
+  "../../../node_modules/@xterm/xterm/css/xterm.css"(exports, module2) {
     module2.exports = `/**
  * Copyright (c) 2014 The xterm.js authors. All rights reserved.
  * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
@@ -7155,7 +7155,7 @@ var require_manifest = __commonJS({
     module2.exports = {
       id: "auto-oc",
       name: "AutoOC \u2014 OpenCode Task Scheduler",
-      version: "1.7.30",
+      version: "1.7.31",
       minAppVersion: "1.0.0",
       description: "Schedule and run OpenCode CLI tasks and visual workflows from Obsidian.",
       author: "JuanPe",
@@ -9489,6 +9489,7 @@ var AreaDashboard = class {
     this.signature = "";
     this.previous = /* @__PURE__ */ new Map();
     this.stepLimit = 40;
+    this.pending = /* @__PURE__ */ new Set();
     this.root = parent.createDiv("auto-oc-areas-dashboard");
     const heading = this.root.createDiv("auto-oc-areas-heading");
     heading.createEl("h2", { text: "Your areas" });
@@ -9547,7 +9548,10 @@ var AreaDashboard = class {
   }
   update() {
     const items = this.host.items(), signature = JSON.stringify(items);
-    if (signature === this.signature) return;
+    if (signature === this.signature) {
+      this.refreshPlay();
+      return;
+    }
     let message = "Recorded execution state. Select an item for controls, log and history.";
     const flat = items.flatMap((item) => [item, ...item.children || []]);
     for (const item of flat) {
@@ -9617,10 +9621,50 @@ var AreaDashboard = class {
     button.createSpan({ cls: "auto-oc-area-meta", text: `${step ? item.kind : item.kind === "workflow" ? `${((_a = item.children) == null ? void 0 : _a.length) || 0} steps` : item.detail} \xB7 ${stateLabel(item)}${item.activeSteps ? ` \xB7 ${item.activeSteps} step(s) running` : ""}` });
     button.onclick = () => {
       this.state.selected = item.key;
-      this.drawMap();
+      for (const node of Array.from(this.root.querySelectorAll("[data-area-item-key]")))
+        node.setAttr("aria-pressed", String(node.getAttribute("data-area-item-key") === item.key));
       this.drawInspector();
       this.restoreFocus(item.key);
     };
+    if (!step && !item.workflowId && item.kind !== "delay")
+      button.ondblclick = (event) => {
+        event.stopPropagation();
+        void this.quickRun(item);
+      };
+  }
+  startReason(item) {
+    var _a, _b;
+    if (!this.host.run || item.workflowId || item.kind === "delay") return "Open controls for this selection.";
+    if (this.pending.has(item.key)) return "Starting\u2026";
+    return ((_b = (_a = this.host).startReason) == null ? void 0 : _b.call(_a, item)) || (item.disabled ? "Execution is disabled." : void 0);
+  }
+  refreshPlay() {
+    if (!this.play) return;
+    const { button, item } = this.play, reason = this.startReason(item);
+    button.disabled = !!reason;
+    button.title = reason || "Run in the selected workspace";
+    button.setAttr("aria-busy", String(this.pending.has(item.key)));
+  }
+  async quickRun(item) {
+    var _a, _b;
+    const reason = this.startReason(item);
+    if (reason) {
+      this.event.setText(reason);
+      this.refreshPlay();
+      return;
+    }
+    this.pending.add(item.key);
+    this.refreshPlay();
+    this.event.setText(`Starting ${item.name}\u2026`);
+    try {
+      await this.host.run(item);
+      this.event.setText(`Launch requested for ${item.name}.`);
+    } catch (error) {
+      this.event.setText(((_b = (_a = this.host).errorText) == null ? void 0 : _b.call(_a, error)) || "Launch rejected. Open controls for details.");
+    } finally {
+      this.pending.delete(item.key);
+      this.refreshPlay();
+    }
   }
   restoreFocus(key) {
     var _a;
@@ -9669,6 +9713,7 @@ var AreaDashboard = class {
     const focused = ((_a = this.inspector.ownerDocument.activeElement) == null ? void 0 : _a.getAttribute("data-area-item-key")) || void 0;
     const top = this.inspector.scrollTop;
     this.inspector.empty();
+    this.play = void 0;
     const parent = this.items.find((item2) => {
       var _a2;
       return item2.key === this.state.selected || ((_a2 = item2.children) == null ? void 0 : _a2.some((child) => child.key === this.state.selected));
@@ -9690,6 +9735,12 @@ var AreaDashboard = class {
       button.onclick = callback;
       return button;
     };
+    if (this.host.run && !item.workflowId && item.kind !== "delay") {
+      const button = action2("\u25B6 Play", () => this.quickRun(item));
+      button.setAttr("aria-label", `Play ${item.name}`);
+      this.play = { button, item };
+      this.refreshPlay();
+    }
     action2("Open controls", () => this.host.open(item));
     if (item.kind !== "delay") {
       action2(item.kind === "workflow" ? "Current step log" : "Log", () => this.host.log(item));
@@ -12573,6 +12624,23 @@ var NewPageModal = class extends import_obsidian4.Modal {
     this.contentEl.empty();
   }
 };
+function mergeFooterGuidance(review, redact) {
+  var _a;
+  const brief = (text3) => {
+    const clean2 = redact(text3).replace(/\s+/g, " ").trim();
+    return clean2.length > 180 ? clean2.slice(0, 180) + "\u2026 (see review details)" : clean2;
+  };
+  if (review.integration === "verified" || review.integration === void 0 && review.state === "integrated")
+    return "Integration verified. No repeated merge or commit is needed. Archiving is independent and preserves files and branches.";
+  if (review.blockers.length)
+    return "Cannot proceed: " + brief(review.blockers[0]) + (review.blockers.length > 1 ? " (+" + (review.blockers.length - 1) + " more in details)" : "") + ". Resolve the blocker, then choose Recheck conflicts.";
+  if (!review.target) return "No target folder available. Choose a checked-out local branch in this repository, then choose Recheck conflicts.";
+  if (review.state === "blocked" || review.state === "unavailable")
+    return "Merge review unavailable: " + brief(review.details || "Git could not establish merge readiness") + ". Check the target folder and Git status, then choose Recheck conflicts.";
+  if (review.state === "resolved") return ((_a = review.completionBlockers) == null ? void 0 : _a.length) ? "Complete merge is blocked: " + brief(review.completionBlockers[0]) + ". Resolve completion blockers in the target folder, run tests, then choose Recheck conflicts." : "Complete merge creates the merge commit in the target folder. Review the staged result and run tests first. Closing leaves the merge in progress.";
+  if (review.inProgress) return "Resolve conflicts and stage resolved files in the target folder, run tests, then choose Recheck conflicts. Closing leaves the merge in progress.";
+  return "Start merge applies changes in the target folder and stops before creating the merge commit. Review the result and run tests, then choose Complete merge.";
+}
 var MergeReviewModal = class extends import_obsidian4.Modal {
   constructor(app, host, pageId, finished) {
     super(app);
@@ -12585,6 +12653,7 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
     this.blocked = false;
     this.closed = false;
     this.feedback = "";
+    this.footerGuidance = "";
   }
   onOpen() {
     this.stopWatching = watchPageReview(this.host, () => this.refresh(void 0, true), () => this.busy || this.refreshing, () => this.blocked);
@@ -12617,7 +12686,7 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
       const integratedReview = review.integration === "verified" || review.integration === void 0 && review.state === "integrated";
       const stamp = JSON.stringify([review, reviewSessions(host, integratedReview ? this.pageId : void 0), (_b = selectWorkPage(host.settings, this.pageId)) == null ? void 0 : _b.archived]);
       if (background && stamp === this.reviewStamp) {
-        loading.setText("");
+        loading.setText(this.footerGuidance);
         controls.forEach(({ control, disabled }) => {
           control.disabled = disabled;
         });
@@ -12686,7 +12755,8 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
       body.createEl("p", { text: review.state === "integrated" ? "You can review archiving independently of integration. Archiving preserves files and branches. Removing a worktree is a separate action after archiving; discarding its branch has its own loss confirmation." : review.inProgress ? "Resolve each conflict in the target folder, review the result, stage the resolved files and run your tests. Recheck conflicts before completing the merge. Closing this dialog leaves the Git merge in progress." : "Start merge applies the source commit in the target folder and stops before creating the merge commit, even for a fast-forward. Review the result and run your tests, then choose Complete merge." });
       body.createEl("p", { text: "AutoOC runs Git and prevents new AutoOC work during each operation. Keep schedules paused and external tasks, CLIs and services stopped in both folders until the merge is complete or aborted.", cls: "setting-item-description" });
       const footer = root.createDiv("auto-oc-finish-footer");
-      const progress = footer.createEl("p", { cls: "auto-oc-finish-status" });
+      this.footerGuidance = mergeFooterGuidance(review, (text3) => host.redactSecrets(text3));
+      const progress = footer.createEl("p", { text: this.footerGuidance, cls: "auto-oc-finish-status" });
       progress.setAttr("role", "status");
       this.reviewStatus = progress;
       const commands = footer.createDiv("auto-oc-page-actions");
@@ -12752,8 +12822,16 @@ var MergeReviewModal = class extends import_obsidian4.Modal {
         root.querySelectorAll("button, select, input").forEach((control) => {
           control.disabled = true;
         });
-        loading = this.reviewStatus || loading;
-        loading.setText(errorText(host, error));
+        let footer = root.querySelectorAll(".auto-oc-finish-footer")[0];
+        if (!footer) footer = root.createDiv("auto-oc-finish-footer");
+        footer.empty();
+        loading = footer.createEl("p", { cls: "auto-oc-finish-status" });
+        loading.setAttr("role", "status");
+        this.reviewStatus = loading;
+        const diagnostic = errorText(host, error).replace(/\s+/g, " ").trim();
+        this.footerGuidance = "";
+        loading.setText("Review failed: " + (diagnostic.length > 180 ? diagnostic.slice(0, 180) + "\u2026" : diagnostic) + ". Readiness is unverified. Check Git and the target folder, then choose Retry review.");
+        loading.title = diagnostic;
         loading.createEl("button", { text: "Retry review" }).onclick = () => {
           this.target = void 0;
           return this.refresh();
@@ -27473,6 +27551,7 @@ var AutoOCView = class extends import_obsidian13.ItemView {
     // that pass is skipped on unchanged layouts to avoid redoing work every
     // render — see the guard in renderDashboard).
     this.forceDashboardFitOnNextRender = false;
+    this.dashboardStarts = /* @__PURE__ */ new Set();
     this.plugin = plugin;
   }
   renderBulkToolbar(root, kind, visibleIds) {
@@ -28178,6 +28257,34 @@ var AutoOCView = class extends import_obsidian13.ItemView {
     this.renderAreaDashboard(containerEl);
   }
   renderAreaDashboard(containerEl, page) {
+    const workspace = this.selectedWorkPage;
+    const pageIdentity = page && JSON.stringify([page.directory, page.branch, page.baseCommit]);
+    const startKey = (item) => JSON.stringify([workspace, item.kind === "workflow" ? "workflow" : "task", item.id]);
+    const startReason = (item) => {
+      var _a, _b, _c, _d, _e, _f;
+      if (item.workflowId || !["task", "code", "workflow"].includes(item.kind)) return "Open controls for this selection.";
+      if (this.selectedWorkPage !== workspace) return "Workspace changed. Select the item again.";
+      if (this.plugin.isLifecycleStopped()) return "AutoOC instance is stopped.";
+      const kind = item.kind === "workflow" ? "workflow" : "task";
+      const definition = (kind === "task" ? this.plugin.settings.tasks : this.plugin.settings.workflows).find((entry) => entry.id === item.id);
+      if (!definition) return "This definition was removed. Refresh the Dashboard.";
+      const disabled = (_b = (_a = this.plugin).definitionDisabledReason) == null ? void 0 : _b.call(_a, kind, item.id);
+      if (disabled || definition.disabled) return disabled || "Execution is disabled.";
+      try {
+        if (kind === "workflow") assertWorkflowDependencies(definition, this.plugin.settings.tasks, this.plugin.settings.workflows);
+        else assertNoRetiredDependency(definition);
+      } catch (error) {
+        return this.plugin.redactSecrets(String(error.message || error));
+      }
+      if (this.dashboardStarts.has(startKey(item))) return "Starting\u2026";
+      if (page) {
+        const current = (_c = this.plugin.settings.workPages) == null ? void 0 : _c.find((entry) => entry.id === page.id);
+        if (!current || current.archived || current.worktreeRemoval || JSON.stringify([current.directory, current.branch, current.baseCommit]) !== pageIdentity) return "Page is unavailable or changed. Open controls.";
+        const run2 = (_d = this.plugin.settings.pageRuns) == null ? void 0 : _d.find((run3) => run3.pageId === page.id && run3.sourceId === item.id && run3.task === (kind === "task") && (run3.uncertain || !["completed", "failed", "abandoned"].includes(run3.phase)));
+        if (run2) return "Page execution is active or needs recovery. Open controls.";
+      } else if (((_f = (_e = this.plugin).getDefinitionStartState) == null ? void 0 : _f.call(_e, kind, item.id)) !== "available") return "Execution is active, starting or needs recovery. Open controls.";
+      return void 0;
+    };
     const locate = (item) => {
       const workflow = this.plugin.settings.workflows.find((wf) => wf.id === (item.workflowId || (item.kind === "workflow" ? item.id : "")));
       const step = workflow == null ? void 0 : workflow.steps.find((entry) => entry.id === item.id);
@@ -28242,7 +28349,24 @@ var AutoOCView = class extends import_obsidian13.ItemView {
       ),
       open: (item) => page ? openPageItemControls(this.app, this.plugin, page.id, item, () => open(item)) : open(item),
       log: (item) => page ? showPageItemHistory(this.app, this.plugin, page.id, item, false) : showLog(item, false),
-      history: (item) => page ? showPageItemHistory(this.app, this.plugin, page.id, item, true) : showLog(item, true)
+      history: (item) => page ? showPageItemHistory(this.app, this.plugin, page.id, item, true) : showLog(item, true),
+      startReason,
+      run: async (item) => {
+        var _a;
+        const reason = startReason(item);
+        if (reason) throw new Error(reason);
+        const key = startKey(item);
+        this.dashboardStarts.add(key);
+        try {
+          if (page) await this.plugin.runWorkPage(page.id, item.id, item.kind !== "workflow");
+          else if (item.kind === "workflow") await this.plugin.runWorkflow(this.plugin.settings.workflows.find((entry) => entry.id === item.id));
+          else await this.plugin.runTask(this.plugin.settings.tasks.find((entry) => entry.id === item.id));
+        } finally {
+          this.dashboardStarts.delete(key);
+          (_a = this.areaDashboard) == null ? void 0 : _a.update();
+        }
+      },
+      errorText: (error) => this.plugin.redactSecrets(String((error == null ? void 0 : error.message) || error))
     });
   }
   renderTasks(containerEl) {

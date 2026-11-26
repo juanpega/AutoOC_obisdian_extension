@@ -25,6 +25,112 @@ const task=(id,extra={})=>({id,name:`Task ${id}`,area:'Engineering',status:'pend
 const flow=(id,steps,extra={})=>({id,name:`Flow ${id}`,area:'Engineering',status:'completed',currentStep:0,steps,...extra});
 const code=(id,extra={})=>({id,stepKind:'code',name:`Code ${id}`,status:'pending',...extra});
 
+test('Play is visible, preserves selection nodes and shares pending exclusion with double click',async()=>{
+  const h=harness(),root=new h.Element(),state=h.createAreaDashboardState(),calls=[];
+  let release,blocked;
+  const dashboard=new h.AreaDashboard(root,state,{
+    items:()=>h.dashboardItems([task('a'),task('b')],[]),open(){},log(){},history(){},
+    startReason:()=>blocked,run:item=>{calls.push(item.id);return new Promise(resolve=>release=resolve);},
+  });
+  const node=root.all().find(e=>e.attrs['data-area-item-key']==='["task","b"]');
+  assert.ok(node);
+  node.onclick();
+  assert.ok(root.all().includes(node),'selection must preserve the native double-click target');
+  assert.deepEqual(calls,[]);
+  const play=()=>root.all().find(e=>e.attrs['aria-label']==='Play Task b');
+  assert.equal(play().tag,'button');assert.equal(play().textContent,'▶ Play');
+  const pending=play().onclick();node.ondblclick({stopPropagation(){}});
+  assert.deepEqual(calls,['b']);assert.equal(play().disabled,true);
+  assert.equal(play().attrs['aria-busy'],'true');
+  release();await pending;
+  blocked='Recovery required';dashboard.update();
+  assert.equal(play().disabled,true);assert.equal(play().title,blocked);
+  node.ondblclick({stopPropagation(){}});assert.deepEqual(calls,['b']);
+});
+
+test('Dashboard shortcuts route exact catalog kinds in Main and Page and reject stale callbacks',async()=>{
+  for(const workspace of ['main','p']){
+    const h=harness(),root=new h.Element(),calls=[];
+    const page={id:'p',name:'Page',directory:'/repo/p',kind:'folder'};
+    const plugin={settings:{tasks:[task('same'),task('code',{taskKind:'code'})],workflows:[flow('same',[code('s')])],workPages:[page]},
+      isLifecycleStopped:()=>false,ownsExecution:()=>false,definitionDisabledReason:()=>undefined,getDefinitionStartState:()=> 'available',
+      runTask:async t=>calls.push(['task',t.id]),runWorkflow:async w=>calls.push(['workflow',w.id]),
+      runWorkPage:async(...args)=>calls.push(args),redactSecrets:text=>text};
+    const view=new h.AutoOCView({},plugin);view.selectedWorkPage=workspace;view.app={vault:{adapter:{basePath:'/repo'}}};
+    view.renderAreaDashboard(root,workspace==='p'?page:undefined);
+    const select=key=>root.all().find(e=>e.attrs['data-area-item-key']===key).onclick();
+    const play=()=>root.all().find(e=>e.textContent==='▶ Play');
+    for(const [kind,id] of [['task','same'],['workflow','same'],['task','code']]){
+      select(JSON.stringify([kind,id]));await play().onclick();
+    }
+    assert.deepEqual(calls,workspace==='main'?[['task','same'],['workflow','same'],['task','code']]:
+      [['p','same',true],['p','same',false],['p','code',true]]);
+    select('["workflow","same"]');
+    root.all().find(e=>e.classes.has('auto-oc-area-step')).onclick();
+    assert.equal(play(),undefined);
+    select('["task","same"]');const stale=play();
+    plugin.settings.tasks[0].disabled=true;await stale.onclick();assert.equal(calls.length,3);
+    plugin.settings.tasks[0].disabled=false;
+    view.selectedWorkPage=workspace==='main'?'p':'main';await stale.onclick();assert.equal(calls.length,3);
+    view.selectedWorkPage=workspace;
+    plugin.settings.tasks.shift();await stale.onclick();assert.equal(calls.length,3);
+  }
+});
+
+test('quick run refreshes Main guards without projection changes and reports redacted rejection once',async()=>{
+  const h=harness(),root=new h.Element();let state='available',stopped=false,calls=0;
+  const plugin={settings:{tasks:[task('a')],workflows:[]},isLifecycleStopped:()=>stopped,
+    getDefinitionStartState:()=>state,definitionDisabledReason:()=>undefined,
+    redactSecrets:text=>text.replace('SECRET','[redacted]'),
+    runTask:async()=>{calls++;throw Error('Terminal reservation SECRET');}};
+  const view=new h.AutoOCView({},plugin);view.renderAreaDashboard(root);
+  const play=()=>root.all().find(e=>e.textContent==='▶ Play');
+  for(const blocked of ['starting','active','blocked']){
+    state=blocked;view.areaDashboard.update();assert.equal(play().disabled,true);
+    await play().onclick();assert.equal(calls,0);
+  }
+  state='available';view.areaDashboard.update();assert.equal(play().disabled,false);
+  await play().onclick();assert.equal(calls,1);
+  assert.equal(root.all().find(e=>e.attrs.role==='status').textContent,'Terminal reservation [redacted]');
+  stopped=true;view.areaDashboard.update();assert.equal(play().disabled,true);
+  await play().onclick();assert.equal(calls,1);
+});
+
+test('Page quick run blocks archived/changed/deleted Pages and active or uncertain runs without using Main state',async()=>{
+  const h=harness(),root=new h.Element(),page={id:'p',directory:'/repo/p'};
+  let calls=0;
+  const plugin={settings:{tasks:[task('a')],workflows:[],workPages:[page],pageRuns:[]},
+    isLifecycleStopped:()=>false,definitionDisabledReason:()=>undefined,redactSecrets:text=>text,
+    getDefinitionStartState:()=>{throw Error('Page must not consult Main state');},runWorkPage:async()=>calls++};
+  const view=new h.AutoOCView({},plugin);view.selectedWorkPage='p';view.renderAreaDashboard(root,page);
+  const play=root.all().find(e=>e.textContent==='▶ Play');
+  page.archived=true;await play.onclick();page.archived=false;
+  page.worktreeRemoval={status:'pending'};await play.onclick();delete page.worktreeRemoval;
+  page.directory='/changed';await play.onclick();page.directory='/repo/p';
+  for(const [phase,uncertain] of [['in_flight',false],['completed',true],['failed',true]]){
+    plugin.settings.pageRuns=[{pageId:'p',sourceId:'a',task:true,phase,uncertain}];await play.onclick();
+  }
+  assert.equal(calls,0);
+  plugin.settings.pageRuns=[{pageId:'other',sourceId:'a',task:true,phase:'in_flight'}];
+  await play.onclick();assert.equal(calls,1);
+  plugin.settings.workPages=[];await play.onclick();assert.equal(calls,1);
+});
+
+test('all owned step kinds remain selection-only while existing controls remain available',()=>{
+  const h=harness(),root=new h.Element(),state=h.createAreaDashboardState(),calls=[];
+  new h.AreaDashboard(root,state,{items:()=>h.dashboardItems([task('a')],[
+    flow('w',[code('s'),{id:'delay',stepKind:'delay'},{id:'task',taskId:'a'},{id:'nested',stepKind:'workflow',workflowId:'child'}]),
+    flow('child',[])]),run:async i=>calls.push(i),open:i=>calls.push(i.id),log(){},history(){}});
+  root.all().find(e=>e.attrs['data-area-item-key']==='["workflow","w"]').onclick();
+  for(const key of ['s','delay','task','nested']){
+    const step=root.all().find(e=>e.attrs['data-area-item-key']===JSON.stringify(['step','w',key]));
+    step.onclick();assert.equal(step.ondblclick,undefined);
+    assert.ok(!root.all().some(e=>e.textContent==='▶ Play'));
+    root.all().find(e=>e.textContent==='Open controls').onclick();
+  }
+  assert.deepEqual(calls,['s','delay','task','nested']);
+});
+
 test('every page uses the real area Dashboard for the full catalog without linking or saving',()=>{
   const h=harness(),root=new h.Element();
   const page={id:'a',name:'Feature',kind:'folder',directory:'/repo/a',objective:'',taskIds:[],workflowIds:[]};
