@@ -4,14 +4,16 @@ function harness(){
   const doc={activeElement:null};
   class Element{
     constructor(tag='div',options={}){this.tag=tag;this.textContent=options.text||'';this.attrs=options.attr||{};this.children=[];this.style={};this.ownerDocument=doc;this.isConnected=true;this.scrollTop=0;this.classes=new Set((typeof options==='string'?options:options.cls||'').split(' '));}
-    createEl(tag,options={}){const el=new Element(tag,options);this.children.push(el);return el;}
+    createEl(tag,options={}){const el=new Element(tag,options);el.parentElement=this;this.children.push(el);return el;}
     createDiv(options={}){return this.createEl('div',options);} createSpan(options={}){return this.createEl('span',options);}
     empty(){this.children=[];} setText(text){this.textContent=text;}
     setAttr(k,v){this.attrs[k]=v;} getAttribute(k){return this.attrs[k]||null;}
     addClass(c){this.classes.add(c);} focus(){doc.activeElement=this;}
+    contains(el){return this.all().includes(el);}
+    setSelectionRange(start,end,direction){this.selectionStart=start;this.selectionEnd=end;this.selectionDirection=direction;}
     get childElementCount(){return this.children.length;}
     all(){return [this,...this.children.flatMap(c=>c.all())];}
-    querySelectorAll(selector){if(selector==='.auto-oc-terminal-claims')return this.all().filter(el=>el.classes.has('auto-oc-terminal-claims'));assert.equal(selector,'[data-area-item-key]');return this.all().filter(el=>el.attrs['data-area-item-key']);}
+    querySelectorAll(selector){if(selector.startsWith('.'))return this.all().filter(el=>el.classes.has(selector.slice(1)));if(selector==='button')return this.all().filter(el=>el.tag==='button');assert.equal(selector,'[data-area-item-key]');return this.all().filter(el=>el.attrs['data-area-item-key']);}
   }
   class Stub{} const notices=[],opened=[],module={exports:{}};
   class Modal {constructor(app){this.app=app;this.contentEl=new Element();this.modalEl=new Element();}open(){opened.push(this);this.onOpen?.();}close(){this.onClose?.();}}
@@ -129,6 +131,41 @@ test('all owned step kinds remain selection-only while existing controls remain 
     root.all().find(e=>e.textContent==='Open controls').onclick();
   }
   assert.deepEqual(calls,['s','delay','task','nested']);
+});
+
+test('normal mounted Page refresh updates saved controls and history while retaining Dashboard interaction state',()=>{
+  const h=harness(),root=new h.Element(),page={id:'p',name:'Feature',objective:'',kind:'folder',directory:'/repo/p',archived:true,taskIds:[],workflowIds:[]};
+  const plugin={settings:{workPages:[page],tasks:[task('a'),task('b',{area:'Other'})],workflows:[],pageRuns:[]},
+    ownsExecution:()=>false,isLifecycleStopped:()=>false,pageRunProgress:()=>({steps:[]})};
+  const view=new h.AutoOCView({},plugin);view.app={vault:{adapter:{basePath:'/repo'}}};
+  view.containerEl=root;view.currentTab='dashboard';view.selectedWorkPage='p';view.renderDashboard(root);
+  const dashboard=view.areaDashboard,state=view.pageDashboardStates.get('p'),find=text=>root.all().find(e=>e.textContent===text);
+  const search=root.all().find(e=>e.attrs['aria-label']==='Search Dashboard');
+  search.value='Task';search.oninput();
+  state.kindFilter='task';state.showDisabled=true;state.attentionOnly=false;state.collapsed.add('Other');
+  state.selected=JSON.stringify(['task','a']);dashboard.update();
+  const pageHistory=()=>root.all().find(e=>e.tag==='details'&&e.children.some(child=>child.tag==='summary'&&child.textContent==='Page executions'));
+  const history=pageHistory();history.open=true;
+  search.focus();search.setSelectionRange(1,3,'backward');
+  plugin.settings.workPages=[{...page,archived:false}];
+  plugin.settings.pageRuns=[{pageId:'p',sourceId:'a',task:true,workflowId:'p:a',runId:'run',name:'First',phase:'in_flight',revision:1}];
+  view.refresh();
+  assert.equal(find('Restore page'),undefined);assert.ok(find('Archive page'));assert.equal(find('CLI in this page').disabled,false);
+  assert.ok(find('First · in_flight'));assert.ok(find('Continue'));assert.ok(find('Reconcile'));
+  assert.equal(view.areaDashboard,dashboard);assert.equal(view.selectedWorkPage,'p');assert.equal(state.selected,JSON.stringify(['task','a']));
+  assert.equal(state.query,'Task');assert.equal(state.kindFilter,'task');assert.equal(state.showDisabled,true);
+  assert.equal(state.attentionOnly,false);assert.equal(state.collapsed.has('Other'),true);
+  assert.equal(h.doc.activeElement,search);assert.equal(search.selectionStart,1);assert.equal(search.selectionEnd,3);assert.equal(search.selectionDirection,'backward');
+  assert.equal(pageHistory(),history);assert.equal(history.open,true);
+  const historyLog=()=>history.all().find(e=>e.textContent==='Log');
+  const log=historyLog(),archive=find('Archive page');view.refresh();view.refresh();
+  assert.equal(historyLog(),log);assert.equal(find('Archive page'),archive);assert.equal(find('Continue').disabled,false);
+  plugin.ownsExecution=()=>true;view.refresh();assert.ok(find('Stop'));assert.equal(find('Continue'),undefined);
+  find('Stop').focus();plugin.ownsExecution=()=>false;
+  plugin.settings.pageRuns=[{...plugin.settings.pageRuns[0],phase:'completed'}];view.refresh();
+  assert.ok(find('First · completed'));assert.equal(find('Stop'),undefined);assert.ok(root.contains(h.doc.activeElement));
+  state.attentionOnly=true;view.refresh();assert.equal(state.attentionOnly,true);
+  assert.equal(history.open,true);assert.equal(root.all().filter(e=>e.textContent==='run').length,1);
 });
 
 test('every page uses the real area Dashboard for the full catalog without linking or saving',()=>{
