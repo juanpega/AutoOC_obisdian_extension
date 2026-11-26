@@ -1,5 +1,7 @@
 import type { InteractiveCliProvider } from "./interactive-cli";
 
+export type InteractiveCliDestination = "integrated" | "external" | "shared-external";
+
 /** Ephemeral host association; never persisted in a workflow definition. */
 export interface TerminalPageContext { pageId: string; claimId: string; }
 
@@ -19,7 +21,7 @@ export interface InteractiveTaskTerminalRequest {
 }
 
 export interface InteractiveTaskTerminalOptions {
-  destination?: "integrated" | "external";
+  destination?: InteractiveCliDestination;
   launch?: (request: InteractiveTaskTerminalRequest) => Promise<void>;
 }
 

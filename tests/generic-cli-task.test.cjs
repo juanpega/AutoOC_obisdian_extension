@@ -124,6 +124,24 @@ for (const provider of providers) test(`generic ${provider} dispatch preserves e
   assert.deepEqual(await pending, {succeeded: true, output: acknowledgement}); assert.deepEqual(h.external, []);
 }));
 
+for (const provider of providers) test(`shared generic workflow routes ${provider} without using the integrated callback`, {skip:process.platform !== 'win32'}, () => fixture(async (root, settings) => {
+  const h = harness(), task = taskOf(provider);
+  const definition = h.load('workflow-definition').prepareWorkflowDefinition(flow('w',[taskStep]),[task],settings);
+  const adapter = h.load('workflow-task-adapters').createWorkflowTaskAdapter(definition,root,undefined,{
+    destination:'shared-external', launch:async()=>assert.fail('shared preference fell back to integrated'),
+  });
+  const pending = adapter.execute(task,handoff);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(h.external.length,1);
+  const args = h.external[0], options = args.at(-1);
+  assert.equal(args[0],settings[pathKeys[providers.indexOf(provider)]]);
+  assert.equal(args[1],root); assert.equal(args[5],handoff);
+  assert.equal(options.sharedExternal.task,task.name);
+  assert.equal(options.sharedExternal.provider,h.load('interactive-cli').INTERACTIVE_CLIS.find(cli=>cli.id===provider).label);
+  options.onLaunched();
+  assert.deepEqual(await pending,{succeeded:true,output:acknowledgement});
+}));
+
 test('generic native defaults never inherit background models/agents', () => fixture((root, settings) => {
   const {prepareCliTask} = harness().load('interactive-cli-task');
   for (const provider of providers) {

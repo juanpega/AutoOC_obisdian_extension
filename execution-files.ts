@@ -4,7 +4,7 @@ import * as path from 'path';
 export type AuxiliaryKind = 'interactive' | 'runtime';
 export const AUXILIARY_COMPLETION = 'autooc-cleanup.json';
 const files: Record<AuxiliaryKind, string[]> = {
-  interactive: ['prompt.txt', 'state.json', '.gitignore'],
+  interactive: ['prompt.txt', 'state.json', '.gitignore', 'runner.ps1'],
   runtime: ['stdout.txt', 'stderr.txt', 'done.txt', 'process.pid', 'instruction.txt', 'input.txt', 'launch.ps1', 'launch.sh', 'launch.vbs'],
 };
 

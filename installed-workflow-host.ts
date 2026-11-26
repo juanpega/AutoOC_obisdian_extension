@@ -105,7 +105,7 @@ export async function runInstalledWorkflow(options: InstalledWorkflowOptions) {
   }
   preflightInstalledWorkflow(definition,vault);
   // Terminal placement is a host preference, not part of historical fingerprints.
-  const terminal:InteractiveTaskTerminalOptions = {destination:config.cliTerminalDestination === 'integrated' ? 'integrated' : 'external',launch:options.launchInteractiveTerminal};
+  const terminal:InteractiveTaskTerminalOptions = {destination:config.cliTerminalDestination === 'shared-external' ? 'shared-external' : config.cliTerminalDestination === 'integrated' ? 'integrated' : 'external',launch:options.launchInteractiveTerminal};
   if (!options.reconcile && terminal.destination === 'integrated' && !terminal.launch &&
       definition.tasks.some(task=>task.taskKind === 'cli' || isOpenCodeTask(task.taskKind) && task.interactiveTerminal)) {
     throw new Error('Integrated CLI tasks require a loaded Obsidian plugin. Open Obsidian or select External window in AutoOC Settings. No workflow steps were started.');

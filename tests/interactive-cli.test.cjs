@@ -67,7 +67,9 @@ function backend(platform = 'win32', files = []) {
       if (id === 'fs') return filesystem;
       if (id === './codex-client') return { resolveCodexBin: configured => resolveCodex(configured) || ((!configured || configured === 'codex') ? fallback : '') };
       if (id === './opencode-version') return { assertOpenCode2: async () => {} };
-      if (id === './cli-launchers') return { psSingleQuoted: quote, openOpencodeCli(...args) {
+      if (id === './cli-launchers') return { psSingleQuoted: quote, openOpencodeCliLongPromptWindows(...args) {
+        calls.push(args); args[6].onLaunched();
+      }, openOpencodeCli(...args) {
         calls.push(args); if (posixError) args[4].onError(posixError); else args[4].onLaunched();
       } };
       if (id === 'child_process') return { spawn(...args) {
@@ -89,6 +91,30 @@ test('CLIs including separate OpenCode versions resolve from PATH and respect me
   ]);
   h.settings.cliLauncherEnabled = { codex: false };
   assert.deepEqual(Array.from(h.configuredInteractiveClis(h.settings), cli => cli.id), ['opencode', 'opencode2', 'copilot', 'claude']);
+  assert.equal(h.calls.length, 0);
+});
+
+test('shared manual routing is typed per launch, preserves preference and keeps provider-native defaults', async () => {
+  for (const provider of ['opencode', 'opencode2', 'codex', 'copilot', 'claude']) {
+    const executable = `C:\\Tools\\${provider === 'opencode2' ? 'opencode' : provider}.exe`;
+    const h = backend('win32', [executable]);
+    h.settings.cliTerminalDestination = 'external';
+    await h.launchInteractiveCli(provider, h.folder, h.settings, { destination: 'shared-external', project: 'Page A' });
+    assert.equal(h.calls.length, 1);
+    const [bin, cwd, env, model, agent, prompt, options] = h.calls[0];
+    assert.equal(bin, executable); assert.equal(cwd, h.folder);
+    assert.equal(model, ''); assert.equal(agent, ''); assert.equal(prompt, '');
+    assert.equal(options.manual, true);
+    assert.equal(options.sharedExternal.project, 'Page A');
+    assert.equal(options.sharedExternal.provider, h.INTERACTIVE_CLIS.find(cli => cli.id === provider).label);
+    assert.equal(h.settings.cliTerminalDestination, 'external');
+  }
+});
+
+test('shared manual destination rejects unsupported platforms without fallback', async () => {
+  const h = backend('linux', ['/tools/claude']);
+  h.settings.cliTerminalDestination = 'shared-external';
+  await assert.rejects(h.launchInteractiveCli('claude', h.folder, h.settings), /Shared external terminal requires Windows/);
   assert.equal(h.calls.length, 0);
 });
 
@@ -331,20 +357,23 @@ test('macOS and Linux use the shared terminal launcher with no prompt or executi
   }
 });
 
-function ui(files = ['C:\\Tools\\codex.exe']) {
+function ui(files = ['C:\\Tools\\codex.exe'], platform = 'win32') {
   const h = backend('win32', files), launches = [], notices = [], opened = [], saved = [];
+  let restoredDestination;
   let picker = async () => ({ canceled: true }), launch = async (...args) => { launches.push(args); };
   let detectVersion = async () => ({version:'2.0.21',major:2});
   let inspectCodex = async () => ({version:'codex-cli 0.167.0',appServer:true});
   class Element {
-    constructor(text = '') { this.textContent = text; this.children = []; this.attrs = {}; }
+    constructor(text = '') { this.textContent = text; this.children = []; this.attrs = {}; this.style = {}; }
     createEl(tag, opts = {}) { const child = new Element(opts.text); child.tag = tag; this.children.push(child); return child; }
     createDiv() { return this.createEl('div'); } empty() { this.children = []; } addClass() {}
     setText(value) { this.textContent = value; } setAttr(key, value) { this.attrs[key] = value; }
+    addEventListener(name, callback) { (this.listeners ??= {})[name] = callback; }
+    focus() { this.listeners?.focus?.(); }
     all() { return [this, ...this.children.flatMap(child => child.all())]; }
   }
   class Control {
-    constructor(el) { this.el = this.inputEl = el; el.options = {}; }
+    constructor(el) { this.el = this.inputEl = this.selectEl = el; el.options = {}; }
     setValue(value) { this.el.value = value; return this; } setPlaceholder() { return this; }
     setButtonText(value) { this.el.textContent = value; return this; }
     setDisabled(value) { this.el.disabled = value; return this; }
@@ -357,14 +386,20 @@ function ui(files = ['C:\\Tools\\codex.exe']) {
     addText(fn) { fn(new Control(this.el.createEl('input'))); return this; }
     addToggle(fn) { fn(new Control(this.el.createEl('toggle'))); return this; }
     addButton(fn) { fn(new Control(this.el.createEl('button'))); return this; }
-    addDropdown(fn) { fn(new Control(this.el.createEl('select'))); return this; }
+    addDropdown(fn) {
+      const el = this.el.createEl('select'); fn(new Control(el));
+      // Model a host-restored DOM value without a change event, independently
+      // of modal state. This is not proof of Electron's restoration mechanism.
+      if (el.attrs['aria-label'] === 'Terminal destination' && restoredDestination) el.value = restoredDestination;
+      return this;
+    }
   }
   class Modal {
     constructor(app) { this.app = app; this.contentEl = new Element(); }
     open() { opened.push(this); this.onOpen(); } close() { this.didClose = true; this.onClose(); }
   }
   const module = { exports: {} };
-  vm.runInNewContext(uiSource, { module, exports: module.exports, console,
+  vm.runInNewContext(uiSource, { module, exports: module.exports, console, process: {platform},
     window: { require: () => ({ remote: { dialog: { showOpenDialog: (...args) => picker(...args) } } }) },
     require: id => id === 'obsidian' ? { Modal, Setting, Notice: class { constructor(text) { notices.push(text); } } }
       : { ...h, detectOpenCodeVersion: (...args) => detectVersion(...args), inspectCodexCli: (...args) => inspectCodex(...args), launchInteractiveCli: (...args) => launch(...args) },
@@ -375,6 +410,7 @@ function ui(files = ['C:\\Tools\\codex.exe']) {
   const modal = selected => { const m = new module.exports.CliLauncherModal(app, host, () => {}, selected); m.open(); return m; };
   const button = (m, label) => m.contentEl.all().find(el => el.tag === 'button' && el.textContent.includes(label));
   return { ...h, ...module.exports, Element, app, host, saved, opened, launches, notices, modal, button, settingsOpened,
+    restoreDestination(value) { restoredDestination = value; },
     picker(fn) { picker = fn; }, launch(fn) { launch = fn; }, detect(fn) { detectVersion = fn; }, inspectCodex(fn) { inspectCodex = fn; } };
 }
 
@@ -429,6 +465,176 @@ test('repeated clicks while launching cannot open duplicate terminals', async ()
   const m = h.modal(), button = h.button(m, 'Open in project');
   const opening = button.onclick(); await button.onclick(); assert.equal(launches, 1); assert.equal(button.disabled, true);
   finish(); await opening;
+});
+
+const destinationSelect = m => m.contentEl.all().find(el => el.tag === 'select' && el.attrs['aria-label'] === 'Terminal destination');
+
+test('reopened Main and Page pickers reconcile a stale displayed destination with the configured default', () => {
+  for (const page of [undefined, {id:'page-1', name:'Page', directory:'C:\\Page'}]) {
+    const h = ui(), calls = [];
+    h.host.settings.cliTerminalDestination = 'external';
+    h.host.cliDestinationUnavailableReason = () => undefined;
+    h.host.launchManualCli = async (...args) => calls.push(args);
+    const before = JSON.stringify(h.host.settings);
+    h.openCliLauncher(h.app, h.host, undefined, page);
+    const first = h.opened.at(-1);
+    destinationSelect(first).change('shared-external');
+    first.close(); // Obsidian's whole-modal Escape close boundary.
+    h.restoreDestination('shared-external');
+    h.openCliLauncher(h.app, h.host, undefined, page);
+    const reopened = h.opened.at(-1), select = destinationSelect(reopened);
+    assert.notEqual(first, reopened);
+    assert.equal(select.value, 'external');
+    assert.equal(select.attrs.autocomplete, 'off');
+    assert.equal(JSON.stringify(h.host.settings), before);
+    assert.equal(calls.length, 0);
+    assert.equal(h.saved.length, 0);
+  }
+});
+
+test('focus reconciles DOM-only restoration but preserves an intentional choice in the current modal', async () => {
+  const h = ui(), calls = [];
+  h.host.settings.cliTerminalDestination = 'external';
+  h.host.cliDestinationUnavailableReason = () => undefined;
+  h.host.launchManualCli = async (...args) => calls.push(args);
+  const m = h.modal(), select = destinationSelect(m);
+  select.value = 'shared-external';
+  select.focus();
+  assert.equal(select.value, 'external');
+  select.value = 'integrated'; select.change('integrated');
+  select.focus();
+  assert.equal(select.value, 'integrated');
+  await h.button(m, 'Open in project').onclick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0][3], 'integrated');
+  assert.equal(h.host.settings.cliTerminalDestination, 'external');
+  assert.equal(h.saved.length, 0);
+});
+
+test('late support results reconcile displayed state without resetting a current choice to the default', async () => {
+  const h = ui(); let answer;
+  h.host.settings.cliTerminalDestination = 'integrated';
+  h.host.cliDestinationUnavailableReason = destination => destination === 'integrated'
+    ? new Promise(resolve => { answer = resolve; }) : undefined;
+  h.host.launchManualCli = async () => {};
+  const m = h.modal(), select = destinationSelect(m);
+  select.value = 'external'; select.change('external');
+  select.value = 'shared-external'; // DOM-only drift while the old check is pending.
+  answer('Integrated support unavailable.');
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(select.value, 'external');
+  assert.equal(m.contentEl.all().find(el => el.attrs.role === 'status').textContent, 'External window');
+  h.button(m, 'Cancel').onclick();
+  assert.equal(h.host.settings.cliTerminalDestination, 'integrated');
+  assert.equal(destinationSelect(h.modal()).value, 'integrated');
+  assert.equal(h.saved.length, 0);
+});
+
+test('destination defaults and provider state are independent and overrides never save preferences', async () => {
+  for (const destination of ['integrated', 'external', 'shared-external']) {
+    const h = ui(['C:\\Tools\\codex.exe', 'C:\\Tools\\claude.exe']), calls = [];
+    h.host.settings.cliTerminalDestination = 'integrated';
+    h.host.cliDestinationUnavailableReason = () => undefined; // Injected combined-contract fixture, not native evidence.
+    h.host.launchManualCli = async (...args) => calls.push(args);
+    const before = JSON.stringify(h.host.settings), m = h.modal(), select = destinationSelect(m);
+    assert.ok(select, 'labeled native destination select');
+    assert.equal(select.value, 'integrated');
+    select.change(destination);
+    m.contentEl.all().find(el => el.tag === 'select' && el !== select).change('claude');
+    await h.button(m, 'Open in project').onclick();
+    assert.deepEqual(calls[0], ['claude', h.folder, undefined, destination]);
+    assert.equal(JSON.stringify(h.host.settings), before);
+    assert.equal(destinationSelect(h.modal()).value, 'integrated');
+    assert.equal(h.saved.length, 0);
+  }
+});
+
+test('unavailable configured destination blocks launch until explicitly changed, with no fallback', async () => {
+  const h = ui(), calls = [];
+  h.host.settings.cliTerminalDestination = 'shared-external';
+  h.host.launchManualCli = async (...args) => calls.push(args);
+  const m = h.modal();
+  assert.equal(destinationSelect(m).value, 'shared-external');
+  assert.equal(h.button(m, 'Open in project').disabled, true);
+  await h.button(m, 'Open in project').onclick();
+  assert.equal(calls.length, 0);
+  assert.match(m.contentEl.all().find(el => el.attrs.role === 'status').textContent, /unavailable/i);
+  destinationSelect(m).change('external');
+  await h.button(m, 'Open in project').onclick();
+  assert.equal(calls[0][3], 'external');
+  assert.equal(h.host.settings.cliTerminalDestination, 'shared-external');
+});
+
+test('async installed-support availability blocks pending launches and is rechecked before dispatch', async () => {
+  const h=ui(),calls=[];
+  let answer;
+  h.host.settings.cliTerminalDestination='integrated';
+  h.host.cliDestinationUnavailableReason=destination=>destination==='integrated'?new Promise(resolve=>{answer=resolve;}):undefined;
+  h.host.launchManualCli=async(...args)=>calls.push(args);
+  const m=h.modal();
+  assert.equal(h.button(m,'Open in project').disabled,true);
+  answer('Installed terminal support is missing.');
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(m.contentEl.all().find(el=>el.attrs.role==='status').textContent,/support is missing/);
+  assert.equal(h.button(m,'Open in project').disabled,true);
+  destinationSelect(m).change('external');
+  await h.button(m,'Open in project').onclick();
+  assert.equal(calls.length,1);assert.equal(calls[0][3],'external');assert.equal(h.saved.length,0);
+});
+
+test('destination is rechecked at confirmation; cancel never dispatches or saves', async () => {
+  const h = ui(), calls = [];
+  let reason;
+  h.host.cliDestinationUnavailableReason = () => reason;
+  h.host.launchManualCli = async (...args) => calls.push(args);
+  const m = h.modal();
+  reason = 'Windows Terminal was removed; unavailable.';
+  await h.button(m, 'Open in project').onclick();
+  assert.equal(calls.length, 0);
+  assert.match(m.contentEl.all().find(el => el.attrs.role === 'alert').textContent, /removed/);
+  h.button(m, 'Cancel').onclick();
+  assert.equal(h.saved.length, 0);
+  assert.equal(calls.length, 0);
+});
+
+test('closing during asynchronous destination verification prevents a late launch', async () => {
+  const h=ui(),calls=[],checks=[];
+  h.host.settings.cliTerminalDestination='integrated';
+  h.host.cliDestinationUnavailableReason=()=>new Promise(resolve=>checks.push(resolve));
+  h.host.launchManualCli=async(...args)=>calls.push(args);
+  const m=h.modal(),pending=h.button(m,'Open in project').onclick();
+  h.button(m,'Cancel').onclick();
+  for(const resolve of checks)resolve(undefined);
+  await pending;
+  assert.equal(calls.length,0);assert.equal(h.saved.length,0);
+});
+
+test('a confirmed folder choice snapshots provider/destination and suppresses a second picker', async () => {
+  const h = ui(['C:\\Tools\\codex.exe', 'C:\\Tools\\claude.exe']), calls = [];
+  h.host.cliDestinationUnavailableReason = () => undefined;
+  h.host.launchManualCli = async (...args) => calls.push(args);
+  let answer, pickers = 0;
+  h.picker(() => { pickers++; return new Promise(resolve => { answer = resolve; }); });
+  const m = h.modal(), choose = h.button(m, 'Choose folder');
+  destinationSelect(m).change('integrated');
+  const pending = choose.onclick();
+  await choose.onclick();
+  destinationSelect(m).change('external');
+  m.contentEl.all().find(el => el.tag === 'select' && el !== destinationSelect(m)).change('claude');
+  answer({ canceled: false, filePaths: ['C:\\Selected'] });
+  await pending;
+  assert.equal(pickers, 1);
+  assert.deepEqual(calls[0], ['codex', 'C:\\Selected', undefined, 'integrated']);
+});
+
+test('tracked live session is revealed before constructing a destination picker', async () => {
+  const h = ui(), revealed = [];
+  h.host.hasPageTerminal = (id, live) => id === 'page-1' && live;
+  h.host.showPageTerminal = async id => revealed.push(id);
+  h.openCliLauncher(h.app, h.host, undefined, {id:'page-1', name:'Page', directory:h.folder});
+  assert.deepEqual(revealed, ['page-1']);
+  assert.equal(h.opened.length, 0);
+  assert.equal(h.launches.length, 0);
 });
 
 test('Settings reuse engine paths, save Claude configuration and roll back failed preferences', async () => {
@@ -510,6 +716,32 @@ function terminalSettings(h) {
   return { root, destination: row.children.find(el => el.tag === 'select'), support,
     button: label => root.all().find(el => el.tag === 'button' && el.textContent.includes(label)) };
 }
+
+test('shared destination is opt-in on Windows and saved selection survives reload and save rollback', async () => {
+  const h = ui(), first = terminalSettings(h);
+  assert.equal(first.destination.options['shared-external'], 'Shared external terminal');
+  assert.equal(first.destination.value, 'external');
+  await first.destination.change('shared-external');
+  assert.equal(h.host.settings.cliTerminalDestination, 'shared-external');
+  assert.equal(terminalSettings(h).destination.value, 'shared-external');
+  h.host.saveSettings = async () => { throw Error('synthetic save failure'); };
+  await first.destination.change('integrated');
+  assert.equal(h.host.settings.cliTerminalDestination, 'shared-external');
+  assert.equal(first.destination.value, 'shared-external');
+  assert.equal(h.launches.length, 0);
+});
+
+test('unsupported platform keeps a saved shared preference visible and never silently substitutes external', async () => {
+  const h = ui([], 'linux');
+  assert.equal(terminalSettings(h).destination.options['shared-external'], undefined);
+  h.host.settings.cliTerminalDestination = 'shared-external';
+  const current = terminalSettings(h);
+  assert.match(current.destination.options['shared-external'], /unavailable.*Windows/i);
+  assert.equal(current.destination.value, 'shared-external');
+  await current.destination.change('shared-external');
+  assert.equal(h.saved.length, 0);
+  assert.equal(h.host.settings.cliTerminalDestination, 'shared-external');
+});
 
 test('destination Settings default to external and save both modes without downloads or unrelated changes', async () => {
   const h = ui(), installs = [], shown = [], refreshes = [];
@@ -609,13 +841,13 @@ test('invalid destination values cannot write settings', async () => {
   assert.equal(h.host.settings.cliTerminalDestination, undefined); assert.equal(destination.value, 'external');
 });
 
-test('launcher defaults to external with read-only destination and no configuration or support controls', async () => {
+test('launcher defaults to external with launch-only destination and no support installation controls', async () => {
   const h = ui(); let integrated = 0, installs = 0;
   h.host.openIntegratedCli = async () => { integrated++; };
   h.host.installCliTerminalSupport = async () => { installs++; };
   const modal = h.modal();
-  assert.ok(modal.contentEl.all().some(el => el.textContent.includes('Terminal: External window')));
-  assert.equal(modal.contentEl.all().filter(el => el.tag === 'select').length, 1);
+  assert.equal(destinationSelect(modal).value, 'external');
+  assert.equal(modal.contentEl.all().filter(el => el.tag === 'select').length, 2);
   assert.equal(h.button(modal, 'Download and install'), undefined); assert.equal(h.button(modal, 'Show existing terminals'), undefined);
   await h.button(modal, 'Open in project').onclick();
   assert.equal(h.launches.length, 1); assert.equal(integrated, 0); assert.equal(installs, 0); assert.equal(h.saved.length, 0);
@@ -627,7 +859,7 @@ test('saved integrated destination persists across modals and each modal capture
   const external = h.modal(), view = terminalSettings(h);
   await view.destination.change('integrated');
   const first = h.modal(), second = h.modal();
-  assert.ok(first.contentEl.all().some(el => el.textContent.includes('Terminal: Integrated in Obsidian')));
+  assert.equal(destinationSelect(first).value, 'integrated');
   await h.button(external, 'Open in project').onclick(); assert.equal(h.launches.length, 1);
   await h.button(first, 'Open in project').onclick(); assert.equal(integrated.length, 1);
   await view.destination.change('external');
@@ -642,5 +874,5 @@ test('integrated preference without host support reports error and never falls b
   const modal = h.modal(); await h.button(modal, 'Open in project').onclick();
   assert.equal(h.launches.length, 0); assert.equal(h.saved.length, 0); assert.notEqual(modal.didClose, true);
   assert.match(modal.contentEl.all().find(el => el.attrs.role === 'alert').textContent, /Integrated terminals are unavailable.*no external session was started/);
-  assert.equal(h.button(modal, 'Open in project').disabled, false);
+  assert.equal(h.button(modal, 'Open in project').disabled, true);
 });
