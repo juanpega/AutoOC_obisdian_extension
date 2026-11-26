@@ -56,6 +56,27 @@ workflow y los límites de concurrencia. No hay una cola de espera automática.
 programaciones y los comandos AutoOC sin `--page` siguen usando Main workspace.
 La pestaña visible y la carpeta de la consola no cambian ese destino.
 
+## Open-Page refresh (development candidate)
+
+While a Page is open, normal refresh updates its controls and **Page executions**
+from the current Page/run state without requiring you to leave and reopen it.
+New runs, phase changes and ownership-dependent **Stop**, **Continue** and
+**Reconcile** actions remain scoped to that Page; refresh does not change their
+execution or recovery rules.
+
+The mounted Dashboard keeps its valid selection, search, filters and collapsed
+areas. **Page executions** keeps its expanded/collapsed state. Unchanged regions
+are not rebuilt; focus stays on a surviving action or moves to an enabled Page
+control or the history summary if the focused action disappears.
+
+After **Restore page** validates the folder and saves successfully, the open
+Page's archived label and controls update in place. Failed validation or saving
+does not activate the Page. If its folder, kind or removal state changes during
+validation, review the Page before retrying. Pending or completed worktree removal
+keeps execution blocked and does not offer Restore; refresh never recreates a
+removed environment. This describes the development candidate, not a verified
+installed or published version.
+
 ## Usar AutoOC desde una CLI externa
 
 Ejemplo PowerShell: sustituye la ruta de bóveda y los identificadores por los de

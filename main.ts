@@ -7179,7 +7179,35 @@ class AutoOCView extends ItemView {
     this.renderAreaDashboard(containerEl);
   }
 
+  private dashboardStarts = new Set<string>();
   private renderAreaDashboard(containerEl:HTMLElement, page?:WorkPage) {
+    const workspace = this.selectedWorkPage;
+    const pageIdentity = page && JSON.stringify([page.directory,page.branch,page.baseCommit]);
+    const startKey = (item:DashboardItem) => JSON.stringify([workspace,item.kind === "workflow" ? "workflow" : "task",item.id]);
+    const startReason = (item:DashboardItem):string|undefined => {
+      if (item.workflowId || !["task","code","workflow"].includes(item.kind)) return "Open controls for this selection.";
+      if (this.selectedWorkPage !== workspace) return "Workspace changed. Select the item again.";
+      if (this.plugin.isLifecycleStopped()) return "AutoOC instance is stopped.";
+      const kind = item.kind === "workflow" ? "workflow" : "task";
+      const definition = (kind === "task" ? this.plugin.settings.tasks : this.plugin.settings.workflows).find(entry=>entry.id === item.id);
+      if (!definition) return "This definition was removed. Refresh the Dashboard.";
+      const disabled = this.plugin.definitionDisabledReason?.(kind,item.id);
+      if (disabled || definition.disabled) return disabled || "Execution is disabled.";
+      try {
+        if (kind === "workflow") assertWorkflowDependencies(definition as Workflow,this.plugin.settings.tasks,this.plugin.settings.workflows);
+        else assertNoRetiredDependency(definition);
+      } catch (error) { return this.plugin.redactSecrets(String((error as Error).message || error)); }
+      if (this.dashboardStarts.has(startKey(item))) return "Starting…";
+      if (page) {
+        const current = this.plugin.settings.workPages?.find(entry=>entry.id === page.id);
+        if (!current || current.archived || current.worktreeRemoval ||
+            JSON.stringify([current.directory,current.branch,current.baseCommit]) !== pageIdentity) return "Page is unavailable or changed. Open controls.";
+        const run = this.plugin.settings.pageRuns?.find(run=>run.pageId === page.id && run.sourceId === item.id && run.task === (kind === "task") &&
+          (run.uncertain || !["completed","failed","abandoned"].includes(run.phase)));
+        if (run) return "Page execution is active or needs recovery. Open controls.";
+      } else if (this.plugin.getDefinitionStartState?.(kind,item.id) !== "available") return "Execution is active, starting or needs recovery. Open controls.";
+      return undefined;
+    };
     const locate = (item: DashboardItem) => {
       const workflow = this.plugin.settings.workflows.find(wf => wf.id === (item.workflowId || (item.kind === "workflow" ? item.id : "")));
       const step = workflow?.steps.find(entry => entry.id === item.id);
@@ -7227,6 +7255,19 @@ class AutoOCView extends ItemView {
       open: item => page ? openPageItemControls(this.app,this.plugin,page.id,item,()=>open(item)) : open(item),
       log: item => page ? showPageItemHistory(this.app,this.plugin,page.id,item,false) : showLog(item, false),
       history: item => page ? showPageItemHistory(this.app,this.plugin,page.id,item,true) : showLog(item, true),
+      startReason,
+      run: async item => {
+        const reason = startReason(item);
+        if (reason) throw new Error(reason);
+        const key = startKey(item);
+        this.dashboardStarts.add(key);
+        try {
+          if (page) await this.plugin.runWorkPage(page.id,item.id,item.kind !== "workflow");
+          else if (item.kind === "workflow") await this.plugin.runWorkflow(this.plugin.settings.workflows.find(entry=>entry.id === item.id)!);
+          else await this.plugin.runTask(this.plugin.settings.tasks.find(entry=>entry.id === item.id)!);
+        } finally { this.dashboardStarts.delete(key); this.areaDashboard?.update(); }
+      },
+      errorText: error => this.plugin.redactSecrets(String((error as Error)?.message || error)),
     });
   }
 
